@@ -45,21 +45,22 @@ cluster instead:
 triggers 33 segmentation calls. Verified by counting calls.
 
 **Cause:** The merge step (boundary scan, connected components, relabel)
-internally reads the label array 3 times. If the label array is a lazy dask
-graph that includes the segmentation call, each read re-evaluates the full
-pipeline — including calling your function again.
+reads the label array several times. If the label array is a lazy dask graph
+that includes the segmentation call, each read re-evaluates the full pipeline
+— including calling your function again.
 
-**Fix:** `stage=True` (the default). blockbuster writes each tile's labels to
-a temporary zarr exactly once. The merge then reads concrete on-disk data —
-your function is called exactly once per tile.
+**Fix:** blockbuster always **stages** first: it writes each tile's labels to
+a temporary zarr exactly once, then the zarr-native merge reads concrete
+on-disk data. Your function is called exactly once per tile, always. There is
+no configuration needed — and no way to accidentally disable it.
 
 ```python
-# Default (safe)
-tile_process("image.zarr", fn, write_to="labels.zarr")  # stage=True
-
-# stage=False: fn may be called multiple times per tile for slow segmenters
-tile_process("image.zarr", fn, write_to="labels.zarr", stage=False)
+# fn runs exactly once per tile
+tile_process("image.zarr", fn, write_to="labels.zarr")
 ```
+
+The temp stage store is deleted after a successful merge (pass
+`keep_stage=True` to keep it for debugging or resuming).
 
 ---
 
@@ -116,7 +117,7 @@ stays lazy; each tile is computed, written, and freed.
 | Pitfall | Symptom | How blockbuster handles it |
 |---|---|---|
 | In-process client | `FutureCancelledError` | Detected at startup, raises immediately |
-| 3-4× fn recompute | Cellpose runs 3× per tile | `stage=True` writes labels once |
+| 3-4× fn recompute | Cellpose runs 3× per tile | Always stages labels to disk once |
 | O(n²) relabelling | Graph construction hangs | Linear post-pass O(voxels) |
 | Wrong overlap boundary | Wrong output shape | Always uses `boundary="none"` |
 | Persisting large arrays | Worker OOM | Never persists; keeps dask graph lazy |

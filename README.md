@@ -233,7 +233,7 @@ tiles where the dask-image approach stalls.
 ## Requirements
 
 - Python ≥ 3.9
-- dask[array], dask-image, numpy, zarr, scipy
+- dask[array], numpy, zarr, scipy
 
 Optional:
 - `psutil` — accurate RAM sizing for `tile_shape="auto"`
