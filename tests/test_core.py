@@ -35,6 +35,35 @@ def test_tile_process_with_overlap():
     assert result.shape == (2, 64, 64)
 
 
+def test_tile_process_overlap_multitile_shape():
+    # Multiple tiles along y and x: exercises the halo trim across real
+    # interior boundaries. Output must keep the original shape (halo trimmed).
+    import dask.array as da
+    from blockbuster import tile_process
+
+    arr = da.from_array(_make_image((1, 96, 96)), chunks=(1, 48, 48))
+    result = tile_process(arr, _label_fn, overlap=8, compute=True)
+    assert result.shape == (1, 96, 96)
+
+
+def test_tile_process_merges_object_across_boundary():
+    # An object spanning a tile boundary must end up with a single label.
+    import dask.array as da
+    from blockbuster import tile_process
+
+    data = np.zeros((1, 16, 32), dtype="uint16")
+    data[0, 4:12, 8:24] = 500  # one solid block straddling the x=16 boundary
+    arr = da.from_array(data, chunks=(1, 16, 16))
+
+    def fn(tile):
+        from skimage.measure import label
+        return label(tile > 0).astype("int32")
+
+    result = tile_process(arr, fn, compute=True)
+    ids = np.unique(result[result > 0])
+    assert ids.size == 1, f"object split into {ids.size} labels, expected 1"
+
+
 def test_tile_process_write_to(tmp_path):
     import dask.array as da
     import zarr
@@ -85,6 +114,30 @@ def test_tile_process_sequential_labels():
     labels = labels[labels > 0]
     # Sequential: no gaps
     assert np.all(labels == np.arange(1, len(labels) + 1))
+
+
+def test_merge_tile_labels_standalone(tmp_path):
+    # Standalone merge of a dask array of per-tile labels: an object straddling
+    # a tile boundary must collapse to a single label.
+    import dask.array as da
+    from blockbuster import merge_tile_labels
+
+    data = np.zeros((1, 16, 32), dtype="uint16")
+    data[0, 4:12, 8:24] = 1  # block crossing the x=16 boundary
+    image = da.from_array(data, chunks=(1, 16, 16))
+
+    def fn(tile):
+        from skimage.measure import label
+        return label(tile > 0).astype("int32")
+
+    labeled = image.map_blocks(
+        fn, dtype="int32", meta=np.empty((0,) * image.ndim, dtype="int32")
+    )
+    out = str(tmp_path / "merged.zarr")
+    merged = merge_tile_labels(labeled, write_to=out, sequential_labels=True)
+    arr = merged.compute()
+    ids = np.unique(arr[arr > 0])
+    assert ids.size == 1, f"object split into {ids.size} labels, expected 1"
 
 
 def test_auto_tile_shape():
