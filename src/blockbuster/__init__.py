@@ -1,0 +1,44 @@
+"""blockbuster — tiled processing for any image, any function.
+
+Process arbitrarily large images by splitting them into overlapping tiles,
+running any callable on each tile, and stitching the results back into globally
+consistent labels.
+
+Quick start
+-----------
+>>> from blockbuster import tile_process
+>>>
+>>> def my_fn(tile):
+...     from skimage.filters import threshold_otsu
+...     from skimage.measure import label
+...     return label(tile > threshold_otsu(tile)).astype("int32")
+>>>
+>>> result = tile_process("image.zarr", my_fn, compute=True)
+
+With Cellpose:
+
+>>> from blockbuster.plugins.cellpose import cellpose_fn
+>>> fn = cellpose_fn("cyto3", gpu=True, diameter=30)
+>>> tile_process("image.zarr", fn, tile_shape=(1, 2048, 2048),
+...              overlap=20, write_to="labels.zarr", progress=True)
+"""
+
+from ._chunks import auto_tile_shape, auto_tile_shape_cellpose
+from ._cluster import make_local_cluster
+from ._core import tile_process
+from ._io import estimate_empty_tiles, load_ome_zarr
+from ._merge import merge_tile_labels
+from ._relabel import relabel_sequential_array, relabel_sequential_zarr
+
+__version__ = "0.1.0"
+__all__ = [
+    "tile_process",
+    "merge_tile_labels",
+    "auto_tile_shape",
+    "auto_tile_shape_cellpose",
+    "load_ome_zarr",
+    "estimate_empty_tiles",
+    "make_local_cluster",
+    "relabel_sequential_array",
+    "relabel_sequential_zarr",
+]
