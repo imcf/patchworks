@@ -1,0 +1,71 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "blockbuster"
+version = "0.1.0"
+description = "Tiled processing of arbitrarily large images with globally consistent labels"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [
+    { name = "IMCF Basel" },
+]
+keywords = ["image processing", "tiling", "chunked", "zarr", "dask", "segmentation", "bioimage"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Image Processing",
+]
+requires-python = ">=3.9"
+dependencies = [
+    "dask[array]>=2023.1.0",
+    "numpy>=1.24",
+    "zarr>=2.14",
+    "scipy>=1.9",
+]
+
+[project.optional-dependencies]
+io = [
+    "psutil",
+    "tqdm",
+]
+cellpose = [
+    "cellpose>=3.0",
+]
+gpu = [
+    "nvidia-ml-py",
+]
+dev = [
+    "pytest",
+    "pytest-cov",
+    "scikit-image",
+    "psutil",
+    "tqdm",
+]
+docs = [
+    "mkdocs-material>=9.0",
+    "mkdocstrings[python]>=0.24",
+]
+all = [
+    "blockbuster[io,gpu]",
+    "psutil",
+    "tqdm",
+    "scikit-image",
+]
+
+[project.urls]
+Homepage = "https://github.com/imcf/blockbuster"
+Issues = "https://github.com/imcf/blockbuster/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/blockbuster"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
