@@ -62,7 +62,6 @@ def tile_process(
     *,
     tile_shape: Union[tuple[int, ...], Callable[[tuple, Any], tuple], str, None] = None,
     overlap: int = 0,
-    iou_threshold: float = 0.8,
     channel: int | None = 0,
     level: int = 0,
     use_gpu: bool = False,
@@ -73,7 +72,6 @@ def tile_process(
     sequential_labels: bool = False,
     skip_empty: bool = False,
     empty_threshold: float | None = None,
-    stage: bool = True,
     stage_dir: Union[str, Path, None] = None,
     keep_stage: bool = False,
     verbose: bool = False,
@@ -109,13 +107,13 @@ def tile_process(
               result = tile_process("image.zarr", fn, tile_shape=tile_fn)
 
     overlap:
-        Voxels of overlap between adjacent tiles passed to *fn*.
-        - ``0`` : labels that *touch* across tile boundaries are merged.
-        - ``>0`` : labels in the overlap region are merged by IoU ≥
-          ``iou_threshold``. Prefer this for methods that need spatial context
-          near boundaries (Cellpose, StarDist, …).
-    iou_threshold:
-        Minimum IoU for two overlapping labels to be merged (overlap > 0 only).
+        Voxels of overlap (halo) added to each tile before *fn* is called, so
+        objects near tile boundaries have enough spatial context to be
+        segmented correctly (Cellpose, StarDist, …). The halo is trimmed off
+        before merging — the output has the original shape. ``0`` disables it.
+
+        Merging is always **touching-label** based: after the halo is trimmed,
+        labels that touch across a tile boundary are merged into one object.
     channel:
         Channel index when *image* is a path. Ignored for arrays.
     level:
@@ -145,22 +143,23 @@ def tile_process(
     empty_threshold:
         Intensity at or below which a tile is empty (``skip_empty=True`` only).
         None → auto-derive via Otsu on a bounded sample.
-    stage:
-        Segment each tile to a temporary zarr *once*, then merge by reading it
-        back. Default True — without staging the merge re-evaluates *fn* ~3-4×
-        per tile. Strongly recommended for slow models like Cellpose.
     stage_dir:
-        Where to put the temp stage store. Default → next to ``write_to``.
+        Where to put the temporary stage store. ``fn`` is always run once per
+        tile to this store, then the merge reads it back from disk (running
+        ``fn`` again is never needed). Default → next to ``write_to``, else next
+        to the input store, else a system temp directory.
     keep_stage:
-        Keep the temp stage store after merging (default: delete it).
+        Keep the temp stage store after merging (default: delete it). Useful
+        for debugging or resuming an interrupted run.
     verbose:
         Log each tile's location and shape as it is processed.
 
     Returns
     -------
     da.Array or np.ndarray
-        Globally relabeled array (int32). Returns a lazy ``da.Array`` unless
-        ``compute=True`` or ``write_to`` is set.
+        Globally relabeled array (int32). Returns a lazy ``da.Array`` backed by
+        ``write_to`` when ``write_to`` is set, otherwise an in-memory NumPy
+        array (the merge always materialises to disk first).
 
     Examples
     --------
@@ -204,9 +203,6 @@ def tile_process(
 
     >>> tile_process("image.zarr", fn, write_to="labels.zarr", progress=True)
     """
-    if progress and not compute and write_to is None:
-        raise ValueError("progress=True requires compute=True or write_to")
-
     # In-process dask workers break the label merge. A GIL-holding fn starves
     # the worker heartbeat and the P2P barrier drops inputs →
     # "FutureCancelledError: lost dependencies".
@@ -254,10 +250,6 @@ def tile_process(
         image = image.rechunk(tile_shape)
         logger.info("Rechunked to %s", tile_shape)
 
-    _eff_chunks: tuple[int, ...] | None = _load_chunks or (
-        tile_shape if isinstance(tile_shape, tuple) else None
-    )
-
     n_tiles = int(np.prod([len(c) for c in image.chunks]))
     logger.info(
         "Processing %d tiles (per-axis %s, tile shape %s)",
@@ -296,15 +288,20 @@ def tile_process(
             logger.debug("process tile %s shape=%s", loc, block.shape)
         return fn(block)
 
-    _use_zarr_merge = stage and (compute or write_to is not None)
-
     labeled = image.map_blocks(
         active_fn, dtype=np.int32, meta=np.empty((0,) * image.ndim, dtype=np.int32)
     )
 
-    if overlap > 0 and _use_zarr_merge:
+    # Trim the overlap halo so staged tiles have clean boundaries for the
+    # boundary-slab scan. Without this the scan reads halo-expanded chunks and
+    # the merged output is larger than the input.
+    if overlap > 0:
         labeled = da.overlap.trim_overlap(labeled, depth=_depth, boundary="none")
 
+    # With no distributed client the threaded scheduler runs many tiles at
+    # once. For GPU that means several evals sharing one device → CUDA OOM.
+    # Pin to a single worker thread so evals run serially. A distributed
+    # client manages its own concurrency, so skip the override there.
     import dask as _dask
 
     if _active is None and use_gpu:
@@ -312,60 +309,43 @@ def tile_process(
     else:
         _sched_ctx = _nullcontext()
 
-    # Stage: write each tile's labels to disk once, merge from disk
-    stage_path = None
-    if stage and (compute or write_to is not None):
-        if stage_dir is not None:
-            base = str(stage_dir)
-        elif write_to is not None:
-            base = os.path.dirname(os.path.abspath(str(write_to)))
-        elif image_source_path is not None:
-            base = os.path.dirname(os.path.abspath(image_source_path))
-        else:
-            import tempfile
-            base = tempfile.mkdtemp(prefix="bb_stage_")
-        stage_path = os.path.join(base, "_bb_stage.zarr")
-        logger.info("Staging tiles to %s …", stage_path)
-        with _sched_ctx:
-            _finalise(labeled, progress, stage_path, "staged")
-        labeled = da.from_zarr(stage_path, component="staged")
+    # Stage: run fn once per tile to a temp zarr, then the zarr-native merge
+    # reads concrete data from disk (fn is never re-run). Required because the
+    # merge scans the labels directly on disk.
+    import tempfile
 
-        if skip_empty and _skip_thr is not None:
-            def _tile_max(block: np.ndarray) -> np.ndarray:
-                return np.full((1,) * block.ndim, int(block.max()), dtype=np.int32)
-            _tile_maxes = labeled.map_blocks(
-                _tile_max, dtype=np.int32,
-                chunks=tuple(tuple(1 for _ in c) for c in labeled.chunks),
-            ).compute()
-            _n_skip = int((_tile_maxes == 0).sum())
-            logger.info(
-                "skip_empty: %d/%d tiles ran fn, %d skipped (max<=%.4g)",
-                int(_tile_maxes.size) - _n_skip, int(_tile_maxes.size), _n_skip, _skip_thr,
-            )
+    if stage_dir is not None:
+        base = str(stage_dir)
+    elif write_to is not None:
+        base = os.path.dirname(os.path.abspath(str(write_to)))
+    elif image_source_path is not None:
+        base = os.path.dirname(os.path.abspath(image_source_path))
+    else:
+        base = tempfile.mkdtemp(prefix="bb_stage_")
+    stage_path = os.path.join(base, "_bb_stage.zarr")
+    logger.info("Staging tiles to %s …", stage_path)
+    with _sched_ctx:
+        _finalise(labeled, progress, stage_path, "staged")
+    labeled = da.from_zarr(stage_path, component="staged")
+
+    if skip_empty and _skip_thr is not None:
+        def _tile_max(block: np.ndarray) -> np.ndarray:
+            return np.full((1,) * block.ndim, int(block.max()), dtype=np.int32)
+        _tile_maxes = labeled.map_blocks(
+            _tile_max, dtype=np.int32,
+            chunks=tuple(tuple(1 for _ in c) for c in labeled.chunks),
+        ).compute()
+        _n_skip = int((_tile_maxes == 0).sum())
+        logger.info(
+            "skip_empty: %d/%d tiles ran fn, %d skipped (max<=%.4g)",
+            int(_tile_maxes.size) - _n_skip, int(_tile_maxes.size), _n_skip, _skip_thr,
+        )
 
     def _cleanup_stage():
-        if stage_path is not None and not keep_stage:
+        if not keep_stage:
             import shutil
             shutil.rmtree(stage_path, ignore_errors=True)
             logger.info("Removed stage store %s", stage_path)
-
-    # Zarr-native merge (boundary scan → scipy CC → parallel relabel).
-    # Works whether or not staging happened. If stage=False, we stage now.
-    import tempfile
-
-    if stage_path is None:
-        # Wasn't staged yet (stage=False): write labeled tiles to a temp zarr.
-        import dask
-        from dask.diagnostics import ProgressBar
-
-        _stage_base = str(stage_dir) if stage_dir is not None else tempfile.mkdtemp(prefix="bb_stage_")
-        stage_path = os.path.join(_stage_base, "_bb_stage.zarr")
-        ctx = ProgressBar() if progress else _nullcontext()
-        logger.info("Staging per-tile labels to %s …", stage_path)
-        with ctx:
-            dask.compute(
-                labeled.to_zarr(stage_path, component="staged", overwrite=True, compute=False)
-            )
 
     _nw = min(4, os.cpu_count() or 1)
 
