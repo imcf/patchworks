@@ -12,7 +12,7 @@ body = """
 ### 👥 Contributors
 
 {% for contributor in github.contributors | sort(attribute="username") %}\
-- [<img src="https://github.com/{{ contributor.username }}.png?size=24" width="24" height="24" alt="@{{ contributor.username }}" />](https://github.com/{{ contributor.username }}) [@{{ contributor.username }}](https://github.com/{{ contributor.username }})
+* @{{ contributor.username }}
 {% endfor %}
 {% endif %}\
 """
