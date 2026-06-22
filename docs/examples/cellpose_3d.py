@@ -6,7 +6,11 @@ xy, xz, and yz planes and takes a 3-D consensus.
 
 from functools import partial
 
-from patchworks import auto_tile_shape_cellpose, make_local_cluster, tile_process
+from patchworks import (
+    auto_tile_shape_cellpose,
+    make_local_cluster,
+    tile_process,
+)
 from patchworks.plugins.cellpose import cellpose_fn
 
 IMAGE = "image.zarr"

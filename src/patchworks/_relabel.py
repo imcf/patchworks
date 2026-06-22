@@ -60,7 +60,8 @@ def relabel_sequential_zarr(store_path: str, component: str = "labels") -> int:
     n_per_dim = [(s + c - 1) // c for s, c in zip(z_shape, z_chunks)]
     chunk_slices = [
         tuple(
-            slice(i * c, min((i + 1) * c, s)) for i, c, s in zip(idx, z_chunks, z_shape)
+            slice(i * c, min((i + 1) * c, s))
+            for i, c, s in zip(idx, z_chunks, z_shape)
         )
         for idx in _iproduct(*[range(n) for n in n_per_dim])
     ]

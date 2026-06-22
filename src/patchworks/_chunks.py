@@ -140,10 +140,14 @@ def auto_tile_shape(
     target_side = int(target_voxels ** (1.0 / n_spatial))
     chunk_spatial = [min(s, target_side) for s in spatial]
 
-    capped = [i for i, (c, s) in enumerate(zip(chunk_spatial, spatial)) if c == s]
+    capped = [
+        i for i, (c, s) in enumerate(zip(chunk_spatial, spatial)) if c == s
+    ]
     uncapped = [i for i in range(n_spatial) if i not in capped]
     if uncapped:
-        used_by_capped = np.prod([chunk_spatial[i] for i in capped]) if capped else 1
+        used_by_capped = (
+            np.prod([chunk_spatial[i] for i in capped]) if capped else 1
+        )
         remaining = target_voxels / max(1, used_by_capped)
         new_side = int(remaining ** (1.0 / len(uncapped)))
         for i in uncapped:

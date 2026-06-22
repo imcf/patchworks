@@ -49,7 +49,9 @@ def tile_process(
     image: Union[da.Array, str, Path],
     fn: Callable[[np.ndarray], np.ndarray],
     *,
-    tile_shape: Union[tuple[int, ...], Callable[[tuple, Any], tuple], str, None] = None,
+    tile_shape: Union[
+        tuple[int, ...], Callable[[tuple, Any], tuple], str, None
+    ] = None,
     overlap: int = 0,
     channel: int | None = 0,
     level: int = 0,
@@ -259,7 +261,8 @@ def tile_process(
     # An integer depth raises if any axis is smaller than the depth, so we
     # cap per axis. In practice z-axis of size 1 (2-D Cellpose) gets depth=0.
     _depth: dict[int, int] = {
-        ax: min(overlap, max(0, sum(c) - 1)) for ax, c in enumerate(image.chunks)
+        ax: min(overlap, max(0, sum(c) - 1))
+        for ax, c in enumerate(image.chunks)
     }
 
     if overlap > 0:
@@ -283,14 +286,18 @@ def tile_process(
         return fn(block)
 
     labeled = image.map_blocks(
-        active_fn, dtype=np.int32, meta=np.empty((0,) * image.ndim, dtype=np.int32)
+        active_fn,
+        dtype=np.int32,
+        meta=np.empty((0,) * image.ndim, dtype=np.int32),
     )
 
     # Trim the overlap halo so staged tiles have clean boundaries for the
     # boundary-slab scan. Without this the scan reads halo-expanded chunks and
     # the merged output is larger than the input.
     if overlap > 0:
-        labeled = da.overlap.trim_overlap(labeled, depth=_depth, boundary="none")
+        labeled = da.overlap.trim_overlap(
+            labeled, depth=_depth, boundary="none"
+        )
 
     # With no distributed client the threaded scheduler runs many tiles at
     # once. For GPU that means several evals sharing one device → CUDA OOM.
@@ -356,7 +363,9 @@ def tile_process(
         _effective_out = os.path.join(
             tempfile.mkdtemp(prefix="bb_merge_"), "merged.zarr"
         )
-        logger.info("write_to not set — merged labels in auto-temp %s", _effective_out)
+        logger.info(
+            "write_to not set — merged labels in auto-temp %s", _effective_out
+        )
 
     zarr_native_merge(
         stage_path,
