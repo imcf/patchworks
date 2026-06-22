@@ -189,7 +189,9 @@ def test_merge_isolated_labels_not_merged(tmp_path):
     zarr_native_merge(sp, "staged", out, "labels", n_workers=1)
     r = np.asarray(zarr.open_group(out)["labels"])
     unique = set(np.unique(r[r > 0]).tolist())
-    assert len(unique) == 2, f"isolated labels were incorrectly merged: {unique}"
+    assert len(unique) == 2, (
+        f"isolated labels were incorrectly merged: {unique}"
+    )
 
 
 def test_auto_tile_shape():

@@ -57,7 +57,9 @@ _merge_out_comp: "str | None" = None
 def _init_worker(lut_path, staged_path, staged_comp, out_path, out_comp):
     global _merge_lut, _merge_lut_path, _merge_staged_path, _merge_staged_comp
     global _merge_out_path, _merge_out_comp
-    _merge_lut = np.load(lut_path, mmap_mode="r")  # shared read-only via OS page cache
+    _merge_lut = np.load(
+        lut_path, mmap_mode="r"
+    )  # shared read-only via OS page cache
     _merge_lut_path = lut_path
     _merge_staged_path = staged_path
     _merge_staged_comp = staged_comp
@@ -123,7 +125,9 @@ def _scan_touching_pairs(
             b_vals = slab[1].ravel().astype(np.int64)
             mask = (a_vals > 0) & (b_vals > 0) & (a_vals != b_vals)
             if mask.any():
-                pairs = np.sort(np.stack([a_vals[mask], b_vals[mask]], axis=1), axis=1)
+                pairs = np.sort(
+                    np.stack([a_vals[mask], b_vals[mask]], axis=1), axis=1
+                )
                 all_pairs.append(np.unique(pairs, axis=0))
     if not all_pairs:
         return np.empty((0, 2), dtype=np.int64)
@@ -167,8 +171,12 @@ def _create_zarr_label_array(
     if name in group:
         del group[name]
     if _ZARR_V3:
-        return group.create_array(name, shape=shape, chunks=chunks, dtype=np.int32)
-    return group.zeros(name, shape=shape, chunks=chunks, dtype=np.int32, overwrite=True)
+        return group.create_array(
+            name, shape=shape, chunks=chunks, dtype=np.int32
+        )
+    return group.zeros(
+        name, shape=shape, chunks=chunks, dtype=np.int32, overwrite=True
+    )
 
 
 def zarr_native_merge(
@@ -202,11 +210,15 @@ def zarr_native_merge(
     n_faces = len(_boundary_face_specs(shape, chunk_shape))
     logger.info("zarr_native_merge: scanning %d boundary faces…", n_faces)
     pairs = _scan_touching_pairs(staged_path, staged_component, chunk_shape)
-    logger.info("zarr_native_merge: %d touching pairs → building LUT", len(pairs))
+    logger.info(
+        "zarr_native_merge: %d touching pairs → building LUT", len(pairs)
+    )
 
     lut = _build_relabel_lut(pairs, max_label)
     n_remapped = int((lut != np.arange(len(lut), dtype=np.int64)).sum())
-    logger.info("zarr_native_merge: %d labels remapped across boundaries", n_remapped)
+    logger.info(
+        "zarr_native_merge: %d labels remapped across boundaries", n_remapped
+    )
 
     out_root = zarr.open_group(out_path, mode="a")
     _create_zarr_label_array(out_root, out_component, shape, chunk_shape)
@@ -222,7 +234,9 @@ def zarr_native_merge(
     n_chunks = len(chunk_slices)
     n_w = max(1, min(n_workers, n_chunks))
     logger.info(
-        "zarr_native_merge: relabeling %d chunks with %d worker(s)…", n_chunks, n_w
+        "zarr_native_merge: relabeling %d chunks with %d worker(s)…",
+        n_chunks,
+        n_w,
     )
 
     # Save LUT to a temp .npy file so workers memory-map it (shared OS page cache).
@@ -377,7 +391,9 @@ def merge_tile_labels(
     else:
         # labeled is a dask array
         if overlap > 0:
-            labeled = da.overlap.trim_overlap(labeled, depth=overlap, boundary="none")
+            labeled = da.overlap.trim_overlap(
+                labeled, depth=overlap, boundary="none"
+            )
 
         _base = (
             str(stage_dir)
@@ -408,7 +424,9 @@ def merge_tile_labels(
         effective_out = os.path.join(
             tempfile.mkdtemp(prefix="bb_merge_"), "merged.zarr"
         )
-        logger.info("write_to not set — merged labels in auto-temp %s", effective_out)
+        logger.info(
+            "write_to not set — merged labels in auto-temp %s", effective_out
+        )
 
     # -- Merge --
     zarr_native_merge(

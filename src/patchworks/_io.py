@@ -83,7 +83,9 @@ def _otsu_threshold(sample: np.ndarray) -> float:
         return 0.0
 
 
-def _auto_empty_threshold(image: da.Array, channel: int | None, level: int) -> float:
+def _auto_empty_threshold(
+    image: da.Array, channel: int | None, level: int
+) -> float:
     """Pick an empty-tile threshold from a cheap bounded sample (Otsu)."""
     n = image.ndim
     win = [min(64 if i >= n - 3 else s, s) for i, s in enumerate(image.shape)]
@@ -100,7 +102,9 @@ def _auto_empty_threshold(image: da.Array, channel: int | None, level: int) -> f
         samples.append(np.asarray(image[sl]).ravel())
     sample = np.concatenate(samples)
     thr = _otsu_threshold(sample)
-    logger.info("Auto empty_threshold=%.3g (Otsu on %d samples)", thr, len(samples))
+    logger.info(
+        "Auto empty_threshold=%.3g (Otsu on %d samples)", thr, len(samples)
+    )
     return thr
 
 
@@ -191,7 +195,11 @@ def estimate_empty_tiles(
         if z_src is not None:
             block = np.asarray(z_src[_ch_prefix + tuple(sl)])
         else:
-            sub = arr[(...,) + tuple(sl)] if arr.ndim > n_spatial else arr[tuple(sl)]
+            sub = (
+                arr[(...,) + tuple(sl)]
+                if arr.ndim > n_spatial
+                else arr[tuple(sl)]
+            )
             block = np.asarray(sub)
 
         tile_maxes[idx] = float(block.max()) if block.size else 0.0
@@ -200,7 +208,9 @@ def estimate_empty_tiles(
         # block freed here — not stored
 
     if threshold is None:
-        threshold = _otsu_threshold(np.concatenate(samples) if samples else np.zeros(1))
+        threshold = _otsu_threshold(
+            np.concatenate(samples) if samples else np.zeros(1)
+        )
 
     occupancy = np.zeros(grid, dtype=bool)
     for idx, mx in tile_maxes.items():
