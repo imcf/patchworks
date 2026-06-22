@@ -52,7 +52,9 @@ logger = logging.getLogger(__name__)
 
 _NGFF_VERSION = "0.4"
 _SPATIAL_AXES = frozenset("zyx")
-_DEFAULT_ORDER = "tczyx"  # axis names assigned to a bare N-D array, from the right
+_DEFAULT_ORDER = (
+    "tczyx"  # axis names assigned to a bare N-D array, from the right
+)
 
 
 def _default_axes(ndim: int) -> str:
@@ -207,11 +209,13 @@ def to_ome_zarr(
     for i in range(n_levels):
         da.to_zarr(level, out, component=str(i), overwrite=overwrite)
         # NGFF scale transform: downscale**i on spatial axes, 1.0 elsewhere.
-        scale = [float(s ** i) for s in strides]
+        scale = [float(s**i) for s in strides]
         datasets.append(
             {
                 "path": str(i),
-                "coordinateTransformations": [{"type": "scale", "scale": scale}],
+                "coordinateTransformations": [
+                    {"type": "scale", "scale": scale}
+                ],
             }
         )
         logger.info("OME-ZARR level %d: shape=%s -> %s", i, level.shape, out)
@@ -219,7 +223,9 @@ def to_ome_zarr(
         # Stop once another downsample would erase a spatial dimension.
         next_shape = tuple(s // st for s, st in zip(level.shape, strides))
         if i + 1 < n_levels and min(next_shape) < 1:
-            logger.info("stopping pyramid at level %d (next level too small)", i)
+            logger.info(
+                "stopping pyramid at level %d (next level too small)", i
+            )
             break
         level = level[tuple(slice(None, None, st) for st in strides)]
         if chunks is not None:

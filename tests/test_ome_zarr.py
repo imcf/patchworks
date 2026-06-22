@@ -39,7 +39,9 @@ def test_non_spatial_axis_not_downsampled(tmp_path):
 
 def test_axes_length_mismatch(tmp_path):
     with pytest.raises(ValueError):
-        to_ome_zarr(np.zeros((4, 4), "uint8"), tmp_path / "bad.zarr", axes="zyx")
+        to_ome_zarr(
+            np.zeros((4, 4), "uint8"), tmp_path / "bad.zarr", axes="zyx"
+        )
 
 
 def test_unreadable_format_without_bioio(tmp_path):
