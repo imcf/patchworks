@@ -1,7 +1,6 @@
 """Self-contained tests for patchworks. No frameworks, no fixtures."""
 
 import numpy as np
-import pytest
 
 
 def _make_image(shape=(4, 64, 64), dtype="uint16"):
@@ -149,7 +148,6 @@ def test_merge_tile_labels_standalone(tmp_path):
 def test_merge_transitive_three_tiles(tmp_path):
     # A cell that spans 3 tiles (A→B→C) must be merged into one label even
     # though A and C never directly touch. Transitivity via connected_components.
-    import dask.array as da
     import zarr
 
     from patchworks._merge import zarr_native_merge
@@ -172,7 +170,6 @@ def test_merge_transitive_three_tiles(tmp_path):
 
 def test_merge_isolated_labels_not_merged(tmp_path):
     # Two cells that never touch across any boundary must stay separate.
-    import dask.array as da
     import zarr
 
     from patchworks._merge import zarr_native_merge
