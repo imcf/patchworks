@@ -101,7 +101,10 @@ def test_tile_process_skip_empty():
         call_count[0] += 1
         return _label_fn(tile)
 
-    tile_process(arr, counting_fn, skip_empty=True, empty_threshold=0)
+    # overlap=0 so empty tiles are not fed signal from a neighbour's halo
+    tile_process(
+        arr, counting_fn, overlap=0, skip_empty=True, empty_threshold=0
+    )
     # With staging, fn is called once per non-empty tile
     assert call_count[0] == 2, f"Expected 2 fn calls, got {call_count[0]}"
 
@@ -154,7 +157,9 @@ def test_merge_transitive_three_tiles(tmp_path):
 
     sp = str(tmp_path / "stage.zarr")
     root = zarr.open_group(sp, mode="w")
-    a = root.zeros("staged", shape=(3, 4, 4), chunks=(1, 4, 4), dtype=np.int32)
+    a = root.zeros(
+        name="staged", shape=(3, 4, 4), chunks=(1, 4, 4), dtype=np.int32
+    )
     a[0] = np.full((4, 4), 10)  # label 10 in tile 0
     a[1] = np.full((4, 4), 20)  # label 20 in tile 1 (touches 10 and 30)
     a[2] = np.full((4, 4), 30)  # label 30 in tile 2
@@ -176,7 +181,9 @@ def test_merge_isolated_labels_not_merged(tmp_path):
 
     sp = str(tmp_path / "stage.zarr")
     root = zarr.open_group(sp, mode="w")
-    a = root.zeros("staged", shape=(2, 4, 8), chunks=(1, 4, 4), dtype=np.int32)
+    a = root.zeros(
+        name="staged", shape=(2, 4, 8), chunks=(1, 4, 4), dtype=np.int32
+    )
     # tile (z=0, x-left): label 1 only in left half, no boundary voxel
     # tile (z=0, x-right): label 2 only in right half
     # They share the x=4 boundary but fill opposite ends → no touching voxel

@@ -52,13 +52,15 @@ def tile_process(
     tile_shape: Union[
         tuple[int, ...], Callable[[tuple, Any], tuple], str, None
     ] = None,
-    overlap: int = 0,
+    overlap: int = 16,
     channel: int | None = 0,
     level: int = 0,
     use_gpu: bool = False,
     progress: bool = False,
     write_to: Union[str, Path, None] = None,
     output_component: str = "labels",
+    pyramid_levels: int = 5,
+    pyramid_downscale: int = 2,
     sequential_labels: bool = False,
     skip_empty: bool = False,
     empty_threshold: float | None = None,
@@ -100,7 +102,9 @@ def tile_process(
         Voxels of overlap (halo) added to each tile before *fn* is called, so
         objects near tile boundaries have enough spatial context to be
         segmented correctly (Cellpose, StarDist, …). The halo is trimmed off
-        before merging — the output has the original shape. ``0`` disables it.
+        before merging — the output has the original shape. Defaults to ``16``;
+        set it to roughly one object diameter (see ``auto_overlap``) for best
+        results, or ``0`` to disable.
 
         Merging is always **touching-label** based: after the halo is trimmed,
         labels that touch across a tile boundary are merged into one object.
@@ -113,10 +117,23 @@ def tile_process(
     progress:
         Show a progress bar during the tile-writing and relabel steps.
     write_to:
-        Output zarr store path. When None, an auto-temp store is used and its
-        path is logged. Pass an explicit path to control the output location.
+        Explicit output zarr store path. Overrides the default behaviour: the
+        merged labels are written here as a single-resolution array named
+        ``output_component`` (no pyramid). When None (default) and *image* is a
+        ``.zarr`` store, labels are written back into that store under the NGFF
+        ``labels/<output_component>/`` group with an auto pyramid, so the image
+        and its segmentation live in one file. When None and *image* is an
+        array, an auto-temp store is used.
     output_component:
-        Array name inside ``write_to``. Default ``"labels"``.
+        Label name. The array inside ``write_to``, or the NGFF label image name
+        under ``labels/`` when writing into the input store. Default
+        ``"labels"``.
+    pyramid_levels:
+        Number of resolution levels for the in-store label pyramid (only when
+        writing into the input ``.zarr``). Default 5.
+    pyramid_downscale:
+        Per-level X/Y downsampling factor for that pyramid (Z is kept at full
+        resolution). Default 2.
     sequential_labels:
         Renumber merged labels to a contiguous ``1..N`` range. Default False —
         labels stay globally unique but gappy (block-encoded), which is fine for
@@ -144,9 +161,10 @@ def tile_process(
     Returns
     -------
     da.Array
-        Globally relabeled array (int32) backed by ``write_to`` (or an
-        auto-temp zarr when ``write_to`` is None). Never loads the full volume
-        into RAM. Call ``.compute()`` yourself only if the result fits in RAM.
+        Globally relabeled array (int32) backed by the output zarr (the input
+        store's ``labels/<name>/0`` by default, ``write_to`` when given, else an
+        auto-temp zarr). Never loads the full volume into RAM. Call
+        ``.compute()`` yourself only if the result fits in RAM.
 
     Examples
     --------
@@ -357,30 +375,57 @@ def tile_process(
 
     _nw = min(4, os.cpu_count() or 1)
 
+    # Default: input is a .zarr store and no explicit write_to → labels go back
+    # *into* the input store under the NGFF labels/<name>/ group with an auto
+    # pyramid, so image + segmentation live in one OME-ZARR.
+    _into_input = (
+        write_to is None
+        and image_source_path is not None
+        and image_source_path.endswith(".zarr")
+    )
+
+    # The merge always writes its result to a concrete store first.
     if write_to is not None:
-        _effective_out = str(write_to)
+        _merge_out = str(write_to)
     else:
-        _effective_out = os.path.join(
+        _merge_out = os.path.join(
             tempfile.mkdtemp(prefix="bb_merge_"), "merged.zarr"
-        )
-        logger.info(
-            "write_to not set — merged labels in auto-temp %s", _effective_out
         )
 
     zarr_native_merge(
         stage_path,
         "staged",
-        _effective_out,
+        _merge_out,
         output_component,
         n_workers=_nw,
         show_progress=progress,
     )
     if sequential_labels:
         logger.info("Relabelling to contiguous ids…")
-        relabel_sequential_zarr(_effective_out, output_component)
+        relabel_sequential_zarr(_merge_out, output_component)
     _cleanup_stage()
 
-    # Always return a lazy dask array backed by the output zarr.
-    # Never load the full volume into RAM here — the merge already materialised
-    # to disk (auto-temp when write_to=None). Caller can .compute() if needed.
-    return da.from_zarr(_effective_out, component=output_component)
+    merged = da.from_zarr(_merge_out, component=output_component)
+    if not _into_input:
+        # Lazy dask array backed by the merge store. Never loads the full
+        # volume into RAM. Caller can .compute() if it fits.
+        return merged
+
+    # Stream the merged labels into the input store as an NGFF label pyramid,
+    # then drop the temporary merge store. write_labels uses da.to_zarr, so
+    # this is chunk-streamed and OOM-safe.
+    import shutil
+
+    from .plugins.ome_zarr import write_labels
+
+    label_group = write_labels(
+        image_source_path,
+        merged,
+        name=output_component,
+        n_levels=pyramid_levels,
+        downscale=pyramid_downscale,
+        overwrite=True,
+    )
+    shutil.rmtree(os.path.dirname(_merge_out), ignore_errors=True)
+    logger.info("labels stored in input OME-ZARR under %s", label_group)
+    return da.from_zarr(label_group, component="0")
