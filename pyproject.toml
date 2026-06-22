@@ -46,6 +46,8 @@ gpu = ["nvidia-ml-py"]
 # OME-ZARR; install a matching reader plugin too (e.g. bioio-ome-tiff,
 # bioio-czi, bioio-lif, bioio-nd2).
 bioio = ["bioio"]
+# napari enables the interactive viewer plugin (GUI-heavy, kept out of [all]).
+napari = ["napari[all]"]
 dev = ["pytest", "pytest-cov", "scikit-image", "psutil", "tqdm"]
 docs = ["mkdocs-material>=9.0", "mkdocstrings[python]>=0.24"]
 all = ["patchworks[io,gpu,bioio]", "psutil", "tqdm", "scikit-image"]

@@ -34,8 +34,13 @@ Optional extras:
 ```bash
 pip install "patchworks[gpu]"      # GPU VRAM querying (nvidia-ml-py)
 pip install "patchworks[cellpose]" # Cellpose plugin
-pip install "patchworks[all]"      # Everything
+pip install "patchworks[bioio]"    # convert any image format to OME-ZARR
+pip install "patchworks[napari]"   # interactive napari viewer plugin
+pip install "patchworks[all]"      # Everything (except napari GUI)
 ```
+
+> `bioio` reads CZI/LIF/ND2/OME-TIFF/… — install a matching reader plugin too
+> (e.g. `bioio-ome-tiff`, `bioio-czi`, `bioio-lif`, `bioio-nd2`).
 
 ---
 
