@@ -18,7 +18,7 @@ from patchworks.plugins.cellpose import cellpose_fn
 IMAGE = "image.zarr"
 OUTPUT = "labels_3d.zarr"
 CHANNEL = 0
-DIAMETER = 20     # pixels
+DIAMETER = 20  # pixels
 ANISOTROPY = 3.0  # z_spacing / xy_spacing
 
 fn = cellpose_fn(
@@ -45,7 +45,8 @@ print("Dashboard:", client.dashboard_link)
 
 try:
     tile_process(
-        IMAGE, fn,
+        IMAGE,
+        fn,
         channel=CHANNEL,
         tile_shape=tile_fn,
         overlap=10,

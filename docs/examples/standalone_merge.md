@@ -13,12 +13,15 @@ from patchworks import merge_tile_labels
 # Your own tiling + segmentation
 image = da.from_zarr("image.zarr").rechunk((1, 1024, 1024))
 
+
 def my_fn(tile: np.ndarray) -> np.ndarray:
     ...  # your segmentation code
     return labels.astype("int32")
 
+
 labeled = image.map_blocks(
-    my_fn, dtype="int32",
+    my_fn,
+    dtype="int32",
     meta=np.empty((0,) * image.ndim, dtype="int32"),
 )
 
@@ -37,7 +40,7 @@ merged = merge_tile_labels(
     "my_staged_labels.zarr",
     input_component="raw_labels",  # component name inside the zarr
     write_to="merged.zarr",
-    sequential_labels=True,        # renumber to 1..N
+    sequential_labels=True,  # renumber to 1..N
 )
 ```
 
@@ -64,5 +67,6 @@ use `merge_tile_labels`:
 labeled = your_pipeline(da.from_zarr("image.zarr"))  # dask.array.Array
 
 from patchworks import merge_tile_labels
+
 merged = merge_tile_labels(labeled, write_to="final.zarr")
 ```

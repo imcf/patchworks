@@ -3,6 +3,7 @@
 patchworks doesn't care what's inside fn. Here's a more elaborate example
 using scipy + skimage with preprocessing.
 """
+
 import numpy as np
 from scipy.ndimage import gaussian_filter
 from skimage.filters import threshold_otsu

@@ -70,8 +70,9 @@ from patchworks import merge_tile_labels
 
 # From a dask array (your own tiling pipeline)
 image = da.from_zarr("image.zarr").rechunk((1, 1024, 1024))
-labeled = image.map_blocks(my_fn, dtype="int32",
-                            meta=np.empty((0,) * image.ndim, dtype="int32"))
+labeled = image.map_blocks(
+    my_fn, dtype="int32", meta=np.empty((0,) * image.ndim, dtype="int32")
+)
 merged = merge_tile_labels(labeled, write_to="labels.zarr")
 
 # From a zarr your pipeline already wrote
@@ -92,8 +93,7 @@ counting, `regionprops`, and measurement — the IDs just aren't consecutive.
 For contiguous 1..N numbering, use `sequential_labels=True`:
 
 ```python
-tile_process("image.zarr", fn, write_to="labels.zarr",
-             sequential_labels=True)
+tile_process("image.zarr", fn, write_to="labels.zarr", sequential_labels=True)
 ```
 
 This runs a cheap linear post-pass: `np.unique` + lookup-table remap, O(voxels).

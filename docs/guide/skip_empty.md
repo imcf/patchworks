@@ -27,7 +27,8 @@ print(f"Threshold: {info['threshold']:.1f}")
 
 # Step 2: run with skip_empty
 tile_process(
-    "image.zarr", fn,
+    "image.zarr",
+    fn,
     tile_shape=TILE,
     skip_empty=True,
     empty_threshold=info["threshold"],  # or let patchworks auto-derive it
@@ -65,17 +66,21 @@ distribution (background vs signal).
 You can also set it explicitly:
 
 ```python
-info = estimate_empty_tiles("image.zarr", tile_shape=(120, 697, 697),
-                             threshold=200.0)  # anything ≤ 200 → empty
+info = estimate_empty_tiles(
+    "image.zarr", tile_shape=(120, 697, 697), threshold=200.0
+)  # anything ≤ 200 → empty
 ```
 
 Or let patchworks auto-derive it at runtime:
 
 ```python
-tile_process("image.zarr", fn,
-             skip_empty=True,
-             # empty_threshold=None → auto-derive from a bounded sample
-             write_to="labels.zarr")
+tile_process(
+    "image.zarr",
+    fn,
+    skip_empty=True,
+    # empty_threshold=None → auto-derive from a bounded sample
+    write_to="labels.zarr",
+)
 ```
 
 ## Empty fraction report

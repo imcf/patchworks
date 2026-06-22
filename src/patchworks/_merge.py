@@ -16,6 +16,7 @@ Public API
 dask arrays or pre-staged zarr stores. Use this directly if you already have
 per-tile labels and just need the boundary-stitching step.
 """
+
 from __future__ import annotations
 
 import logging
@@ -122,9 +123,7 @@ def _scan_touching_pairs(
             b_vals = slab[1].ravel().astype(np.int64)
             mask = (a_vals > 0) & (b_vals > 0) & (a_vals != b_vals)
             if mask.any():
-                pairs = np.sort(
-                    np.stack([a_vals[mask], b_vals[mask]], axis=1), axis=1
-                )
+                pairs = np.sort(np.stack([a_vals[mask], b_vals[mask]], axis=1), axis=1)
                 all_pairs.append(np.unique(pairs, axis=0))
     if not all_pairs:
         return np.empty((0, 2), dtype=np.int64)
@@ -137,7 +136,8 @@ def _build_relabel_lut(pairs: np.ndarray, max_label: int) -> np.ndarray:
         logger.warning(
             "_build_relabel_lut: max_label=%d → LUT ~%.0f MB. "
             "Memory use is bounded but large LUTs slow the merge.",
-            max_label, max_label * 8 / 1024**2,
+            max_label,
+            max_label * 8 / 1024**2,
         )
     lut = np.arange(max_label + 1, dtype=np.int64)
     if len(pairs) == 0 or max_label == 0:
@@ -189,9 +189,14 @@ def zarr_native_merge(
     arr = root[staged_component]
     shape, chunk_shape = arr.shape, arr.chunks
 
-    max_label = int(da.from_zarr(staged_path, component=staged_component).max().compute())
+    max_label = int(
+        da.from_zarr(staged_path, component=staged_component).max().compute()
+    )
     logger.info(
-        "zarr_native_merge: shape=%s chunks=%s max_label=%d", shape, chunk_shape, max_label
+        "zarr_native_merge: shape=%s chunks=%s max_label=%d",
+        shape,
+        chunk_shape,
+        max_label,
     )
 
     n_faces = len(_boundary_face_specs(shape, chunk_shape))
@@ -216,7 +221,9 @@ def zarr_native_merge(
     ]
     n_chunks = len(chunk_slices)
     n_w = max(1, min(n_workers, n_chunks))
-    logger.info("zarr_native_merge: relabeling %d chunks with %d worker(s)…", n_chunks, n_w)
+    logger.info(
+        "zarr_native_merge: relabeling %d chunks with %d worker(s)…", n_chunks, n_w
+    )
 
     # Save LUT to a temp .npy file so workers memory-map it (shared OS page cache).
     # Pickling the LUT array directly via multiprocessing initargs would
@@ -228,7 +235,9 @@ def zarr_native_merge(
 
     try:
         if n_w <= 1:
-            _init_worker(lut_path, staged_path, staged_component, out_path, out_component)
+            _init_worker(
+                lut_path, staged_path, staged_component, out_path, out_component
+            )
             it: Any = chunk_slices
             if show_progress and _tqdm is not None:
                 it = _tqdm(it, total=n_chunks, desc="relabel chunks")
@@ -238,7 +247,13 @@ def zarr_native_merge(
             with _Pool(
                 processes=n_w,
                 initializer=_init_worker,
-                initargs=(lut_path, staged_path, staged_component, out_path, out_component),
+                initargs=(
+                    lut_path,
+                    staged_path,
+                    staged_component,
+                    out_path,
+                    out_component,
+                ),
             ) as pool:
                 it = pool.imap_unordered(_relabel_chunk_worker, chunk_slices)
                 if show_progress and _tqdm is not None:
@@ -247,6 +262,7 @@ def zarr_native_merge(
                     pass
     finally:
         import shutil
+
         shutil.rmtree(_lut_dir, ignore_errors=True)
 
 
@@ -346,6 +362,7 @@ def merge_tile_labels(
     >>> merged = merge_tile_labels(labeled, write_to="labels.zarr", overlap=20)
     """
     import dask.array as da
+
     from ._relabel import relabel_sequential_zarr
 
     nw = n_workers if n_workers is not None else min(4, os.cpu_count() or 1)
@@ -362,8 +379,12 @@ def merge_tile_labels(
         if overlap > 0:
             labeled = da.overlap.trim_overlap(labeled, depth=overlap, boundary="none")
 
-        _base = str(stage_dir) if stage_dir is not None else tempfile.mkdtemp(prefix="bb_stage_")
-        stage_path = os.path.join(_base, "_bb_stage.zarr")
+        _base = (
+            str(stage_dir)
+            if stage_dir is not None
+            else tempfile.mkdtemp(prefix="pws_stage_")
+        )
+        stage_path = os.path.join(_base, "_pws_stage.zarr")
 
         import dask
         from dask.diagnostics import ProgressBar
@@ -372,7 +393,12 @@ def merge_tile_labels(
         logger.info("Staging per-tile labels to %s …", stage_path)
         with ctx:
             dask.compute(
-                labeled.to_zarr(stage_path, component=staged_component, overwrite=True, compute=False)
+                labeled.to_zarr(
+                    stage_path,
+                    component=staged_component,
+                    overwrite=True,
+                    compute=False,
+                )
             )
 
     # -- Resolve output path --
@@ -386,8 +412,10 @@ def merge_tile_labels(
 
     # -- Merge --
     zarr_native_merge(
-        stage_path, staged_component,
-        effective_out, output_component,
+        stage_path,
+        staged_component,
+        effective_out,
+        output_component,
         n_workers=nw,
         show_progress=progress,
     )
@@ -399,6 +427,7 @@ def merge_tile_labels(
     # -- Cleanup temp stage (only when we created it) --
     if not isinstance(labeled, (str, Path)) and not keep_stage:
         import shutil
+
         shutil.rmtree(stage_path, ignore_errors=True)
         logger.info("Removed stage store %s", stage_path)
 

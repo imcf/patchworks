@@ -11,12 +11,15 @@ from patchworks.plugins.cellpose import cellpose_fn
 from patchworks import tile_process
 
 fn = cellpose_fn("cyto3", gpu=True, diameter=30)
-tile_process("image.zarr", fn,
-             tile_shape=(1, 2048, 2048),
-             overlap=20,
-             use_gpu=True,         # sizes tiles against GPU VRAM
-             write_to="labels.zarr",
-             progress=True)
+tile_process(
+    "image.zarr",
+    fn,
+    tile_shape=(1, 2048, 2048),
+    overlap=20,
+    use_gpu=True,  # sizes tiles against GPU VRAM
+    write_to="labels.zarr",
+    progress=True,
+)
 ```
 
 ## Dask distributed cluster
@@ -33,11 +36,14 @@ client, cluster = make_local_cluster(use_gpu=True)  # 1 worker, processes=True
 print("Dashboard:", client.dashboard_link)
 
 try:
-    tile_process("image.zarr", fn,
-                 tile_shape=(1, 2048, 2048),
-                 overlap=20,
-                 write_to="labels.zarr",
-                 progress=True)
+    tile_process(
+        "image.zarr",
+        fn,
+        tile_shape=(1, 2048, 2048),
+        overlap=20,
+        write_to="labels.zarr",
+        progress=True,
+    )
 finally:
     client.close()
     cluster.close()

@@ -1,4 +1,5 @@
 """Auto tile-shape estimation."""
+
 from __future__ import annotations
 
 import logging
@@ -43,12 +44,14 @@ def auto_overlap(diameter: float, safety: float = 1.0) -> int:
     """
     return max(1, int(np.ceil(diameter * safety)))
 
+
 _GPU_MEMORY_FALLBACK = 8 * 1024**3
 
 
 def _get_available_memory() -> int:
     try:
         import psutil
+
         return int(psutil.virtual_memory().available)
     except Exception:
         return 8 * 1024**3
@@ -58,6 +61,7 @@ def _get_gpu_memory() -> int:
     """Return free GPU VRAM in bytes. Falls back to 8 GiB default."""
     try:
         import pynvml
+
         pynvml.nvmlInit()
         handle = pynvml.nvmlDeviceGetHandleByIndex(0)
         info = pynvml.nvmlDeviceGetMemoryInfo(handle)
@@ -151,7 +155,10 @@ def auto_tile_shape(
         mib = np.prod(result) * itemsize / 1024**2
         logger.info(
             "auto_tile_shape: shape=%s dtype=%s → tiles=%s (~%.0f MiB/tile)",
-            shape, np.dtype(dtype).name, result, mib,
+            shape,
+            np.dtype(dtype).name,
+            result,
+            mib,
         )
 
     return result
@@ -251,8 +258,12 @@ def auto_tile_shape_cellpose(
         logger.info(
             "auto_tile_shape_cellpose: shape=%s dtype=%s do_3D=%s "
             "→ tiles=%s (~%.0f MiB raw, ~%.0f MiB Cellpose estimate)",
-            shape, np.dtype(dtype).name, do_3D, result,
-            raw_mib, raw_mib * cellpose_memory_factor,
+            shape,
+            np.dtype(dtype).name,
+            do_3D,
+            result,
+            raw_mib,
+            raw_mib * cellpose_memory_factor,
         )
 
     return result

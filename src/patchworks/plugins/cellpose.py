@@ -11,6 +11,7 @@ Usage
 >>> result = tile_process("image.zarr", fn, tile_shape=(1, 2048, 2048),
 ...                       overlap=20, write_to="labels.zarr", progress=True)
 """
+
 from __future__ import annotations
 
 import importlib.metadata
@@ -24,6 +25,7 @@ logger = logging.getLogger(__name__)
 
 try:
     from cellpose import models as _cellpose_models
+
     _CELLPOSE_VERSION: tuple[int, ...] = tuple(
         int(x) for x in importlib.metadata.version("cellpose").split(".")[:2]
     )
@@ -109,7 +111,9 @@ def cellpose_fn(
     >>> result = tile_process("image.zarr", fn, tile_shape=tile_fn, overlap=10)
     """
     _require_cellpose()
-    cfg = _make_config(model, gpu, channels, channel_axis, diameter, do_3D, **cellpose_kwargs)
+    cfg = _make_config(
+        model, gpu, channels, channel_axis, diameter, do_3D, **cellpose_kwargs
+    )
     return partial(_run, cellpose_dict=cfg)
 
 

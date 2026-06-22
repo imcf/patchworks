@@ -1,4 +1,5 @@
 """Dask cluster helpers."""
+
 from __future__ import annotations
 
 import logging
@@ -11,6 +12,7 @@ def _distributed_client():
     """Return the active dask.distributed Client, or None."""
     try:
         from dask.distributed import get_client
+
         return get_client()
     except Exception:
         return None
@@ -88,6 +90,8 @@ def make_local_cluster(
     client = Client(cluster)
     logger.info(
         "Started %d-worker process cluster (use_gpu=%s). Dashboard: %s",
-        n_workers, use_gpu, client.dashboard_link,
+        n_workers,
+        use_gpu,
+        client.dashboard_link,
     )
     return client, cluster
