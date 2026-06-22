@@ -43,9 +43,10 @@ io = ["psutil", "tqdm"]
 cellpose = ["cellpose>=3.0"]
 gpu = ["nvidia-ml-py"]
 # bioio enables converting any image format (CZI, LIF, ND2, OME-TIFF, …) to
-# OME-ZARR; install a matching reader plugin too (e.g. bioio-ome-tiff,
-# bioio-czi, bioio-lif, bioio-nd2).
-bioio = ["bioio"]
+# OME-ZARR. bioio-bioformats is the Bio-Formats catch-all reader (needs a JVM);
+# add narrower native readers too where you want them (bioio-ome-tiff,
+# bioio-czi, bioio-lif, bioio-nd2) as they are faster than going through Java.
+bioio = ["bioio", "bioio-bioformats"]
 # napari enables the interactive viewer plugin (GUI-heavy, kept out of [all]).
 napari = ["napari[all]"]
 dev = ["pytest", "pytest-cov", "scikit-image", "psutil", "tqdm"]
