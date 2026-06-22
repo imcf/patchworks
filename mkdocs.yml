@@ -22,9 +22,11 @@ theme:
   - content.code.annotate
   - content.code.copy
   - content.tabs.link
-  - navigation.tabs
+  - navigation.expand
+  - navigation.sections
   - navigation.top
   - navigation.footer
+  - toc.integrate
   - search.highlight
   - search.share
 
