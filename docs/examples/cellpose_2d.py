@@ -3,6 +3,7 @@
 Each z-slice is processed independently. Tiles overlap by 20 voxels so cells
 near tile boundaries are fully visible to Cellpose.
 """
+
 from functools import partial
 
 from patchworks import auto_tile_shape_cellpose, tile_process
@@ -19,11 +20,12 @@ fn = cellpose_fn("cyto3", gpu=True, diameter=DIAMETER)
 tile_fn = partial(auto_tile_shape_cellpose, diameter=DIAMETER, use_gpu=True)
 
 tile_process(
-    IMAGE, fn,
+    IMAGE,
+    fn,
     channel=CHANNEL,
     tile_shape=tile_fn,
     overlap=20,
-    skip_empty=True,        # skip background slices
+    skip_empty=True,  # skip background slices
     write_to=OUTPUT,
     progress=True,
 )

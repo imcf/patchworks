@@ -1,4 +1,5 @@
 """Core tile_process function."""
+
 from __future__ import annotations
 
 import logging
@@ -9,7 +10,6 @@ from typing import Any, Callable, Union
 
 import dask.array as da
 import numpy as np
-
 
 from ._chunks import auto_tile_shape
 from ._cluster import _client_is_in_process, _distributed_client
@@ -25,16 +25,21 @@ def _stage_to_zarr(
 ) -> None:
     """Write *arr* to zarr *path/component*, never loading it into RAM."""
     import dask
-    lazy_write = arr.to_zarr(str(path), component=component, overwrite=True, compute=False)
+
+    lazy_write = arr.to_zarr(
+        str(path), component=component, overwrite=True, compute=False
+    )
     client = _distributed_client()
     if client is not None:
         future = client.compute(lazy_write)
         if show_progress:
             from dask.distributed import progress as _dist_progress
+
             _dist_progress(future)
         future.result()
     else:
         from dask.diagnostics import ProgressBar
+
         ctx = ProgressBar() if show_progress else _nullcontext()
         with ctx:
             dask.compute(lazy_write)
@@ -208,14 +213,20 @@ def tile_process(
             _load_chunks = tuple(tile_shape(_peek.shape, _peek.dtype))
         elif isinstance(tile_shape, str):
             if tile_shape != "auto":
-                raise ValueError(f"Unknown tile_shape value: {tile_shape!r}. Use 'auto', a tuple, or a callable.")
-            _load_chunks = auto_tile_shape(_peek.shape, _peek.dtype, use_gpu=use_gpu, verbose=True)
+                raise ValueError(
+                    f"Unknown tile_shape value: {tile_shape!r}. Use 'auto', a tuple, or a callable."
+                )
+            _load_chunks = auto_tile_shape(
+                _peek.shape, _peek.dtype, use_gpu=use_gpu, verbose=True
+            )
         elif tile_shape is not None:
             _load_chunks = tuple(tile_shape)
         tile_shape = None  # already handled at load time
         if _load_chunks is not None:
             logger.info("Loading zarr with target tiles %s", _load_chunks)
-            image = load_ome_zarr(image, channel=channel, level=level, chunks=_load_chunks)
+            image = load_ome_zarr(
+                image, channel=channel, level=level, chunks=_load_chunks
+            )
         else:
             image = _peek
 
@@ -223,8 +234,12 @@ def tile_process(
         tile_shape = tile_shape(image.shape, image.dtype)
     elif isinstance(tile_shape, str):
         if tile_shape != "auto":
-            raise ValueError(f"Unknown tile_shape value: {tile_shape!r}. Use 'auto', a tuple, or a callable.")
-        tile_shape = auto_tile_shape(image.shape, image.dtype, use_gpu=use_gpu, verbose=True)
+            raise ValueError(
+                f"Unknown tile_shape value: {tile_shape!r}. Use 'auto', a tuple, or a callable."
+            )
+        tile_shape = auto_tile_shape(
+            image.shape, image.dtype, use_gpu=use_gpu, verbose=True
+        )
 
     if tile_shape is not None:
         image = image.rechunk(tile_shape)
@@ -244,8 +259,7 @@ def tile_process(
     # An integer depth raises if any axis is smaller than the depth, so we
     # cap per axis. In practice z-axis of size 1 (2-D Cellpose) gets depth=0.
     _depth: dict[int, int] = {
-        ax: min(overlap, max(0, sum(c) - 1))
-        for ax, c in enumerate(image.chunks)
+        ax: min(overlap, max(0, sum(c) - 1)) for ax, c in enumerate(image.chunks)
     }
 
     if overlap > 0:
@@ -301,29 +315,36 @@ def tile_process(
     elif image_source_path is not None:
         base = os.path.dirname(os.path.abspath(image_source_path))
     else:
-        base = tempfile.mkdtemp(prefix="bb_stage_")
-    stage_path = os.path.join(base, "_bb_stage.zarr")
+        base = tempfile.mkdtemp(prefix="pws_stage_")
+    stage_path = os.path.join(base, "_pws_stage.zarr")
     logger.info("Staging tiles to %s …", stage_path)
     with _sched_ctx:
         _stage_to_zarr(labeled, stage_path, "staged", progress)
     labeled = da.from_zarr(stage_path, component="staged")
 
     if skip_empty and _skip_thr is not None:
+
         def _tile_max(block: np.ndarray) -> np.ndarray:
             return np.full((1,) * block.ndim, int(block.max()), dtype=np.int32)
+
         _tile_maxes = labeled.map_blocks(
-            _tile_max, dtype=np.int32,
+            _tile_max,
+            dtype=np.int32,
             chunks=tuple(tuple(1 for _ in c) for c in labeled.chunks),
         ).compute()
         _n_skip = int((_tile_maxes == 0).sum())
         logger.info(
             "skip_empty: %d/%d tiles ran fn, %d skipped (max<=%.4g)",
-            int(_tile_maxes.size) - _n_skip, int(_tile_maxes.size), _n_skip, _skip_thr,
+            int(_tile_maxes.size) - _n_skip,
+            int(_tile_maxes.size),
+            _n_skip,
+            _skip_thr,
         )
 
     def _cleanup_stage():
         if not keep_stage:
             import shutil
+
             shutil.rmtree(stage_path, ignore_errors=True)
             logger.info("Removed stage store %s", stage_path)
 
@@ -338,8 +359,12 @@ def tile_process(
         logger.info("write_to not set — merged labels in auto-temp %s", _effective_out)
 
     zarr_native_merge(
-        stage_path, "staged", _effective_out, output_component,
-        n_workers=_nw, show_progress=progress,
+        stage_path,
+        "staged",
+        _effective_out,
+        output_component,
+        n_workers=_nw,
+        show_progress=progress,
     )
     if sequential_labels:
         logger.info("Relabelling to contiguous ids…")

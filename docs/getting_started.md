@@ -68,9 +68,11 @@ and must return an integer label array of the same shape:
 ```python
 import numpy as np
 
+
 def my_fn(tile: np.ndarray) -> np.ndarray:
     from skimage.filters import threshold_otsu
     from skimage.measure import label
+
     binary = tile > threshold_otsu(tile)
     return label(binary).astype("int32")
 ```
@@ -88,8 +90,8 @@ objects spanning tile boundaries are merged into a single label.
     from patchworks import tile_process
 
     result = tile_process("image.zarr", my_fn, compute=True)
-    print(result.shape)   # (z, y, x)
-    print(result.max())   # number of objects found
+    print(result.shape)  # (z, y, x)
+    print(result.max())  # number of objects found
     ```
 
 === "From a dask array"
@@ -108,7 +110,8 @@ objects spanning tile boundaries are merged into a single label.
     from patchworks import tile_process
 
     tile_process(
-        "image.zarr", my_fn,
+        "image.zarr",
+        my_fn,
         write_to="labels.zarr",
         progress=True,
     )
@@ -122,16 +125,15 @@ objects spanning tile boundaries are merged into a single label.
 === "Fixed tile shape"
 
     ```python
-    result = tile_process("image.zarr", my_fn,
-                          tile_shape=(1, 1024, 1024))
+    result = tile_process("image.zarr", my_fn, tile_shape=(1, 1024, 1024))
     ```
 
 === "Auto from available memory"
 
     ```python
-    result = tile_process("image.zarr", my_fn,
-                          tile_shape="auto",
-                          use_gpu=True)  # sizes against GPU VRAM
+    result = tile_process(
+        "image.zarr", my_fn, tile_shape="auto", use_gpu=True
+    )  # sizes against GPU VRAM
     ```
 
 === "Callable (computed at runtime)"
@@ -153,7 +155,8 @@ Use `overlap` (in voxels) so boundary objects are fully visible:
 
 ```python
 result = tile_process(
-    "image.zarr", my_fn,
+    "image.zarr",
+    my_fn,
     tile_shape=(1, 2048, 2048),
     overlap=20,  # 20-voxel halo on every side
 )
@@ -175,7 +178,8 @@ from patchworks.plugins.cellpose import cellpose_fn
 fn = cellpose_fn("cyto3", gpu=True, diameter=30)
 
 tile_process(
-    "image.zarr", fn,
+    "image.zarr",
+    fn,
     channel=0,
     tile_shape=(1, 2048, 2048),
     overlap=20,

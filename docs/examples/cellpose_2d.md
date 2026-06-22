@@ -18,8 +18,8 @@ from patchworks.plugins.cellpose import cellpose_fn
 
 IMAGE = "image.zarr"
 OUTPUT = "labels.zarr"
-CHANNEL = 0       # channel to segment
-DIAMETER = 30     # expected cell diameter in pixels
+CHANNEL = 0  # channel to segment
+DIAMETER = 30  # expected cell diameter in pixels
 
 # 1. Create the Cellpose function
 fn = cellpose_fn("cyto3", gpu=True, diameter=DIAMETER)
@@ -31,10 +31,11 @@ print(f"{info['empty_fraction']:.0%} of slices are background")
 # 3. Run
 tile_fn = partial(auto_tile_shape_cellpose, diameter=DIAMETER, use_gpu=True)
 tile_process(
-    IMAGE, fn,
+    IMAGE,
+    fn,
     channel=CHANNEL,
-    tile_shape=tile_fn,       # auto-sized for GPU VRAM
-    overlap=20,               # 20-voxel halo for boundary cells
+    tile_shape=tile_fn,  # auto-sized for GPU VRAM
+    overlap=20,  # 20-voxel halo for boundary cells
     skip_empty=True,
     empty_threshold=info["threshold"],
     write_to=OUTPUT,

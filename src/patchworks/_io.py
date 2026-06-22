@@ -1,4 +1,5 @@
 """OME-ZARR loading and empty-tile estimation."""
+
 from __future__ import annotations
 
 import logging
@@ -74,6 +75,7 @@ def _otsu_threshold(sample: np.ndarray) -> float:
     """
     try:
         from skimage.filters import threshold_otsu
+
         return float(threshold_otsu(sample))
     except Exception:
         # Degenerate (all same value) → no threshold needed; return 0 so
@@ -89,8 +91,10 @@ def _auto_empty_threshold(image: da.Array, channel: int | None, level: int) -> f
     samples = []
     for frac in (0.33, 0.5, 0.66):
         sl = tuple(
-            slice(int(s * frac) - w // 2 if s > w else 0,
-                  (int(s * frac) - w // 2 if s > w else 0) + w)
+            slice(
+                int(s * frac) - w // 2 if s > w else 0,
+                (int(s * frac) - w // 2 if s > w else 0) + w,
+            )
             for s, w in zip(image.shape, win)
         )
         samples.append(np.asarray(image[sl]).ravel())
@@ -207,7 +211,10 @@ def estimate_empty_tiles(
     empty_frac = 1.0 - n_occ / n_tiles if n_tiles else 0.0
     logger.info(
         "estimate_empty_tiles: threshold=%.4g  occupied %d/%d tiles  empty=%.0f%%",
-        threshold, n_occ, n_tiles, empty_frac * 100,
+        threshold,
+        n_occ,
+        n_tiles,
+        empty_frac * 100,
     )
     return {
         "threshold": float(threshold),
