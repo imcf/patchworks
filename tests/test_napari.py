@@ -10,7 +10,9 @@ from patchworks.plugins.ome_zarr import to_ome_zarr
 
 def test_resolve_image_multiscale(tmp_path):
     """An OME-ZARR pyramid resolves to a multi-scale list of dask arrays."""
-    to_ome_zarr(np.zeros((16, 16, 16), "uint16"), tmp_path / "img.zarr", n_levels=3)
+    to_ome_zarr(
+        np.zeros((16, 16, 16), "uint16"), tmp_path / "img.zarr", n_levels=3
+    )
     out = nplugin._resolve_image(tmp_path / "img.zarr", channel=None)
     assert isinstance(out, list)
     assert len(out) == 3

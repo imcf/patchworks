@@ -57,11 +57,16 @@ def _has_multiscales(path: Union[str, Path]) -> bool:
     return "multiscales" in root.attrs
 
 
-def _multiscale_levels(path: Union[str, Path], channel: int | None) -> list[da.Array]:
+def _multiscale_levels(
+    path: Union[str, Path], channel: int | None
+) -> list[da.Array]:
     """Return every pyramid level as a lazy dask array (napari multi-scale)."""
     root = zarr.open_group(str(path), mode="r")
     datasets = root.attrs["multiscales"][0]["datasets"]
-    return [load_ome_zarr(path, channel=channel, level=i) for i in range(len(datasets))]
+    return [
+        load_ome_zarr(path, channel=channel, level=i)
+        for i in range(len(datasets))
+    ]
 
 
 def _resolve_image(
@@ -147,7 +152,10 @@ def view_in_napari(
     img = _resolve_image(image, channel)
     viewer = napari.Viewer()
     viewer.add_image(
-        img, name=image_name, multiscale=isinstance(img, list), **add_image_kwargs
+        img,
+        name=image_name,
+        multiscale=isinstance(img, list),
+        **add_image_kwargs,
     )
 
     if labels is not None:
