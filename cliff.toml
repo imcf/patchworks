@@ -8,12 +8,11 @@ body = """
 - {% if commit.scope %}**{{ commit.scope }}**: {% endif %}{{ commit.message | split(pat="\n") | first }}
 {% endfor %}
 {% endfor %}\
-{% set contributors = commits | map(attribute="author.name") | unique | sort -%}
-{% if contributors | length > 0 %}
+{% if github.contributors | length > 0 %}
 ### 👥 Contributors
 
-{% for name in contributors %}\
-- {{ name }}
+{% for contributor in github.contributors | sort(attribute="username") %}\
+- [<img src="https://github.com/{{ contributor.username }}.png?size=24" width="24" height="24" alt="@{{ contributor.username }}" />](https://github.com/{{ contributor.username }}) [@{{ contributor.username }}](https://github.com/{{ contributor.username }})
 {% endfor %}
 {% endif %}\
 """
@@ -47,3 +46,7 @@ commit_parsers = [
 filter_commits = true
 tag_pattern = "v[0-9].*"
 sort_commits = "oldest"
+
+[remote.github]
+owner = "imcf"
+repo = "patchworks"
