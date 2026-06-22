@@ -1,4 +1,4 @@
-"""Self-contained tests for blockbuster. No frameworks, no fixtures."""
+"""Self-contained tests for patchworks. No frameworks, no fixtures."""
 import numpy as np
 import pytest
 
@@ -17,7 +17,7 @@ def _label_fn(tile: np.ndarray) -> np.ndarray:
 
 def test_tile_process_numpy_array():
     import dask.array as da
-    from blockbuster import tile_process
+    from patchworks import tile_process
 
     arr = da.from_array(_make_image((4, 64, 64)), chunks=(1, 64, 64))
     result = tile_process(arr, _label_fn).compute()
@@ -28,7 +28,7 @@ def test_tile_process_numpy_array():
 
 def test_tile_process_with_overlap():
     import dask.array as da
-    from blockbuster import tile_process
+    from patchworks import tile_process
 
     arr = da.from_array(_make_image((2, 64, 64)), chunks=(1, 64, 64))
     result = tile_process(arr, _label_fn, overlap=8).compute()
@@ -39,7 +39,7 @@ def test_tile_process_overlap_multitile_shape():
     # Multiple tiles along y and x: exercises the halo trim across real
     # interior boundaries. Output must keep the original shape (halo trimmed).
     import dask.array as da
-    from blockbuster import tile_process
+    from patchworks import tile_process
 
     arr = da.from_array(_make_image((1, 96, 96)), chunks=(1, 48, 48))
     result = tile_process(arr, _label_fn, overlap=8).compute()
@@ -49,7 +49,7 @@ def test_tile_process_overlap_multitile_shape():
 def test_tile_process_merges_object_across_boundary():
     # An object spanning a tile boundary must end up with a single label.
     import dask.array as da
-    from blockbuster import tile_process
+    from patchworks import tile_process
 
     data = np.zeros((1, 16, 32), dtype="uint16")
     data[0, 4:12, 8:24] = 500  # one solid block straddling the x=16 boundary
@@ -67,7 +67,7 @@ def test_tile_process_merges_object_across_boundary():
 def test_tile_process_write_to(tmp_path):
     import dask.array as da
     import zarr
-    from blockbuster import tile_process
+    from patchworks import tile_process
 
     arr = da.from_array(_make_image((2, 32, 32)), chunks=(1, 32, 32))
     out = str(tmp_path / "labels.zarr")
@@ -80,7 +80,7 @@ def test_tile_process_write_to(tmp_path):
 
 def test_tile_process_skip_empty():
     import dask.array as da
-    from blockbuster import tile_process
+    from patchworks import tile_process
 
     # First two tiles are zeros (empty), last two have signal
     arr_data = _make_image((4, 32, 32))
@@ -99,7 +99,7 @@ def test_tile_process_skip_empty():
 
 def test_tile_process_sequential_labels():
     import dask.array as da
-    from blockbuster import tile_process
+    from patchworks import tile_process
 
     arr = da.from_array(_make_image((2, 32, 32)), chunks=(1, 32, 32))
     result = tile_process(arr, _label_fn, sequential_labels=True).compute()
@@ -113,7 +113,7 @@ def test_merge_tile_labels_standalone(tmp_path):
     # Standalone merge of a dask array of per-tile labels: an object straddling
     # a tile boundary must collapse to a single label.
     import dask.array as da
-    from blockbuster import merge_tile_labels
+    from patchworks import merge_tile_labels
 
     data = np.zeros((1, 16, 32), dtype="uint16")
     data[0, 4:12, 8:24] = 1  # block crossing the x=16 boundary
@@ -137,7 +137,7 @@ def test_merge_transitive_three_tiles(tmp_path):
     # A cell that spans 3 tiles (A→B→C) must be merged into one label even
     # though A and C never directly touch. Transitivity via connected_components.
     import dask.array as da
-    from blockbuster._merge import zarr_native_merge
+    from patchworks._merge import zarr_native_merge
     import zarr
 
     sp = str(tmp_path / "stage.zarr")
@@ -159,7 +159,7 @@ def test_merge_transitive_three_tiles(tmp_path):
 def test_merge_isolated_labels_not_merged(tmp_path):
     # Two cells that never touch across any boundary must stay separate.
     import dask.array as da
-    from blockbuster._merge import zarr_native_merge
+    from patchworks._merge import zarr_native_merge
     import zarr
 
     sp = str(tmp_path / "stage.zarr")
@@ -181,7 +181,7 @@ def test_merge_isolated_labels_not_merged(tmp_path):
 
 
 def test_auto_tile_shape():
-    from blockbuster import auto_tile_shape
+    from patchworks import auto_tile_shape
 
     shape = (128, 2048, 2048)
     tile = auto_tile_shape(shape, "uint16", target_bytes=64 * 1024**2)
@@ -192,14 +192,14 @@ def test_auto_tile_shape():
 
 
 def test_auto_tile_shape_cellpose():
-    from blockbuster import auto_tile_shape_cellpose
+    from patchworks import auto_tile_shape_cellpose
 
     tile = auto_tile_shape_cellpose((128, 2048, 2048), "uint16", diameter=30)
     assert tile[0] == 1  # z=1 for 2-D cellpose
 
 
 def test_relabel_sequential_array():
-    from blockbuster import relabel_sequential_array
+    from patchworks import relabel_sequential_array
 
     labels = np.array([0, 500, 500, 7, 7, 7, 0, 1000], dtype=np.int32)
     out = relabel_sequential_array(labels)
@@ -215,7 +215,7 @@ def test_relabel_sequential_array():
 
 def test_estimate_empty_tiles():
     import dask.array as da
-    from blockbuster import estimate_empty_tiles
+    from patchworks import estimate_empty_tiles
 
     arr_data = np.zeros((4, 32, 32), dtype="uint16")
     arr_data[2:] = 1000  # tiles 2 and 3 have signal

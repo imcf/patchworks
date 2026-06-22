@@ -6,7 +6,7 @@ than Cellpose (32 voxels recommended for the default 2D_versatile_fluo model).
 import numpy as np
 from stardist.models import StarDist2D
 
-from blockbuster import tile_process
+from patchworks import tile_process
 
 IMAGE = "image.zarr"
 OUTPUT = "labels_sd.zarr"

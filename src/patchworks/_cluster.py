@@ -44,7 +44,7 @@ def make_local_cluster(
 
     Always uses worker subprocesses (``processes=True``). An in-process
     (threaded) worker breaks the label merge when ``segment_fn`` holds the
-    GIL — see the blockbuster docs for details.
+    GIL — see the patchworks docs for details.
 
     For GPU work defaults to a single worker (one CUDA context, no contention).
     For CPU scales to available cores.

@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "blockbuster"
+name = "patchworks"
 version = "0.2.0"
 description = "Tiled processing of arbitrarily large images with globally consistent labels"
 readme = "README.md"
@@ -54,18 +54,18 @@ docs = [
     "mkdocstrings[python]>=0.24",
 ]
 all = [
-    "blockbuster[io,gpu]",
+    "patchworks[io,gpu]",
     "psutil",
     "tqdm",
     "scikit-image",
 ]
 
 [project.urls]
-Homepage = "https://github.com/imcf/blockbuster"
-Issues = "https://github.com/imcf/blockbuster/issues"
+Homepage = "https://github.com/imcf/patchworks"
+Issues = "https://github.com/imcf/patchworks/issues"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/blockbuster"]
+packages = ["src/patchworks"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

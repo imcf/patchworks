@@ -2,13 +2,13 @@
 
 ## Single GPU (no distributed client)
 
-For a single GPU, you don't need a Dask distributed client. blockbuster
+For a single GPU, you don't need a Dask distributed client. patchworks
 detects GPU usage and pins execution to a single thread, so multiple Cellpose
 evals don't compete for the same CUDA context:
 
 ```python
-from blockbuster.plugins.cellpose import cellpose_fn
-from blockbuster import tile_process
+from patchworks.plugins.cellpose import cellpose_fn
+from patchworks import tile_process
 
 fn = cellpose_fn("cyto3", gpu=True, diameter=30)
 tile_process("image.zarr", fn,
@@ -24,8 +24,8 @@ tile_process("image.zarr", fn,
 For multi-GPU or multi-node work, use `make_local_cluster`:
 
 ```python
-from blockbuster import make_local_cluster, tile_process
-from blockbuster.plugins.cellpose import cellpose_fn
+from patchworks import make_local_cluster, tile_process
+from patchworks.plugins.cellpose import cellpose_fn
 
 fn = cellpose_fn("cyto3", gpu=True, diameter=30)
 
@@ -60,19 +60,19 @@ FutureCancelledError: lost dependencies
 
 `make_local_cluster` always uses subprocess workers to avoid this.
 
-!!! warning "Never use `Client(processes=False)` with blockbuster"
-    blockbuster detects in-process clients at startup and raises immediately
+!!! warning "Never use `Client(processes=False)` with patchworks"
+    patchworks detects in-process clients at startup and raises immediately
     with a clear error message and the fix.
 
 ## GPU memory sizing
 
-When `use_gpu=True`, blockbuster queries free GPU VRAM via `nvidia-ml-py`
-(install: `pip install "blockbuster[gpu]"`). Tile size is set so each tile
+When `use_gpu=True`, patchworks queries free GPU VRAM via `nvidia-ml-py`
+(install: `pip install "patchworks[gpu]"`). Tile size is set so each tile
 uses at most half the available VRAM.
 
 Without `nvidia-ml-py`, a conservative 8 GiB default is used with a warning.
 Install it for accurate sizing on large-VRAM cards (A100, H100):
 
 ```bash
-pip install "blockbuster[gpu]"
+pip install "patchworks[gpu]"
 ```

@@ -1,6 +1,6 @@
 # Custom segmentation function
 
-blockbuster is completely agnostic to what happens inside `fn`. Here are
+patchworks is completely agnostic to what happens inside `fn`. Here are
 examples with different tools and preprocessing steps.
 
 ## Otsu threshold + skimage
@@ -9,7 +9,7 @@ examples with different tools and preprocessing steps.
 import numpy as np
 from skimage.filters import threshold_otsu
 from skimage.measure import label
-from blockbuster import tile_process
+from patchworks import tile_process
 
 def threshold_fn(tile: np.ndarray) -> np.ndarray:
     thr = threshold_otsu(tile)
@@ -25,7 +25,7 @@ import numpy as np
 from scipy.ndimage import gaussian_filter
 from skimage.morphology import remove_small_objects
 from skimage.measure import label
-from blockbuster import tile_process
+from patchworks import tile_process
 
 def smooth_and_label(tile: np.ndarray) -> np.ndarray:
     smoothed = gaussian_filter(tile.astype("float32"), sigma=1.5)
@@ -45,7 +45,7 @@ tile_process("image.zarr", smooth_and_label,
 ```python
 import numpy as np
 import torch
-from blockbuster import tile_process
+from patchworks import tile_process
 
 # Load once, outside the function
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -70,7 +70,7 @@ tile_process("image.zarr", torch_fn,
 ```python
 import dask.array as da
 import numpy as np
-from blockbuster import tile_process
+from patchworks import tile_process
 
 # From any array-like source
 arr = da.from_array(my_numpy_array, chunks=(1, 1024, 1024))

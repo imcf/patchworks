@@ -1,4 +1,4 @@
-# blockbuster
+# patchworks
 
 **Tiled processing of arbitrarily large images — any image, any function.**
 
@@ -16,11 +16,11 @@
          tiles                               globally consistent labels
 ```
 
-blockbuster splits a large image into tiles, runs **any callable** on each tile
+patchworks splits a large image into tiles, runs **any callable** on each tile
 in parallel, and merges the results into a globally consistent label array.
 It handles terabyte-scale images without loading them into RAM.
 
-## Why blockbuster?
+## Why patchworks?
 
 Modern fluorescence microscopy produces images in the hundreds of GB to several TB
 range. Instance segmentation tools (Cellpose, StarDist, threshold methods, your
@@ -28,7 +28,7 @@ own model) all assume the image fits in memory. They don't scale.
 
 The naive approach — split the image into tiles, segment each tile, stitch the
 labels — creates **split objects**: any cell spanning a tile boundary gets two
-different label IDs. blockbuster solves this with a zarr-native boundary merge:
+different label IDs. patchworks solves this with a zarr-native boundary merge:
 
 1. Tiles are segmented independently and streamed to disk
 2. Thin slabs at each tile boundary are scanned for touching label pairs
@@ -43,7 +43,7 @@ strategy used by
 ## Quick example
 
 ```python
-from blockbuster import tile_process
+from patchworks import tile_process
 
 def my_fn(tile):
     from skimage.filters import threshold_otsu
@@ -57,11 +57,11 @@ Any function. Any image.
 
 ## Method agnostic
 
-blockbuster doesn't care what's inside `fn`:
+patchworks doesn't care what's inside `fn`:
 
 ```python
 # Cellpose
-from blockbuster.plugins.cellpose import cellpose_fn
+from patchworks.plugins.cellpose import cellpose_fn
 fn = cellpose_fn("cyto3", gpu=True, diameter=30)
 
 # StarDist
@@ -80,7 +80,7 @@ tile_process("image.zarr", fn, tile_shape=(1, 1024, 1024), overlap=20,
 ## Installation
 
 ```bash
-pip install blockbuster
+pip install patchworks
 ```
 
 See [Getting Started](getting_started.md) for installation options and

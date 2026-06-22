@@ -1,4 +1,4 @@
-# blockbuster
+# patchworks
 
 > Tiled processing of arbitrarily large images — any image, any function.
 
@@ -12,7 +12,7 @@
 └──────┴──────┴──────┘                            └──────┴──────┴──────┘
 ```
 
-blockbuster splits a large image into tiles, runs **any callable** on each
+patchworks splits a large image into tiles, runs **any callable** on each
 tile in parallel, and merges the results into a globally consistent label array.
 It handles terabyte-scale images without loading them into memory.
 
@@ -21,15 +21,15 @@ It handles terabyte-scale images without loading them into memory.
 ## Installation
 
 ```bash
-pip install blockbuster
+pip install patchworks
 ```
 
 Optional extras:
 
 ```bash
-pip install "blockbuster[gpu]"      # GPU VRAM querying (nvidia-ml-py)
-pip install "blockbuster[cellpose]" # Cellpose plugin
-pip install "blockbuster[all]"      # Everything
+pip install "patchworks[gpu]"      # GPU VRAM querying (nvidia-ml-py)
+pip install "patchworks[cellpose]" # Cellpose plugin
+pip install "patchworks[all]"      # Everything
 ```
 
 ---
@@ -37,7 +37,7 @@ pip install "blockbuster[all]"      # Everything
 ## Quick start — 5 lines
 
 ```python
-from blockbuster import tile_process
+from patchworks import tile_process
 
 def my_fn(tile):
     from skimage.filters import threshold_otsu
@@ -55,8 +55,8 @@ input, with globally unique IDs across all tiles.
 ## With Cellpose
 
 ```python
-from blockbuster import tile_process
-from blockbuster.plugins.cellpose import cellpose_fn
+from patchworks import tile_process
+from patchworks.plugins.cellpose import cellpose_fn
 
 fn = cellpose_fn("cyto3", gpu=True, diameter=30)
 
@@ -75,7 +75,7 @@ tile_process(
 
 ```python
 from stardist.models import StarDist2D
-from blockbuster import tile_process
+from patchworks import tile_process
 
 model = StarDist2D.from_pretrained("2D_versatile_fluo")
 
@@ -98,7 +98,7 @@ tile_process("image.zarr", stardist_fn,
 import numpy as np
 from scipy.ndimage import gaussian_filter
 from skimage.measure import label
-from blockbuster import tile_process
+from patchworks import tile_process
 
 def my_custom_fn(tile: np.ndarray) -> np.ndarray:
     smoothed = gaussian_filter(tile.astype("float32"), sigma=1.5)
@@ -115,7 +115,7 @@ tile_process("image.zarr", my_custom_fn, tile_shape=(1, 512, 512))
 ### Auto-size tiles from available memory
 
 ```python
-from blockbuster import tile_process
+from patchworks import tile_process
 
 tile_process("image.zarr", fn, tile_shape="auto", use_gpu=True)
 ```
@@ -123,7 +123,7 @@ tile_process("image.zarr", fn, tile_shape="auto", use_gpu=True)
 ### Skip empty tiles (sparse volumes)
 
 ```python
-from blockbuster import estimate_empty_tiles, tile_process
+from patchworks import estimate_empty_tiles, tile_process
 
 info = estimate_empty_tiles("image.zarr", tile_shape=(120, 697, 697))
 print(f"{info['empty_fraction']:.0%} tiles are background — will be skipped")
@@ -138,7 +138,7 @@ tile_process("image.zarr", fn,
 ### Distributed cluster for GPU
 
 ```python
-from blockbuster import make_local_cluster, tile_process
+from patchworks import make_local_cluster, tile_process
 
 client, cluster = make_local_cluster(use_gpu=True)
 try:
@@ -165,7 +165,7 @@ merge step directly:
 ```python
 import dask.array as da
 import numpy as np
-from blockbuster import merge_tile_labels
+from patchworks import merge_tile_labels
 
 # Your own tiling + segmentation
 image = da.from_zarr("image.zarr").rechunk((1, 1024, 1024))
@@ -178,7 +178,7 @@ merged = merge_tile_labels(labeled, write_to="labels.zarr", progress=True)
 Or merge from a zarr store your pipeline already wrote:
 
 ```python
-from blockbuster import merge_tile_labels
+from patchworks import merge_tile_labels
 
 merged = merge_tile_labels(
     "my_staged_labels.zarr",
@@ -209,9 +209,9 @@ tiles where the dask-image approach stalls.
 
 ---
 
-## Known pitfalls (and how blockbuster avoids them)
+## Known pitfalls (and how patchworks avoids them)
 
-| Pitfall | Symptom | How blockbuster handles it |
+| Pitfall | Symptom | How patchworks handles it |
 |---|---|---|
 | In-process Dask client | `FutureCancelledError: lost dependencies` | Detected at startup, raises immediately with fix instructions |
 | 3-4× fn recompute during merge | Cellpose runs 3× per tile | Staging writes labels once, merge reads from disk |

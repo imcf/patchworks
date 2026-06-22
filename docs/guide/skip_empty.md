@@ -14,8 +14,8 @@ wall time from ~110 hours to ~24 hours.
 ## Quick usage
 
 ```python
-from blockbuster import estimate_empty_tiles, tile_process
-from blockbuster.plugins.cellpose import cellpose_fn
+from patchworks import estimate_empty_tiles, tile_process
+from patchworks.plugins.cellpose import cellpose_fn
 
 fn = cellpose_fn("cyto3", gpu=True, diameter=30)
 TILE = (120, 697, 697)
@@ -30,7 +30,7 @@ tile_process(
     "image.zarr", fn,
     tile_shape=TILE,
     skip_empty=True,
-    empty_threshold=info["threshold"],  # or let blockbuster auto-derive it
+    empty_threshold=info["threshold"],  # or let patchworks auto-derive it
     write_to="labels.zarr",
     progress=True,
 )
@@ -69,7 +69,7 @@ info = estimate_empty_tiles("image.zarr", tile_shape=(120, 697, 697),
                              threshold=200.0)  # anything ≤ 200 → empty
 ```
 
-Or let blockbuster auto-derive it at runtime:
+Or let patchworks auto-derive it at runtime:
 
 ```python
 tile_process("image.zarr", fn,
@@ -84,5 +84,5 @@ After a `tile_process` run with `skip_empty=True`, the log reports exactly
 how many tiles ran your function:
 
 ```
-INFO blockbuster._core: skip_empty: 486/2200 tiles ran fn, 1714 skipped (max<=412.0)
+INFO patchworks._core: skip_empty: 486/2200 tiles ran fn, 1714 skipped (max<=412.0)
 ```

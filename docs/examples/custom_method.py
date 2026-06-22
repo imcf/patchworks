@@ -1,6 +1,6 @@
 """Custom segmentation function — anything goes.
 
-blockbuster doesn't care what's inside fn. Here's a more elaborate example
+patchworks doesn't care what's inside fn. Here's a more elaborate example
 using scipy + skimage with preprocessing.
 """
 import numpy as np
@@ -9,7 +9,7 @@ from skimage.filters import threshold_otsu
 from skimage.measure import label
 from skimage.morphology import remove_small_objects
 
-from blockbuster import tile_process
+from patchworks import tile_process
 
 
 def my_fn(tile: np.ndarray) -> np.ndarray:

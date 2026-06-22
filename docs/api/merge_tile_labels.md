@@ -1,3 +1,3 @@
 # merge_tile_labels
 
-::: blockbuster.merge_tile_labels
+::: patchworks.merge_tile_labels

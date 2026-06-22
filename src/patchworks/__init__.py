@@ -1,15 +1,15 @@
-"""blockbuster — tiled processing for any image, any function.
+"""patchworks — tiled processing for any image, any function.
 
 Process arbitrarily large images by splitting them into overlapping tiles,
 running any callable on each tile, and stitching the results back into globally
 consistent labels.
 
 📖 **Full documentation, guides and tutorials:**
-<https://imcf.one/blockbuster/>
+<https://imcf.one/patchworks/>
 
 Quick start
 -----------
->>> from blockbuster import tile_process
+>>> from patchworks import tile_process
 >>>
 >>> def my_fn(tile):
 ...     from skimage.filters import threshold_otsu
@@ -20,7 +20,7 @@ Quick start
 
 With Cellpose:
 
->>> from blockbuster.plugins.cellpose import cellpose_fn
+>>> from patchworks.plugins.cellpose import cellpose_fn
 >>> fn = cellpose_fn("cyto3", gpu=True, diameter=30)
 >>> tile_process("image.zarr", fn, tile_shape=(1, 2048, 2048),
 ...              overlap=20, write_to="labels.zarr", progress=True)

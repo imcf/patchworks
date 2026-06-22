@@ -1,3 +1,3 @@
 # Cluster helpers
 
-::: blockbuster.make_local_cluster
+::: patchworks.make_local_cluster

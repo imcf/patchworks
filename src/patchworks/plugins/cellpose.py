@@ -1,11 +1,11 @@
-"""Cellpose plugin for blockbuster.
+"""Cellpose plugin for patchworks.
 
 Requires cellpose >= 3.0 (compatible with v3 and v4).
 
 Usage
 -----
->>> from blockbuster.plugins.cellpose import cellpose_fn
->>> from blockbuster import tile_process
+>>> from patchworks.plugins.cellpose import cellpose_fn
+>>> from patchworks import tile_process
 >>>
 >>> fn = cellpose_fn("cyto3", gpu=True, diameter=30)
 >>> result = tile_process("image.zarr", fn, tile_shape=(1, 2048, 2048),
@@ -43,7 +43,7 @@ def _require_cellpose():
             "cellpose is not installed. Install it with:\n"
             "    pip install cellpose\n"
             "or:\n"
-            "    pip install blockbuster[cellpose]"
+            "    pip install patchworks[cellpose]"
         )
 
 
@@ -104,7 +104,7 @@ def cellpose_fn(
 
     >>> fn = cellpose_fn("cyto3", gpu=True, do_3D=True, anisotropy=3.0, diameter=20)
     >>> from functools import partial
-    >>> from blockbuster import auto_tile_shape_cellpose, tile_process
+    >>> from patchworks import auto_tile_shape_cellpose, tile_process
     >>> tile_fn = partial(auto_tile_shape_cellpose, do_3D=True, use_gpu=True, diameter=20)
     >>> result = tile_process("image.zarr", fn, tile_shape=tile_fn, overlap=10)
     """

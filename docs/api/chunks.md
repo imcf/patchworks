@@ -1,5 +1,5 @@
 # Tile sizing
 
-::: blockbuster.auto_tile_shape
+::: patchworks.auto_tile_shape
 
-::: blockbuster.auto_tile_shape_cellpose
+::: patchworks.auto_tile_shape_cellpose
