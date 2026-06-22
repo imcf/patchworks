@@ -22,6 +22,9 @@ jobs:
         with:
           config: cliff.toml
           args: --latest --strip header
+        env:
+          # Lets git-cliff resolve commit authors to GitHub handles/avatars.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
