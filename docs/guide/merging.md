@@ -7,7 +7,7 @@ tile A has labels 1-500, tile B also has labels 1-500. Worse, an object
 spanning the A-B boundary gets label 247 in tile A and label 83 in tile B,
 even though it's the same cell.
 
-blockbuster solves this with a zarr-native merge algorithm:
+patchworks solves this with a zarr-native merge algorithm:
 
 ```
 Tile A labels:        Tile B labels:        After merge:
@@ -66,7 +66,7 @@ You can call the merge step directly on any existing label array or zarr:
 ```python
 import dask.array as da
 import numpy as np
-from blockbuster import merge_tile_labels
+from patchworks import merge_tile_labels
 
 # From a dask array (your own tiling pipeline)
 image = da.from_zarr("image.zarr").rechunk((1, 1024, 1024))
@@ -102,5 +102,5 @@ This runs a cheap linear post-pass: `np.unique` + lookup-table remap, O(voxels).
     `dask_image.ndmeasure.merge_labels_across_chunk_boundaries` has a
     `produce_sequential_labels=True` option that builds a task graph of O(n²)
     in the number of tiles. At 64 tiles this takes 54 seconds; at 2200 tiles
-    it would take hours — just for graph construction. blockbuster's approach
+    it would take hours — just for graph construction. patchworks's approach
     is always linear in the number of voxels.

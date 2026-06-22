@@ -12,8 +12,8 @@ plane orientations and takes a 3-D consensus.
 
 ```python
 from functools import partial
-from blockbuster import auto_tile_shape_cellpose, make_local_cluster, tile_process
-from blockbuster.plugins.cellpose import cellpose_fn
+from patchworks import auto_tile_shape_cellpose, make_local_cluster, tile_process
+from patchworks.plugins.cellpose import cellpose_fn
 
 IMAGE = "image.zarr"
 OUTPUT = "labels_3d.zarr"

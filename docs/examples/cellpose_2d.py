@@ -5,8 +5,8 @@ near tile boundaries are fully visible to Cellpose.
 """
 from functools import partial
 
-from blockbuster import auto_tile_shape_cellpose, tile_process
-from blockbuster.plugins.cellpose import cellpose_fn
+from patchworks import auto_tile_shape_cellpose, tile_process
+from patchworks.plugins.cellpose import cellpose_fn
 
 IMAGE = "image.zarr"
 OUTPUT = "labels.zarr"

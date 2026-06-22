@@ -8,7 +8,7 @@ pipeline and only need the boundary-stitching step.
 ```python
 import dask.array as da
 import numpy as np
-from blockbuster import merge_tile_labels
+from patchworks import merge_tile_labels
 
 # Your own tiling + segmentation
 image = da.from_zarr("image.zarr").rechunk((1, 1024, 1024))
@@ -31,7 +31,7 @@ merged = merge_tile_labels(labeled, write_to="labels.zarr", progress=True)
 If your pipeline already wrote per-tile labels to zarr:
 
 ```python
-from blockbuster import merge_tile_labels
+from patchworks import merge_tile_labels
 
 merged = merge_tile_labels(
     "my_staged_labels.zarr",
@@ -47,7 +47,7 @@ If your tiles were computed with `da.overlap.overlap(depth=20)`, trim the
 halos before merging:
 
 ```python
-from blockbuster import merge_tile_labels
+from patchworks import merge_tile_labels
 
 # labeled was computed with da.overlap.overlap(depth=20)
 merged = merge_tile_labels(labeled, write_to="labels.zarr", overlap=20)
@@ -55,7 +55,7 @@ merged = merge_tile_labels(labeled, write_to="labels.zarr", overlap=20)
 
 ## Integration with other frameworks
 
-blockbuster's merge step is framework-agnostic. Any pipeline that produces a
+patchworks's merge step is framework-agnostic. Any pipeline that produces a
 dask array of integer labels (one value per voxel, distinct per tile) can
 use `merge_tile_labels`:
 
@@ -63,6 +63,6 @@ use `merge_tile_labels`:
 # zarr → your pipeline → per-tile labels
 labeled = your_pipeline(da.from_zarr("image.zarr"))  # dask.array.Array
 
-from blockbuster import merge_tile_labels
+from patchworks import merge_tile_labels
 merged = merge_tile_labels(labeled, write_to="final.zarr")
 ```

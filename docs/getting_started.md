@@ -2,44 +2,44 @@
 
 ## Installation
 
-blockbuster can be installed from PyPI on all operating systems, for Python ≥ 3.9.
+patchworks can be installed from PyPI on all operating systems, for Python ≥ 3.9.
 
 !!! tip "Virtual environment (recommended)"
     We recommend creating a dedicated environment:
 
     ```bash
-    conda create -n blockbuster python=3.12
-    conda activate blockbuster
+    conda create -n patchworks python=3.12
+    conda activate patchworks
     ```
     or with pixi:
     ```bash
-    pixi init blockbuster && cd blockbuster
+    pixi init patchworks && cd patchworks
     pixi add python=3.12
     ```
 
 === "Minimal"
 
     ```bash
-    pip install blockbuster
+    pip install patchworks
     ```
 
 === "With GPU VRAM sizing"
 
     ```bash
-    pip install "blockbuster[gpu]"
+    pip install "patchworks[gpu]"
     ```
     Installs `nvidia-ml-py` to query free GPU VRAM when auto-sizing tiles.
 
 === "With Cellpose plugin"
 
     ```bash
-    pip install "blockbuster[cellpose]"
+    pip install "patchworks[cellpose]"
     ```
 
 === "Everything"
 
     ```bash
-    pip install "blockbuster[all]"
+    pip install "patchworks[all]"
     ```
 
 ---
@@ -47,7 +47,7 @@ blockbuster can be installed from PyPI on all operating systems, for Python ≥ 
 ## The one function you need
 
 ```python
-from blockbuster import tile_process
+from patchworks import tile_process
 
 result = tile_process(image, fn)
 ```
@@ -62,7 +62,7 @@ and returns a globally consistent label array.
 
 ## Step 1: write your function
 
-blockbuster is method-agnostic. Your function receives a NumPy array (one tile)
+patchworks is method-agnostic. Your function receives a NumPy array (one tile)
 and must return an integer label array of the same shape:
 
 ```python
@@ -75,7 +75,7 @@ def my_fn(tile: np.ndarray) -> np.ndarray:
     return label(binary).astype("int32")
 ```
 
-The function is called independently on every tile. blockbuster ensures that
+The function is called independently on every tile. patchworks ensures that
 objects spanning tile boundaries are merged into a single label.
 
 ---
@@ -85,7 +85,7 @@ objects spanning tile boundaries are merged into a single label.
 === "From a zarr path"
 
     ```python
-    from blockbuster import tile_process
+    from patchworks import tile_process
 
     result = tile_process("image.zarr", my_fn, compute=True)
     print(result.shape)   # (z, y, x)
@@ -96,7 +96,7 @@ objects spanning tile boundaries are merged into a single label.
 
     ```python
     import dask.array as da
-    from blockbuster import tile_process
+    from patchworks import tile_process
 
     arr = da.from_zarr("image.zarr")
     result = tile_process(arr, my_fn, compute=True)
@@ -105,7 +105,7 @@ objects spanning tile boundaries are merged into a single label.
 === "Stream to zarr (recommended for large images)"
 
     ```python
-    from blockbuster import tile_process
+    from patchworks import tile_process
 
     tile_process(
         "image.zarr", my_fn,
@@ -138,7 +138,7 @@ objects spanning tile boundaries are merged into a single label.
 
     ```python
     from functools import partial
-    from blockbuster import auto_tile_shape_cellpose, tile_process
+    from patchworks import auto_tile_shape_cellpose, tile_process
 
     tile_fn = partial(auto_tile_shape_cellpose, diameter=30, use_gpu=True)
     result = tile_process("image.zarr", my_fn, tile_shape=tile_fn)
@@ -169,8 +169,8 @@ result = tile_process(
 ## Use Cellpose
 
 ```python
-from blockbuster import tile_process
-from blockbuster.plugins.cellpose import cellpose_fn
+from patchworks import tile_process
+from patchworks.plugins.cellpose import cellpose_fn
 
 fn = cellpose_fn("cyto3", gpu=True, diameter=30)
 

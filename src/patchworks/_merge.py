@@ -322,7 +322,7 @@ def merge_tile_labels(
     **From a dask array of per-tile labels:**
 
     >>> import dask.array as da
-    >>> from blockbuster import merge_tile_labels
+    >>> from patchworks import merge_tile_labels
     >>>
     >>> # your own tiling + segmentation
     >>> image = da.from_zarr("image.zarr").rechunk((1, 1024, 1024))

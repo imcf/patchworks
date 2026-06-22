@@ -61,7 +61,7 @@ def tile_process(
 ) -> da.Array:
     """Apply *fn* to every tile of *image* and merge labels globally.
 
-    The core workhorse of blockbuster. ``fn`` can be any callable that takes a
+    The core workhorse of patchworks. ``fn`` can be any callable that takes a
     NumPy array and returns an integer label array of the same shape — Cellpose,
     StarDist, Otsu threshold, your own model, anything.
 
@@ -85,7 +85,7 @@ def tile_process(
           .. code-block:: python
 
               from functools import partial
-              from blockbuster import auto_tile_shape_cellpose, tile_process
+              from patchworks import auto_tile_shape_cellpose, tile_process
               tile_fn = partial(auto_tile_shape_cellpose, diameter=30, use_gpu=True)
               result = tile_process("image.zarr", fn, tile_shape=tile_fn)
 
@@ -155,7 +155,7 @@ def tile_process(
 
     **Cellpose (via the plugin):**
 
-    >>> from blockbuster.plugins.cellpose import cellpose_fn
+    >>> from patchworks.plugins.cellpose import cellpose_fn
     >>>
     >>> fn = cellpose_fn("cyto3", gpu=True, diameter=30)
     >>> result = tile_process(
@@ -192,7 +192,7 @@ def tile_process(
             "Active Dask client uses an in-process worker (processes=False). "
             "This breaks the label merge when fn holds the GIL. Use a "
             "process-based cluster instead:\n"
-            "    from blockbuster import make_local_cluster\n"
+            "    from patchworks import make_local_cluster\n"
             "    client, cluster = make_local_cluster(use_gpu=True)\n"
             "or drop the client to use the threaded scheduler "
             "(client.close(); cluster.close())."

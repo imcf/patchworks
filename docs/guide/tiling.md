@@ -6,7 +6,7 @@ Segmentation tools run on NumPy arrays in RAM. A 250 GB microscopy image can't
 fit in RAM (and wouldn't fit on a GPU either). Tiling solves this: split the
 image into manageable pieces, process each independently, stitch the results.
 
-blockbuster uses **dask** to manage the tiling. Each dask chunk becomes one tile.
+patchworks uses **dask** to manage the tiling. Each dask chunk becomes one tile.
 Tiles are streamed one at a time through your function and written to disk —
 peak RAM during segmentation is approximately one tile's worth of data.
 
@@ -44,8 +44,8 @@ Cellpose's memory usage scales as `20× raw input bytes + 2 GB model`. The
 
 ```python
 from functools import partial
-from blockbuster import auto_tile_shape_cellpose, tile_process
-from blockbuster.plugins.cellpose import cellpose_fn
+from patchworks import auto_tile_shape_cellpose, tile_process
+from patchworks.plugins.cellpose import cellpose_fn
 
 fn = cellpose_fn("cyto3", gpu=True, diameter=30)
 tile_fn = partial(auto_tile_shape_cellpose, diameter=30, use_gpu=True)
@@ -82,7 +82,7 @@ No overlap:        With overlap=20:
 ## Overlap and tile size interaction
 
 !!! warning
-    The overlap depth must be smaller than the tile dimension. blockbuster
+    The overlap depth must be smaller than the tile dimension. patchworks
     automatically clips the depth per axis, so z-tiles of size 1 (typical in
     2-D Cellpose mode) get `depth=0` in z even if you pass `overlap=20`.
 

@@ -1,3 +1,3 @@
 # Cellpose plugin
 
-::: blockbuster.plugins.cellpose.cellpose_fn
+::: patchworks.plugins.cellpose.cellpose_fn

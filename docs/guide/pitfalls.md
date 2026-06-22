@@ -1,7 +1,7 @@
 # Common pitfalls
 
 These pitfalls were discovered (and fixed) while processing 250 GB
-light-sheet volumes with ~2200 GPU tiles. blockbuster handles all of them
+light-sheet volumes with ~2200 GPU tiles. patchworks handles all of them
 automatically, but understanding them helps you debug unexpected behavior.
 
 ---
@@ -20,20 +20,20 @@ dead, the label merge's P2P barrier drops its inputs.
 **Fix:** Use a subprocess-based cluster:
 
 ```python
-from blockbuster import make_local_cluster
+from patchworks import make_local_cluster
 client, cluster = make_local_cluster(use_gpu=True)
 ```
 
 or drop the distributed client entirely (the threaded scheduler works for
-single-GPU runs — blockbuster pins it to 1 thread automatically).
+single-GPU runs — patchworks pins it to 1 thread automatically).
 
-blockbuster detects in-process clients at startup and raises immediately:
+patchworks detects in-process clients at startup and raises immediately:
 
 ```
 RuntimeError: Active Dask client uses an in-process worker (processes=False).
 This breaks the label merge when fn holds the GIL. Use a process-based
 cluster instead:
-    from blockbuster import make_local_cluster
+    from patchworks import make_local_cluster
     client, cluster = make_local_cluster(use_gpu=True)
 ```
 
@@ -49,7 +49,7 @@ reads the label array several times. If the label array is a lazy dask graph
 that includes the segmentation call, each read re-evaluates the full pipeline
 — including calling your function again.
 
-**Fix:** blockbuster always **stages** first: it writes each tile's labels to
+**Fix:** patchworks always **stages** first: it writes each tile's labels to
 a temporary zarr exactly once, then the zarr-native merge reads concrete
 on-disk data. Your function is called exactly once per tile, always. There is
 no configuration needed — and no way to accidentally disable it.
@@ -76,7 +76,7 @@ builds a dask task graph that is O(n_tiles²). At 64 tiles: 54 seconds. At
 2200 tiles: several hours — just for graph construction, before any data is
 even read.
 
-**Fix:** blockbuster does not use this function. The zarr-native merge is
+**Fix:** patchworks does not use this function. The zarr-native merge is
 O(face_area × n_boundaries). Sequential relabelling uses a linear post-pass:
 `np.unique` + lookup-table remap, O(voxels). Pass `sequential_labels=True`
 to enable it.
@@ -93,7 +93,7 @@ at the edges. When the merge step trims halos with
 `da.overlap.trim_overlap(boundary="none")`, these two modes don't compose:
 the halo remains in the output.
 
-**Fix:** blockbuster always uses `boundary="none"` for both overlap expansion
+**Fix:** patchworks always uses `boundary="none"` for both overlap expansion
 and trim. This is also scientifically correct — no fabricated mirror data is
 added past the true image edges.
 
@@ -107,14 +107,14 @@ added past the true image edges.
 tries to load the entire halo-expanded array into a single worker's RAM.
 For a 250 GB image with a 20-voxel halo, this is ~300 GB on one worker.
 
-**Fix:** blockbuster never persists intermediate results. The overlap graph
+**Fix:** patchworks never persists intermediate results. The overlap graph
 stays lazy; each tile is computed, written, and freed.
 
 ---
 
 ## Summary table
 
-| Pitfall | Symptom | How blockbuster handles it |
+| Pitfall | Symptom | How patchworks handles it |
 |---|---|---|
 | In-process client | `FutureCancelledError` | Detected at startup, raises immediately |
 | 3-4× fn recompute | Cellpose runs 3× per tile | Always stages labels to disk once |

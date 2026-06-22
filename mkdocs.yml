@@ -1,6 +1,6 @@
-site_name: blockbuster
-repo_name: imcf/blockbuster
-repo_url: https://github.com/imcf/blockbuster
+site_name: patchworks
+repo_name: imcf/patchworks
+repo_url: https://github.com/imcf/patchworks
 copyright: Copyright &copy; 2025 IMCF Basel
 
 theme:

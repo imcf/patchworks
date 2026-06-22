@@ -33,8 +33,8 @@ def auto_overlap(diameter: float, safety: float = 1.0) -> int:
 
     Examples
     --------
-    >>> from blockbuster import auto_overlap, tile_process
-    >>> from blockbuster.plugins.cellpose import cellpose_fn
+    >>> from patchworks import auto_overlap, tile_process
+    >>> from patchworks.plugins.cellpose import cellpose_fn
     >>>
     >>> fn = cellpose_fn("cyto3", gpu=True, diameter=30)
     >>> result = tile_process("image.zarr", fn,

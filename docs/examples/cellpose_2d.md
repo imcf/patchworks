@@ -6,15 +6,15 @@ Each tile is one z-slice `(1, y, x)`.
 ## Installation
 
 ```bash
-pip install "blockbuster[cellpose,gpu]"
+pip install "patchworks[cellpose,gpu]"
 ```
 
 ## Code
 
 ```python
 from functools import partial
-from blockbuster import auto_tile_shape_cellpose, estimate_empty_tiles, tile_process
-from blockbuster.plugins.cellpose import cellpose_fn
+from patchworks import auto_tile_shape_cellpose, estimate_empty_tiles, tile_process
+from patchworks.plugins.cellpose import cellpose_fn
 
 IMAGE = "image.zarr"
 OUTPUT = "labels.zarr"
