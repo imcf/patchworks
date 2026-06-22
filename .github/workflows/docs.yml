@@ -4,6 +4,10 @@ on:
   push:
     branches:
       - main
+  # Rebuild after each release so the version shown in the header refreshes.
+  release:
+    types: [published]
+  workflow_dispatch:
 
 permissions:
   contents: write
