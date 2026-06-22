@@ -3,6 +3,7 @@
 Each z-slice is processed as a 2-D tile. StarDist needs more overlap context
 than Cellpose (32 voxels recommended for the default 2D_versatile_fluo model).
 """
+
 import numpy as np
 from stardist.models import StarDist2D
 
@@ -33,7 +34,8 @@ def stardist_fn(tile: np.ndarray) -> np.ndarray:
 
 
 tile_process(
-    IMAGE, stardist_fn,
+    IMAGE,
+    stardist_fn,
     channel=CHANNEL,
     tile_shape=(1, 1024, 1024),
     overlap=32,

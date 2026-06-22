@@ -1,4 +1,5 @@
 """Linear sequential relabelling (O(voxels), not O(n_chunks²))."""
+
 from __future__ import annotations
 
 import logging
@@ -30,7 +31,8 @@ def relabel_sequential_array(labels: np.ndarray) -> np.ndarray:
         logger.warning(
             "relabel_sequential_array: max_label=%d → LUT size ~%.0f MB. "
             "Consider using write_to= so labels never need to be in RAM.",
-            max_label, max_label * 8 / 1024**2,
+            max_label,
+            max_label * 8 / 1024**2,
         )
     lut = np.zeros(max_label + 1, dtype=np.int64)
     lut[uniq] = np.arange(uniq.size)
@@ -57,7 +59,9 @@ def relabel_sequential_zarr(store_path: str, component: str = "labels") -> int:
     # = 464 GiB in one allocation (MemoryError).
     n_per_dim = [(s + c - 1) // c for s, c in zip(z_shape, z_chunks)]
     chunk_slices = [
-        tuple(slice(i * c, min((i + 1) * c, s)) for i, c, s in zip(idx, z_chunks, z_shape))
+        tuple(
+            slice(i * c, min((i + 1) * c, s)) for i, c, s in zip(idx, z_chunks, z_shape)
+        )
         for idx in _iproduct(*[range(n) for n in n_per_dim])
     ]
 
@@ -69,7 +73,8 @@ def relabel_sequential_zarr(store_path: str, component: str = "labels") -> int:
     if max_label > _LUT_WARN_THRESHOLD:
         logger.warning(
             "relabel_sequential_zarr: max_label=%d → LUT size ~%.0f MB.",
-            max_label, max_label * 8 / 1024**2,
+            max_label,
+            max_label * 8 / 1024**2,
         )
     lut = np.zeros(max_label + 1, dtype=np.int64)
     lut[sorted_ids] = np.arange(sorted_ids.size)

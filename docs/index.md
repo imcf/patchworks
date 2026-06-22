@@ -45,10 +45,13 @@ strategy used by
 ```python
 from patchworks import tile_process
 
+
 def my_fn(tile):
     from skimage.filters import threshold_otsu
     from skimage.measure import label
+
     return label(tile > threshold_otsu(tile)).astype("int32")
+
 
 result = tile_process("image.zarr", my_fn, compute=True)
 ```
@@ -62,10 +65,12 @@ patchworks doesn't care what's inside `fn`:
 ```python
 # Cellpose
 from patchworks.plugins.cellpose import cellpose_fn
+
 fn = cellpose_fn("cyto3", gpu=True, diameter=30)
 
 # StarDist
 from stardist.models import StarDist2D
+
 model = StarDist2D.from_pretrained("2D_versatile_fluo")
 fn = lambda tile: model.predict_instances(tile)[0].astype("int32")
 
@@ -73,8 +78,14 @@ fn = lambda tile: model.predict_instances(tile)[0].astype("int32")
 fn = lambda tile: my_model(torch.from_numpy(tile)).argmax(0).numpy()
 
 # All work identically with tile_process
-tile_process("image.zarr", fn, tile_shape=(1, 1024, 1024), overlap=20,
-             write_to="labels.zarr", progress=True)
+tile_process(
+    "image.zarr",
+    fn,
+    tile_shape=(1, 1024, 1024),
+    overlap=20,
+    write_to="labels.zarr",
+    progress=True,
+)
 ```
 
 ## Installation

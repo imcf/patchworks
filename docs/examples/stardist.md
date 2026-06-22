@@ -33,10 +33,11 @@ def stardist_fn(tile: np.ndarray) -> np.ndarray:
 
 
 tile_process(
-    IMAGE, stardist_fn,
+    IMAGE,
+    stardist_fn,
     channel=0,
     tile_shape=(1, 1024, 1024),
-    overlap=32,          # StarDist receptive field is larger than Cellpose
+    overlap=32,  # StarDist receptive field is larger than Cellpose
     write_to=OUTPUT,
     progress=True,
 )
@@ -51,9 +52,11 @@ tile_process(
     ```python
     from functools import lru_cache
 
+
     @lru_cache(maxsize=1)
     def _get_model():
         return StarDist2D.from_pretrained("2D_versatile_fluo")
+
 
     def stardist_fn(tile):
         model = _get_model()

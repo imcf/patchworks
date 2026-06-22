@@ -21,6 +21,7 @@ dead, the label merge's P2P barrier drops its inputs.
 
 ```python
 from patchworks import make_local_cluster
+
 client, cluster = make_local_cluster(use_gpu=True)
 ```
 
@@ -114,10 +115,10 @@ stays lazy; each tile is computed, written, and freed.
 
 ## Summary table
 
-| Pitfall | Symptom | How patchworks handles it |
-|---|---|---|
-| In-process client | `FutureCancelledError` | Detected at startup, raises immediately |
-| 3-4× fn recompute | Cellpose runs 3× per tile | Always stages labels to disk once |
-| O(n²) relabelling | Graph construction hangs | Linear post-pass O(voxels) |
-| Wrong overlap boundary | Wrong output shape | Always uses `boundary="none"` |
-| Persisting large arrays | Worker OOM | Never persists; keeps dask graph lazy |
+| Pitfall                 | Symptom                   | How patchworks handles it               |
+| ----------------------- | ------------------------- | --------------------------------------- |
+| In-process client       | `FutureCancelledError`    | Detected at startup, raises immediately |
+| 3-4× fn recompute       | Cellpose runs 3× per tile | Always stages labels to disk once       |
+| O(n²) relabelling       | Graph construction hangs  | Linear post-pass O(voxels)              |
+| Wrong overlap boundary  | Wrong output shape        | Always uses `boundary="none"`           |
+| Persisting large arrays | Worker OOM                | Never persists; keeps dask graph lazy   |

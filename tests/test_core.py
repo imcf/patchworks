@@ -1,4 +1,5 @@
 """Self-contained tests for patchworks. No frameworks, no fixtures."""
+
 import numpy as np
 import pytest
 
@@ -11,12 +12,14 @@ def _make_image(shape=(4, 64, 64), dtype="uint16"):
 def _label_fn(tile: np.ndarray) -> np.ndarray:
     """Simple threshold segmentation for testing."""
     from skimage.measure import label as sk_label
+
     binary = tile > tile.mean()
     return sk_label(binary).astype("int32")
 
 
 def test_tile_process_numpy_array():
     import dask.array as da
+
     from patchworks import tile_process
 
     arr = da.from_array(_make_image((4, 64, 64)), chunks=(1, 64, 64))
@@ -28,6 +31,7 @@ def test_tile_process_numpy_array():
 
 def test_tile_process_with_overlap():
     import dask.array as da
+
     from patchworks import tile_process
 
     arr = da.from_array(_make_image((2, 64, 64)), chunks=(1, 64, 64))
@@ -39,6 +43,7 @@ def test_tile_process_overlap_multitile_shape():
     # Multiple tiles along y and x: exercises the halo trim across real
     # interior boundaries. Output must keep the original shape (halo trimmed).
     import dask.array as da
+
     from patchworks import tile_process
 
     arr = da.from_array(_make_image((1, 96, 96)), chunks=(1, 48, 48))
@@ -49,6 +54,7 @@ def test_tile_process_overlap_multitile_shape():
 def test_tile_process_merges_object_across_boundary():
     # An object spanning a tile boundary must end up with a single label.
     import dask.array as da
+
     from patchworks import tile_process
 
     data = np.zeros((1, 16, 32), dtype="uint16")
@@ -57,6 +63,7 @@ def test_tile_process_merges_object_across_boundary():
 
     def fn(tile):
         from skimage.measure import label
+
         return label(tile > 0).astype("int32")
 
     result = tile_process(arr, fn).compute()
@@ -67,6 +74,7 @@ def test_tile_process_merges_object_across_boundary():
 def test_tile_process_write_to(tmp_path):
     import dask.array as da
     import zarr
+
     from patchworks import tile_process
 
     arr = da.from_array(_make_image((2, 32, 32)), chunks=(1, 32, 32))
@@ -80,6 +88,7 @@ def test_tile_process_write_to(tmp_path):
 
 def test_tile_process_skip_empty():
     import dask.array as da
+
     from patchworks import tile_process
 
     # First two tiles are zeros (empty), last two have signal
@@ -88,6 +97,7 @@ def test_tile_process_skip_empty():
     arr = da.from_array(arr_data, chunks=(1, 32, 32))
 
     call_count = [0]
+
     def counting_fn(tile):
         call_count[0] += 1
         return _label_fn(tile)
@@ -99,6 +109,7 @@ def test_tile_process_skip_empty():
 
 def test_tile_process_sequential_labels():
     import dask.array as da
+
     from patchworks import tile_process
 
     arr = da.from_array(_make_image((2, 32, 32)), chunks=(1, 32, 32))
@@ -113,6 +124,7 @@ def test_merge_tile_labels_standalone(tmp_path):
     # Standalone merge of a dask array of per-tile labels: an object straddling
     # a tile boundary must collapse to a single label.
     import dask.array as da
+
     from patchworks import merge_tile_labels
 
     data = np.zeros((1, 16, 32), dtype="uint16")
@@ -121,6 +133,7 @@ def test_merge_tile_labels_standalone(tmp_path):
 
     def fn(tile):
         from skimage.measure import label
+
         return label(tile > 0).astype("int32")
 
     labeled = image.map_blocks(
@@ -137,30 +150,32 @@ def test_merge_transitive_three_tiles(tmp_path):
     # A cell that spans 3 tiles (A→B→C) must be merged into one label even
     # though A and C never directly touch. Transitivity via connected_components.
     import dask.array as da
-    from patchworks._merge import zarr_native_merge
     import zarr
+
+    from patchworks._merge import zarr_native_merge
 
     sp = str(tmp_path / "stage.zarr")
     root = zarr.open_group(sp, mode="w")
     a = root.zeros("staged", shape=(3, 4, 4), chunks=(1, 4, 4), dtype=np.int32)
-    a[0] = np.full((4, 4), 10)   # label 10 in tile 0
-    a[1] = np.full((4, 4), 20)   # label 20 in tile 1 (touches 10 and 30)
-    a[2] = np.full((4, 4), 30)   # label 30 in tile 2
+    a[0] = np.full((4, 4), 10)  # label 10 in tile 0
+    a[1] = np.full((4, 4), 20)  # label 20 in tile 1 (touches 10 and 30)
+    a[2] = np.full((4, 4), 30)  # label 30 in tile 2
 
     out = str(tmp_path / "out.zarr")
     zarr_native_merge(sp, "staged", out, "labels", n_workers=1)
     r = np.asarray(zarr.open_group(out)["labels"])
 
     assert r[0, 0, 0] == r[1, 0, 0] == r[2, 0, 0], (
-        f"transitive merge failed: tile0={r[0,0,0]} tile1={r[1,0,0]} tile2={r[2,0,0]}"
+        f"transitive merge failed: tile0={r[0, 0, 0]} tile1={r[1, 0, 0]} tile2={r[2, 0, 0]}"
     )
 
 
 def test_merge_isolated_labels_not_merged(tmp_path):
     # Two cells that never touch across any boundary must stay separate.
     import dask.array as da
-    from patchworks._merge import zarr_native_merge
     import zarr
+
+    from patchworks._merge import zarr_native_merge
 
     sp = str(tmp_path / "stage.zarr")
     root = zarr.open_group(sp, mode="w")
@@ -168,10 +183,10 @@ def test_merge_isolated_labels_not_merged(tmp_path):
     # tile (z=0, x-left): label 1 only in left half, no boundary voxel
     # tile (z=0, x-right): label 2 only in right half
     # They share the x=4 boundary but fill opposite ends → no touching voxel
-    a[0, :, :3] = 1   # left side of tile 0
+    a[0, :, :3] = 1  # left side of tile 0
     a[0, :, 5:] = 0
     a[1, :, :3] = 0
-    a[1, :, 5:] = 2   # right side of tile 1
+    a[1, :, 5:] = 2  # right side of tile 1
 
     out = str(tmp_path / "out.zarr")
     zarr_native_merge(sp, "staged", out, "labels", n_workers=1)
@@ -215,6 +230,7 @@ def test_relabel_sequential_array():
 
 def test_estimate_empty_tiles():
     import dask.array as da
+
     from patchworks import estimate_empty_tiles
 
     arr_data = np.zeros((4, 32, 32), dtype="uint16")
