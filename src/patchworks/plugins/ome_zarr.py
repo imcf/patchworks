@@ -50,6 +50,9 @@ logger = logging.getLogger(__name__)
 
 _NGFF_VERSION = "0.4"
 _SPATIAL_AXES = frozenset("zyx")
+# Only X and Y are downsampled when building pyramids; Z is kept at full
+# resolution (microscopy stacks are already coarse and anisotropic in Z).
+_DOWNSAMPLE_AXES = frozenset("yx")
 # axis names assigned to a bare N-D array, taken from the right:
 _DEFAULT_ORDER = "tczyx"
 
@@ -78,8 +81,8 @@ def _axes_meta(axes: str) -> list[dict]:
 
 
 def _strides(axes: str, downscale: int) -> tuple[int, ...]:
-    """Per-axis stride: downsample spatial axes only, others stay at 1."""
-    return tuple(downscale if a in _SPATIAL_AXES else 1 for a in axes)
+    """Per-axis stride: downsample X/Y only; Z, C and T stay at 1."""
+    return tuple(downscale if a in _DOWNSAMPLE_AXES else 1 for a in axes)
 
 
 def _write_pyramid(
@@ -216,8 +219,8 @@ def to_ome_zarr(
     *source* may be a dask/NumPy array, a ``.zarr`` store, or any image file
     readable by bioio (CZI, LIF, ND2, OME-TIFF, …). File inputs are read
     lazily, and every pyramid level is streamed to disk through dask, so the
-    full volume never needs to fit in RAM. Only the spatial axes
-    (``z``/``y``/``x``) are downsampled; channel/time axes are kept intact.
+    full volume never needs to fit in RAM. Only ``x`` and ``y`` are
+    downsampled; ``z`` (and channel/time) are kept at full resolution.
 
     Parameters
     ----------
@@ -347,6 +350,48 @@ def add_pyramid(
     return gp
 
 
+def register_labels(
+    image_store: Union[str, Path],
+    name: str = "labels",
+    *,
+    axes: Union[str, None] = None,
+    n_levels: int = 5,
+    downscale: int = 2,
+    chunks: Union[tuple[int, ...], None] = None,
+) -> str:
+    """Pyramidalise and register an existing ``labels/<name>/0`` base level.
+
+    Assumes the full-resolution label array already exists at
+    ``image_store/labels/<name>/0`` (e.g. written there directly by
+    ``tile_process``). Adds the downsampled levels, tags the group with NGFF
+    ``image-label`` metadata, and lists *name* in ``labels/.zattrs``.
+
+    Returns
+    -------
+    str
+        Path to the label group (``image_store/labels/<name>``).
+    """
+    store = str(image_store)
+    group = f"{store}/labels/{name}"
+    add_pyramid(
+        group,
+        base="0",
+        axes=axes,
+        n_levels=n_levels,
+        downscale=downscale,
+        chunks=chunks,
+    )
+    grp = zarr.open_group(group, mode="a")
+    grp.attrs["image-label"] = {"version": _NGFF_VERSION}
+
+    labels_grp = zarr.open_group(f"{store}/labels", mode="a")
+    registered = list(labels_grp.attrs.get("labels", []))
+    if name not in registered:
+        registered.append(name)
+    labels_grp.attrs["labels"] = registered
+    return group
+
+
 def write_labels(
     image_store: Union[str, Path],
     labels: Union[da.Array, np.ndarray],
@@ -392,24 +437,23 @@ def write_labels(
         )
 
     store = str(image_store)
+    # Build the labels/<name> group hierarchy from the root store so the NGFF
+    # group markers are persisted at every level (a nested open_group on its
+    # own does not create the parent `labels` group on a zarr-v3 LocalStore).
+    root = zarr.open_group(store, mode="a")
+    parent = root.require_group("labels")
+    if overwrite and name in parent:
+        del parent[name]
+    parent.require_group(name)
+
     label_group = f"{store}/labels/{name}"
-    zarr.open_group(label_group, mode="w" if overwrite else "a")
-    datasets = _write_pyramid(
-        arr,
-        axes,
-        label_group,
+    base = arr.rechunk(chunks) if chunks is not None else arr
+    da.to_zarr(base, label_group, component="0", overwrite=True)
+    return register_labels(
+        store,
+        name,
+        axes=axes,
         n_levels=n_levels,
         downscale=downscale,
         chunks=chunks,
     )
-    _write_multiscales(label_group, axes, datasets, name)
-    group = zarr.open_group(label_group, mode="a")
-    group.attrs["image-label"] = {"version": _NGFF_VERSION}
-
-    # Register the label image in the parent `labels` group.
-    labels_grp = zarr.open_group(f"{store}/labels", mode="a")
-    registered = list(labels_grp.attrs.get("labels", []))
-    if name not in registered:
-        registered.append(name)
-    labels_grp.attrs["labels"] = registered
-    return label_group

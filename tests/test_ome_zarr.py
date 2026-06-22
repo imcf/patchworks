@@ -25,12 +25,13 @@ def test_pyramid_roundtrip(tmp_path):
     l1 = load_ome_zarr(out, channel=None, level=1)
     l2 = load_ome_zarr(out, channel=None, level=2)
 
+    # Z is kept at full resolution; only X/Y are downsampled.
     assert l0.shape == (8, 8, 8)
-    assert l1.shape == (4, 4, 4)
-    assert l2.shape == (2, 2, 2)
+    assert l1.shape == (8, 4, 4)
+    assert l2.shape == (8, 2, 2)
     # Full resolution is byte-identical; downsampling is nearest (label-safe).
     assert np.array_equal(np.asarray(l0), a)
-    assert np.array_equal(np.asarray(l1), a[::2, ::2, ::2])
+    assert np.array_equal(np.asarray(l1), a[:, ::2, ::2])
 
 
 def test_non_spatial_axis_not_downsampled(tmp_path):
@@ -71,8 +72,8 @@ def test_add_pyramid_to_flat_store(tmp_path):
 
     assert load_ome_zarr(store, channel=None, level=0).shape == (8, 8, 8)
     l1 = load_ome_zarr(store, channel=None, level=1)
-    assert l1.shape == (4, 4, 4)
-    assert np.array_equal(np.asarray(l1), base[::2, ::2, ::2])
+    assert l1.shape == (8, 4, 4)  # Z preserved
+    assert np.array_equal(np.asarray(l1), base[:, ::2, ::2])
 
 
 def test_write_labels_into_store(tmp_path):
@@ -89,6 +90,6 @@ def test_write_labels_into_store(tmp_path):
     assert "cells" in labels_grp.attrs["labels"]
     # readable as a multi-scale label image with image-label metadata
     assert load_ome_zarr(group, channel=None, level=0).shape == (8, 8, 8)
-    assert load_ome_zarr(group, channel=None, level=1).shape == (4, 4, 4)
+    assert load_ome_zarr(group, channel=None, level=1).shape == (8, 4, 4)
     lg = zarr.open_group(group, mode="r")
     assert lg.attrs["image-label"]["version"]
