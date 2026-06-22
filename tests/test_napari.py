@@ -17,7 +17,7 @@ def test_resolve_image_multiscale(tmp_path):
     assert isinstance(out, list)
     assert len(out) == 3
     assert all(isinstance(lvl, da.Array) for lvl in out)
-    assert out[1].shape == (8, 8, 8)
+    assert out[1].shape == (16, 8, 8)  # Z preserved, only X/Y downsampled
 
 
 def test_resolve_labels_plain_zarr(tmp_path):

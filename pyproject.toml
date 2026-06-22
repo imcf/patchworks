@@ -1,10 +1,10 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
 
 [project]
 name = "patchworks"
-version = "0.2.0"
+dynamic = ["version"]
 description = "Tiled processing of arbitrarily large images with globally consistent labels"
 readme = "README.md"
 license = { text = "MIT" }
@@ -56,6 +56,9 @@ all = ["patchworks[io,gpu,bioio]", "psutil", "tqdm", "scikit-image"]
 [project.urls]
 Homepage = "https://github.com/imcf/patchworks"
 Issues = "https://github.com/imcf/patchworks/issues"
+
+[tool.hatch.version]
+source = "vcs"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/patchworks"]

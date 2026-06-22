@@ -26,6 +26,9 @@ With Cellpose:
 ...              overlap=20, write_to="labels.zarr", progress=True)
 """
 
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _pkg_version
+
 from ._chunks import auto_overlap, auto_tile_shape, auto_tile_shape_cellpose
 from ._cluster import make_local_cluster
 from ._core import tile_process
@@ -33,7 +36,10 @@ from ._io import estimate_empty_tiles, load_ome_zarr
 from ._merge import merge_tile_labels
 from ._relabel import relabel_sequential_array, relabel_sequential_zarr
 
-__version__ = "0.2.0"
+try:
+    __version__ = _pkg_version("patchworks")
+except PackageNotFoundError:  # not installed (e.g. running from a checkout)
+    __version__ = "0+unknown"
 __all__ = [
     "tile_process",
     "merge_tile_labels",
