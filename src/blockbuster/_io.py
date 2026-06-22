@@ -171,8 +171,13 @@ def estimate_empty_tiles(
         if channel is not None and n_leading > 0:
             _ch_prefix = (0,) * (n_leading - 1) + (channel,)
 
+    # Streaming single pass: store only per-tile max (a scalar) and a bounded
+    # sample list for Otsu. The old approach stored every tile's full block in
+    # `blocks` dict — for 2000 tiles × 24×256×256 × 2 bytes = ~6 GB in RAM.
+    _MAX_OTSU_SAMPLES = 500
     samples: list[np.ndarray] = []
-    blocks: dict[tuple, np.ndarray] = {}
+    tile_maxes: dict[tuple, float] = {}
+
     for idx in np.ndindex(*grid):
         sl: list[slice] = []
         for i, t, w, s in zip(idx, tile_shape, win, sp_shape):
@@ -185,15 +190,17 @@ def estimate_empty_tiles(
             sub = arr[(...,) + tuple(sl)] if arr.ndim > n_spatial else arr[tuple(sl)]
             block = np.asarray(sub)
 
-        blocks[idx] = block
-        samples.append(block.ravel())
+        tile_maxes[idx] = float(block.max()) if block.size else 0.0
+        if threshold is None and len(samples) < _MAX_OTSU_SAMPLES:
+            samples.append(block.ravel())
+        # block freed here — not stored
 
     if threshold is None:
-        threshold = _otsu_threshold(np.concatenate(samples))
+        threshold = _otsu_threshold(np.concatenate(samples) if samples else np.zeros(1))
 
     occupancy = np.zeros(grid, dtype=bool)
-    for idx, block in blocks.items():
-        occupancy[idx] = bool(block.size and block.max() > threshold)
+    for idx, mx in tile_maxes.items():
+        occupancy[idx] = mx > threshold
 
     n_tiles = int(occupancy.size)
     n_occ = int(occupancy.sum())

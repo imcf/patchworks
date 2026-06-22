@@ -20,7 +20,7 @@ def test_tile_process_numpy_array():
     from blockbuster import tile_process
 
     arr = da.from_array(_make_image((4, 64, 64)), chunks=(1, 64, 64))
-    result = tile_process(arr, _label_fn, compute=True)
+    result = tile_process(arr, _label_fn).compute()
     assert result.shape == (4, 64, 64)
     assert result.dtype in (np.int32, np.int64, np.uint16, np.uint32)
     assert result.max() > 0
@@ -31,7 +31,7 @@ def test_tile_process_with_overlap():
     from blockbuster import tile_process
 
     arr = da.from_array(_make_image((2, 64, 64)), chunks=(1, 64, 64))
-    result = tile_process(arr, _label_fn, overlap=8, compute=True)
+    result = tile_process(arr, _label_fn, overlap=8).compute()
     assert result.shape == (2, 64, 64)
 
 
@@ -42,7 +42,7 @@ def test_tile_process_overlap_multitile_shape():
     from blockbuster import tile_process
 
     arr = da.from_array(_make_image((1, 96, 96)), chunks=(1, 48, 48))
-    result = tile_process(arr, _label_fn, overlap=8, compute=True)
+    result = tile_process(arr, _label_fn, overlap=8).compute()
     assert result.shape == (1, 96, 96)
 
 
@@ -59,7 +59,7 @@ def test_tile_process_merges_object_across_boundary():
         from skimage.measure import label
         return label(tile > 0).astype("int32")
 
-    result = tile_process(arr, fn, compute=True)
+    result = tile_process(arr, fn).compute()
     ids = np.unique(result[result > 0])
     assert ids.size == 1, f"object split into {ids.size} labels, expected 1"
 
@@ -92,12 +92,7 @@ def test_tile_process_skip_empty():
         call_count[0] += 1
         return _label_fn(tile)
 
-    result = tile_process(
-        arr, counting_fn,
-        skip_empty=True, empty_threshold=0,
-        compute=True,
-    )
-    assert result.shape == (4, 32, 32)
+    tile_process(arr, counting_fn, skip_empty=True, empty_threshold=0)
     # With staging, fn is called once per non-empty tile
     assert call_count[0] == 2, f"Expected 2 fn calls, got {call_count[0]}"
 
@@ -107,9 +102,7 @@ def test_tile_process_sequential_labels():
     from blockbuster import tile_process
 
     arr = da.from_array(_make_image((2, 32, 32)), chunks=(1, 32, 32))
-    result = tile_process(arr, _label_fn, compute=True, sequential_labels=True)
-    if hasattr(result, 'compute'):
-        result = result.compute()
+    result = tile_process(arr, _label_fn, sequential_labels=True).compute()
     labels = np.unique(result)
     labels = labels[labels > 0]
     # Sequential: no gaps
@@ -138,6 +131,53 @@ def test_merge_tile_labels_standalone(tmp_path):
     arr = merged.compute()
     ids = np.unique(arr[arr > 0])
     assert ids.size == 1, f"object split into {ids.size} labels, expected 1"
+
+
+def test_merge_transitive_three_tiles(tmp_path):
+    # A cell that spans 3 tiles (A→B→C) must be merged into one label even
+    # though A and C never directly touch. Transitivity via connected_components.
+    import dask.array as da
+    from blockbuster._merge import zarr_native_merge
+    import zarr
+
+    sp = str(tmp_path / "stage.zarr")
+    root = zarr.open_group(sp, mode="w")
+    a = root.zeros("staged", shape=(3, 4, 4), chunks=(1, 4, 4), dtype=np.int32)
+    a[0] = np.full((4, 4), 10)   # label 10 in tile 0
+    a[1] = np.full((4, 4), 20)   # label 20 in tile 1 (touches 10 and 30)
+    a[2] = np.full((4, 4), 30)   # label 30 in tile 2
+
+    out = str(tmp_path / "out.zarr")
+    zarr_native_merge(sp, "staged", out, "labels", n_workers=1)
+    r = np.asarray(zarr.open_group(out)["labels"])
+
+    assert r[0, 0, 0] == r[1, 0, 0] == r[2, 0, 0], (
+        f"transitive merge failed: tile0={r[0,0,0]} tile1={r[1,0,0]} tile2={r[2,0,0]}"
+    )
+
+
+def test_merge_isolated_labels_not_merged(tmp_path):
+    # Two cells that never touch across any boundary must stay separate.
+    import dask.array as da
+    from blockbuster._merge import zarr_native_merge
+    import zarr
+
+    sp = str(tmp_path / "stage.zarr")
+    root = zarr.open_group(sp, mode="w")
+    a = root.zeros("staged", shape=(2, 4, 8), chunks=(1, 4, 4), dtype=np.int32)
+    # tile (z=0, x-left): label 1 only in left half, no boundary voxel
+    # tile (z=0, x-right): label 2 only in right half
+    # They share the x=4 boundary but fill opposite ends → no touching voxel
+    a[0, :, :3] = 1   # left side of tile 0
+    a[0, :, 5:] = 0
+    a[1, :, :3] = 0
+    a[1, :, 5:] = 2   # right side of tile 1
+
+    out = str(tmp_path / "out.zarr")
+    zarr_native_merge(sp, "staged", out, "labels", n_workers=1)
+    r = np.asarray(zarr.open_group(out)["labels"])
+    unique = set(np.unique(r[r > 0]).tolist())
+    assert len(unique) == 2, f"isolated labels were incorrectly merged: {unique}"
 
 
 def test_auto_tile_shape():

@@ -2,11 +2,15 @@
 from __future__ import annotations
 
 import logging
+from itertools import product as _iproduct
 
 import numpy as np
 import zarr
 
 logger = logging.getLogger(__name__)
+
+
+_LUT_WARN_THRESHOLD = 100_000_000  # warn when max_label > 100 M (LUT > 800 MB)
 
 
 def relabel_sequential_array(labels: np.ndarray) -> np.ndarray:
@@ -21,7 +25,14 @@ def relabel_sequential_array(labels: np.ndarray) -> np.ndarray:
     array([0, 2, 2, 1])
     """
     uniq = np.unique(labels)
-    lut = np.zeros(int(uniq[-1]) + 1, dtype=np.int64)
+    max_label = int(uniq[-1])
+    if max_label > _LUT_WARN_THRESHOLD:
+        logger.warning(
+            "relabel_sequential_array: max_label=%d → LUT size ~%.0f MB. "
+            "Consider using write_to= so labels never need to be in RAM.",
+            max_label, max_label * 8 / 1024**2,
+        )
+    lut = np.zeros(max_label + 1, dtype=np.int64)
     lut[uniq] = np.arange(uniq.size)
     out = lut[labels]
     n = uniq.size - 1 if uniq[0] == 0 else uniq.size
@@ -38,17 +49,35 @@ def relabel_sequential_zarr(store_path: str, component: str = "labels") -> int:
     """
     root = zarr.open_group(store_path, mode="r+")
     z = root[component]
-    uniq: set[int] = set()
     z_shape, z_chunks = z.shape, z.chunks
-    step = z_chunks[0] if z_chunks else z_shape[0]
-    for i0 in range(0, z_shape[0], step):
-        uniq.update(np.unique(z[i0:i0 + step]).tolist())
+
+    # Iterate over actual zarr chunks in ALL dimensions. The z-slab approach
+    # (step = z_chunks[0], slice z[i0:i0+step]) reads the full y/x extent per
+    # step — for chunks like (120, 731, 731) that means (120, 37888, 27392)
+    # = 464 GiB in one allocation (MemoryError).
+    n_per_dim = [(s + c - 1) // c for s, c in zip(z_shape, z_chunks)]
+    chunk_slices = [
+        tuple(slice(i * c, min((i + 1) * c, s)) for i, c, s in zip(idx, z_chunks, z_shape))
+        for idx in _iproduct(*[range(n) for n in n_per_dim])
+    ]
+
+    uniq: set[int] = set()
+    for sl in chunk_slices:
+        uniq.update(np.unique(np.asarray(z[sl])).tolist())
     sorted_ids = np.array(sorted(uniq), dtype=np.int64)
-    lut = np.zeros(int(sorted_ids[-1]) + 1, dtype=np.int64)
+    max_label = int(sorted_ids[-1])
+    if max_label > _LUT_WARN_THRESHOLD:
+        logger.warning(
+            "relabel_sequential_zarr: max_label=%d → LUT size ~%.0f MB.",
+            max_label, max_label * 8 / 1024**2,
+        )
+    lut = np.zeros(max_label + 1, dtype=np.int64)
     lut[sorted_ids] = np.arange(sorted_ids.size)
     n = sorted_ids.size - 1 if sorted_ids[0] == 0 else sorted_ids.size
-    for i0 in range(0, z_shape[0], step):
-        block = z[i0:i0 + step]
-        z[i0:i0 + step] = lut[block].astype(z.dtype)
+    # Use same dtype logic as relabel_sequential_array so output never overflows.
+    out_dtype = np.uint16 if n < np.iinfo(np.uint16).max else np.uint32
+    for sl in chunk_slices:
+        block = np.asarray(z[sl])
+        z[sl] = lut[block].astype(out_dtype)
     logger.info("relabel_sequential_zarr: %d objects renumbered to 1..%d", n, n)
     return int(n)

@@ -15,45 +15,29 @@ from ._chunks import auto_tile_shape
 from ._cluster import _client_is_in_process, _distributed_client
 from ._io import _auto_empty_threshold, load_ome_zarr
 from ._merge import zarr_native_merge
-from ._relabel import relabel_sequential_array, relabel_sequential_zarr
+from ._relabel import relabel_sequential_zarr
 
 logger = logging.getLogger(__name__)
 
 
-def _finalise(arr: da.Array, show_progress: bool,
-              write_to: str | None, component: str) -> np.ndarray | None:
-    """Compute or write *arr*, showing progress via the active scheduler."""
+def _stage_to_zarr(
+    arr: da.Array, path: str, component: str, show_progress: bool
+) -> None:
+    """Write *arr* to zarr *path/component*, never loading it into RAM."""
     import dask
-
+    lazy_write = arr.to_zarr(str(path), component=component, overwrite=True, compute=False)
     client = _distributed_client()
-    if write_to is not None:
-        lazy_write = arr.to_zarr(
-            str(write_to), component=component, overwrite=True, compute=False
-        )
-        if client is not None:
-            future = client.compute(lazy_write)
-            if show_progress:
-                from dask.distributed import progress as _dist_progress
-                _dist_progress(future)
-            future.result()
-        else:
-            from dask.diagnostics import ProgressBar
-            ctx = ProgressBar() if show_progress else _nullcontext()
-            with ctx:
-                dask.compute(lazy_write)
-        return None
-
     if client is not None:
-        future = client.compute(arr)
+        future = client.compute(lazy_write)
         if show_progress:
             from dask.distributed import progress as _dist_progress
             _dist_progress(future)
-        return future.result()
-
-    from dask.diagnostics import ProgressBar
-    ctx = ProgressBar() if show_progress else _nullcontext()
-    with ctx:
-        return arr.compute()
+        future.result()
+    else:
+        from dask.diagnostics import ProgressBar
+        ctx = ProgressBar() if show_progress else _nullcontext()
+        with ctx:
+            dask.compute(lazy_write)
 
 
 def tile_process(
@@ -65,7 +49,6 @@ def tile_process(
     channel: int | None = 0,
     level: int = 0,
     use_gpu: bool = False,
-    compute: bool = False,
     progress: bool = False,
     write_to: Union[str, Path, None] = None,
     output_component: str = "labels",
@@ -75,7 +58,7 @@ def tile_process(
     stage_dir: Union[str, Path, None] = None,
     keep_stage: bool = False,
     verbose: bool = False,
-) -> Union[da.Array, np.ndarray]:
+) -> da.Array:
     """Apply *fn* to every tile of *image* and merge labels globally.
 
     The core workhorse of blockbuster. ``fn`` can be any callable that takes a
@@ -120,14 +103,11 @@ def tile_process(
         Pyramid level when *image* is a path (0 = full resolution).
     use_gpu:
         When ``tile_shape="auto"``, size tiles against GPU VRAM instead of RAM.
-    compute:
-        Compute and return the result immediately as a NumPy array.
     progress:
-        Show a progress bar while computing. Requires ``compute=True`` or
-        ``write_to`` to be set.
+        Show a progress bar during the tile-writing and relabel steps.
     write_to:
-        Zarr store path to stream-write labels while computing (avoids loading
-        the full result into RAM). Implies ``compute=True``.
+        Output zarr store path. When None, an auto-temp store is used and its
+        path is logged. Pass an explicit path to control the output location.
     output_component:
         Array name inside ``write_to``. Default ``"labels"``.
     sequential_labels:
@@ -156,10 +136,10 @@ def tile_process(
 
     Returns
     -------
-    da.Array or np.ndarray
-        Globally relabeled array (int32). Returns a lazy ``da.Array`` backed by
-        ``write_to`` when ``write_to`` is set, otherwise an in-memory NumPy
-        array (the merge always materialises to disk first).
+    da.Array
+        Globally relabeled array (int32) backed by ``write_to`` (or an
+        auto-temp zarr when ``write_to`` is None). Never loads the full volume
+        into RAM. Call ``.compute()`` yourself only if the result fits in RAM.
 
     Examples
     --------
@@ -171,7 +151,7 @@ def tile_process(
     >>> def my_fn(tile):
     ...     return label(tile > threshold_otsu(tile)).astype("int32")
     >>>
-    >>> result = tile_process("image.zarr", my_fn, compute=True)
+    >>> result = tile_process("image.zarr", my_fn, write_to="labels.zarr")
 
     **Cellpose (via the plugin):**
 
@@ -325,7 +305,7 @@ def tile_process(
     stage_path = os.path.join(base, "_bb_stage.zarr")
     logger.info("Staging tiles to %s …", stage_path)
     with _sched_ctx:
-        _finalise(labeled, progress, stage_path, "staged")
+        _stage_to_zarr(labeled, stage_path, "staged", progress)
     labeled = da.from_zarr(stage_path, component="staged")
 
     if skip_empty and _skip_thr is not None:
@@ -366,7 +346,7 @@ def tile_process(
         relabel_sequential_zarr(_effective_out, output_component)
     _cleanup_stage()
 
-    result_arr = da.from_zarr(_effective_out, component=output_component)
-    if compute or write_to is None:
-        return result_arr.compute()
-    return result_arr
+    # Always return a lazy dask array backed by the output zarr.
+    # Never load the full volume into RAM here — the merge already materialised
+    # to disk (auto-temp when write_to=None). Caller can .compute() if needed.
+    return da.from_zarr(_effective_out, component=output_component)
