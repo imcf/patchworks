@@ -1,5 +1,10 @@
 # patchworks
 
+[![PyPI](https://img.shields.io/pypi/v/patchworks.svg)](https://pypi.org/project/patchworks/)
+[![Python versions](https://img.shields.io/pypi/pyversions/patchworks.svg)](https://pypi.org/project/patchworks/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Docs](https://img.shields.io/badge/docs-imcf.one%2Fpatchworks-blue)](https://imcf.one/patchworks/)
+
 > Tiled processing of arbitrarily large images — any image, any function.
 
 ```
@@ -29,8 +34,14 @@ Optional extras:
 ```bash
 pip install "patchworks[gpu]"      # GPU VRAM querying (nvidia-ml-py)
 pip install "patchworks[cellpose]" # Cellpose plugin
-pip install "patchworks[all]"      # Everything
+pip install "patchworks[bioio]"    # convert any image format to OME-ZARR
+pip install "patchworks[napari]"   # interactive napari viewer plugin
+pip install "patchworks[all]"      # Everything (except napari GUI)
 ```
+
+> `bioio` reads CZI/LIF/ND2/OME-TIFF/… — it ships with `bioio-bioformats`, the
+> Bio-Formats catch-all reader (needs a JVM). Add faster native readers where
+> you want them (e.g. `bioio-ome-tiff`, `bioio-czi`, `bioio-lif`, `bioio-nd2`).
 
 ---
 
@@ -39,10 +50,13 @@ pip install "patchworks[all]"      # Everything
 ```python
 from patchworks import tile_process
 
+
 def my_fn(tile):
     from skimage.filters import threshold_otsu
     from skimage.measure import label
+
     return label(tile > threshold_otsu(tile)).astype("int32")
+
 
 result = tile_process("image.zarr", my_fn, compute=True)
 ```
@@ -61,10 +75,11 @@ from patchworks.plugins.cellpose import cellpose_fn
 fn = cellpose_fn("cyto3", gpu=True, diameter=30)
 
 tile_process(
-    "image.zarr", fn,
+    "image.zarr",
+    fn,
     tile_shape=(1, 2048, 2048),  # one z-slice per tile
-    overlap=20,                  # gives boundary cells enough context
-    write_to="labels.zarr",      # stream directly to disk — no RAM accumulation
+    overlap=20,  # gives boundary cells enough context
+    write_to="labels.zarr",  # stream directly to disk — no RAM accumulation
     progress=True,
 )
 ```
@@ -79,15 +94,22 @@ from patchworks import tile_process
 
 model = StarDist2D.from_pretrained("2D_versatile_fluo")
 
+
 def stardist_fn(tile):
     img = tile[0] if tile.ndim == 3 and tile.shape[0] == 1 else tile
     norm = img.astype("float32") / (img.max() or 1)
     labels, _ = model.predict_instances(norm)
     return labels.astype("int32")[None] if tile.ndim == 3 else labels.astype("int32")
 
-tile_process("image.zarr", stardist_fn,
-             tile_shape=(1, 1024, 1024), overlap=32,
-             write_to="labels.zarr", progress=True)
+
+tile_process(
+    "image.zarr",
+    stardist_fn,
+    tile_shape=(1, 1024, 1024),
+    overlap=32,
+    write_to="labels.zarr",
+    progress=True,
+)
 ```
 
 ---
@@ -100,10 +122,12 @@ from scipy.ndimage import gaussian_filter
 from skimage.measure import label
 from patchworks import tile_process
 
+
 def my_custom_fn(tile: np.ndarray) -> np.ndarray:
     smoothed = gaussian_filter(tile.astype("float32"), sigma=1.5)
     binary = smoothed > smoothed.mean()
     return label(binary).astype("int32")
+
 
 tile_process("image.zarr", my_custom_fn, tile_shape=(1, 512, 512))
 ```
@@ -128,11 +152,14 @@ from patchworks import estimate_empty_tiles, tile_process
 info = estimate_empty_tiles("image.zarr", tile_shape=(120, 697, 697))
 print(f"{info['empty_fraction']:.0%} tiles are background — will be skipped")
 
-tile_process("image.zarr", fn,
-             tile_shape=(120, 697, 697),
-             skip_empty=True,
-             empty_threshold=info["threshold"],
-             write_to="labels.zarr")
+tile_process(
+    "image.zarr",
+    fn,
+    tile_shape=(120, 697, 697),
+    skip_empty=True,
+    empty_threshold=info["threshold"],
+    write_to="labels.zarr",
+)
 ```
 
 ### Distributed cluster for GPU
@@ -144,7 +171,8 @@ client, cluster = make_local_cluster(use_gpu=True)
 try:
     tile_process("image.zarr", fn, write_to="labels.zarr", progress=True)
 finally:
-    client.close(); cluster.close()
+    client.close()
+    cluster.close()
 ```
 
 ### Contiguous label numbering
@@ -152,9 +180,7 @@ finally:
 ```python
 # Labels are globally unique by default, but may be gappy (block-encoded IDs).
 # sequential_labels=True does a linear relabel O(voxels) — not O(n_tiles²).
-tile_process("image.zarr", fn,
-             write_to="labels.zarr",
-             sequential_labels=True)
+tile_process("image.zarr", fn, write_to="labels.zarr", sequential_labels=True)
 ```
 
 ### Use only the merge step (bring your own tiling)
@@ -169,8 +195,9 @@ from patchworks import merge_tile_labels
 
 # Your own tiling + segmentation
 image = da.from_zarr("image.zarr").rechunk((1, 1024, 1024))
-labeled = image.map_blocks(my_segment_fn, dtype="int32",
-                            meta=np.empty((0,) * image.ndim, dtype="int32"))
+labeled = image.map_blocks(
+    my_segment_fn, dtype="int32", meta=np.empty((0,) * image.ndim, dtype="int32")
+)
 
 merged = merge_tile_labels(labeled, write_to="labels.zarr", progress=True)
 ```
@@ -211,13 +238,13 @@ tiles where the dask-image approach stalls.
 
 ## Known pitfalls (and how patchworks avoids them)
 
-| Pitfall | Symptom | How patchworks handles it |
-|---|---|---|
-| In-process Dask client | `FutureCancelledError: lost dependencies` | Detected at startup, raises immediately with fix instructions |
-| 3-4× fn recompute during merge | Cellpose runs 3× per tile | Staging writes labels once, merge reads from disk |
-| O(n²) sequential relabelling | Graph construction hangs at 1000+ tiles | Linear post-pass O(voxels) via `np.unique` + LUT |
-| Wrong overlap boundary | Output shape mismatch | Always uses `boundary="none"` |
-| Persisting large arrays | Worker OOM | Never persists; keeps dask graph lazy and streams |
+| Pitfall                        | Symptom                                   | How patchworks handles it                                     |
+| ------------------------------ | ----------------------------------------- | ------------------------------------------------------------- |
+| In-process Dask client         | `FutureCancelledError: lost dependencies` | Detected at startup, raises immediately with fix instructions |
+| 3-4× fn recompute during merge | Cellpose runs 3× per tile                 | Staging writes labels once, merge reads from disk             |
+| O(n²) sequential relabelling   | Graph construction hangs at 1000+ tiles   | Linear post-pass O(voxels) via `np.unique` + LUT              |
+| Wrong overlap boundary         | Output shape mismatch                     | Always uses `boundary="none"`                                 |
+| Persisting large arrays        | Worker OOM                                | Never persists; keeps dask graph lazy and streams             |
 
 ---
 
