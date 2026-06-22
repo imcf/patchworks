@@ -27,6 +27,7 @@ from multiprocessing import Pool as _Pool
 from pathlib import Path
 from typing import Any, Union
 
+import dask.array as da
 import numpy as np
 import zarr
 
@@ -38,19 +39,25 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 _ZARR_V3 = int(zarr.__version__.split(".")[0]) >= 3
+_LUT_WARN_THRESHOLD = 100_000_000  # warn when max_label > 100 M (LUT > 800 MB)
 
-# Per-worker globals set by _init_worker — avoids re-pickling the LUT (10s-100s MB)
+# Per-worker globals set by _init_worker.
+# LUT is memory-mapped from disk so it is shared read-only across all workers
+# (OS page cache, no per-process copy). Passing the LUT directly via pickle
+# would deserialize N separate copies — e.g. 4 workers × 800 MB = 3.2 GB wasted.
 _merge_lut: "np.ndarray | None" = None
+_merge_lut_path: "str | None" = None
 _merge_staged_path: "str | None" = None
 _merge_staged_comp: "str | None" = None
 _merge_out_path: "str | None" = None
 _merge_out_comp: "str | None" = None
 
 
-def _init_worker(lut, staged_path, staged_comp, out_path, out_comp):
-    global _merge_lut, _merge_staged_path, _merge_staged_comp
+def _init_worker(lut_path, staged_path, staged_comp, out_path, out_comp):
+    global _merge_lut, _merge_lut_path, _merge_staged_path, _merge_staged_comp
     global _merge_out_path, _merge_out_comp
-    _merge_lut = lut
+    _merge_lut = np.load(lut_path, mmap_mode="r")  # shared read-only via OS page cache
+    _merge_lut_path = lut_path
     _merge_staged_path = staged_path
     _merge_staged_comp = staged_comp
     _merge_out_path = out_path
@@ -89,22 +96,36 @@ def _boundary_face_specs(
 def _scan_touching_pairs(
     zarr_path: str, component: str, chunk_shape: tuple[int, ...]
 ) -> np.ndarray:
-    """Scan chunk-boundary slabs; return (N, 2) int64 array of touching pairs."""
+    """Scan chunk-boundary slabs; return (N, 2) int64 array of touching pairs.
+
+    Reads the boundary face one zarr-chunk column at a time so memory per read
+    is bounded to one chunk (~200 MB). Reading the full face at once
+    (slice(None) on face axes) would allocate face_area × 8 bytes in one shot —
+    e.g. 37888 × 27392 × 8 = 8 GiB for a single z-face (OOM on real datasets).
+    """
     root = zarr.open_group(zarr_path, mode="r")
     arr = root[component]
     shape = arr.shape
     specs = _boundary_face_specs(shape, chunk_shape)
     all_pairs: list[np.ndarray] = []
     for ax, pos in specs:
-        sl: list = [slice(None)] * arr.ndim
-        sl[ax] = slice(pos - 1, pos + 1)
-        slab = np.moveaxis(np.asarray(arr[tuple(sl)]), ax, 0)
-        a = slab[0].ravel().astype(np.int64)
-        b = slab[1].ravel().astype(np.int64)
-        mask = (a > 0) & (b > 0) & (a != b)
-        if mask.any():
-            pairs = np.sort(np.stack([a[mask], b[mask]], axis=1), axis=1)
-            all_pairs.append(np.unique(pairs, axis=0))
+        # tile the face dimensions using chunk_shape columns
+        face_axes = [a for a in range(arr.ndim) if a != ax]
+        face_ranges = [range(0, shape[a], chunk_shape[a]) for a in face_axes]
+        for offsets in _iproduct(*face_ranges):
+            sl: list = [slice(None)] * arr.ndim
+            sl[ax] = slice(pos - 1, pos + 1)
+            for a, off in zip(face_axes, offsets):
+                sl[a] = slice(off, min(off + chunk_shape[a], shape[a]))
+            slab = np.moveaxis(np.asarray(arr[tuple(sl)]), ax, 0)
+            a_vals = slab[0].ravel().astype(np.int64)
+            b_vals = slab[1].ravel().astype(np.int64)
+            mask = (a_vals > 0) & (b_vals > 0) & (a_vals != b_vals)
+            if mask.any():
+                pairs = np.sort(
+                    np.stack([a_vals[mask], b_vals[mask]], axis=1), axis=1
+                )
+                all_pairs.append(np.unique(pairs, axis=0))
     if not all_pairs:
         return np.empty((0, 2), dtype=np.int64)
     return np.unique(np.vstack(all_pairs), axis=0)
@@ -112,6 +133,12 @@ def _scan_touching_pairs(
 
 def _build_relabel_lut(pairs: np.ndarray, max_label: int) -> np.ndarray:
     """Touching-pairs → scipy connected components → relabeling LUT."""
+    if max_label > _LUT_WARN_THRESHOLD:
+        logger.warning(
+            "_build_relabel_lut: max_label=%d → LUT ~%.0f MB. "
+            "Memory use is bounded but large LUTs slow the merge.",
+            max_label, max_label * 8 / 1024**2,
+        )
     lut = np.arange(max_label + 1, dtype=np.int64)
     if len(pairs) == 0 or max_label == 0:
         return lut
@@ -158,8 +185,6 @@ def zarr_native_merge(
     graph). Reads *staged_path/staged_component*, merges touching cross-boundary
     labels, writes result to *out_path/out_component*. No dask task graph.
     """
-    import dask.array as da
-
     root = zarr.open_group(staged_path, mode="r")
     arr = root[staged_component]
     shape, chunk_shape = arr.shape, arr.chunks
@@ -193,24 +218,36 @@ def zarr_native_merge(
     n_w = max(1, min(n_workers, n_chunks))
     logger.info("zarr_native_merge: relabeling %d chunks with %d worker(s)…", n_chunks, n_w)
 
-    if n_w <= 1:
-        _init_worker(lut, staged_path, staged_component, out_path, out_component)
-        it: Any = chunk_slices
-        if show_progress and _tqdm is not None:
-            it = _tqdm(it, total=n_chunks, desc="relabel chunks")
-        for sl in it:
-            _relabel_chunk_worker(sl)
-    else:
-        with _Pool(
-            processes=n_w,
-            initializer=_init_worker,
-            initargs=(lut, staged_path, staged_component, out_path, out_component),
-        ) as pool:
-            it = pool.imap_unordered(_relabel_chunk_worker, chunk_slices)
+    # Save LUT to a temp .npy file so workers memory-map it (shared OS page cache).
+    # Pickling the LUT array directly via multiprocessing initargs would
+    # deserialize a full copy per worker — e.g. 4 workers × 800 MB = 3.2 GB.
+    _lut_dir = tempfile.mkdtemp(prefix="bb_lut_")
+    lut_path = os.path.join(_lut_dir, "lut.npy")
+    np.save(lut_path, lut)
+    del lut  # parent no longer needs it; workers load via mmap
+
+    try:
+        if n_w <= 1:
+            _init_worker(lut_path, staged_path, staged_component, out_path, out_component)
+            it: Any = chunk_slices
             if show_progress and _tqdm is not None:
                 it = _tqdm(it, total=n_chunks, desc="relabel chunks")
-            for _ in it:
-                pass
+            for sl in it:
+                _relabel_chunk_worker(sl)
+        else:
+            with _Pool(
+                processes=n_w,
+                initializer=_init_worker,
+                initargs=(lut_path, staged_path, staged_component, out_path, out_component),
+            ) as pool:
+                it = pool.imap_unordered(_relabel_chunk_worker, chunk_slices)
+                if show_progress and _tqdm is not None:
+                    it = _tqdm(it, total=n_chunks, desc="relabel chunks")
+                for _ in it:
+                    pass
+    finally:
+        import shutil
+        shutil.rmtree(_lut_dir, ignore_errors=True)
 
 
 # ---------------------------------------------------------------------------
