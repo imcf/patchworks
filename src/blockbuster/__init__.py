@@ -33,7 +33,7 @@ from ._io import estimate_empty_tiles, load_ome_zarr
 from ._merge import merge_tile_labels
 from ._relabel import relabel_sequential_array, relabel_sequential_zarr
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 __all__ = [
     "tile_process",
     "merge_tile_labels",
