@@ -8,10 +8,16 @@ version = "0.2.0"
 description = "Tiled processing of arbitrarily large images with globally consistent labels"
 readme = "README.md"
 license = { text = "MIT" }
-authors = [
-    { name = "IMCF Basel" },
+authors = [{ name = "IMCF Basel" }]
+keywords = [
+    "image processing",
+    "tiling",
+    "chunked",
+    "zarr",
+    "dask",
+    "segmentation",
+    "bioimage",
 ]
-keywords = ["image processing", "tiling", "chunked", "zarr", "dask", "segmentation", "bioimage"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
@@ -23,6 +29,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Image Processing",
 ]
+
 requires-python = ">=3.9"
 dependencies = [
     "dask[array]>=2023.1.0",
@@ -32,33 +39,16 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-io = [
-    "psutil",
-    "tqdm",
-]
-cellpose = [
-    "cellpose>=3.0",
-]
-gpu = [
-    "nvidia-ml-py",
-]
-dev = [
-    "pytest",
-    "pytest-cov",
-    "scikit-image",
-    "psutil",
-    "tqdm",
-]
-docs = [
-    "mkdocs-material>=9.0",
-    "mkdocstrings[python]>=0.24",
-]
-all = [
-    "patchworks[io,gpu]",
-    "psutil",
-    "tqdm",
-    "scikit-image",
-]
+io = ["psutil", "tqdm"]
+cellpose = ["cellpose>=3.0"]
+gpu = ["nvidia-ml-py"]
+# bioio enables converting any image format (CZI, LIF, ND2, OME-TIFF, …) to
+# OME-ZARR; install a matching reader plugin too (e.g. bioio-ome-tiff,
+# bioio-czi, bioio-lif, bioio-nd2).
+bioio = ["bioio"]
+dev = ["pytest", "pytest-cov", "scikit-image", "psutil", "tqdm"]
+docs = ["mkdocs-material>=9.0", "mkdocstrings[python]>=0.24"]
+all = ["patchworks[io,gpu,bioio]", "psutil", "tqdm", "scikit-image"]
 
 [project.urls]
 Homepage = "https://github.com/imcf/patchworks"
