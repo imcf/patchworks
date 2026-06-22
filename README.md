@@ -39,8 +39,9 @@ pip install "patchworks[napari]"   # interactive napari viewer plugin
 pip install "patchworks[all]"      # Everything (except napari GUI)
 ```
 
-> `bioio` reads CZI/LIF/ND2/OME-TIFF/… — install a matching reader plugin too
-> (e.g. `bioio-ome-tiff`, `bioio-czi`, `bioio-lif`, `bioio-nd2`).
+> `bioio` reads CZI/LIF/ND2/OME-TIFF/… — it ships with `bioio-bioformats`, the
+> Bio-Formats catch-all reader (needs a JVM). Add faster native readers where
+> you want them (e.g. `bioio-ome-tiff`, `bioio-czi`, `bioio-lif`, `bioio-nd2`).
 
 ---
 
