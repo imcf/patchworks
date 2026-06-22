@@ -4,6 +4,9 @@ Process arbitrarily large images by splitting them into overlapping tiles,
 running any callable on each tile, and stitching the results back into globally
 consistent labels.
 
+📖 **Full documentation, guides and tutorials:**
+<https://imcf.one/blockbuster/>
+
 Quick start
 -----------
 >>> from blockbuster import tile_process
@@ -13,7 +16,7 @@ Quick start
 ...     from skimage.measure import label
 ...     return label(tile > threshold_otsu(tile)).astype("int32")
 >>>
->>> result = tile_process("image.zarr", my_fn, compute=True)
+>>> result = tile_process("image.zarr", my_fn, write_to="labels.zarr")
 
 With Cellpose:
 
@@ -23,7 +26,7 @@ With Cellpose:
 ...              overlap=20, write_to="labels.zarr", progress=True)
 """
 
-from ._chunks import auto_tile_shape, auto_tile_shape_cellpose
+from ._chunks import auto_overlap, auto_tile_shape, auto_tile_shape_cellpose
 from ._cluster import make_local_cluster
 from ._core import tile_process
 from ._io import estimate_empty_tiles, load_ome_zarr
@@ -34,6 +37,7 @@ __version__ = "0.1.0"
 __all__ = [
     "tile_process",
     "merge_tile_labels",
+    "auto_overlap",
     "auto_tile_shape",
     "auto_tile_shape_cellpose",
     "load_ome_zarr",

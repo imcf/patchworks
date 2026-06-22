@@ -9,6 +9,40 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
+
+def auto_overlap(diameter: float, safety: float = 1.0) -> int:
+    """Recommended overlap (halo) for a given cell diameter.
+
+    Rule: overlap >= diameter so the segmentation function always sees at
+    least one full cell's worth of context on every tile edge. Cells near
+    tile boundaries are then segmented correctly and only genuinely split
+    cells produce touching labels at the boundary → correct merge.
+
+    Parameters
+    ----------
+    diameter:
+        Expected cell diameter in pixels (same unit as your image).
+    safety:
+        Multiplier on top of diameter. Default 1.0 (= one cell width).
+        Use 1.5–2.0 for elongated or irregularly-shaped cells.
+
+    Returns
+    -------
+    int
+        Overlap depth to pass to ``tile_process(..., overlap=...)``.
+
+    Examples
+    --------
+    >>> from blockbuster import auto_overlap, tile_process
+    >>> from blockbuster.plugins.cellpose import cellpose_fn
+    >>>
+    >>> fn = cellpose_fn("cyto3", gpu=True, diameter=30)
+    >>> result = tile_process("image.zarr", fn,
+    ...                       tile_shape=(1, 2048, 2048),
+    ...                       overlap=auto_overlap(30))
+    """
+    return max(1, int(np.ceil(diameter * safety)))
+
 _GPU_MEMORY_FALLBACK = 8 * 1024**3
 
 
