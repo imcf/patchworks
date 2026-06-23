@@ -46,11 +46,11 @@ patchworks can be installed from PyPI on all operating systems, for Python ≥ 3
 
 ## The one function you need
 
-```python
-from patchworks import tile_process
+    ```python
+    from patchworks import tile_process
 
-result = tile_process(image, fn)
-```
+    result = tile_process(image, fn)
+    ```
 
 `tile_process(image, fn)` splits `image` into tiles, runs `fn` on each tile,
 and returns a globally consistent label array.
@@ -65,17 +65,17 @@ and returns a globally consistent label array.
 patchworks is method-agnostic. Your function receives a NumPy array (one tile)
 and must return an integer label array of the same shape:
 
-```python
-import numpy as np
+    ```python
+    import numpy as np
 
 
-def my_fn(tile: np.ndarray) -> np.ndarray:
-    from skimage.filters import threshold_otsu
-    from skimage.measure import label
+    def my_fn(tile: np.ndarray) -> np.ndarray:
+        from skimage.filters import threshold_otsu
+        from skimage.measure import label
 
-    binary = tile > threshold_otsu(tile)
-    return label(binary).astype("int32")
-```
+        binary = tile > threshold_otsu(tile)
+        return label(binary).astype("int32")
+    ```
 
 The function is called independently on every tile. patchworks ensures that
 objects spanning tile boundaries are merged into a single label.
@@ -155,14 +155,14 @@ objects spanning tile boundaries are merged into a single label.
 Methods like Cellpose and StarDist need spatial context at tile boundaries.
 Use `overlap` (in voxels) so boundary objects are fully visible:
 
-```python
-result = tile_process(
-    "image.zarr",
-    my_fn,
-    tile_shape=(1, 2048, 2048),
-    overlap=20,  # 20-voxel halo on every side
-)
-```
+    ```python
+    result = tile_process(
+        "image.zarr",
+        my_fn,
+        tile_shape=(1, 2048, 2048),
+        overlap=20,  # 20-voxel halo on every side
+    )
+    ```
 
 !!! info "How overlap works"
     Each tile is expanded by `overlap` voxels on every side before calling `fn`.
@@ -173,22 +173,22 @@ result = tile_process(
 
 ## Use Cellpose
 
-```python
-from patchworks import tile_process
-from patchworks.plugins.cellpose import cellpose_fn
+    ```python
+    from patchworks import tile_process
+    from patchworks.plugins.cellpose import cellpose_fn
 
-fn = cellpose_fn("cyto3", gpu=True, diameter=30)
+    fn = cellpose_fn("cyto3", gpu=True, diameter=30)
 
-tile_process(
-    "image.zarr",
-    fn,
-    channel=0,
-    tile_shape=(1, 2048, 2048),
-    overlap=20,
-    write_to="labels.zarr",
-    progress=True,
-)
-```
+    tile_process(
+        "image.zarr",
+        fn,
+        channel=0,
+        tile_shape=(1, 2048, 2048),
+        overlap=20,
+        write_to="labels.zarr",
+        progress=True,
+    )
+    ```
 
 See the [Cellpose 2-D example](examples/cellpose_2d.md) for the full workflow.
 

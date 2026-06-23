@@ -88,6 +88,6 @@ tile_process(
 After a `tile_process` run with `skip_empty=True`, the log reports exactly
 how many tiles ran your function:
 
-```
+```text
 INFO patchworks._core: skip_empty: 486/2200 tiles ran fn, 1714 skipped (max<=412.0)
 ```

@@ -40,6 +40,12 @@ _model_cache: dict[tuple, Any] = {}
 
 
 def _require_cellpose():
+    """Raise an actionable ImportError if cellpose is not installed.
+
+    Returns
+    -------
+    None
+    """
     if _cellpose_models is None:
         raise ImportError(
             "cellpose is not installed. Install it with:\n"
@@ -126,6 +132,30 @@ def _make_config(
     do_3D: bool = False,
     **cellpose_kwargs: Any,
 ) -> dict[str, Any]:
+    """Build a picklable Cellpose configuration dict.
+
+    Parameters
+    ----------
+    model : str
+        Cellpose model type.
+    gpu : bool
+        Run on the GPU.
+    channels : list of int or None
+        Cellpose-3 ``[cyto, nucleus]`` channels; defaults to ``[0, 0]``.
+    channel_axis : int or None
+        Cellpose-4 channel axis.
+    diameter : float or None
+        Expected cell diameter in pixels.
+    do_3D : bool
+        Segment in 3-D.
+    **cellpose_kwargs : Any
+        Extra arguments forwarded to ``model.eval()``.
+
+    Returns
+    -------
+    dict
+        The configuration consumed by :func:`_get_model` and :func:`_run`.
+    """
     return {
         "model": model,
         "gpu": gpu,
@@ -138,7 +168,18 @@ def _make_config(
 
 
 def _get_model(cellpose_dict: dict[str, Any]) -> Any:
-    """Return a worker-local cached Cellpose model."""
+    """Return a worker-local cached Cellpose model.
+
+    Parameters
+    ----------
+    cellpose_dict : dict
+        Configuration from :func:`_make_config`.
+
+    Returns
+    -------
+    Any
+        A Cellpose model instance (cached per ``(model, gpu)`` per process).
+    """
     _require_cellpose()
     key = (cellpose_dict["model"], cellpose_dict.get("gpu", False))
     if key not in _model_cache:
@@ -156,7 +197,20 @@ def _get_model(cellpose_dict: dict[str, Any]) -> Any:
 
 
 def _run(block: np.ndarray, cellpose_dict: dict[str, Any]) -> np.ndarray:
-    """Segment one tile with a cached Cellpose model."""
+    """Segment one tile with a cached Cellpose model.
+
+    Parameters
+    ----------
+    block : np.ndarray
+        One image tile.
+    cellpose_dict : dict
+        Configuration from :func:`_make_config`.
+
+    Returns
+    -------
+    np.ndarray
+        Integer (``int32``) label array of the same spatial shape.
+    """
     model = _get_model(cellpose_dict)
     do_3D = cellpose_dict["do_3D"]
 

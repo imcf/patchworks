@@ -55,6 +55,25 @@ _merge_out_comp: "str | None" = None
 
 
 def _init_worker(lut_path, staged_path, staged_comp, out_path, out_comp):
+    """Initialise a merge worker process with the shared paths and LUT.
+
+    Parameters
+    ----------
+    lut_path : str
+        Path to the relabel lookup table (loaded memory-mapped, read-only).
+    staged_path : str
+        Path to the staged-labels zarr store.
+    staged_comp : str
+        Component name within the staged store.
+    out_path : str
+        Path to the output zarr store.
+    out_comp : str
+        Component name within the output store.
+
+    Returns
+    -------
+    None
+    """
     global _merge_lut, _merge_lut_path, _merge_staged_path, _merge_staged_comp
     global _merge_out_path, _merge_out_comp
     _merge_lut = np.load(
@@ -68,6 +87,17 @@ def _init_worker(lut_path, staged_path, staged_comp, out_path, out_comp):
 
 
 def _relabel_chunk_worker(chunk_slice: tuple) -> None:
+    """Apply the relabel LUT to one chunk and write it to the output store.
+
+    Parameters
+    ----------
+    chunk_slice : tuple
+        The slice selecting this chunk in both stores.
+
+    Returns
+    -------
+    None
+    """
     src = zarr.open_group(_merge_staged_path, mode="r")[_merge_staged_comp]
     dst = zarr.open_group(_merge_out_path, mode="r+")[_merge_out_comp]
     block = np.asarray(src[chunk_slice], dtype=np.int64)
@@ -87,6 +117,20 @@ def _relabel_chunk_worker(chunk_slice: tuple) -> None:
 def _boundary_face_specs(
     shape: tuple[int, ...], chunk_shape: tuple[int, ...]
 ) -> list[tuple[int, int]]:
+    """Enumerate interior chunk boundaries to scan for touching labels.
+
+    Parameters
+    ----------
+    shape : tuple of int
+        Array shape.
+    chunk_shape : tuple of int
+        Chunk shape.
+
+    Returns
+    -------
+    list of tuple of int
+        ``(axis, position)`` pairs, one per interior chunk boundary.
+    """
     specs = []
     for ax, (s, cs) in enumerate(zip(shape, chunk_shape)):
         pos = cs
@@ -105,6 +149,21 @@ def _scan_touching_pairs(
     is bounded to one chunk (~200 MB). Reading the full face at once
     (slice(None) on face axes) would allocate face_area × 8 bytes in one shot —
     e.g. 37888 × 27392 × 8 = 8 GiB for a single z-face (OOM on real datasets).
+
+    Parameters
+    ----------
+    zarr_path : str
+        Path to the staged-labels zarr store.
+    component : str
+        Component name within the store.
+    chunk_shape : tuple of int
+        Chunk shape (sets the per-read column size).
+
+    Returns
+    -------
+    np.ndarray
+        ``(N, 2)`` int64 array of unique label pairs touching across a
+        boundary.
     """
     root = zarr.open_group(zarr_path, mode="r")
     arr = root[component]
@@ -135,7 +194,20 @@ def _scan_touching_pairs(
 
 
 def _build_relabel_lut(pairs: np.ndarray, max_label: int) -> np.ndarray:
-    """Touching-pairs → scipy connected components → relabeling LUT."""
+    """Build a relabel LUT from touching pairs via connected components.
+
+    Parameters
+    ----------
+    pairs : np.ndarray
+        ``(N, 2)`` array of touching label pairs.
+    max_label : int
+        Largest label id present.
+
+    Returns
+    -------
+    np.ndarray
+        Lookup table mapping each old label to its merged (component) id.
+    """
     if max_label > _LUT_WARN_THRESHOLD:
         logger.warning(
             "_build_relabel_lut: max_label=%d → LUT ~%.0f MB. "
@@ -168,6 +240,24 @@ def _build_relabel_lut(pairs: np.ndarray, max_label: int) -> np.ndarray:
 def _create_zarr_label_array(
     group: zarr.Group, name: str, shape: tuple, chunks: tuple
 ) -> zarr.Array:
+    """Create (replacing any existing) an int32 label array in *group*.
+
+    Parameters
+    ----------
+    group : zarr.Group
+        Parent group.
+    name : str
+        Array name (may be a nested path).
+    shape : tuple
+        Array shape.
+    chunks : tuple
+        Chunk shape.
+
+    Returns
+    -------
+    zarr.Array
+        The newly created array (works on zarr v2 and v3).
+    """
     if name in group:
         del group[name]
     if _ZARR_V3:
@@ -192,6 +282,25 @@ def zarr_native_merge(
     Scales to 2000+ chunks where the dask_image approach stalls (O(n_chunks²)
     graph). Reads *staged_path/staged_component*, merges touching cross-boundary
     labels, writes result to *out_path/out_component*. No dask task graph.
+
+    Parameters
+    ----------
+    staged_path : str
+        Path to the staged-labels zarr store.
+    staged_component : str
+        Component name within the staged store.
+    out_path : str
+        Path to the output zarr store.
+    out_component : str
+        Component name within the output store.
+    n_workers : int
+        Number of worker processes for the parallel relabel.
+    show_progress : bool
+        Show a progress bar over the relabel chunks.
+
+    Returns
+    -------
+    None
     """
     root = zarr.open_group(staged_path, mode="r")
     arr = root[staged_component]

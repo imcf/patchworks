@@ -76,6 +76,28 @@ and streaming the downsampled result out through dask with bounded chunks. The
 graph never chains level-on-level and no whole plane/volume is held in RAM, so
 terabyte images convert in bounded memory.
 
+### Sharding (fewer files)
+
+A big array becomes tens of thousands of tiny chunk files, which strain
+filesystems and object stores. Sharding packs many chunks into one **shard**
+file (zarr v3), cutting the file count ~100×:
+
+```python
+to_ome_zarr("scan.ims", "scan.zarr", shard=True)        # auto ~512 MB shards
+to_ome_zarr("scan.ims", "scan.zarr", shard=(1, 16, 2048, 2048))  # explicit
+```
+
+Default is `shard=False` for maximum reader compatibility — sharding is
+zarr-v3-only, so older tools may not read it (your zarr/napari stack does).
+A sharded write holds ~one shard per worker in RAM, so very large shards cost
+memory.
+
+### Progress
+
+All write steps show a dask progress bar **by default** (`progress=True`), so
+you can see how long a conversion will take. Pass `progress=False` to silence
+it.
+
 !!! note "Install the readers you need"
     `pip install "patchworks[bioio]"` pulls `bioio` plus the `bioio-bioformats`
     catch-all reader (needs a JVM). For speed, add native readers for your

@@ -60,7 +60,7 @@ in the same process as the kernel. When your segmentation function holds the
 Python GIL (every PyTorch/CUDA `eval` does), the worker thread can't send
 heartbeats. The scheduler declares it dead, and the merge fails:
 
-```
+```python
 FutureCancelledError: lost dependencies
 ```
 

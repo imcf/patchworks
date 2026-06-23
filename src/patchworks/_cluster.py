@@ -9,7 +9,14 @@ logger = logging.getLogger(__name__)
 
 
 def _distributed_client():
-    """Return the active dask.distributed Client, or None."""
+    """Return the active dask.distributed Client, or None.
+
+    Returns
+    -------
+    distributed.Client or None
+        The current client, or ``None`` if none is active / distributed is not
+        installed.
+    """
     try:
         from dask.distributed import get_client
 
@@ -19,12 +26,22 @@ def _distributed_client():
 
 
 def _client_is_in_process(client) -> bool:
-    """True if *client* runs its worker in this process (processes=False).
+    """Whether *client* runs its worker in this process (``processes=False``).
 
     An in-process worker shares the GIL. A long task that holds the GIL
     (e.g. a Cellpose/torch eval) starves the worker heartbeat, the scheduler
     declares it dead, and the P2P merge barrier drops its inputs →
     "FutureCancelledError: lost dependencies".
+
+    Parameters
+    ----------
+    client : distributed.Client
+        The client to inspect.
+
+    Returns
+    -------
+    bool
+        True if any worker address uses the ``inproc://`` transport.
     """
     try:
         for addr in client.scheduler_info().get("workers", {}):

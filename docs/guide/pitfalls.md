@@ -30,7 +30,7 @@ single-GPU runs — patchworks pins it to 1 thread automatically).
 
 patchworks detects in-process clients at startup and raises immediately:
 
-```
+```python
 RuntimeError: Active Dask client uses an in-process worker (processes=False).
 This breaks the label merge when fn holds the GIL. Use a process-based
 cluster instead:
