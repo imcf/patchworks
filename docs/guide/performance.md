@@ -17,6 +17,22 @@ merge step are sized to the host automatically:
 The RAM figure is read live via `psutil`; without it, a conservative default is
 used instead of guessing high.
 
+## Live progress dashboard (GPU runs)
+
+A single-GPU run still gets a **Dask dashboard**: patchworks spins up a tiny
+1-worker / 1-thread in-process cluster, which keeps GPU evaluations serial (no
+VRAM contention) while exposing the dashboard so you can watch tiles stream
+through. The URL is logged at the start of staging:
+
+```text
+INFO:patchworks._core:Dask dashboard for this run: http://127.0.0.1:8787/status
+```
+
+This needs `distributed` (and `bokeh` for the UI) installed; if they are
+missing, patchworks logs a warning and falls back to the threaded scheduler
+(no dashboard, same result). A cluster you start yourself
+(`make_local_cluster`) is used as-is instead.
+
 ## Overriding the worker count
 
 ```python
