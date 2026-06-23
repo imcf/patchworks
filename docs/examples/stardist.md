@@ -47,18 +47,18 @@ tile_process(
     Load the model **outside** the `fn` closure. If you load it inside,
     it will be re-initialised (and potentially re-downloaded) once per tile.
 
-    For distributed execution, use `functools.partial` with a cached model:
+For distributed execution, use `functools.partial` with a cached model:
 
-    ```python
-    from functools import lru_cache
-
-
-    @lru_cache(maxsize=1)
-    def _get_model():
-        return StarDist2D.from_pretrained("2D_versatile_fluo")
+```python
+from functools import lru_cache
 
 
-    def stardist_fn(tile):
-        model = _get_model()
-        ...
-    ```
+@lru_cache(maxsize=1)
+def _get_model():
+    return StarDist2D.from_pretrained("2D_versatile_fluo")
+
+
+def stardist_fn(tile):
+    model = _get_model()
+    ...
+```

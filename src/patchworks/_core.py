@@ -23,7 +23,23 @@ logger = logging.getLogger(__name__)
 def _stage_to_zarr(
     arr: da.Array, path: str, component: str, show_progress: bool
 ) -> None:
-    """Write *arr* to zarr *path/component*, never loading it into RAM."""
+    """Write *arr* to zarr ``path/component``, never loading it into RAM.
+
+    Parameters
+    ----------
+    arr : da.Array
+        Array to materialise to disk.
+    path : str
+        Zarr store path.
+    component : str
+        Array name within the store.
+    show_progress : bool
+        Show a progress bar while computing.
+
+    Returns
+    -------
+    None
+    """
     import dask
 
     lazy_write = arr.to_zarr(
@@ -57,7 +73,7 @@ def tile_process(
     level: int = 0,
     use_gpu: bool = False,
     max_workers: int | None = None,
-    progress: bool = False,
+    progress: bool = True,
     write_to: Union[str, Path, None] = None,
     output_component: str = "labels",
     pyramid_levels: int = 5,
@@ -123,7 +139,8 @@ def tile_process(
         every core. Ignored when a distributed client is active (it manages its
         own concurrency).
     progress:
-        Show a progress bar during the tile-writing and relabel steps.
+        Show progress bars for staging, the label write and the pyramid
+        (default ``True``). Set ``False`` to silence them.
     write_to:
         Explicit output zarr store path. Overrides the default behaviour: the
         merged labels are written here as a single-resolution array named
@@ -297,6 +314,20 @@ def tile_process(
         _skip_thr = _auto_empty_threshold(image_for_threshold, channel, level)
 
     def active_fn(block, block_info=None):
+        """Run *fn* on one tile, or return zeros for an empty tile.
+
+        Parameters
+        ----------
+        block : np.ndarray
+            One image tile.
+        block_info : dict or None
+            Dask block metadata (used for logging the tile location).
+
+        Returns
+        -------
+        np.ndarray
+            Integer labels, or an all-zero tile when skipped.
+        """
         loc = block_info[0].get("chunk-location") if block_info else "?"
         if skip_empty and block.size and block.max() <= _skip_thr:
             if verbose:
@@ -398,6 +429,12 @@ def tile_process(
     # that figure instead.
 
     def _cleanup_stage():
+        """Delete the temporary stage store unless ``keep_stage`` is set.
+
+        Returns
+        -------
+        None
+        """
         if not keep_stage:
             import shutil
 
@@ -457,6 +494,7 @@ def tile_process(
         name=output_component,
         n_levels=pyramid_levels,
         downscale=pyramid_downscale,
+        progress=progress,
         overwrite=True,
     )
     shutil.rmtree(os.path.dirname(_merge_out), ignore_errors=True)

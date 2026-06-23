@@ -20,6 +20,16 @@ def relabel_sequential_array(labels: np.ndarray) -> np.ndarray:
     Background (0) stays 0. Runs in one ``np.unique`` + a lookup-table gather,
     i.e. O(voxels) — unlike dask's ``relabel_sequential`` which is O(n_chunks²).
 
+    Parameters
+    ----------
+    labels : np.ndarray
+        Integer label array (may have gappy ids).
+
+    Returns
+    -------
+    np.ndarray
+        Labels remapped to a contiguous ``0, 1, … N`` range.
+
     Examples
     --------
     >>> relabel_sequential_array(np.array([0, 500000, 500000, 7]))

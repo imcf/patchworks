@@ -37,6 +37,7 @@ Usage
 from __future__ import annotations
 
 import logging
+import math
 from pathlib import Path
 from typing import Union
 
@@ -66,6 +67,16 @@ def _default_axes(ndim: int) -> str:
     """Assign trailing OME axis names to an unlabelled array.
 
     A 2-D array becomes ``"yx"``, 3-D ``"zyx"``, 4-D ``"czyx"``.
+
+    Parameters
+    ----------
+    ndim : int
+        Number of array dimensions.
+
+    Returns
+    -------
+    str
+        The axes string for those trailing dimensions.
     """
     if ndim > len(_DEFAULT_ORDER):
         raise ValueError(
@@ -75,13 +86,38 @@ def _default_axes(ndim: int) -> str:
 
 
 def _axis_type(name: str) -> str:
+    """Map an axis letter to its NGFF axis type.
+
+    Parameters
+    ----------
+    name : str
+        Axis letter (``z``/``y``/``x``/``c``/``t``).
+
+    Returns
+    -------
+    str
+        ``"space"``, ``"time"`` or ``"channel"``.
+    """
     if name in _SPATIAL_AXES:
         return "space"
     return "time" if name == "t" else "channel"
 
 
 def _axes_meta(axes: str, calibrated: bool) -> list[dict]:
-    """NGFF ``axes`` metadata; spatial axes get a µm unit when calibrated."""
+    """Build NGFF ``axes`` metadata for an axes string.
+
+    Parameters
+    ----------
+    axes : str
+        One letter per axis.
+    calibrated : bool
+        When True, spatial axes carry a micrometer unit.
+
+    Returns
+    -------
+    list of dict
+        One ``{name, type[, unit]}`` entry per axis.
+    """
     meta = []
     for a in axes:
         entry = {"name": a, "type": _axis_type(a)}
@@ -92,19 +128,244 @@ def _axes_meta(axes: str, calibrated: bool) -> list[dict]:
 
 
 def _strides(axes: str, downscale: int) -> tuple[int, ...]:
-    """Per-axis stride: downsample X/Y only; Z, C and T stay at 1."""
+    """Per-axis downsampling stride for one pyramid step.
+
+    Parameters
+    ----------
+    axes : str
+        One letter per axis.
+    downscale : int
+        Downsampling factor for X/Y.
+
+    Returns
+    -------
+    tuple of int
+        ``downscale`` for X/Y axes, ``1`` for Z/C/T.
+    """
     return tuple(downscale if a in _DOWNSAMPLE_AXES else 1 for a in axes)
 
 
 def _default_chunks(shape: tuple[int, ...], axes: str) -> tuple[int, ...]:
-    """Bounded chunk shape so writing a level never blows up RAM."""
+    """Bounded chunk shape so writing a level never blows up RAM.
+
+    Parameters
+    ----------
+    shape : tuple of int
+        Array shape.
+    axes : str
+        One letter per axis (selects the per-axis cap).
+
+    Returns
+    -------
+    tuple of int
+        Per-axis chunk size, capped by ``_CHUNK_CAP``.
+    """
     return tuple(min(s, _CHUNK_CAP.get(a, s)) for s, a in zip(shape, axes))
+
+
+ShardSpec = Union[bool, tuple[int, ...]]
+_SHARD_TARGET_BYTES = 512 * 1024**2  # aim for ~512 MB shards
+_ZARR_V3 = int(zarr.__version__.split(".")[0]) >= 3
+
+
+def _effective_shard(
+    requested: tuple[int, ...],
+    chunks: tuple[int, ...],
+    shape: tuple[int, ...],
+) -> tuple[int, ...]:
+    """Clamp a requested shard shape to a valid one.
+
+    A shard must be a whole multiple of the inner chunk and should not exceed
+    the array's chunk-padded extent.
+
+    Parameters
+    ----------
+    requested : tuple of int
+        Desired shard shape.
+    chunks : tuple of int
+        Inner chunk shape.
+    shape : tuple of int
+        Array shape.
+
+    Returns
+    -------
+    tuple of int
+        A shard shape that is a chunk-multiple within the array.
+    """
+    out = []
+    for r, c, s in zip(requested, chunks, shape):
+        cap = math.ceil(s / c) * c  # array dim padded up to a whole chunk
+        out.append(min(max(c, (r // c) * c), cap))
+    return tuple(out)
+
+
+def _auto_shard(
+    chunks: tuple[int, ...], shape: tuple[int, ...], dtype
+) -> tuple[int, ...]:
+    """Pick a shard shape of roughly ``_SHARD_TARGET_BYTES``.
+
+    Grows the two largest axes equally until the shard reaches the target size,
+    then clamps to a valid chunk-multiple.
+
+    Parameters
+    ----------
+    chunks : tuple of int
+        Inner chunk shape.
+    shape : tuple of int
+        Array shape.
+    dtype : data-type
+        Array dtype, used to size the shard in bytes.
+
+    Returns
+    -------
+    tuple of int
+        The chosen shard shape.
+    """
+    itemsize = np.dtype(dtype).itemsize
+    base = itemsize
+    for c in chunks:
+        base *= c
+    big = sorted(range(len(chunks)), key=lambda i: shape[i], reverse=True)[:2]
+    factor = max(1, int((_SHARD_TARGET_BYTES / max(1, base)) ** 0.5))
+    shard = list(chunks)
+    for i in big:
+        shard[i] = chunks[i] * factor
+    return _effective_shard(tuple(shard), chunks, shape)
+
+
+def _shard_for(
+    shard: ShardSpec,
+    chunks: tuple[int, ...],
+    shape: tuple[int, ...],
+    dtype,
+) -> Union[tuple[int, ...], None]:
+    """Resolve the ``shard`` argument into a concrete shard shape.
+
+    Parameters
+    ----------
+    shard : bool or tuple of int
+        ``False`` → no sharding; ``True`` → auto;
+        a tuple → an explicit shard shape.
+    chunks : tuple of int
+        Inner chunk shape.
+    shape : tuple of int
+        Array shape.
+    dtype : data-type
+        Array dtype.
+
+    Returns
+    -------
+    tuple of int or None
+        The shard shape, or ``None`` when not sharding
+        (also when zarr is older than v3).
+    """
+    if not shard:
+        return None
+    if not _ZARR_V3:
+        logger.warning("sharding requires zarr v3; writing unsharded.")
+        return None
+    if shard is True:
+        return _auto_shard(chunks, shape, dtype)
+    return _effective_shard(tuple(shard), chunks, shape)
+
+
+def _progress_ctx(progress: bool, label: str):
+    """Return a progress-bar context manager.
+
+    Parameters
+    ----------
+    progress : bool
+        Whether to show a dask progress bar.
+    label : str
+        Name logged just before the bar.
+
+    Returns
+    -------
+    contextmanager
+        A ``ProgressBar`` when *progress* is set, else a no-op
+        context manager.
+    """
+    if not progress:
+        from contextlib import nullcontext
+
+        return nullcontext()
+    from dask.diagnostics import ProgressBar
+
+    logger.info("writing %s …", label)
+    return ProgressBar()
+
+
+def _to_zarr_level(
+    arr: da.Array,
+    group_path: str,
+    component: str,
+    shard: ShardSpec,
+    progress: bool = True,
+) -> None:
+    """Write one array to ``group_path/component``, optionally sharded.
+
+    Without sharding, ``da.to_zarr`` writes chunk by chunk. With sharding that
+    is unsafe — many chunks share one shard file and per-chunk writes race —
+    so we create the sharded array explicitly (inner *chunks* + *shards*) and
+    store with the dask blocks rechunked to the **shard** size, so each task
+    writes one whole shard atomically.
+
+    Parameters
+    ----------
+    arr : da.Array
+        Array to write (its chunk size becomes the inner chunk).
+    group_path : str
+        Path of the parent zarr group.
+    component : str
+        Array name within the group.
+    shard : bool or tuple of int
+        Sharding request; see :func:`_shard_for`.
+    progress : bool
+        Show a dask progress bar for the write.
+
+    Returns
+    -------
+    None
+    """
+    inner = arr.chunksize
+    sh = _shard_for(shard, inner, arr.shape, arr.dtype)
+    ctx = _progress_ctx(progress, f"{Path(group_path).name}/{component}")
+    if not sh:
+        with ctx:
+            da.to_zarr(arr, group_path, component=component, overwrite=True)
+        return
+    grp = zarr.open_group(group_path, mode="a")
+    if component in grp:
+        del grp[component]
+    z = grp.create_array(
+        name=component,
+        shape=arr.shape,
+        chunks=inner,
+        shards=sh,
+        dtype=arr.dtype,
+    )
+    with ctx:
+        arr.rechunk(sh).store(z, lock=True, compute=True)
 
 
 def _normalize_pixel_size(
     pixel_size: Union[PixelSize, tuple, None], axes: str
 ) -> PixelSize:
-    """Coerce a pixel-size dict/tuple into ``{axis: size}`` for spatial axes."""
+    """Coerce a pixel-size dict/tuple into ``{axis: size}``.
+
+    Parameters
+    ----------
+    pixel_size : dict, tuple or None
+        Voxel size as a per-axis dict or a tuple
+        aligned to the spatial axes.
+    axes : str
+        One letter per axis.
+
+    Returns
+    -------
+    dict
+        ``{axis: size}`` for the spatial axes present (empty if none given).
+    """
     if not pixel_size:
         return {}
     if isinstance(pixel_size, dict):
@@ -115,11 +376,38 @@ def _normalize_pixel_size(
 
 
 def _base_scale(axes: str, pixel_size: PixelSize) -> list[float]:
-    """Level-0 NGFF scale per axis: physical size for spatial, 1.0 else."""
+    """Build the level-0 NGFF scale vector.
+
+    Parameters
+    ----------
+    axes : str
+        One letter per axis.
+    pixel_size : dict
+        ``{axis: size}`` for spatial axes.
+
+    Returns
+    -------
+    list of float
+        Physical size per spatial axis, ``1.0`` for C/T.
+    """
     return [float(pixel_size.get(a, 1.0)) for a in axes]
 
 
 def _dataset(name: str, scale: list[float]) -> dict:
+    """Build one NGFF ``multiscales`` dataset entry.
+
+    Parameters
+    ----------
+    name : str
+        Component path of the level (e.g. ``"0"``).
+    scale : list of float
+        Per-axis scale (physical size × downsample factor).
+
+    Returns
+    -------
+    dict
+        A dataset dict with its ``path`` and ``coordinateTransformations``.
+    """
     return {
         "path": name,
         "coordinateTransformations": [
@@ -139,6 +427,8 @@ def _write_pyramid(
     base_scale: list[float],
     base_name: str = "0",
     write_base: bool = True,
+    shard: ShardSpec = False,
+    progress: bool = True,
 ) -> list[dict]:
     """Write pyramid levels into *group_path* and return NGFF datasets.
 
@@ -147,16 +437,43 @@ def _write_pyramid(
     whole-volume recomputation, no OOM. Level 0 is named *base_name*; when
     *write_base* is False it is assumed to already exist (used by
     :func:`add_pyramid`).
+
+    Parameters
+    ----------
+    arr : da.Array
+        Full-resolution array.
+    axes : str
+        One letter per axis.
+    group_path : str
+        Path of the zarr group to write into.
+    n_levels : int
+        Maximum number of levels including full resolution.
+    downscale : int
+        Per-level X/Y downsampling factor.
+    chunks : tuple of int or None
+        Chunk shape, or a bounded default.
+    base_scale : list of float
+        Level-0 physical scale per axis.
+    base_name : str
+        Component name of level 0.
+    write_base : bool
+        Write level 0, or assume it already exists.
+    shard : bool or tuple of int
+        Sharding request (see :func:`_shard_for`).
+    progress : bool
+        Show a per-level progress bar.
+
+    Returns
+    -------
+    list of dict
+        One NGFF dataset entry per written level.
     """
     strides = _strides(axes, downscale)
 
     if write_base:
         base_chunks = chunks or _default_chunks(arr.shape, axes)
-        da.to_zarr(
-            arr.rechunk(base_chunks),
-            group_path,
-            component=base_name,
-            overwrite=True,
+        _to_zarr_level(
+            arr.rechunk(base_chunks), group_path, base_name, shard, progress
         )
     datasets = [_dataset(base_name, base_scale)]
 
@@ -170,7 +487,7 @@ def _write_pyramid(
         src = da.from_zarr(group_path, component=prev_name)
         nxt = src[tuple(slice(None, None, st) for st in strides)]
         nxt = nxt.rechunk(chunks or _default_chunks(nxt.shape, axes))
-        da.to_zarr(nxt, group_path, component=str(i), overwrite=True)
+        _to_zarr_level(nxt, group_path, str(i), shard, progress)
         scale = [base_scale[k] * (strides[k] ** i) for k in range(len(axes))]
         datasets.append(_dataset(str(i), scale))
         logger.info("pyramid level %d: shape=%s", i, nxt.shape)
@@ -187,7 +504,25 @@ def _write_multiscales(
     *,
     calibrated: bool,
 ) -> None:
-    """Write NGFF ``multiscales`` metadata onto *group_path*."""
+    """Write NGFF ``multiscales`` metadata onto *group_path*.
+
+    Parameters
+    ----------
+    group_path : str
+        Path of the zarr group to annotate.
+    axes : str
+        One letter per axis.
+    datasets : list of dict
+        Per-level dataset entries (see :func:`_dataset`).
+    name : str
+        Multiscales name.
+    calibrated : bool
+        Whether spatial axes carry a micrometer unit.
+
+    Returns
+    -------
+    None
+    """
     group = zarr.open_group(group_path, mode="a")
     group.attrs["multiscales"] = [
         {
@@ -200,7 +535,21 @@ def _write_multiscales(
 
 
 def _read_zarr_calibration(store: Union[str, Path], axes: str) -> PixelSize:
-    """Read level-0 spatial scale from an existing OME-ZARR, if any."""
+    """Read level-0 spatial scale from an existing OME-ZARR, if any.
+
+    Parameters
+    ----------
+    store : str or Path
+        Path of the OME-ZARR group.
+    axes : str
+        One letter per axis (unused for parsing, kept for symmetry).
+
+    Returns
+    -------
+    dict
+        ``{axis: size}`` for spatial axes with a non-unit scale (empty if
+        the store has no multiscales metadata).
+    """
     try:
         root = zarr.open_group(str(store), mode="r")
         ms = root.attrs["multiscales"][0]
@@ -216,7 +565,23 @@ def _read_zarr_calibration(store: Union[str, Path], axes: str) -> PixelSize:
 
 
 def _open_bioio(path: str, scene: int) -> tuple[da.Array, str, PixelSize]:
-    """Open *path* with bioio → ``(array, axes, pixel_size)``, all lazy."""
+    """Open *path* with bioio, lazily.
+
+    Singleton non-spatial axes (T/C of size 1) are dropped.
+
+    Parameters
+    ----------
+    path : str
+        Image file path.
+    scene : int
+        Scene index for multi-scene files.
+
+    Returns
+    -------
+    tuple
+        ``(array, axes, pixel_size)`` — a lazy dask array, its axes string
+        and a ``{axis: micrometers}`` calibration dict.
+    """
     try:
         from bioio import BioImage
     except ImportError as exc:
@@ -256,7 +621,24 @@ def _open_bioio(path: str, scene: int) -> tuple[da.Array, str, PixelSize]:
 
 
 def _open_imaris(path: str, level: int = 0) -> tuple[da.Array, str, PixelSize]:
-    """Open an Imaris ``.ims`` *level* lazily → ``(array, axes, pixel_size)``."""
+    """Open one Imaris ``.ims`` resolution level lazily.
+
+    Reads the underlying HDF5 datasets directly (own handle, crops the Imaris
+    chunk padding) and stacks the per-(timepoint, channel) 3-D arrays.
+
+    Parameters
+    ----------
+    path : str
+        Imaris ``.ims`` file path.
+    level : int
+        Resolution level to read (0 = full resolution).
+
+    Returns
+    -------
+    tuple
+        ``(array, axes, pixel_size)`` — a lazy dask array, its axes string
+        and a ``{axis: micrometers}`` calibration dict.
+    """
     try:
         from imaris_ims_file_reader.ims import ims
     except ImportError as exc:
@@ -326,12 +708,34 @@ def _write_imaris_pyramid(
     *,
     chunks: Union[tuple[int, ...], None],
     overwrite: bool,
+    shard: ShardSpec = False,
+    progress: bool = True,
 ) -> str:
     """Copy an Imaris file's own resolution levels into an OME-ZARR.
 
     Each Imaris ``ResolutionLevel`` is written as a pyramid level with its own
     physical scale, so no downsampling is recomputed. Lazy (h5py-backed) reads
     stream straight to disk.
+
+    Parameters
+    ----------
+    path : str
+        Imaris ``.ims`` file path.
+    out : str
+        Destination ``.zarr`` store path.
+    chunks : tuple of int or None
+        Chunk shape, or a bounded default.
+    overwrite : bool
+        Overwrite an existing store.
+    shard : bool or tuple of int
+        Sharding request (see :func:`_shard_for`).
+    progress : bool
+        Show a per-level progress bar.
+
+    Returns
+    -------
+    str
+        The path to the written store.
     """
     from imaris_ims_file_reader.ims import ims
 
@@ -346,11 +750,12 @@ def _write_imaris_pyramid(
         arr, axes, ps = _open_imaris(path, level=level)
         scale = _base_scale(axes, ps)
         calibrated = calibrated or bool(ps)
-        da.to_zarr(
+        _to_zarr_level(
             arr.rechunk(chunks or _default_chunks(arr.shape, axes)),
             out,
-            component=str(level),
-            overwrite=True,
+            str(level),
+            shard,
+            progress,
         )
         datasets.append(_dataset(str(level), scale))
         logger.info("imaris level %d copied: shape=%s", level, arr.shape)
@@ -365,7 +770,26 @@ def _to_dask(
     axes: Union[str, None],
     scene: int,
 ) -> tuple[da.Array, str, PixelSize]:
-    """Resolve *source* into a lazy ``(array, axes, pixel_size)`` triple."""
+    """Resolve *source* into a lazy ``(array, axes, pixel_size)`` triple.
+
+    Dispatches by type: dask/NumPy arrays pass through; ``.zarr`` paths use the
+    OME-ZARR loader; ``.ims`` paths use the Imaris reader; anything else uses
+    bioio.
+
+    Parameters
+    ----------
+    source : da.Array, np.ndarray, str or Path
+        Array or path to resolve.
+    axes : str or None
+        Explicit axes, or ``None`` to infer them.
+    scene : int
+        Scene index for bioio inputs.
+
+    Returns
+    -------
+    tuple
+        ``(array, axes, pixel_size)``.
+    """
     if isinstance(source, da.Array):
         return source, axes or _default_axes(source.ndim), {}
     if isinstance(source, np.ndarray):
@@ -394,7 +818,9 @@ def to_ome_zarr(
     n_levels: int = 5,
     downscale: int = 2,
     chunks: Union[tuple[int, ...], None] = None,
+    shard: ShardSpec = False,
     reuse_pyramid: bool = False,
+    progress: bool = True,
     overwrite: bool = False,
 ) -> str:
     """Write *source* as a pyramidal, calibrated OME-ZARR store.
@@ -427,6 +853,15 @@ def to_ome_zarr(
         Per-level X/Y downsampling factor (default 2).
     chunks : tuple of int, optional
         Chunk shape for the written levels. ``None`` → a bounded default.
+    shard : bool or tuple of int, optional
+        Pack many chunks into one shard file (zarr v3), cutting the file count
+        ~100× on huge arrays. ``False`` (default) → unsharded, maximum reader
+        compatibility. ``True`` → auto-pick a ~512 MB shard. A tuple sets an
+        explicit shard shape (clamped to a chunk multiple). Sharded writes hold
+        ~one shard per worker in RAM. Requires zarr v3 (ignored otherwise).
+    progress : bool, optional
+        Show a per-level dask progress bar (default ``True``). Set ``False`` to
+        silence it.
     reuse_pyramid : bool, optional
         *Imaris ``.ims`` only.* Copy the file's **own** resolution levels
         instead of rebuilding the pyramid (faster, no recompute), keeping each
@@ -460,7 +895,12 @@ def to_ome_zarr(
     ):
         try:
             return _write_imaris_pyramid(
-                str(source), str(out_path), chunks=chunks, overwrite=overwrite
+                str(source),
+                str(out_path),
+                chunks=chunks,
+                overwrite=overwrite,
+                shard=shard,
+                progress=progress,
             )
         except Exception as exc:
             logger.warning(
@@ -487,6 +927,8 @@ def to_ome_zarr(
         downscale=downscale,
         chunks=chunks,
         base_scale=base_scale,
+        shard=shard,
+        progress=progress,
     )
     _write_multiscales(out, axes, datasets, Path(out).stem, calibrated=bool(ps))
     return out
@@ -501,6 +943,8 @@ def add_pyramid(
     n_levels: int = 5,
     downscale: int = 2,
     chunks: Union[tuple[int, ...], None] = None,
+    shard: ShardSpec = False,
+    progress: bool = True,
 ) -> str:
     """Add downsampled pyramid levels to an existing single-resolution zarr.
 
@@ -552,6 +996,8 @@ def add_pyramid(
         base_scale=base_scale,
         base_name=base,
         write_base=False,
+        shard=shard,
+        progress=progress,
     )
     _write_multiscales(gp, axes, datasets, Path(gp).stem, calibrated=bool(ps))
     return gp
@@ -566,6 +1012,8 @@ def register_labels(
     n_levels: int = 5,
     downscale: int = 2,
     chunks: Union[tuple[int, ...], None] = None,
+    shard: ShardSpec = False,
+    progress: bool = True,
 ) -> str:
     """Pyramidalise and register an existing ``labels/<name>/0`` base level.
 
@@ -594,6 +1042,8 @@ def register_labels(
         n_levels=n_levels,
         downscale=downscale,
         chunks=chunks,
+        shard=shard,
+        progress=progress,
     )
     grp = zarr.open_group(group, mode="a")
     grp.attrs["image-label"] = {"version": _NGFF_VERSION}
@@ -616,6 +1066,8 @@ def write_labels(
     n_levels: int = 5,
     downscale: int = 2,
     chunks: Union[tuple[int, ...], None] = None,
+    shard: ShardSpec = False,
+    progress: bool = True,
     overwrite: bool = False,
 ) -> str:
     """Store *labels* inside *image_store* under the NGFF ``labels/`` group.
@@ -648,7 +1100,7 @@ def write_labels(
 
     label_group = f"{store}/labels/{name}"
     base = arr.rechunk(chunks or _default_chunks(arr.shape, axes))
-    da.to_zarr(base, label_group, component="0", overwrite=True)
+    _to_zarr_level(base, label_group, "0", shard, progress)
     return register_labels(
         store,
         name,
@@ -657,4 +1109,6 @@ def write_labels(
         n_levels=n_levels,
         downscale=downscale,
         chunks=chunks,
+        shard=shard,
+        progress=progress,
     )

@@ -7,7 +7,7 @@
 
 > Tiled processing of arbitrarily large images — any image, any function.
 
-```
+```text
 ┌──────┬──────┬──────┐     fn(tile) → labels      ┌──────┬──────┬──────┐
 │ tile │ tile │ tile │  ─────────────────────►    │  1   │  2   │  3   │
 ├──────┼──────┼──────┤                            ├──────┼──────┼──────┤
@@ -295,6 +295,7 @@ Full docs, guides and tutorials: **<https://imcf.one/patchworks/>**
 - dask[array], numpy, zarr, scipy
 
 Optional:
+
 - `psutil` — accurate RAM sizing for `tile_shape="auto"`
 - `nvidia-ml-py` — accurate GPU VRAM sizing
 - `tqdm` — progress bars

@@ -9,7 +9,7 @@ even though it's the same cell.
 
 patchworks solves this with a zarr-native merge algorithm:
 
-```
+```text
 Tile A labels:        Tile B labels:        After merge:
 ┌────────────┐        ┌────────────┐        ┌──────────────────────┐
 │  3   1   2 │        │  1   4   2 │        │  3   1   2 │ 501 5 502│
@@ -32,7 +32,7 @@ Each tile's labels are written to a temporary zarr once. This is critical:
 without staging, any downstream operation that reads the label array re-runs
 your segmentation function. The merge internally reads labels multiple times.
 
-```
+```text
 tile_process calls fn once per tile → staged zarr
                                          │
                          merge reads from staged zarr (no fn calls)

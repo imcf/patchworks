@@ -37,6 +37,13 @@ logger = logging.getLogger(__name__)
 
 
 def _require_napari():
+    """Import and return napari, or raise an actionable ImportError.
+
+    Returns
+    -------
+    module
+        The imported ``napari`` module.
+    """
     try:
         import napari
     except ImportError as exc:
@@ -48,10 +55,34 @@ def _require_napari():
 
 
 def _is_zarr(src: Any) -> bool:
+    """Whether *src* is a path ending in ``.zarr``.
+
+    Parameters
+    ----------
+    src : Any
+        Candidate source.
+
+    Returns
+    -------
+    bool
+        True for a str/Path ending in ``.zarr``.
+    """
     return isinstance(src, (str, Path)) and str(src).endswith(".zarr")
 
 
 def _has_multiscales(path: Union[str, Path]) -> bool:
+    """Whether a zarr group carries NGFF ``multiscales`` metadata.
+
+    Parameters
+    ----------
+    path : str or Path
+        Zarr group path.
+
+    Returns
+    -------
+    bool
+        True if the group has a ``multiscales`` attribute.
+    """
     root = zarr.open_group(str(path), mode="r")
     return "multiscales" in root.attrs
 
@@ -59,7 +90,20 @@ def _has_multiscales(path: Union[str, Path]) -> bool:
 def _multiscale_levels(
     path: Union[str, Path], channel: int | None
 ) -> list[da.Array]:
-    """Return every pyramid level as a lazy dask array (napari multi-scale)."""
+    """Return every pyramid level as a lazy dask array (napari multi-scale).
+
+    Parameters
+    ----------
+    path : str or Path
+        OME-ZARR group path.
+    channel : int or None
+        Channel to select, or ``None`` to keep all channels.
+
+    Returns
+    -------
+    list of da.Array
+        One lazy array per resolution level.
+    """
     root = zarr.open_group(str(path), mode="r")
     datasets = root.attrs["multiscales"][0]["datasets"]
     return [
@@ -71,7 +115,20 @@ def _multiscale_levels(
 def _resolve_image(
     source: Union[da.Array, str, Path], channel: int | None
 ) -> Union[da.Array, list[da.Array]]:
-    """Resolve *source* into data napari can display (lazily)."""
+    """Resolve *source* into data napari can display (lazily).
+
+    Parameters
+    ----------
+    source : da.Array, str or Path
+        OME-ZARR store, other image file, or an in-memory array.
+    channel : int or None
+        Channel to display, or ``None`` to keep all channels.
+
+    Returns
+    -------
+    da.Array or list of da.Array
+        A single array, or a multi-scale list for an OME-ZARR pyramid.
+    """
     if _is_zarr(source):
         if _has_multiscales(source):
             return _multiscale_levels(source, channel)
@@ -86,7 +143,18 @@ def _resolve_image(
 
 
 def _inner_label_names(store: Union[str, Path]) -> list[str]:
-    """Names registered under an OME-ZARR's NGFF ``labels/`` group, if any."""
+    """List label images registered under an OME-ZARR's ``labels/`` group.
+
+    Parameters
+    ----------
+    store : str or Path
+        OME-ZARR store path.
+
+    Returns
+    -------
+    list of str
+        Registered label-image names (empty if there are none).
+    """
     try:
         grp = zarr.open_group(f"{store}/labels", mode="r")
     except Exception:
@@ -97,7 +165,20 @@ def _inner_label_names(store: Union[str, Path]) -> list[str]:
 def _resolve_labels(
     source: Union[da.Array, str, Path], component: str
 ) -> Union[da.Array, list[da.Array]]:
-    """Resolve a label *source* into integer data for an Labels layer."""
+    """Resolve a label *source* into integer data for a Labels layer.
+
+    Parameters
+    ----------
+    source : da.Array, str or Path
+        Label store (plain or multi-scale) or an in-memory array.
+    component : str
+        Array name inside a plain-zarr label store.
+
+    Returns
+    -------
+    da.Array or list of da.Array
+        Integer (``int32``) labels; a list for a multi-scale store.
+    """
     if _is_zarr(source):
         if _has_multiscales(source):
             levels = _multiscale_levels(source, None)

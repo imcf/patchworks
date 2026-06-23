@@ -139,3 +139,42 @@ def test_reuse_pyramid_ignored_for_arrays(tmp_path):
         reuse_pyramid=True,
     )
     assert load_ome_zarr(out, channel=None, level=1).shape == (8, 4, 4)
+
+
+def test_sharding(tmp_path):
+    """shard=True/tuple writes zarr-v3 shards; data round-trips intact."""
+    import zarr as _zarr
+
+    a = np.arange(4 * 64 * 64, dtype="uint16").reshape(4, 64, 64)
+
+    out = to_ome_zarr(
+        a,
+        tmp_path / "s.zarr",
+        axes="zyx",
+        n_levels=2,
+        chunks=(2, 16, 16),
+        shard=True,
+    )
+    z0 = _zarr.open_array(f"{out}/0", mode="r")
+    assert z0.chunks == (2, 16, 16)
+    assert z0.shards is not None and z0.shards != z0.chunks
+    assert np.array_equal(
+        np.asarray(load_ome_zarr(out, channel=None, level=0)), a
+    )
+
+    out2 = to_ome_zarr(
+        a,
+        tmp_path / "e.zarr",
+        axes="zyx",
+        n_levels=1,
+        chunks=(2, 16, 16),
+        shard=(2, 32, 32),
+    )
+    assert _zarr.open_array(f"{out2}/0", mode="r").shards == (2, 32, 32)
+
+    out3 = to_ome_zarr(
+        a, tmp_path / "n.zarr", axes="zyx", n_levels=1, chunks=(2, 16, 16)
+    )
+    assert (
+        getattr(_zarr.open_array(f"{out3}/0", mode="r"), "shards", None) is None
+    )
