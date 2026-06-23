@@ -57,6 +57,51 @@ def _get_available_memory() -> int:
         return 8 * 1024**3
 
 
+def safe_worker_count(
+    tile_nbytes: int,
+    *,
+    use_gpu: bool = False,
+    fn_overhead: int = 4,
+    ram_fraction: float = 0.6,
+) -> int:
+    """Concurrent tiles that fit the machine without OOM or a CPU freeze.
+
+    Bounds the threaded scheduler by two limits and takes the smaller:
+
+    * **CPU** — leaves at least one core free so the box stays responsive
+      (never pins every core).
+    * **RAM** — at most ``ram_fraction`` of available memory, assuming each
+      in-flight tile needs ``fn_overhead`` copies (halo + output + temporaries).
+
+    On GPU the answer is always 1: one evaluation at a time so concurrent
+    tiles can never exhaust VRAM. Without ``psutil`` it returns a conservative
+    default rather than guessing high.
+
+    Parameters
+    ----------
+    tile_nbytes : int
+        Size of one tile in bytes (``prod(tile_shape) * dtype.itemsize``).
+    use_gpu : bool, optional
+        Whether tiles are processed on the GPU.
+    fn_overhead : int, optional
+        Assumed peak number of tile-sized buffers alive per worker.
+    ram_fraction : float, optional
+        Fraction of available RAM the staging step may use.
+
+    Returns
+    -------
+    int
+        Worker-thread count (always >= 1).
+    """
+    cpu_cap = max(1, (os.cpu_count() or 1) - 1)
+    if use_gpu:
+        return 1
+    avail = _get_available_memory()
+    per_tile = max(1, int(tile_nbytes) * max(1, fn_overhead))
+    mem_cap = max(1, int(avail * ram_fraction) // per_tile)
+    return max(1, min(cpu_cap, mem_cap))
+
+
 def _get_gpu_memory() -> int:
     """Return free GPU VRAM in bytes. Falls back to 8 GiB default."""
     try:
