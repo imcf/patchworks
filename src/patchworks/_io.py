@@ -75,6 +75,16 @@ def _otsu_threshold(sample: np.ndarray) -> float:
 
     Operates on the full distribution including zeros — zeros are background
     pixels and must be included so Otsu can find the signal/background boundary.
+
+    Parameters
+    ----------
+    sample : np.ndarray
+        Flat intensity sample.
+
+    Returns
+    -------
+    float
+        The Otsu threshold, or ``0.0`` when the sample is degenerate.
     """
     try:
         from skimage.filters import threshold_otsu
@@ -89,7 +99,22 @@ def _otsu_threshold(sample: np.ndarray) -> float:
 def _auto_empty_threshold(
     image: da.Array, channel: int | None, level: int
 ) -> float:
-    """Pick an empty-tile threshold from a cheap bounded sample (Otsu)."""
+    """Pick an empty-tile threshold from a cheap bounded sample (Otsu).
+
+    Parameters
+    ----------
+    image : da.Array
+        Image to sample.
+    channel : int or None
+        Channel hint (kept for signature symmetry).
+    level : int
+        Pyramid level hint (kept for signature symmetry).
+
+    Returns
+    -------
+    float
+        Otsu threshold over a few small centred windows.
+    """
     n = image.ndim
     win = [min(64 if i >= n - 3 else s, s) for i, s in enumerate(image.shape)]
     win = [min(w, 256) if i >= n - 2 else w for i, w in enumerate(win)]
