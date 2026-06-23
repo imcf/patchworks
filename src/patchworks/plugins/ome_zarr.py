@@ -255,8 +255,8 @@ def _open_bioio(path: str, scene: int) -> tuple[da.Array, str, PixelSize]:
     return arr, axes, pixel_size
 
 
-def _open_imaris(path: str) -> tuple[da.Array, str, PixelSize]:
-    """Open an Imaris ``.ims`` file lazily → ``(array, axes, pixel_size)``."""
+def _open_imaris(path: str, level: int = 0) -> tuple[da.Array, str, PixelSize]:
+    """Open an Imaris ``.ims`` *level* lazily → ``(array, axes, pixel_size)``."""
     try:
         from imaris_ims_file_reader.ims import ims
     except ImportError as exc:
@@ -265,8 +265,8 @@ def _open_imaris(path: str) -> tuple[da.Array, str, PixelSize]:
             "Install it with:\n    pip install 'patchworks[imaris]'"
         ) from exc
 
-    # Full-resolution level; the object is array-like and h5py-backed (lazy).
-    reader = ims(path, ResolutionLevelLock=0)
+    # The object is array-like and h5py-backed (lazy).
+    reader = ims(path, ResolutionLevelLock=level)
     order = _DEFAULT_ORDER[len(_DEFAULT_ORDER) - reader.ndim :]
     arr = da.from_array(reader, chunks=_default_chunks(reader.shape, order))
 
@@ -291,6 +291,46 @@ def _open_imaris(path: str) -> tuple[da.Array, str, PixelSize]:
         "imaris opened %s as %s %s cal=%s", path, axes, arr.shape, pixel_size
     )
     return arr, axes, pixel_size
+
+
+def _write_imaris_pyramid(
+    path: str,
+    out: str,
+    *,
+    chunks: Union[tuple[int, ...], None],
+    overwrite: bool,
+) -> str:
+    """Copy an Imaris file's own resolution levels into an OME-ZARR.
+
+    Each Imaris ``ResolutionLevel`` is written as a pyramid level with its own
+    physical scale, so no downsampling is recomputed. Lazy (h5py-backed) reads
+    stream straight to disk.
+    """
+    from imaris_ims_file_reader.ims import ims
+
+    base = ims(path, ResolutionLevelLock=0)
+    n_levels = int(getattr(base, "ResolutionLevels", 1) or 1)
+
+    zarr.open_group(out, mode="w" if overwrite else "w-")
+    datasets: list[dict] = []
+    axes = ""
+    calibrated = False
+    for level in range(n_levels):
+        arr, axes, ps = _open_imaris(path, level=level)
+        scale = _base_scale(axes, ps)
+        calibrated = calibrated or bool(ps)
+        da.to_zarr(
+            arr.rechunk(chunks or _default_chunks(arr.shape, axes)),
+            out,
+            component=str(level),
+            overwrite=True,
+        )
+        datasets.append(_dataset(str(level), scale))
+        logger.info("imaris level %d copied: shape=%s", level, arr.shape)
+    _write_multiscales(
+        out, axes, datasets, Path(out).stem, calibrated=calibrated
+    )
+    return out
 
 
 def _to_dask(
@@ -327,6 +367,7 @@ def to_ome_zarr(
     n_levels: int = 5,
     downscale: int = 2,
     chunks: Union[tuple[int, ...], None] = None,
+    reuse_pyramid: bool = False,
     overwrite: bool = False,
 ) -> str:
     """Write *source* as a pyramidal, calibrated OME-ZARR store.
@@ -359,6 +400,12 @@ def to_ome_zarr(
         Per-level X/Y downsampling factor (default 2).
     chunks : tuple of int, optional
         Chunk shape for the written levels. ``None`` → a bounded default.
+    reuse_pyramid : bool, optional
+        *Imaris ``.ims`` only.* Copy the file's **own** resolution levels
+        instead of rebuilding the pyramid (faster, no recompute), keeping each
+        level's native scale. Ignored for other inputs; falls back to a
+        rebuild if the Imaris levels can't be read. Default ``False`` (rebuild,
+        for a consistent XY-only, nearest-neighbour NGFF pyramid).
     overwrite : bool, optional
         Overwrite an existing store at *out_path*.
 
@@ -377,6 +424,22 @@ def to_ome_zarr(
         raise ValueError("downscale must be >= 2")
     if n_levels < 1:
         raise ValueError("n_levels must be >= 1")
+
+    # Reuse an Imaris file's own resolution pyramid instead of rebuilding it.
+    if (
+        reuse_pyramid
+        and isinstance(source, (str, Path))
+        and str(source).lower().endswith(".ims")
+    ):
+        try:
+            return _write_imaris_pyramid(
+                str(source), str(out_path), chunks=chunks, overwrite=overwrite
+            )
+        except Exception as exc:
+            logger.warning(
+                "reuse_pyramid failed (%s); rebuilding the pyramid instead.",
+                exc,
+            )
 
     arr, axes, detected = _to_dask(source, axes, scene)
     if len(axes) != arr.ndim:
