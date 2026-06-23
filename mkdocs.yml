@@ -38,6 +38,7 @@ nav:
   - Merging labels: guide/merging.md
   - Empty tile skipping: guide/skip_empty.md
   - GPU & distributed: guide/gpu_distributed.md
+  - Performance & memory: guide/performance.md
   - OME-ZARR & napari: guide/ome_zarr_napari.md
   - Pitfalls: guide/pitfalls.md
 - Examples:
