@@ -17,7 +17,7 @@ def threshold_fn(tile: np.ndarray) -> np.ndarray:
     return label(tile > thr).astype("int32")
 
 
-result = tile_process("image.zarr", threshold_fn, compute=True)
+result = tile_process("image.zarr", threshold_fn)
 ```
 
 ## Gaussian + morphological operations
@@ -86,12 +86,12 @@ from patchworks import tile_process
 
 # From any array-like source
 arr = da.from_array(my_numpy_array, chunks=(1, 1024, 1024))
-result = tile_process(arr, my_fn, compute=True)
+result = tile_process(arr, my_fn)
 
 # From tifffile
 import tifffile
 import dask.array as da
 
 arr = da.from_array(tifffile.imread("image.tif", aszarr=True))
-result = tile_process(arr, my_fn, compute=True)
+result = tile_process(arr, my_fn)
 ```

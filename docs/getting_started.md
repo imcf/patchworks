@@ -89,9 +89,11 @@ objects spanning tile boundaries are merged into a single label.
     ```python
     from patchworks import tile_process
 
-    result = tile_process("image.zarr", my_fn, compute=True)
+    # returns a lazy dask array; labels are also written into image.zarr by
+    # default (image.zarr/labels/labels/, as a pyramid)
+    result = tile_process("image.zarr", my_fn)
     print(result.shape)  # (z, y, x)
-    print(result.max())  # number of objects found
+    print(int(result.max().compute()))  # number of objects found
     ```
 
 === "From a dask array"
@@ -101,7 +103,7 @@ objects spanning tile boundaries are merged into a single label.
     from patchworks import tile_process
 
     arr = da.from_zarr("image.zarr")
-    result = tile_process(arr, my_fn, compute=True)
+    result = tile_process(arr, my_fn)
     ```
 
 === "Stream to zarr (recommended for large images)"

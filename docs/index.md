@@ -53,7 +53,7 @@ def my_fn(tile):
     return label(tile > threshold_otsu(tile)).astype("int32")
 
 
-result = tile_process("image.zarr", my_fn, compute=True)
+result = tile_process("image.zarr", my_fn)
 ```
 
 Any function. Any image.
