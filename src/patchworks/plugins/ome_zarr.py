@@ -265,11 +265,38 @@ def _open_imaris(path: str, level: int = 0) -> tuple[da.Array, str, PixelSize]:
             "Install it with:\n    pip install 'patchworks[imaris]'"
         ) from exc
 
-    # The object is array-like and h5py-backed (lazy).
-    reader = ims(path, ResolutionLevelLock=level)
-    order = _DEFAULT_ORDER[len(_DEFAULT_ORDER) - reader.ndim :]
-    arr = da.from_array(reader, chunks=_default_chunks(reader.shape, order))
+    # Read straight from the underlying HDF5 datasets. The reader's own
+    # __getitem__ squeezes singletons and pads to chunk boundaries, which both
+    # break da.from_array; the raw h5py datasets slice exactly and keep their
+    # native chunking. Imaris stores one 3-D (Z, Y, X) Data array per
+    # (timepoint, channel), padded to a chunk multiple — crop to the true
+    # extent the reader reports.
+    import h5py
 
+    reader = ims(path, ResolutionLevelLock=level)
+    n_t = int(getattr(reader, "TimePoints", 1) or 1)
+    n_c = int(getattr(reader, "Channels", 1) or 1)
+    z, y, x = (int(s) for s in reader.shape[-3:])
+
+    # Open our own h5py handle (the reader closes its own on GC). The Dataset
+    # objects keep this File alive for the lifetime of the dask graph, and
+    # da.from_array's default read lock makes the (thread-unsafe) h5py reads
+    # safe under the threaded scheduler.
+    hf = h5py.File(path, "r")
+    t_stack = []
+    for t in range(n_t):
+        c_stack = []
+        for c in range(n_c):
+            ds = hf[
+                f"DataSet/ResolutionLevel {level}/TimePoint {t}/"
+                f"Channel {c}/Data"
+            ]
+            c_stack.append(da.from_array(ds, chunks=ds.chunks)[:z, :y, :x])
+        t_stack.append(da.stack(c_stack, axis=0))  # (c, z, y, x)
+    arr = da.stack(t_stack, axis=0)  # (t, c, z, y, x)
+
+    # Drop singleton non-spatial axes for a tidy result.
+    order = "tczyx"
     keep = [
         i
         for i, name in enumerate(order)
