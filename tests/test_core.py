@@ -247,3 +247,27 @@ def test_estimate_empty_tiles():
     assert info["n_tiles"] == 4
     assert info["n_occupied"] == 2
     assert info["empty_fraction"] == 0.5
+
+
+def test_safe_worker_count_bounds():
+    import os
+
+    from patchworks._chunks import safe_worker_count
+
+    # GPU → always serial (no VRAM contention)
+    assert safe_worker_count(10**6, use_gpu=True) == 1
+    # Absurdly large tile → memory-bound to 1
+    assert safe_worker_count(10**15) == 1
+    # Tiny tile → CPU-bound, leaves a core free, always >= 1
+    n = safe_worker_count(1024)
+    assert 1 <= n <= max(1, (os.cpu_count() or 1) - 1)
+
+
+def test_tile_process_max_workers():
+    import dask.array as da
+
+    from patchworks import tile_process
+
+    arr = da.from_array(_make_image((2, 32, 32)), chunks=(1, 32, 32))
+    result = tile_process(arr, _label_fn, max_workers=1).compute()
+    assert result.shape == (2, 32, 32)

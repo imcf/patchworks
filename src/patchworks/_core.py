@@ -11,7 +11,7 @@ from typing import Any, Callable, Union
 import dask.array as da
 import numpy as np
 
-from ._chunks import auto_tile_shape
+from ._chunks import auto_tile_shape, safe_worker_count
 from ._cluster import _client_is_in_process, _distributed_client
 from ._io import _auto_empty_threshold, load_ome_zarr
 from ._merge import zarr_native_merge
@@ -56,6 +56,7 @@ def tile_process(
     channel: int | None = 0,
     level: int = 0,
     use_gpu: bool = False,
+    max_workers: int | None = None,
     progress: bool = False,
     write_to: Union[str, Path, None] = None,
     output_component: str = "labels",
@@ -114,6 +115,13 @@ def tile_process(
         Pyramid level when *image* is a path (0 = full resolution).
     use_gpu:
         When ``tile_shape="auto"``, size tiles against GPU VRAM instead of RAM.
+        Also forces staging to one tile at a time (no VRAM contention).
+    max_workers:
+        Cap the worker threads/processes used for staging and merging. ``None``
+        (default) auto-sizes to the machine: bounded by available RAM (tile
+        size) and CPU (leaves one core free) so a run can neither OOM nor pin
+        every core. Ignored when a distributed client is active (it manages its
+        own concurrency).
     progress:
         Show a progress bar during the tile-writing and relabel steps.
     write_to:
@@ -283,11 +291,6 @@ def tile_process(
         for ax, c in enumerate(image.chunks)
     }
 
-    if overlap > 0:
-        # boundary="none" is required: only this boundary mode composes with
-        # trim_overlap to recover the original shape. "reflect" keeps the halo.
-        image = da.overlap.overlap(image, depth=_depth, boundary="none")
-
     # Wrap fn with optional empty-tile skipping
     _skip_thr = empty_threshold
     if skip_empty and _skip_thr is None:
@@ -303,28 +306,43 @@ def tile_process(
             logger.debug("process tile %s shape=%s", loc, block.shape)
         return fn(block)
 
-    labeled = image.map_blocks(
-        active_fn,
-        dtype=np.int32,
-        meta=np.empty((0,) * image.ndim, dtype=np.int32),
-    )
-
-    # Trim the overlap halo so staged tiles have clean boundaries for the
-    # boundary-slab scan. Without this the scan reads halo-expanded chunks and
-    # the merged output is larger than the input.
+    _meta = np.empty((0,) * image.ndim, dtype=np.int32)
     if overlap > 0:
-        labeled = da.overlap.trim_overlap(
-            labeled, depth=_depth, boundary="none"
+        # One fused pass: add the halo, run fn, trim it back off. map_overlap
+        # materialises only the halos it needs (no separate overlapped array)
+        # and keeps the task graph small. boundary="none" + trim recovers the
+        # original shape, so the boundary-slab scan reads clean tiles.
+        labeled = da.map_overlap(
+            active_fn,
+            image,
+            depth=_depth,
+            boundary="none",
+            trim=True,
+            dtype=np.int32,
+            meta=_meta,
         )
+    else:
+        labeled = image.map_blocks(active_fn, dtype=np.int32, meta=_meta)
 
-    # With no distributed client the threaded scheduler runs many tiles at
-    # once. For GPU that means several evals sharing one device → CUDA OOM.
-    # Pin to a single worker thread so evals run serially. A distributed
-    # client manages its own concurrency, so skip the override there.
+    # Bound staging concurrency to the machine so it can neither OOM nor pin
+    # every core:
+    #   - GPU → 1 eval at a time (no VRAM contention),
+    #   - CPU → as many tiles as fit RAM, leaving one core free.
+    # A distributed client manages its own concurrency, so skip the override.
     import dask as _dask
 
-    if _active is None and use_gpu:
-        _sched_ctx: Any = _dask.config.set(scheduler="threads", num_workers=1)
+    _tile_nbytes = int(np.prod(labeled.chunksize)) * labeled.dtype.itemsize
+    if _active is None:
+        _workers = (
+            max_workers
+            if max_workers is not None
+            else safe_worker_count(_tile_nbytes, use_gpu=use_gpu)
+        )
+        _workers = max(1, min(_workers, os.cpu_count() or 1))
+        logger.info("Staging with %d worker thread(s)", _workers)
+        _sched_ctx: Any = _dask.config.set(
+            scheduler="threads", num_workers=_workers
+        )
     else:
         _sched_ctx = _nullcontext()
 
@@ -347,24 +365,10 @@ def tile_process(
         _stage_to_zarr(labeled, stage_path, "staged", progress)
     labeled = da.from_zarr(stage_path, component="staged")
 
-    if skip_empty and _skip_thr is not None:
-
-        def _tile_max(block: np.ndarray) -> np.ndarray:
-            return np.full((1,) * block.ndim, int(block.max()), dtype=np.int32)
-
-        _tile_maxes = labeled.map_blocks(
-            _tile_max,
-            dtype=np.int32,
-            chunks=tuple(tuple(1 for _ in c) for c in labeled.chunks),
-        ).compute()
-        _n_skip = int((_tile_maxes == 0).sum())
-        logger.info(
-            "skip_empty: %d/%d tiles ran fn, %d skipped (max<=%.4g)",
-            int(_tile_maxes.size) - _n_skip,
-            int(_tile_maxes.size),
-            _n_skip,
-            _skip_thr,
-        )
+    # NB: no post-staging skip-count pass here — counting skipped tiles by
+    # re-reading the whole staged store off disk would double the I/O of the
+    # entire run just for a log line. Use estimate_empty_tiles() up front for
+    # that figure instead.
 
     def _cleanup_stage():
         if not keep_stage:
@@ -373,7 +377,9 @@ def tile_process(
             shutil.rmtree(stage_path, ignore_errors=True)
             logger.info("Removed stage store %s", stage_path)
 
-    _nw = min(4, os.cpu_count() or 1)
+    # Merge runs in worker processes (each holds one chunk + an mmap'd LUT);
+    # size it to RAM/CPU like staging, capped so we don't spawn a process storm.
+    _nw = max_workers or max(1, min(safe_worker_count(_tile_nbytes), 8))
 
     # Default: input is a .zarr store and no explicit write_to → labels go back
     # *into* the input store under the NGFF labels/<name>/ group with an auto
