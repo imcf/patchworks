@@ -49,6 +49,14 @@ _GPU_MEMORY_FALLBACK = 8 * 1024**3
 
 
 def _get_available_memory() -> int:
+    """Return available system RAM in bytes.
+
+    Returns
+    -------
+    int
+        Available memory via ``psutil``, or an 8 GiB fallback if it is not
+        installed.
+    """
     try:
         import psutil
 
@@ -103,7 +111,14 @@ def safe_worker_count(
 
 
 def _get_gpu_memory() -> int:
-    """Return free GPU VRAM in bytes. Falls back to 8 GiB default."""
+    """Return free GPU VRAM in bytes.
+
+    Returns
+    -------
+    int
+        Free VRAM of GPU 0 via ``nvidia-ml-py``, or an 8 GiB fallback if the
+        query fails.
+    """
     try:
         import pynvml
 
