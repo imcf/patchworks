@@ -161,7 +161,9 @@ def estimate_empty_tiles(
     if isinstance(image, (str, Path)):
         _root = zarr.open_group(str(image), mode="r")
         _rattr = dict(_root.attrs)
-        _rms = _rattr.get("multiscales") or _rattr.get("ome", {}).get("multiscales")
+        _rms = _rattr.get("multiscales") or _rattr.get("ome", {}).get(
+            "multiscales"
+        )
         try:
             _zpath = _rms[0]["datasets"][level]["path"]
         except (KeyError, IndexError, TypeError) as exc:
