@@ -50,6 +50,13 @@ to_ome_zarr("scan.czi", "scan.zarr", n_levels=5)   # via bioio
 to_ome_zarr("scan.ims", "scan.zarr")               # Imaris, native HDF5
 ```
 
+!!! note "Imaris pyramids are rebuilt, not reused"
+    `.ims` files carry their own resolution pyramid, but `to_ome_zarr` reads
+    only the **full-resolution** level and **builds a fresh NGFF pyramid** from
+    it. This guarantees a consistent pyramid (XY-only, nearest-neighbour,
+    calibrated) rather than inheriting Imaris's own downsampling scheme. It
+    costs some extra compute, but the build is lazy and OOM-safe.
+
 ### Pixel calibration
 
 The physical voxel size is read from the input — bioio's `physical_pixel_sizes`,
@@ -96,13 +103,17 @@ write_labels("scan.zarr", my_labels, name="nuclei")
 layer in one call. OME-ZARR pyramids are handed to napari as a lazy multi-scale
 list, so even huge stores open instantly and only on-screen data is fetched.
 
+Because `tile_process` writes labels **into** the store by default, you usually
+need no `labels=` argument at all — `view_in_napari` auto-loads every label
+image found under `scan.zarr/labels/`:
+
 ```python
 from patchworks.plugins.napari import view_in_napari
 
-# one store holding both image and labels/<name>:
-view_in_napari("scan.zarr", labels="scan.zarr/labels/labels")
+# auto-loads scan.zarr/labels/* as Labels layers:
+view_in_napari("scan.zarr")
 
-# or a separate plain label store written with write_to=:
+# or point at a separate plain label store written with write_to=:
 view_in_napari("scan.zarr", labels="labels.zarr")
 ```
 
@@ -120,7 +131,7 @@ from patchworks.plugins.napari import view_in_napari
 tile_process("scan.zarr", fn, progress=True)
 
 # 2. inspect image + labels together, straight from the one store
-view_in_napari("scan.zarr", labels="scan.zarr/labels/labels")
+view_in_napari("scan.zarr")  # labels auto-loaded from scan.zarr/labels/
 ```
 
 Plugging in a different segmentation method is just swapping `fn` — any

@@ -39,3 +39,32 @@ def test_require_napari_message(monkeypatch):
             nplugin._require_napari()
     else:
         assert nplugin._require_napari() is napari
+
+
+def test_inner_label_discovery(tmp_path):
+    """Labels written into a store are discoverable for auto-overlay."""
+    import numpy as np
+
+    from patchworks.plugins.ome_zarr import to_ome_zarr, write_labels
+
+    store = to_ome_zarr(
+        np.zeros((8, 8, 8), "uint16"), tmp_path / "scan.zarr", n_levels=2
+    )
+    write_labels(store, np.ones((8, 8, 8), "int32"), name="cells", n_levels=2)
+
+    assert nplugin._inner_label_names(store) == ["cells"]
+    levels = nplugin._multiscale_levels(f"{store}/labels/cells", None)
+    assert len(levels) == 2
+    assert levels[1].shape == (8, 4, 4)  # Z preserved, XY downsampled
+
+
+def test_inner_label_discovery_none(tmp_path):
+    """A store without labels yields an empty list (image-only view)."""
+    import numpy as np
+
+    from patchworks.plugins.ome_zarr import to_ome_zarr
+
+    store = to_ome_zarr(
+        np.zeros((8, 8, 8), "uint16"), tmp_path / "img.zarr", n_levels=1
+    )
+    assert nplugin._inner_label_names(store) == []
