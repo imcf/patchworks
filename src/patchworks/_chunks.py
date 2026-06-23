@@ -62,7 +62,7 @@ def safe_worker_count(
     *,
     use_gpu: bool = False,
     fn_overhead: int = 4,
-    ram_fraction: float = 0.6,
+    ram_fraction: float = 0.8,
 ) -> int:
     """Concurrent tiles that fit the machine without OOM or a CPU freeze.
 
