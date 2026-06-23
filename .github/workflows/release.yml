@@ -48,3 +48,17 @@ jobs:
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+
+  # Rebuild the org-wide pdoc apidocs site so it picks up the new version.
+  apidocs:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger imcf.github.io apidocs rebuild
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          # Fine-grained PAT with "Contents: write" on imcf/imcf.github.io,
+          # stored as the APIDOCS_DISPATCH_TOKEN secret in this repo.
+          token: ${{ secrets.APIDOCS_DISPATCH_TOKEN }}
+          repository: imcf/imcf.github.io
+          event-type: dispatch-event
