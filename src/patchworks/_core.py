@@ -332,7 +332,31 @@ def tile_process(
     import dask as _dask
 
     _tile_nbytes = int(np.prod(labeled.chunksize)) * labeled.dtype.itemsize
-    if _active is None:
+    _temp_cluster = None
+    _temp_client = None
+    if _active is None and use_gpu:
+        # Single-GPU runs still get a live Dask dashboard: a 1-worker /
+        # 1-thread in-process cluster keeps GPU evals serial (no VRAM
+        # contention) while exposing the dashboard for progress.
+        try:
+            from dask.distributed import Client, LocalCluster
+
+            _temp_cluster = LocalCluster(
+                n_workers=1, threads_per_worker=1, processes=False
+            )
+            _temp_client = Client(_temp_cluster)
+            logger.info(
+                "Dask dashboard for this run: %s",
+                _temp_client.dashboard_link,
+            )
+        except Exception as exc:  # no distributed/bokeh → threaded fallback
+            logger.warning(
+                "Could not start a dashboard cluster (%s); "
+                "falling back to the threaded scheduler.",
+                exc,
+            )
+
+    if _distributed_client() is None:
         _workers = (
             max_workers
             if max_workers is not None
@@ -363,6 +387,9 @@ def tile_process(
     logger.info("Staging tiles to %s …", stage_path)
     with _sched_ctx:
         _stage_to_zarr(labeled, stage_path, "staged", progress)
+    if _temp_client is not None:
+        _temp_client.close()
+        _temp_cluster.close()
     labeled = da.from_zarr(stage_path, component="staged")
 
     # NB: no post-staging skip-count pass here — counting skipped tiles by

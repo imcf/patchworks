@@ -14,13 +14,12 @@ napari is an optional, GUI-heavy dependency. Install it with
 Usage
 -----
 >>> from patchworks import tile_process
->>> from patchworks.plugins.ome_zarr import to_ome_zarr
 >>> from patchworks.plugins.napari import view_in_napari
 >>>
->>> tile_process("scan.zarr", fn, write_to="labels.zarr")
->>> to_ome_zarr("scan.zarr", "scan_pyramid.zarr")        # optional, for speed
->>>
->>> view_in_napari("scan_pyramid.zarr", labels="labels.zarr")
+>>> # labels are written into scan.zarr/labels/ by default …
+>>> tile_process("scan.zarr", fn)
+>>> # … so the viewer finds and overlays them with no labels= argument:
+>>> view_in_napari("scan.zarr")
 """
 
 from __future__ import annotations
@@ -86,6 +85,15 @@ def _resolve_image(
     return source
 
 
+def _inner_label_names(store: Union[str, Path]) -> list[str]:
+    """Names registered under an OME-ZARR's NGFF ``labels/`` group, if any."""
+    try:
+        grp = zarr.open_group(f"{store}/labels", mode="r")
+    except Exception:
+        return []
+    return list(grp.attrs.get("labels", []))
+
+
 def _resolve_labels(
     source: Union[da.Array, str, Path], component: str
 ) -> Union[da.Array, list[da.Array]]:
@@ -123,7 +131,10 @@ def view_in_napari(
     labels : da.Array, str, Path or None
         Label array to overlay. A plain ``.zarr`` store written by
         ``tile_process`` is read from its ``labels_component``; an OME-ZARR
-        pyramid is shown multi-scale; ``None`` shows the image only.
+        pyramid is shown multi-scale. ``None`` (default) **auto-loads** every
+        label image stored inside the OME-ZARR under ``labels/<name>/`` — the
+        place ``tile_process`` writes them by default — each as its own Labels
+        layer. (Falls back to image-only if there are none.)
     channel : int or None, optional
         Channel to display from the image (``None`` keeps all channels).
     labels_component : str, optional
@@ -145,7 +156,7 @@ def view_in_napari(
 
     Examples
     --------
-    >>> view_in_napari("scan.zarr", labels="labels.zarr")  # doctest: +SKIP
+    >>> view_in_napari("scan.zarr")  # auto-loads scan.zarr/labels/*  # doctest: +SKIP
     """
     napari = _require_napari()
 
@@ -161,6 +172,15 @@ def view_in_napari(
     if labels is not None:
         lab = _resolve_labels(labels, labels_component)
         viewer.add_labels(lab, name=labels_name)
+    elif _is_zarr(image):
+        # No labels given → auto-overlay every label image stored inside the
+        # OME-ZARR under labels/<name>/ (the default place tile_process writes
+        # them), each as its own multi-scale Labels layer.
+        for name in _inner_label_names(image):
+            levels = _multiscale_levels(f"{image}/labels/{name}", None)
+            lab = [lvl.astype("int32") for lvl in levels]
+            viewer.add_labels(lab if len(lab) > 1 else lab[0], name=name)
+            logger.info("auto-loaded labels/%s from %s", name, image)
 
     if show:
         napari.run()
