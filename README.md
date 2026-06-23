@@ -37,7 +37,7 @@ pip install "patchworks[cellpose]" # Cellpose plugin
 pip install "patchworks[bioio]"    # convert any image format to OME-ZARR
 pip install "patchworks[imaris]"   # convert Imaris .ims files to OME-ZARR
 pip install "patchworks[napari]"   # interactive napari viewer plugin
-pip install "patchworks[all]"      # Everything (except napari GUI)
+pip install "patchworks[all]"      # Everything, incl. the napari viewer
 ```
 
 > `bioio` reads CZI/LIF/ND2/OME-TIFF/… The `[bioio]` extra bundles the common
