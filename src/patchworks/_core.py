@@ -283,11 +283,6 @@ def tile_process(
         for ax, c in enumerate(image.chunks)
     }
 
-    if overlap > 0:
-        # boundary="none" is required: only this boundary mode composes with
-        # trim_overlap to recover the original shape. "reflect" keeps the halo.
-        image = da.overlap.overlap(image, depth=_depth, boundary="none")
-
     # Wrap fn with optional empty-tile skipping
     _skip_thr = empty_threshold
     if skip_empty and _skip_thr is None:
@@ -303,19 +298,23 @@ def tile_process(
             logger.debug("process tile %s shape=%s", loc, block.shape)
         return fn(block)
 
-    labeled = image.map_blocks(
-        active_fn,
-        dtype=np.int32,
-        meta=np.empty((0,) * image.ndim, dtype=np.int32),
-    )
-
-    # Trim the overlap halo so staged tiles have clean boundaries for the
-    # boundary-slab scan. Without this the scan reads halo-expanded chunks and
-    # the merged output is larger than the input.
+    _meta = np.empty((0,) * image.ndim, dtype=np.int32)
     if overlap > 0:
-        labeled = da.overlap.trim_overlap(
-            labeled, depth=_depth, boundary="none"
+        # One fused pass: add the halo, run fn, trim it back off. map_overlap
+        # materialises only the halos it needs (no separate overlapped array)
+        # and keeps the task graph small. boundary="none" + trim recovers the
+        # original shape, so the boundary-slab scan reads clean tiles.
+        labeled = da.map_overlap(
+            active_fn,
+            image,
+            depth=_depth,
+            boundary="none",
+            trim=True,
+            dtype=np.int32,
+            meta=_meta,
         )
+    else:
+        labeled = image.map_blocks(active_fn, dtype=np.int32, meta=_meta)
 
     # With no distributed client the threaded scheduler runs many tiles at
     # once. For GPU that means several evals sharing one device → CUDA OOM.
@@ -347,24 +346,10 @@ def tile_process(
         _stage_to_zarr(labeled, stage_path, "staged", progress)
     labeled = da.from_zarr(stage_path, component="staged")
 
-    if skip_empty and _skip_thr is not None:
-
-        def _tile_max(block: np.ndarray) -> np.ndarray:
-            return np.full((1,) * block.ndim, int(block.max()), dtype=np.int32)
-
-        _tile_maxes = labeled.map_blocks(
-            _tile_max,
-            dtype=np.int32,
-            chunks=tuple(tuple(1 for _ in c) for c in labeled.chunks),
-        ).compute()
-        _n_skip = int((_tile_maxes == 0).sum())
-        logger.info(
-            "skip_empty: %d/%d tiles ran fn, %d skipped (max<=%.4g)",
-            int(_tile_maxes.size) - _n_skip,
-            int(_tile_maxes.size),
-            _n_skip,
-            _skip_thr,
-        )
+    # NB: no post-staging skip-count pass here — counting skipped tiles by
+    # re-reading the whole staged store off disk would double the I/O of the
+    # entire run just for a log line. Use estimate_empty_tiles() up front for
+    # that figure instead.
 
     def _cleanup_stage():
         if not keep_stage:
