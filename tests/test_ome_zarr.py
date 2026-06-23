@@ -14,6 +14,41 @@ from patchworks.plugins.ome_zarr import (
 )
 
 
+def _level_scale(store, level):
+    root = zarr.open_group(str(store), mode="r")
+    ds = root.attrs["multiscales"][0]["datasets"][level]
+    return ds["coordinateTransformations"][0]["scale"]
+
+
+def test_pixel_size_written_and_scaled(tmp_path):
+    """Physical voxel size lands in NGFF scale; X/Y scale, Z stays."""
+    out = tmp_path / "cal.zarr"
+    to_ome_zarr(
+        da.zeros((8, 8, 8), "uint16"),
+        out,
+        axes="zyx",
+        pixel_size={"z": 2.0, "y": 0.5, "x": 0.5},
+        n_levels=2,
+    )
+    # level 0 = physical size; level 1 doubles X/Y, keeps Z.
+    assert _level_scale(out, 0) == [2.0, 0.5, 0.5]
+    assert _level_scale(out, 1) == [2.0, 1.0, 1.0]
+    root = zarr.open_group(str(out), mode="r")
+    units = [a.get("unit") for a in root.attrs["multiscales"][0]["axes"]]
+    assert units == ["micrometer", "micrometer", "micrometer"]
+
+
+def test_imaris_without_reader(tmp_path):
+    """A .ims path without the reader raises an actionable ImportError."""
+    try:
+        import imaris_ims_file_reader  # noqa: F401
+    except ImportError:
+        with pytest.raises(ImportError, match="imaris"):
+            to_ome_zarr(str(tmp_path / "scan.ims"), tmp_path / "o.zarr")
+    else:
+        pytest.skip("imaris reader installed; ImportError path not exercised")
+
+
 def test_pyramid_roundtrip(tmp_path):
     """Levels are written, downsampled by striding, and read back intact."""
     a = np.arange(8 * 8 * 8, dtype="int32").reshape(8, 8, 8)

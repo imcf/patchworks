@@ -54,11 +54,13 @@ bioio = [
     "bioio-tifffile",
     "bioio-lif",
 ]
+# imaris reads .ims files natively (HDF5, no JVM) for OME-ZARR conversion.
+imaris = ["imaris-ims-file-reader"]
 # napari enables the interactive viewer plugin (GUI-heavy, kept out of [all]).
 napari = ["napari[all]"]
 dev = ["pytest", "pytest-cov", "scikit-image", "psutil", "tqdm"]
 docs = ["mkdocs-material>=9.0", "mkdocstrings[python]>=0.24"]
-all = ["patchworks[io,gpu,bioio]", "psutil", "tqdm", "scikit-image"]
+all = ["patchworks[io,gpu,bioio,imaris]", "psutil", "tqdm", "scikit-image"]
 
 [project.urls]
 Homepage = "https://github.com/imcf/patchworks"

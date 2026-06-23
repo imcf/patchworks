@@ -38,18 +38,32 @@ existed.
 
 ## Convert any image to OME-ZARR
 
-`to_ome_zarr` accepts a dask/NumPy array, an existing `.zarr` store, or **any
-file format** readable by [bioio](https://github.com/bioio-devs/bioio) (CZI,
-LIF, ND2, OME-TIFF, …). File inputs are read **lazily** — pixels stream from
-disk and are written level by level through dask, so terabyte images convert in
-bounded RAM.
+`to_ome_zarr` accepts a dask/NumPy array, an existing `.zarr` store, an
+**Imaris `.ims`** file, or **any format** readable by
+[bioio](https://github.com/bioio-devs/bioio) (CZI, LIF, ND2, OME-TIFF, …). File
+inputs are read **lazily**.
 
 ```python
 from patchworks.plugins.ome_zarr import to_ome_zarr
 
-# From a proprietary microscope file (lazy, via bioio):
-to_ome_zarr("scan.czi", "scan.zarr", n_levels=5)
+to_ome_zarr("scan.czi", "scan.zarr", n_levels=5)   # via bioio
+to_ome_zarr("scan.ims", "scan.zarr")               # Imaris, native HDF5
 ```
+
+### Pixel calibration
+
+The physical voxel size is read from the input — bioio's `physical_pixel_sizes`,
+the Imaris resolution metadata, or an existing OME-ZARR's scale — and written
+into the NGFF `coordinateTransformations` (in micrometers), so calibration is
+preserved regardless of input. Override or supply it for bare arrays with
+`pixel_size={"z": 2.0, "y": 0.32, "x": 0.32}`.
+
+### Won't OOM
+
+Each pyramid level is built by reading the **previous level back from disk**
+and streaming the downsampled result out through dask with bounded chunks. The
+graph never chains level-on-level and no whole plane/volume is held in RAM, so
+terabyte images convert in bounded memory.
 
 !!! note "Install the readers you need"
     `pip install "patchworks[bioio]"` pulls `bioio` plus the `bioio-bioformats`
