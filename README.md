@@ -61,11 +61,15 @@ def my_fn(tile):
     return label(tile > threshold_otsu(tile)).astype("int32")
 
 
-result = tile_process("image.zarr", my_fn, compute=True)
+result = tile_process("image.zarr", my_fn)
 ```
 
-Done. `result` is a NumPy array of integer labels, same spatial shape as the
-input, with globally unique IDs across all tiles.
+Done. `result` is a **lazy dask array** of integer labels (call `.compute()`
+for a NumPy array), same spatial shape as the input, with globally unique IDs
+across all tiles. By default the labels are also written **into the input
+store** at `image.zarr/labels/labels/` as a multi-scale pyramid, so the image
+and its segmentation live in one OME-ZARR. Pass `write_to="labels.zarr"` to
+write a separate store instead.
 
 ---
 
@@ -134,6 +138,26 @@ def my_custom_fn(tile: np.ndarray) -> np.ndarray:
 
 tile_process("image.zarr", my_custom_fn, tile_shape=(1, 512, 512))
 ```
+
+---
+
+## Convert to OME-ZARR & view in napari
+
+Optional plugins close the loop: convert any image (Imaris `.ims`, CZI, LIF,
+ND2, OME-TIFF, … via bioio) to a pyramidal, **calibrated** OME-ZARR, then view
+the image and its labels in napari.
+
+```python
+from patchworks.plugins.ome_zarr import to_ome_zarr
+from patchworks.plugins.napari import view_in_napari
+
+to_ome_zarr("scan.ims", "scan.zarr")          # lazy, OOM-safe, keeps µm calibration
+view_in_napari("scan.zarr", labels="scan.zarr/labels/labels")
+```
+
+Pyramids downsample **X/Y only** (Z kept full-res) and are built level-by-level
+from disk, so terabyte volumes convert in bounded RAM. See the
+[OME-ZARR & napari guide](https://imcf.one/patchworks/guide/ome_zarr_napari/).
 
 ---
 
@@ -222,8 +246,8 @@ merged = merge_tile_labels(
 
 ## How tiling and merging work
 
-See [docs/how-it-works.md](docs/how-it-works.md) for a full explanation.
-Short version:
+See the [Merging labels guide](https://imcf.one/patchworks/guide/merging/) for
+a full explanation. Short version:
 
 1. Image is split into tiles (with optional overlap for boundary context).
 2. Your function is called independently on each tile. Dask handles parallelism
@@ -253,10 +277,15 @@ tiles where the dask-image approach stalls.
 
 ## Documentation
 
-- [Quick Start](docs/quickstart.md)
-- [API Reference](docs/api-reference.md)
-- [How It Works](docs/how-it-works.md)
-- [Examples](docs/examples/)
+Full docs, guides and tutorials: **<https://imcf.one/patchworks/>**
+
+- [Getting Started](https://imcf.one/patchworks/getting_started/)
+- [User Guide](https://imcf.one/patchworks/guide/tiling/) — tiling, merging,
+  empty-tile skipping, GPU/distributed, OME-ZARR & napari, pitfalls
+- [Examples](https://imcf.one/patchworks/examples/cellpose_2d/) — Cellpose,
+  StarDist, custom functions, standalone merge
+- [API Reference](https://imcf.one/patchworks/api/tile_process/) ·
+  [pdoc API](https://imcf.one/apidocs/patchworks/)
 
 ---
 
@@ -269,7 +298,11 @@ Optional:
 - `psutil` — accurate RAM sizing for `tile_shape="auto"`
 - `nvidia-ml-py` — accurate GPU VRAM sizing
 - `tqdm` — progress bars
-- `cellpose` — Cellpose plugin
+- `cellpose` — Cellpose plugin (`patchworks[cellpose]`)
+- `bioio` + readers — convert CZI/LIF/ND2/OME-TIFF/… to OME-ZARR
+  (`patchworks[bioio]`)
+- `imaris-ims-file-reader` — convert Imaris `.ims` (`patchworks[imaris]`)
+- `napari` — interactive viewer plugin (`patchworks[napari]`)
 
 ---
 

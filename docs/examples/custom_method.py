@@ -41,8 +41,7 @@ result = tile_process(
     my_fn,
     tile_shape=(1, 512, 512),
     overlap=16,
-    compute=True,
     progress=True,
 )
 
-print(f"Found {result.max()} objects")
+print(f"Found {int(result.max().compute())} objects")
