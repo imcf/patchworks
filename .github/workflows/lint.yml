@@ -15,9 +15,11 @@ jobs:
       - name: ruff check
         uses: astral-sh/ruff-action@v3
         with:
+          version: "0.15.18"
           args: "check"
 
       - name: ruff format --check
         uses: astral-sh/ruff-action@v3
         with:
+          version: "0.15.18"
           args: "format --check"

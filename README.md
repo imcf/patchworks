@@ -35,6 +35,7 @@ Optional extras:
 pip install "patchworks[gpu]"      # GPU VRAM querying (nvidia-ml-py)
 pip install "patchworks[cellpose]" # Cellpose plugin
 pip install "patchworks[bioio]"    # convert any image format to OME-ZARR
+pip install "patchworks[imaris]"   # convert Imaris .ims files to OME-ZARR
 pip install "patchworks[napari]"   # interactive napari viewer plugin
 pip install "patchworks[all]"      # Everything (except napari GUI)
 ```
@@ -42,6 +43,8 @@ pip install "patchworks[all]"      # Everything (except napari GUI)
 > `bioio` reads CZI/LIF/ND2/OME-TIFF/… The `[bioio]` extra bundles the common
 > native readers (`bioio-nd2`, `bioio-ome-tiff`, `bioio-czi`, `bioio-tifffile`,
 > `bioio-lif`) plus `bioio-bioformats`, the Bio-Formats catch-all reader (JVM).
+> `[imaris]` adds native `.ims` support (HDF5, no JVM). Physical pixel
+> calibration is read from the input and written into the OME-ZARR.
 
 ---
 

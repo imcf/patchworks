@@ -7,30 +7,30 @@ Input handling, in order:
 
 * a dask or NumPy array → used directly (NumPy is wrapped lazily);
 * a ``.zarr`` path → read through :func:`patchworks.load_ome_zarr`;
+* a ``.ims`` (Imaris) path → read lazily with ``imaris-ims-file-reader``
+  (HDF5, no JVM); install with ``pip install "patchworks[imaris]"``;
 * any other path (CZI, LIF, ND2, OME-TIFF, …) → opened lazily with
-  `bioio <https://github.com/bioio-devs/bioio>`_, so the pixels are streamed
-  from disk and never fully loaded into RAM.
+  `bioio <https://github.com/bioio-devs/bioio>`_.
 
-Downsampling uses strided (nearest-neighbour) subsampling, the correct,
-label-preserving choice for segmentation results — interpolating label values
-would invent objects that do not exist. The whole pipeline is lazy: each level
-is written chunk by chunk via dask, so terabyte inputs convert in bounded RAM.
+Pixel calibration (physical voxel size) is read from the input — bioio's
+``physical_pixel_sizes``, the Imaris resolution metadata, or an existing
+OME-ZARR's scale transform — and written into the NGFF ``coordinate
+Transformations`` so the µm/pixel sizing is preserved. Pass ``pixel_size=`` to
+override or to supply it for bare arrays.
 
-``bioio`` itself is an optional dependency, and each file format needs its own
-reader plugin (``bioio-ome-tiff``, ``bioio-czi``, ``bioio-lif``, …). Install
-the base support with ``pip install "patchworks[bioio]"`` plus the reader(s)
-you need.
+Downsampling uses strided (nearest-neighbour) subsampling — the correct,
+label-preserving choice — and only on **X and Y**; ``z`` (and channel/time)
+stay at full resolution. Every level is built by reading the *previous level
+back from disk* and streaming the downsampled result out through dask with
+bounded chunks, so the pyramid never materialises a whole volume in RAM.
 
-This module also exposes :func:`add_pyramid`, to add resolution levels to an
-existing single-resolution store, and :func:`write_labels`, to store a label
-image inside an OME-ZARR under the NGFF ``labels/`` group.
+This module also exposes :func:`add_pyramid` (add levels to an existing store)
+and :func:`write_labels` (store a label image under the NGFF ``labels/`` group).
 
 Usage
 -----
 >>> from patchworks.plugins.ome_zarr import to_ome_zarr
->>>
->>> # From any microscopy file (lazy, via bioio):
->>> to_ome_zarr("scan.czi", "scan.zarr")
+>>> to_ome_zarr("scan.ims", "scan.zarr")
 'scan.zarr'
 """
 
@@ -48,6 +48,8 @@ from .._io import load_ome_zarr
 
 logger = logging.getLogger(__name__)
 
+PixelSize = dict[str, float]
+
 _NGFF_VERSION = "0.4"
 _SPATIAL_AXES = frozenset("zyx")
 # Only X and Y are downsampled when building pyramids; Z is kept at full
@@ -55,6 +57,9 @@ _SPATIAL_AXES = frozenset("zyx")
 _DOWNSAMPLE_AXES = frozenset("yx")
 # axis names assigned to a bare N-D array, taken from the right:
 _DEFAULT_ORDER = "tczyx"
+# Per-axis chunk caps so each written chunk stays small (≈tens of MB) and the
+# pyramid never needs a whole plane/volume in RAM.
+_CHUNK_CAP = {"t": 1, "c": 1, "z": 16, "y": 1024, "x": 1024}
 
 
 def _default_axes(ndim: int) -> str:
@@ -75,14 +80,52 @@ def _axis_type(name: str) -> str:
     return "time" if name == "t" else "channel"
 
 
-def _axes_meta(axes: str) -> list[dict]:
-    """NGFF ``axes`` metadata for an axes string."""
-    return [{"name": a, "type": _axis_type(a)} for a in axes]
+def _axes_meta(axes: str, calibrated: bool) -> list[dict]:
+    """NGFF ``axes`` metadata; spatial axes get a µm unit when calibrated."""
+    meta = []
+    for a in axes:
+        entry = {"name": a, "type": _axis_type(a)}
+        if calibrated and a in _SPATIAL_AXES:
+            entry["unit"] = "micrometer"
+        meta.append(entry)
+    return meta
 
 
 def _strides(axes: str, downscale: int) -> tuple[int, ...]:
     """Per-axis stride: downsample X/Y only; Z, C and T stay at 1."""
     return tuple(downscale if a in _DOWNSAMPLE_AXES else 1 for a in axes)
+
+
+def _default_chunks(shape: tuple[int, ...], axes: str) -> tuple[int, ...]:
+    """Bounded chunk shape so writing a level never blows up RAM."""
+    return tuple(min(s, _CHUNK_CAP.get(a, s)) for s, a in zip(shape, axes))
+
+
+def _normalize_pixel_size(
+    pixel_size: Union[PixelSize, tuple, None], axes: str
+) -> PixelSize:
+    """Coerce a pixel-size dict/tuple into ``{axis: size}`` for spatial axes."""
+    if not pixel_size:
+        return {}
+    if isinstance(pixel_size, dict):
+        return {a: float(v) for a, v in pixel_size.items() if a in axes}
+    # tuple/list: aligned to the spatial axes present, in axes order
+    spatial = [a for a in axes if a in _SPATIAL_AXES]
+    return {a: float(v) for a, v in zip(spatial, pixel_size)}
+
+
+def _base_scale(axes: str, pixel_size: PixelSize) -> list[float]:
+    """Level-0 NGFF scale per axis: physical size for spatial, 1.0 else."""
+    return [float(pixel_size.get(a, 1.0)) for a in axes]
+
+
+def _dataset(name: str, scale: list[float]) -> dict:
+    return {
+        "path": name,
+        "coordinateTransformations": [
+            {"type": "scale", "scale": [float(s) for s in scale]}
+        ],
+    }
 
 
 def _write_pyramid(
@@ -93,47 +136,56 @@ def _write_pyramid(
     n_levels: int,
     downscale: int,
     chunks: Union[tuple[int, ...], None],
+    base_scale: list[float],
     base_name: str = "0",
     write_base: bool = True,
 ) -> list[dict]:
     """Write pyramid levels into *group_path* and return NGFF datasets.
 
-    Level 0 is named *base_name*; deeper levels are ``"1"``, ``"2"``, …. When
-    *write_base* is False the full-resolution array is assumed to already exist
-    at ``group_path/base_name`` (used by :func:`add_pyramid`) and only the
-    downsampled levels are written.
+    Each deeper level is produced by reading the previous level **back from
+    disk** and striding it, so the dask graph stays shallow and bounded — no
+    whole-volume recomputation, no OOM. Level 0 is named *base_name*; when
+    *write_base* is False it is assumed to already exist (used by
+    :func:`add_pyramid`).
     """
     strides = _strides(axes, downscale)
-    datasets: list[dict] = []
-    level = arr.rechunk(chunks) if chunks is not None else arr
-    for i in range(n_levels):
-        comp = base_name if i == 0 else str(i)
-        if i > 0 or write_base:
-            da.to_zarr(level, group_path, component=comp, overwrite=True)
-        scale = [float(s**i) for s in strides]
-        datasets.append(
-            {
-                "path": comp,
-                "coordinateTransformations": [
-                    {"type": "scale", "scale": scale}
-                ],
-            }
+
+    if write_base:
+        base_chunks = chunks or _default_chunks(arr.shape, axes)
+        da.to_zarr(
+            arr.rechunk(base_chunks),
+            group_path,
+            component=base_name,
+            overwrite=True,
         )
-        logger.info(
-            "pyramid level %s: shape=%s -> %s", comp, level.shape, group_path
-        )
-        next_shape = tuple(s // st for s, st in zip(level.shape, strides))
-        if i + 1 < n_levels and min(next_shape) < 1:
+    datasets = [_dataset(base_name, base_scale)]
+
+    prev_name = base_name
+    prev_shape = arr.shape
+    for i in range(1, n_levels):
+        next_shape = tuple(s // st for s, st in zip(prev_shape, strides))
+        if min(next_shape) < 1:
             logger.info("stopping pyramid at level %d (next too small)", i)
             break
-        level = level[tuple(slice(None, None, st) for st in strides)]
-        if chunks is not None:
-            level = level.rechunk(chunks)
+        src = da.from_zarr(group_path, component=prev_name)
+        nxt = src[tuple(slice(None, None, st) for st in strides)]
+        nxt = nxt.rechunk(chunks or _default_chunks(nxt.shape, axes))
+        da.to_zarr(nxt, group_path, component=str(i), overwrite=True)
+        scale = [base_scale[k] * (strides[k] ** i) for k in range(len(axes))]
+        datasets.append(_dataset(str(i), scale))
+        logger.info("pyramid level %d: shape=%s", i, nxt.shape)
+        prev_name = str(i)
+        prev_shape = nxt.shape
     return datasets
 
 
 def _write_multiscales(
-    group_path: str, axes: str, datasets: list[dict], name: str
+    group_path: str,
+    axes: str,
+    datasets: list[dict],
+    name: str,
+    *,
+    calibrated: bool,
 ) -> None:
     """Write NGFF ``multiscales`` metadata onto *group_path*."""
     group = zarr.open_group(group_path, mode="a")
@@ -141,19 +193,30 @@ def _write_multiscales(
         {
             "version": _NGFF_VERSION,
             "name": name,
-            "axes": _axes_meta(axes),
+            "axes": _axes_meta(axes, calibrated),
             "datasets": datasets,
         }
     ]
 
 
-def _open_bioio(path: str, scene: int) -> tuple[da.Array, str]:
-    """Open *path* with bioio and return a lazy ``(array, axes)`` pair.
+def _read_zarr_calibration(store: Union[str, Path], axes: str) -> PixelSize:
+    """Read level-0 spatial scale from an existing OME-ZARR, if any."""
+    try:
+        root = zarr.open_group(str(store), mode="r")
+        ms = root.attrs["multiscales"][0]
+        ax = [a["name"] for a in ms["axes"]]
+        scale = ms["datasets"][0]["coordinateTransformations"][0]["scale"]
+    except (KeyError, IndexError, TypeError):
+        return {}
+    return {
+        a: float(s)
+        for a, s in zip(ax, scale)
+        if a in _SPATIAL_AXES and float(s) != 1.0
+    }
 
-    Singleton non-spatial axes (T/C of size 1) are dropped so the resulting
-    array and axes string are as compact as possible while always keeping the
-    spatial dimensions.
-    """
+
+def _open_bioio(path: str, scene: int) -> tuple[da.Array, str, PixelSize]:
+    """Open *path* with bioio → ``(array, axes, pixel_size)``, all lazy."""
     try:
         from bioio import BioImage
     except ImportError as exc:
@@ -179,28 +242,79 @@ def _open_bioio(path: str, scene: int) -> tuple[da.Array, str]:
     index = tuple(slice(None) if i in keep else 0 for i in range(arr.ndim))
     arr = arr[index]
     axes = "".join(order[i].lower() for i in keep)
-    logger.info("bioio opened %s as %s %s", path, axes, arr.shape)
-    return arr, axes
+
+    pixel_size: PixelSize = {}
+    pps = getattr(img, "physical_pixel_sizes", None)
+    for axis in "zyx":
+        val = getattr(pps, axis.upper(), None) if pps is not None else None
+        if val:
+            pixel_size[axis] = float(val)
+    logger.info(
+        "bioio opened %s as %s %s cal=%s", path, axes, arr.shape, pixel_size
+    )
+    return arr, axes, pixel_size
+
+
+def _open_imaris(path: str) -> tuple[da.Array, str, PixelSize]:
+    """Open an Imaris ``.ims`` file lazily → ``(array, axes, pixel_size)``."""
+    try:
+        from imaris_ims_file_reader.ims import ims
+    except ImportError as exc:
+        raise ImportError(
+            "reading Imaris .ims files requires imaris-ims-file-reader. "
+            "Install it with:\n    pip install 'patchworks[imaris]'"
+        ) from exc
+
+    # Full-resolution level; the object is array-like and h5py-backed (lazy).
+    reader = ims(path, ResolutionLevelLock=0)
+    order = _DEFAULT_ORDER[len(_DEFAULT_ORDER) - reader.ndim :]
+    arr = da.from_array(reader, chunks=_default_chunks(reader.shape, order))
+
+    keep = [
+        i
+        for i, name in enumerate(order)
+        if name in _SPATIAL_AXES or arr.shape[i] > 1
+    ]
+    index = tuple(slice(None) if i in keep else 0 for i in range(arr.ndim))
+    arr = arr[index]
+    axes = "".join(order[i] for i in keep)
+
+    pixel_size: PixelSize = {}
+    res = getattr(reader, "resolution", None)  # (z, y, x) in micrometers
+    if res is not None and len(res) >= 3:
+        pixel_size = {
+            "z": float(res[0]),
+            "y": float(res[1]),
+            "x": float(res[2]),
+        }
+    logger.info(
+        "imaris opened %s as %s %s cal=%s", path, axes, arr.shape, pixel_size
+    )
+    return arr, axes, pixel_size
 
 
 def _to_dask(
     source: Union[da.Array, np.ndarray, str, Path],
     axes: Union[str, None],
     scene: int,
-) -> tuple[da.Array, str]:
-    """Resolve *source* into a lazy ``(dask_array, axes)`` pair."""
+) -> tuple[da.Array, str, PixelSize]:
+    """Resolve *source* into a lazy ``(array, axes, pixel_size)`` triple."""
     if isinstance(source, da.Array):
-        return source, axes or _default_axes(source.ndim)
+        return source, axes or _default_axes(source.ndim), {}
     if isinstance(source, np.ndarray):
-        return da.asarray(source), axes or _default_axes(source.ndim)
+        return da.asarray(source), axes or _default_axes(source.ndim), {}
 
     path = str(source)
     if path.endswith(".zarr"):
         arr = load_ome_zarr(source, channel=None)
-        return arr, axes or _default_axes(arr.ndim)
+        ax = axes or _default_axes(arr.ndim)
+        return arr, ax, _read_zarr_calibration(source, ax)
+    if path.lower().endswith(".ims"):
+        arr, detected, ps = _open_imaris(path)
+        return arr, axes or detected, ps
 
-    arr, detected = _open_bioio(path, scene)
-    return arr, axes or detected
+    arr, detected, ps = _open_bioio(path, scene)
+    return arr, axes or detected, ps
 
 
 def to_ome_zarr(
@@ -208,19 +322,20 @@ def to_ome_zarr(
     out_path: Union[str, Path],
     *,
     axes: Union[str, None] = None,
+    pixel_size: Union[PixelSize, tuple, None] = None,
     scene: int = 0,
     n_levels: int = 5,
     downscale: int = 2,
     chunks: Union[tuple[int, ...], None] = None,
     overwrite: bool = False,
 ) -> str:
-    """Write *source* as a pyramidal OME-ZARR store.
+    """Write *source* as a pyramidal, calibrated OME-ZARR store.
 
-    *source* may be a dask/NumPy array, a ``.zarr`` store, or any image file
-    readable by bioio (CZI, LIF, ND2, OME-TIFF, …). File inputs are read
-    lazily, and every pyramid level is streamed to disk through dask, so the
-    full volume never needs to fit in RAM. Only ``x`` and ``y`` are
-    downsampled; ``z`` (and channel/time) are kept at full resolution.
+    *source* may be a dask/NumPy array, a ``.zarr`` store, an Imaris ``.ims``
+    file, or any image format readable by bioio (CZI, LIF, ND2, OME-TIFF, …).
+    File inputs are read lazily; the pyramid is built level-by-level from disk
+    with bounded chunks, so the full volume never needs to fit in RAM. Only
+    ``x``/``y`` are downsampled; ``z`` (and channel/time) stay full-resolution.
 
     Parameters
     ----------
@@ -230,16 +345,20 @@ def to_ome_zarr(
         Destination ``.zarr`` store (a directory).
     axes : str, optional
         One character per array dimension, e.g. ``"zyx"`` or ``"cyx"``.
-        ``None`` → inferred from bioio metadata for files, or from the
-        trailing dimensions for bare arrays.
+        ``None`` → inferred from the file metadata or the array dimensions.
+    pixel_size : dict, tuple or None, optional
+        Physical voxel size in micrometers, as ``{"z": .., "y": .., "x": ..}``
+        or a tuple aligned to the spatial axes. ``None`` → read from the input
+        (bioio/Imaris/OME-ZARR); falls back to 1.0 (uncalibrated) for bare
+        arrays.
     scene : int, optional
-        Scene index to read from multi-scene files (bioio inputs only).
+        Scene index for multi-scene bioio files.
     n_levels : int, optional
         Maximum number of pyramid levels including full resolution.
     downscale : int, optional
-        Per-level downsampling factor along each spatial axis (default 2).
+        Per-level X/Y downsampling factor (default 2).
     chunks : tuple of int, optional
-        Chunk shape for the written levels. ``None`` keeps the chunks.
+        Chunk shape for the written levels. ``None`` → a bounded default.
     overwrite : bool, optional
         Overwrite an existing store at *out_path*.
 
@@ -251,7 +370,7 @@ def to_ome_zarr(
     Examples
     --------
     >>> from patchworks.plugins.ome_zarr import to_ome_zarr
-    >>> to_ome_zarr("scan.czi", "scan.zarr", n_levels=4)
+    >>> to_ome_zarr("scan.ims", "scan.zarr", n_levels=4)
     'scan.zarr'
     """
     if downscale < 2:
@@ -259,11 +378,14 @@ def to_ome_zarr(
     if n_levels < 1:
         raise ValueError("n_levels must be >= 1")
 
-    arr, axes = _to_dask(source, axes, scene)
+    arr, axes, detected = _to_dask(source, axes, scene)
     if len(axes) != arr.ndim:
         raise ValueError(
             f"axes {axes!r} has {len(axes)} entries but array is {arr.ndim}-D"
         )
+
+    ps = _normalize_pixel_size(pixel_size, axes) if pixel_size else detected
+    base_scale = _base_scale(axes, ps)
 
     out = str(out_path)
     zarr.open_group(out, mode="w" if overwrite else "w-")
@@ -274,8 +396,9 @@ def to_ome_zarr(
         n_levels=n_levels,
         downscale=downscale,
         chunks=chunks,
+        base_scale=base_scale,
     )
-    _write_multiscales(out, axes, datasets, Path(out).stem)
+    _write_multiscales(out, axes, datasets, Path(out).stem, calibrated=bool(ps))
     return out
 
 
@@ -284,30 +407,17 @@ def add_pyramid(
     *,
     base: str = "0",
     axes: Union[str, None] = None,
+    pixel_size: Union[PixelSize, tuple, None] = None,
     n_levels: int = 5,
     downscale: int = 2,
     chunks: Union[tuple[int, ...], None] = None,
 ) -> str:
     """Add downsampled pyramid levels to an existing single-resolution zarr.
 
-    Reads the full-resolution array already stored at ``group_path/base``,
-    writes the missing downsampled levels next to it, and (re)writes the NGFF
-    ``multiscales`` metadata — turning a flat store into a multi-scale one
-    in place, lazily.
-
-    Parameters
-    ----------
-    group_path : str or Path
-        Path to the zarr group holding the base array.
-    base : str, optional
-        Component name of the existing full-resolution array (default
-        ``"0"``). Ignored if the group already has ``multiscales`` metadata,
-        in which case its level-0 path and axes are reused.
-    axes : str, optional
-        Axes string. ``None`` → taken from existing metadata, else inferred
-        from the array's dimensions.
-    n_levels, downscale, chunks
-        As in :func:`to_ome_zarr`.
+    Reads the full-resolution array already at ``group_path/base``, writes the
+    missing levels next to it (lazily, from disk), and (re)writes the NGFF
+    ``multiscales`` metadata. Existing calibration is preserved; pass
+    *pixel_size* to set it.
 
     Returns
     -------
@@ -336,6 +446,12 @@ def add_pyramid(
             f"{base_arr.ndim}-D"
         )
 
+    if pixel_size:
+        ps = _normalize_pixel_size(pixel_size, axes)
+    else:
+        ps = _read_zarr_calibration(gp, axes)
+    base_scale = _base_scale(axes, ps)
+
     datasets = _write_pyramid(
         base_arr,
         axes,
@@ -343,10 +459,11 @@ def add_pyramid(
         n_levels=n_levels,
         downscale=downscale,
         chunks=chunks,
+        base_scale=base_scale,
         base_name=base,
         write_base=False,
     )
-    _write_multiscales(gp, axes, datasets, Path(gp).stem)
+    _write_multiscales(gp, axes, datasets, Path(gp).stem, calibrated=bool(ps))
     return gp
 
 
@@ -355,6 +472,7 @@ def register_labels(
     name: str = "labels",
     *,
     axes: Union[str, None] = None,
+    pixel_size: Union[PixelSize, tuple, None] = None,
     n_levels: int = 5,
     downscale: int = 2,
     chunks: Union[tuple[int, ...], None] = None,
@@ -362,9 +480,10 @@ def register_labels(
     """Pyramidalise and register an existing ``labels/<name>/0`` base level.
 
     Assumes the full-resolution label array already exists at
-    ``image_store/labels/<name>/0`` (e.g. written there directly by
-    ``tile_process``). Adds the downsampled levels, tags the group with NGFF
-    ``image-label`` metadata, and lists *name* in ``labels/.zattrs``.
+    ``image_store/labels/<name>/0``. Adds the downsampled levels, tags the
+    group with NGFF ``image-label`` metadata, lists *name* in
+    ``labels/.zattrs``, and inherits the parent image's pixel calibration
+    (unless *pixel_size* is given).
 
     Returns
     -------
@@ -373,10 +492,15 @@ def register_labels(
     """
     store = str(image_store)
     group = f"{store}/labels/{name}"
+    if not pixel_size:
+        arr0 = da.from_zarr(group, component="0")
+        lab_axes = axes or _default_axes(arr0.ndim)
+        pixel_size = _read_zarr_calibration(store, lab_axes)
     add_pyramid(
         group,
         base="0",
         axes=axes,
+        pixel_size=pixel_size,
         n_levels=n_levels,
         downscale=downscale,
         chunks=chunks,
@@ -398,6 +522,7 @@ def write_labels(
     *,
     name: str = "labels",
     axes: Union[str, None] = None,
+    pixel_size: Union[PixelSize, tuple, None] = None,
     n_levels: int = 5,
     downscale: int = 2,
     chunks: Union[tuple[int, ...], None] = None,
@@ -408,20 +533,8 @@ def write_labels(
     The labels are written as their own multi-scale pyramid at
     ``image_store/labels/<name>/`` and registered in
     ``image_store/labels/.zattrs``, so the image and its segmentation live in a
-    single OME-ZARR store (the NGFF *image-label* convention).
-
-    Parameters
-    ----------
-    image_store : str or Path
-        Existing OME-ZARR store to attach the labels to.
-    labels : da.Array or np.ndarray
-        Label array (integer).
-    name : str, optional
-        Label image name (default ``"labels"``).
-    axes, n_levels, downscale, chunks
-        As in :func:`to_ome_zarr`.
-    overwrite : bool, optional
-        Overwrite an existing label image of the same name.
+    single OME-ZARR store. Calibration is inherited from the parent image
+    unless *pixel_size* is given.
 
     Returns
     -------
@@ -437,9 +550,6 @@ def write_labels(
         )
 
     store = str(image_store)
-    # Build the labels/<name> group hierarchy from the root store so the NGFF
-    # group markers are persisted at every level (a nested open_group on its
-    # own does not create the parent `labels` group on a zarr-v3 LocalStore).
     root = zarr.open_group(store, mode="a")
     parent = root.require_group("labels")
     if overwrite and name in parent:
@@ -447,12 +557,13 @@ def write_labels(
     parent.require_group(name)
 
     label_group = f"{store}/labels/{name}"
-    base = arr.rechunk(chunks) if chunks is not None else arr
+    base = arr.rechunk(chunks or _default_chunks(arr.shape, axes))
     da.to_zarr(base, label_group, component="0", overwrite=True)
     return register_labels(
         store,
         name,
         axes=axes,
+        pixel_size=pixel_size,
         n_levels=n_levels,
         downscale=downscale,
         chunks=chunks,

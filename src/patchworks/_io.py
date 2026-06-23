@@ -47,8 +47,11 @@ def load_ome_zarr(
     (128, 2048, 2048)
     """
     root = zarr.open_group(str(store_path), mode="r")
+    # OME-ZARR 0.5 nests under "ome" key; older stores use "multiscales" directly
+    _attrs = dict(root.attrs)
+    _ms = _attrs.get("multiscales") or _attrs.get("ome", {}).get("multiscales")
     try:
-        path = root.attrs["multiscales"][0]["datasets"][level]["path"]
+        path = _ms[0]["datasets"][level]["path"]
     except (KeyError, IndexError, TypeError) as exc:
         raise ValueError(
             f"Cannot read OME-ZARR multiscales metadata at level {level} "
@@ -157,8 +160,12 @@ def estimate_empty_tiles(
     z_src: Any = None
     if isinstance(image, (str, Path)):
         _root = zarr.open_group(str(image), mode="r")
+        _rattr = dict(_root.attrs)
+        _rms = _rattr.get("multiscales") or _rattr.get("ome", {}).get(
+            "multiscales"
+        )
         try:
-            _zpath = _root.attrs["multiscales"][0]["datasets"][level]["path"]
+            _zpath = _rms[0]["datasets"][level]["path"]
         except (KeyError, IndexError, TypeError) as exc:
             raise ValueError(
                 f"Cannot read OME-ZARR multiscales metadata at level {level} "
