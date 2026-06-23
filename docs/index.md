@@ -2,7 +2,7 @@
 
 **Tiled processing of arbitrarily large images — any image, any function.**
 
-```
+```text
 ┌──────┬──────┬──────┐                    ┌──────┬──────┬──────┐
 │      │      │      │   fn(tile) → IDs   │  1   │  2   │  3   │
 │      │      │      │  ───────────────►  │      │      │      │

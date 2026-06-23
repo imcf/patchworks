@@ -13,6 +13,7 @@ peak RAM during segmentation is approximately one tile's worth of data.
 ## Choosing a tile size
 
 The right tile size depends on:
+
 - Your available RAM (or GPU VRAM)
 - The minimum context your segmentation method needs (objects should fit fully
   inside a tile, or you need overlap)
@@ -62,7 +63,7 @@ Methods that need spatial context (Cellpose, StarDist, U-Net) produce wrong
 results near tile edges: objects at the boundary are cut off. Overlap fixes this
 by expanding each tile by `overlap` voxels on every side.
 
-```
+```text
 No overlap:        With overlap=20:
 ┌──────────┐      ┌──────────────────┐
 │          │      │  ░░░░░░░░░░░░░░  │
@@ -86,4 +87,4 @@ No overlap:        With overlap=20:
     automatically clips the depth per axis, so z-tiles of size 1 (typical in
     2-D Cellpose mode) get `depth=0` in z even if you pass `overlap=20`.
 
-    Axes that are too small for the requested overlap simply get a smaller halo.
+  Axes that are too small for the requested overlap simply get a smaller halo.
