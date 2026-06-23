@@ -144,8 +144,8 @@ view_in_napari("scan.zarr", labels="labels.zarr")
 ```
 
 !!! note
-    napari is a GUI-heavy extra and is **not** included in `patchworks[all]`.
-    Install it explicitly: `pip install "patchworks[napari]"`.
+    napari ships in `patchworks[all]`, or install just it with
+    `pip install "patchworks[napari]"`.
 
 ## End-to-end
 
