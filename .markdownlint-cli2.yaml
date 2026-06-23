@@ -1,0 +1,16 @@
+# markdownlint-cli2 configuration — see https://github.com/DavidAnson/markdownlint
+config:
+  MD013: false # line length (tables, code and long prose)
+  MD033: false # inline HTML (badges, <img>)
+  MD041: false # first line need not be a top-level heading (badges)
+  MD024:
+    siblings_only: true # repeated headings OK across different sections
+  MD046: false # allow both indented and fenced code blocks
+  MD060: false # don't enforce table pipe spacing style
+globs:
+  - "**/*.md"
+ignores:
+  - "site"
+  - ".pixi"
+  - "PUBLIC"
+  - "**/node_modules"
