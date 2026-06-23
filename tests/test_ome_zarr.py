@@ -128,3 +128,14 @@ def test_write_labels_into_store(tmp_path):
     assert load_ome_zarr(group, channel=None, level=1).shape == (8, 4, 4)
     lg = zarr.open_group(group, mode="r")
     assert lg.attrs["image-label"]["version"]
+
+
+def test_reuse_pyramid_ignored_for_arrays(tmp_path):
+    """reuse_pyramid only affects .ims inputs; arrays still rebuild."""
+    out = to_ome_zarr(
+        np.zeros((8, 8, 8), "uint16"),
+        tmp_path / "arr.zarr",
+        n_levels=2,
+        reuse_pyramid=True,
+    )
+    assert load_ome_zarr(out, channel=None, level=1).shape == (8, 4, 4)

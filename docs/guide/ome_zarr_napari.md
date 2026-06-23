@@ -50,12 +50,16 @@ to_ome_zarr("scan.czi", "scan.zarr", n_levels=5)   # via bioio
 to_ome_zarr("scan.ims", "scan.zarr")               # Imaris, native HDF5
 ```
 
-!!! note "Imaris pyramids are rebuilt, not reused"
-    `.ims` files carry their own resolution pyramid, but `to_ome_zarr` reads
-    only the **full-resolution** level and **builds a fresh NGFF pyramid** from
-    it. This guarantees a consistent pyramid (XY-only, nearest-neighbour,
-    calibrated) rather than inheriting Imaris's own downsampling scheme. It
-    costs some extra compute, but the build is lazy and OOM-safe.
+!!! note "Imaris pyramids: rebuild (default) or reuse"
+    `.ims` files carry their own resolution pyramid. By default `to_ome_zarr`
+    reads only the **full-resolution** level and **builds a fresh NGFF pyramid**
+    (XY-only, nearest-neighbour, calibrated) for consistency. Pass
+    `reuse_pyramid=True` to instead **copy the Imaris levels** as-is — faster,
+    no recompute, keeping each level's native scale:
+
+    ```python
+    to_ome_zarr("scan.ims", "scan.zarr", reuse_pyramid=True)
+    ```
 
 ### Pixel calibration
 
