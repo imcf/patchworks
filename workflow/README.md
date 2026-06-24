@@ -3,6 +3,10 @@
 A SLURM-ready pipeline that segments an arbitrarily large image and spreads the
 expensive Cellpose step across **many GPUs** — one tile per SLURM job.
 
+> **Full step-by-step guide:**
+> <https://imcf.one/patchworks/guide/snakemake/> — install, configure every
+> field, dry-run, local vs SLURM, monitoring, outputs and troubleshooting.
+
 ```text
 convert ──▶ prepare (checkpoint) ──▶ segment {tile}  ──▶ merge
                                      one GPU job/tile
