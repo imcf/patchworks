@@ -1,18 +1,14 @@
 """Snakemake script: merge the staged tiles into one labelled OME-ZARR.
 
 Runs patchworks' zarr-native boundary merge (stitches labels across tile
-boundaries), optionally renumbers them, and writes the result back into the
+boundaries, optionally renumbers them) and writes the result back into the
 image store under ``labels/<name>/`` as a calibrated, multi-scale pyramid.
 """
 
-import os
 import shutil
 from pathlib import Path
 
-import dask.array as da
-
-from patchworks._merge import zarr_native_merge
-from patchworks._relabel import relabel_sequential_zarr
+from patchworks import merge_tile_labels
 from patchworks.plugins.ome_zarr import write_labels
 
 from _pw import stage_path
@@ -22,14 +18,13 @@ work_dir = cfg["work_dir"]
 image_store = str(Path(work_dir) / "image.zarr")
 merged_store = str(Path(work_dir) / "_merged.zarr")
 
-n_workers = min(8, os.cpu_count() or 1)
-zarr_native_merge(
-    stage_path(work_dir), "staged", merged_store, "labels", n_workers=n_workers
+merged = merge_tile_labels(
+    stage_path(work_dir),
+    write_to=merged_store,
+    input_component="staged",
+    sequential_labels=cfg.get("sequential_labels", True),
+    progress=False,
 )
-if cfg.get("sequential_labels", True):
-    relabel_sequential_zarr(merged_store, "labels")
-
-merged = da.from_zarr(merged_store, component="labels")
 group = write_labels(
     image_store,
     merged,

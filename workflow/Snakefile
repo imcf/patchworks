@@ -1,7 +1,7 @@
 # patchworks Snakemake workflow.
 #
-#   convert  ──▶  prepare (checkpoint)  ──▶  segment {tile}  ──▶  merge
-#                                            (one GPU job per tile)
+#   convert ──▶ prepare (checkpoint) ──▶ segment {tile}  ──▶ merge
+#                                        one GPU job per tile
 #
 # Run locally:
 #   snakemake --cores 8 --configfile config/config.yaml
@@ -13,58 +13,12 @@ from pathlib import Path
 
 configfile: "config/config.yaml"
 
-WORK = config["work_dir"]
-IMAGE = f"{WORK}/image.zarr"
-TILES = f"{WORK}/tiles.json"
-STAGE = f"{WORK}/stage.zarr"
+include: "rules/common.smk"
+include: "rules/convert.smk"
+include: "rules/segment.smk"
+include: "rules/merge.smk"
 
 
 rule all:
     input:
         f"{WORK}/labels.done",
-
-
-rule convert:
-    output:
-        directory(IMAGE),
-    script:
-        "scripts/convert.py"
-
-
-checkpoint prepare:
-    input:
-        IMAGE,
-    output:
-        tiles=TILES,
-        stage=directory(STAGE),
-    script:
-        "scripts/prepare_tiles.py"
-
-
-def occupied_done(wildcards):
-    """Expand the per-tile markers for the occupied tiles (post-checkpoint)."""
-    tiles = checkpoints.prepare.get().output.tiles
-    occupied = json.loads(Path(tiles).read_text())["occupied"]
-    return [f"{WORK}/seg/{i}.done" for i in occupied]
-
-
-rule segment:
-    """Segment one tile on a GPU and write it into the stage store."""
-    input:
-        tiles=TILES,
-        stage=STAGE,
-        image=IMAGE,
-    output:
-        f"{WORK}/seg/{{index}}.done",
-    script:
-        "scripts/segment_tile.py"
-
-
-rule merge:
-    """Stitch labels across tile boundaries and write them into the image."""
-    input:
-        occupied_done,
-    output:
-        touch(f"{WORK}/labels.done"),
-    script:
-        "scripts/merge.py"

@@ -64,10 +64,28 @@ from patchworks.plugins.napari import view_in_napari
 view_in_napari("<work_dir>/image.zarr")   # auto-loads the labels
 ```
 
+## Layout
+
+```text
+workflow/
+  Snakefile            # includes the rule files below
+  rules/               # convert.smk, segment.smk, merge.smk, common.smk
+  scripts/             # thin wrappers over patchworks' public API
+  config/config.yaml
+  profile/slurm/config.yaml
+```
+
+The rule scripts are intentionally thin — the work is done by patchworks'
+public API (`spatial_tiles`, `create_stage`, `stage_tile`, `merge_tile_labels`,
+`write_labels`), so the same per-tile distribution is available from your own
+code too.
+
 ## Notes
 
 - Tiles overlap on read (halo) but write **disjoint** regions, so the per-tile
   jobs are safe to run concurrently.
 - Background tiles are skipped (`skip_empty`), so only occupied tiles become
   jobs.
+- `method:` selects `cellpose` (default) or a simple `threshold` (no GPU —
+  handy for testing or quick masks).
 - For very large stores, set `shard: true` in the config to cut the file count.

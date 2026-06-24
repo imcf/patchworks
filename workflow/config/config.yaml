@@ -24,7 +24,8 @@ overlap: 30 # halo (≈ one object diameter)
 skip_empty: true # skip background tiles
 empty_threshold: null # null → Otsu; or a number
 
-# ---- segmentation (Cellpose) ------------------------------------------------
+# ---- segmentation -----------------------------------------------------------
+method: "cellpose" # "cellpose" (GPU) or "threshold" (simple, no GPU; testing)
 label_name: "cellpose"
 cellpose:
   model: "cyto3"
