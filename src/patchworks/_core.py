@@ -20,6 +20,38 @@ from ._relabel import relabel_sequential_zarr
 logger = logging.getLogger(__name__)
 
 
+def _attach_log_file(path: str) -> None:
+    """Tee the ``patchworks`` INFO log to *path* (replacing a prior auto file).
+
+    A previous auto-attached handler is removed first so repeated calls do not
+    stack handlers. The package logger level is raised to INFO if needed so the
+    messages are actually emitted.
+
+    Parameters
+    ----------
+    path : str
+        Destination log-file path.
+
+    Returns
+    -------
+    None
+    """
+    pkg = logging.getLogger("patchworks")
+    for h in list(pkg.handlers):
+        if getattr(h, "_patchworks_auto", False):
+            pkg.removeHandler(h)
+            h.close()
+    handler = logging.FileHandler(path)
+    handler._patchworks_auto = True  # tag so we can find/replace it later
+    handler.setLevel(logging.INFO)
+    handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+    )
+    pkg.addHandler(handler)
+    if pkg.level == logging.NOTSET or pkg.level > logging.INFO:
+        pkg.setLevel(logging.INFO)
+
+
 def _stage_to_zarr(
     arr: da.Array, path: str, component: str, show_progress: bool
 ) -> None:
@@ -83,6 +115,7 @@ def tile_process(
     empty_threshold: float | None = None,
     stage_dir: Union[str, Path, None] = None,
     keep_stage: bool = False,
+    log_file: Union[str, Path, bool, None] = True,
     verbose: bool = False,
 ) -> da.Array:
     """Apply *fn* to every tile of *image* and merge labels globally.
@@ -180,6 +213,11 @@ def tile_process(
     keep_stage:
         Keep the temp stage store after merging (default: delete it). Useful
         for debugging or resuming an interrupted run.
+    log_file:
+        Where to tee the ``patchworks`` INFO log (including a per-tile
+        ``processing tile k/N`` counter). ``True`` (default) auto-writes
+        ``patchworks.log`` next to the output; a path writes there; ``False``/
+        ``None`` disables the file (logs still go to stderr).
     verbose:
         Log each tile's location and shape as it is processed.
 
@@ -250,6 +288,21 @@ def tile_process(
 
     # Load + tile
     image_source_path = None if isinstance(image, da.Array) else str(image)
+
+    # Auto log file (default): tee patchworks' INFO logs to a file next to the
+    # output, so a long run leaves a tailable record without notebook setup.
+    if log_file:
+        if log_file is True:
+            if write_to is not None:
+                _ldir = os.path.dirname(os.path.abspath(str(write_to)))
+            elif image_source_path is not None:
+                _ldir = os.path.dirname(os.path.abspath(image_source_path))
+            else:
+                _ldir = os.getcwd()
+            log_file = os.path.join(_ldir, "patchworks.log")
+        _attach_log_file(str(log_file))
+        logger.info("patchworks log → %s", log_file)
+
     _load_chunks: tuple[int, ...] | None = None
 
     if not isinstance(image, da.Array):
@@ -313,6 +366,10 @@ def tile_process(
     if skip_empty and _skip_thr is None:
         _skip_thr = _auto_empty_threshold(image_for_threshold, channel, level)
 
+    # Tile counter (GIL-safe enough for the threaded / in-process schedulers
+    # patchworks uses) so the log shows "tile k/N" progress.
+    _progress = {"done": 0}
+
     def active_fn(block, block_info=None):
         """Run *fn* on one tile, or return zeros for an empty tile.
 
@@ -333,9 +390,17 @@ def tile_process(
             if verbose:
                 logger.debug("skip empty tile %s (max<=%s)", loc, _skip_thr)
             return np.zeros(block.shape, dtype=np.int32)
-        if verbose:
-            logger.debug("process tile %s shape=%s", loc, block.shape)
-        return fn(block)
+        _progress["done"] += 1
+        logger.info(
+            "processing tile %d/%d at %s shape=%s",
+            _progress["done"],
+            n_tiles,
+            loc,
+            block.shape,
+        )
+        out = fn(block)
+        logger.info("finished tile %d/%d", _progress["done"], n_tiles)
+        return out
 
     _meta = np.empty((0,) * image.ndim, dtype=np.int32)
     if overlap > 0:
