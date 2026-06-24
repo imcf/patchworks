@@ -2,6 +2,7 @@
 
 rule convert:
     output:
-        directory(IMAGE),
+        # marker file inside the store; existence => skip re-conversion.
+        IMAGE_OK,
     script:
         "../scripts/convert.py"

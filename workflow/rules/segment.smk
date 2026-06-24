@@ -2,7 +2,7 @@
 
 checkpoint prepare:
     input:
-        IMAGE,
+        IMAGE_OK,
     output:
         tiles=TILES,
         stage=directory(STAGE),
@@ -15,7 +15,7 @@ rule segment:
     input:
         tiles=TILES,
         stage=STAGE,
-        image=IMAGE,
+        image=IMAGE_OK,
     output:
         f"{WORK}/seg/{{index}}.done",
     script:
