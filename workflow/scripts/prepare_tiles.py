@@ -20,12 +20,17 @@ image = open_image(work_dir, cfg["channel"], cfg["level"])
 ts = cfg.get("tile_shape", "auto")
 if ts == "auto":
     cp = cfg["cellpose"]
+    # prepare runs on a CPU node, so the segment GPU's VRAM can't be queried
+    # here; pass gpu_memory_gb from the config to size tiles for it (avoids the
+    # "GPU memory query failed" fallback). None => the built-in 8 GiB default.
+    gpu_gb = cfg.get("gpu_memory_gb")
     tile_shape = tuple(
         partial(
             auto_tile_shape_cellpose,
             do_3D=cp.get("do_3D", False),
             use_gpu=cp.get("gpu", True),
             diameter=cp.get("diameter"),
+            gpu_memory=int(gpu_gb * 1024**3) if gpu_gb else None,
         )(image.shape, image.dtype)
     )
 else:

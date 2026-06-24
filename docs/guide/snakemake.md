@@ -56,6 +56,7 @@ shard: false                   # true → pack chunks into shards (fewer files)
 channel: 0                     # channel to segment (null = keep all)
 level: 0                       # pyramid level (0 = full resolution)
 tile_shape: "auto"             # "auto", or e.g. [16, 1024, 1024] (zyx)
+gpu_memory_gb: null            # for "auto" on SLURM: your segment GPU's VRAM
 overlap: 30                    # halo ≈ one object diameter
 skip_empty: true               # skip background tiles
 empty_threshold: null          # null → Otsu
@@ -80,6 +81,11 @@ sequential_labels: true        # renumber labels to a contiguous 1..N
     `tile_shape: "auto"` sizes each tile to your GPU's VRAM. Smaller tiles =
     more (faster) jobs; very large 3-D tiles are slow. Keep `do_3D: false` (2-D
     per slice) if your objects segment fine per slice — it is much faster.
+
+    Tile planning runs on a **CPU** node, which cannot see the segment GPU, so
+    it logs `GPU memory query failed … using 8 GiB default` and sizes tiles for
+    8 GiB. Harmless, but to size for the real GPU set `gpu_memory_gb:` to its
+    VRAM (e.g. `24`, `40`, `80`) — or just set `tile_shape` explicitly.
 
 ## 4. Dry-run (always do this first)
 
