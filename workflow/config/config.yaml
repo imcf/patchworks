@@ -1,0 +1,41 @@
+# patchworks Snakemake workflow — configuration.
+# Copy and edit, then run:  snakemake --workflow-profile profile/slurm
+#
+# The expensive Cellpose step is split into one SLURM job per tile, so many
+# GPUs run in parallel; the merge is a single CPU job.
+
+# ---- input / output ---------------------------------------------------------
+input: "/path/to/scan.ims" # .ims, .czi, .lif, .nd2, ome-tiff, or an .zarr
+work_dir: "/path/to/results" # everything is written under here
+# Final outputs (under work_dir):
+#   image.zarr            — converted, pyramidal OME-ZARR
+#   image.zarr/labels/<name>/  — the segmentation (multi-scale), in the image
+
+# ---- conversion -------------------------------------------------------------
+reuse_pyramid: true # for .ims: copy its own pyramid (fast); else rebuild
+convert_chunks: null # null → patchworks' bounded auto chunks; or [c,z,y,x]
+shard: false # true → pack chunks into shards (zarr v3; fewer files)
+
+# ---- tiling -----------------------------------------------------------------
+channel: 0 # channel to segment
+level: 0 # pyramid level to segment (0 = full res)
+tile_shape: "auto" # "auto", or e.g. [16, 1024, 1024] (zyx)
+overlap: 30 # halo (≈ one object diameter)
+skip_empty: true # skip background tiles
+empty_threshold: null # null → Otsu; or a number
+
+# ---- segmentation (Cellpose) ------------------------------------------------
+label_name: "cellpose"
+cellpose:
+  model: "cyto3"
+  diameter: 30
+  do_3D: true
+  gpu: true
+  # extra kwargs forwarded to model.eval(), e.g.:
+  # flow_threshold: 0.4
+  # cellprob_threshold: 0.0
+
+# ---- pyramid for the labels -------------------------------------------------
+pyramid_levels: 5
+pyramid_downscale: 2
+sequential_labels: true # renumber merged labels to a contiguous 1..N range

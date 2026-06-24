@@ -1,0 +1,40 @@
+# Snakemake 8+ SLURM profile for the patchworks workflow.
+# Needs: pip install "patchworks[workflow]"  (snakemake + slurm executor plugin)
+# Run:   snakemake --workflow-profile profile/slurm --configfile config/config.yaml
+#
+# Edit the partitions / account / GPU request for your cluster.
+
+executor: slurm
+jobs: 64 # max concurrent SLURM jobs (≈ how many GPUs you can grab at once)
+latency-wait: 60
+rerun-incomplete: true
+printshellcmds: true
+keep-going: true
+
+# Defaults for every rule (CPU jobs).
+default-resources:
+  slurm_partition: "cpu"
+  # slurm_account: "my_account"
+  mem_mb: 16000
+  cpus_per_task: 4
+  runtime: 60 # minutes
+
+# Per-rule overrides.
+set-resources:
+  convert:
+    mem_mb: 64000
+    cpus_per_task: 8
+    runtime: 360
+  prepare:
+    mem_mb: 32000
+    runtime: 120
+  segment: # one GPU per tile — this is what spreads Cellpose across GPUs
+    slurm_partition: "gpu"
+    slurm_extra: "'--gres=gpu:1'"
+    mem_mb: 32000
+    cpus_per_task: 4
+    runtime: 120
+  merge:
+    mem_mb: 128000
+    cpus_per_task: 8
+    runtime: 240
