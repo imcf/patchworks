@@ -1,0 +1,56 @@
+"""Snakemake script: plan tiles, create the empty stage store, list work."""
+
+import json
+from functools import partial
+from pathlib import Path
+
+from patchworks import (
+    auto_tile_shape_cellpose,
+    create_stage,
+    estimate_empty_tiles,
+    spatial_tiles,
+)
+
+from _pw import open_image, stage_path
+
+cfg = snakemake.config  # noqa: F821
+work_dir = cfg["work_dir"]
+image = open_image(work_dir, cfg["channel"], cfg["level"])
+
+ts = cfg.get("tile_shape", "auto")
+if ts == "auto":
+    cp = cfg["cellpose"]
+    tile_shape = tuple(
+        partial(
+            auto_tile_shape_cellpose,
+            do_3D=cp.get("do_3D", False),
+            use_gpu=cp.get("gpu", True),
+            diameter=cp.get("diameter"),
+        )(image.shape, image.dtype)
+    )
+else:
+    tile_shape = tuple(ts)
+
+tiles = spatial_tiles(image.shape, tile_shape)
+occupied = list(range(len(tiles)))
+if cfg.get("skip_empty", True):
+    info = estimate_empty_tiles(
+        image, tile_shape, threshold=cfg.get("empty_threshold")
+    )
+    occ = info["occupancy"].ravel()  # row-major, matches spatial_tiles
+    occupied = [i for i in range(len(tiles)) if occ[i]]
+
+create_stage(stage_path(work_dir), image.shape, tile_shape)
+
+Path(work_dir, "tiles.json").write_text(
+    json.dumps(
+        {
+            "tile_shape": list(tile_shape),
+            "overlap": int(cfg.get("overlap", 0)),
+            "n_tiles": len(tiles),
+            "occupied": occupied,
+        },
+        indent=2,
+    )
+)
+print(f"[patchworks] {len(occupied)}/{len(tiles)} tiles to segment")

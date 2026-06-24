@@ -58,6 +58,8 @@ bioio = [
 imaris = ["imaris-ims-file-reader"]
 # napari enables the interactive viewer plugin.
 napari = ["napari[all]"]
+# workflow runs the Snakemake pipeline (per-tile SLURM jobs across GPUs).
+workflow = ["snakemake>=8", "snakemake-executor-plugin-slurm"]
 dev = ["pytest", "pytest-cov", "scikit-image", "psutil", "tqdm"]
 docs = ["mkdocs-material>=9.0", "mkdocstrings[python]>=0.24"]
 all = [
