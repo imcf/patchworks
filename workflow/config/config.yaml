@@ -22,6 +22,8 @@ shard: false # true → pack chunks into shards (zarr v3; fewer files)
 channel: 0 # channel to segment
 level: 0 # pyramid level to segment (0 = full res)
 tile_shape: "auto" # "auto", or e.g. [16, 1024, 1024] (zyx)
+gpu_memory_gb: null # for "auto" on a CPU prepare node: your segment GPU's VRAM
+#                     (e.g. 24, 40, 80). null → 8 GiB guess + a harmless warning
 overlap: 30 # halo (≈ one object diameter)
 skip_empty: true # skip background tiles
 empty_threshold: null # null → Otsu; or a number
