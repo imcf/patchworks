@@ -102,11 +102,14 @@ known after `prepare` decides which tiles are non-empty.)
 ## 5a. Run locally (single machine)
 
 ```bash
-python -m snakemake -s Snakefile --configfile config/config.yaml --cores 8
+python -m snakemake -s Snakefile --configfile config/config.yaml \
+    --rerun-triggers mtime --cores 8
 ```
 
 Tiles run on the local machine (one at a time on the GPU). Good for a small
-image or a smoke test.
+image or a smoke test. `--rerun-triggers mtime` re-runs only steps whose output
+is missing/stale — so upgrading patchworks won't redo the conversion (the SLURM
+profile sets this for you).
 
 ## 5b. Run on SLURM (one GPU job per tile)
 
@@ -184,6 +187,12 @@ The OME-ZARR conversion is **not redone** once `image.zarr` exists: the
 `convert` rule's output is a marker file inside the store, so Snakemake skips it
 on every later run. To force a fresh conversion, delete `image.zarr` or run
 `snakemake --forcerun convert`.
+
+This relies on `--rerun-triggers mtime` (set in the SLURM profile and the pixi
+tasks; add it on the command line for ad-hoc local runs). Without it, Snakemake
+also re-runs a step when its **code, params or software environment** change —
+so upgrading patchworks would re-do the conversion and overwrite an existing
+result. Keep `mtime` and reruns happen only when an output is missing or stale.
 
 ## pixi (instead of conda)
 
