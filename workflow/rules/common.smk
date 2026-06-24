@@ -2,6 +2,11 @@
 
 WORK = config["work_dir"]
 IMAGE = f"{WORK}/image.zarr"
+# A single file inside the store, used as the convert rule's output and as the
+# dependency marker for downstream rules. Tracking a leaf file (not the
+# directory) lets Snakemake skip conversion when the store already exists and
+# avoids wiping the whole store on a re-run (same trick as imcf/sopa).
+IMAGE_OK = f"{IMAGE}/zarr.json"
 TILES = f"{WORK}/tiles.json"
 STAGE = f"{WORK}/stage.zarr"
 

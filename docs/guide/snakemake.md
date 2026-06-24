@@ -174,6 +174,11 @@ Snakemake is resumable — if jobs fail or you cancel, just relaunch the same
 command and it picks up only the missing tiles. To force a clean rerun, delete
 `work_dir` (or the relevant outputs).
 
+The OME-ZARR conversion is **not redone** once `image.zarr` exists: the
+`convert` rule's output is a marker file inside the store, so Snakemake skips it
+on every later run. To force a fresh conversion, delete `image.zarr` or run
+`snakemake --forcerun convert`.
+
 ## pixi (instead of conda)
 
 Conda is **not** required — Snakemake runs in whatever environment launches it.

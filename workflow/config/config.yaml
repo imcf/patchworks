@@ -15,6 +15,8 @@ work_dir: "/path/to/results" # everything is written under here
 reuse_pyramid: true # for .ims: copy its own pyramid (fast); else rebuild
 convert_chunks: null # null → patchworks' bounded auto chunks; or [c,z,y,x]
 shard: false # true → pack chunks into shards (zarr v3; fewer files)
+# Re-running reuses an existing image.zarr automatically (skips conversion).
+# To force a rebuild: delete image.zarr, or `snakemake --forcerun convert`.
 
 # ---- tiling -----------------------------------------------------------------
 channel: 0 # channel to segment
