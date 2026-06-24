@@ -56,10 +56,11 @@ account, GPU request).
 ## Run
 
 ```bash
-# locally (single machine)
-snakemake --cores 8 --configfile config/config.yaml
+# locally (single machine) — mtime triggers => upgrades don't redo conversion
+snakemake --cores 8 --configfile config/config.yaml --rerun-triggers mtime
 
 # on SLURM — one GPU job per tile, up to `jobs:` in parallel
+# (the profile already sets --rerun-triggers mtime)
 snakemake --workflow-profile profile/slurm --configfile config/config.yaml
 ```
 

@@ -8,6 +8,10 @@ executor: slurm
 jobs: 64 # max concurrent SLURM jobs (≈ how many GPUs you can grab at once)
 latency-wait: 60
 rerun-incomplete: true
+# Only re-run when an output is missing/stale — NOT when the patchworks code,
+# params or software env change. Stops an upgrade from re-doing the expensive
+# conversion / re-segmenting an existing image.zarr.
+rerun-triggers: mtime
 printshellcmds: true
 keep-going: true
 

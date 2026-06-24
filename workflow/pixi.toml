@@ -19,6 +19,8 @@ python = "3.12.*"
 patchworks = { version = "*", extras = ["workflow", "cellpose", "imaris", "bioio"] }
 
 [tasks]
-dry = "snakemake -s Snakefile --configfile config/config.yaml -n -p"
-go = "snakemake -s Snakefile --configfile config/config.yaml --cores 8"
+# --rerun-triggers mtime: don't redo finished steps (e.g. the conversion) just
+# because the patchworks version/code changed — only when an output is missing.
+dry = "snakemake -s Snakefile --configfile config/config.yaml --rerun-triggers mtime -n -p"
+go = "snakemake -s Snakefile --configfile config/config.yaml --rerun-triggers mtime --cores 8"
 slurm = "snakemake --workflow-profile profile/slurm --configfile config/config.yaml"
