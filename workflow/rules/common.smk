@@ -9,6 +9,10 @@ IMAGE = f"{WORK}/image.zarr"
 IMAGE_OK = f"{IMAGE}/zarr.json"
 TILES = f"{WORK}/tiles.json"
 STAGE = f"{WORK}/stage.zarr"
+# Completion sentinel for the stage store. Tracking a touch()ed marker instead
+# of directory(STAGE) keeps Snakemake from deleting/recreating the store on a
+# re-run and avoids directory-mtime quirks (same touch() discipline as sopa).
+STAGE_OK = f"{STAGE}.done"
 
 
 def occupied_done(wildcards):

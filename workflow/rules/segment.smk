@@ -5,7 +5,7 @@ checkpoint prepare:
         IMAGE_OK,
     output:
         tiles=TILES,
-        stage=directory(STAGE),
+        stage=touch(STAGE_OK),
     script:
         "../scripts/prepare_tiles.py"
 
@@ -14,7 +14,7 @@ rule segment:
     """Segment one tile on a GPU and write it into the stage store."""
     input:
         tiles=TILES,
-        stage=STAGE,
+        stage=STAGE_OK,
         image=IMAGE_OK,
     output:
         f"{WORK}/seg/{{index}}.done",
