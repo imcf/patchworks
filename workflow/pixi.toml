@@ -1,0 +1,24 @@
+# pixi environment for the patchworks Snakemake workflow.
+#   pixi install
+#   pixi run dry      # dry-run (plan only)
+#   pixi run go       # run locally
+#   pixi run slurm    # submit to SLURM (edit profile/slurm/config.yaml first)
+#
+# On a cluster, put this project on a shared filesystem the compute nodes can
+# read: the SLURM jobs re-launch snakemake from this env's interpreter.
+
+[project]
+name = "patchworks-workflow"
+channels = ["conda-forge"]
+platforms = ["linux-64"]
+
+[dependencies]
+python = "3.12.*"
+
+[pypi-dependencies]
+patchworks = { version = "*", extras = ["workflow", "cellpose", "imaris", "bioio"] }
+
+[tasks]
+dry = "snakemake -s Snakefile --configfile config/config.yaml -n -p"
+go = "snakemake -s Snakefile --configfile config/config.yaml --cores 8"
+slurm = "snakemake --workflow-profile profile/slurm --configfile config/config.yaml"

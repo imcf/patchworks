@@ -38,6 +38,15 @@ pip install "patchworks[workflow,cellpose,imaris,bioio]"
 # workflow → snakemake + the SLURM executor plugin
 ```
 
+Prefer pixi? No conda needed — a `pixi.toml` is included:
+
+```bash
+pixi install
+pixi run dry    # dry-run
+pixi run go     # run locally
+pixi run slurm  # submit to SLURM
+```
+
 ## Configure
 
 Edit `config/config.yaml` (input, output dir, channel, tile shape, Cellpose

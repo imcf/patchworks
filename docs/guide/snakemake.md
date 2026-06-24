@@ -34,8 +34,9 @@ pip install "patchworks[workflow,cellpose,imaris,bioio]"
 - `cellpose` → the segmentation model
 - `imaris` / `bioio` → read your input format (`.ims`, `.czi`, `.lif`, …)
 
-On a cluster, do this inside a conda/venv that the compute nodes can see, or let
-each rule activate a conda env (see *Conda*, below).
+On a cluster, do this inside a conda/venv/pixi env that the compute nodes can
+see, or let each rule activate a conda env. Prefer pixi? Skip this step — the
+workflow ships a `pixi.toml`; see *pixi (instead of conda)*, below.
 
 ## 3. Configure the run
 
@@ -172,6 +173,24 @@ view_in_napari("/scratch/results/image.zarr")   # auto-loads the labels
 Snakemake is resumable — if jobs fail or you cancel, just relaunch the same
 command and it picks up only the missing tiles. To force a clean rerun, delete
 `work_dir` (or the relevant outputs).
+
+## pixi (instead of conda)
+
+Conda is **not** required — Snakemake runs in whatever environment launches it.
+The workflow ships a `pixi.toml`, so the whole thing is:
+
+```bash
+cd workflow
+pixi install          # builds the env (patchworks + snakemake + readers)
+pixi run dry          # dry-run
+pixi run go           # run locally (8 cores)
+pixi run slurm        # submit to SLURM (edit profile/slurm/config.yaml first)
+```
+
+`pixi run …` activates the env, so the rule scripts execute in that env — do
+**not** pass `--use-conda`. On a cluster, keep the `workflow/` directory on a
+shared filesystem the compute nodes can read: the SLURM executor re-launches
+Snakemake from this env's interpreter on each compute node.
 
 ## Conda (optional)
 
