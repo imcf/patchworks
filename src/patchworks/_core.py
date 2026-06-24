@@ -418,9 +418,22 @@ def tile_process(
     if skip_empty and _skip_thr is None:
         _skip_thr = _auto_empty_threshold(image_for_threshold, channel, level)
 
-    # Tile counter (GIL-safe enough for the threaded / in-process schedulers
-    # patchworks uses) so the log shows "tile k/N" progress.
-    _progress = {"done": 0}
+    # Up-front heads-up for a big 3-D GPU job (z-stack tiles, many of them):
+    # an accurate ETA is logged after the first few tiles, but warn early that
+    # this is the expensive path and point at the faster alternatives.
+    if use_gpu and image.ndim >= 3 and _tile[0] > 4 and n_tiles >= 50:
+        logger.warning(
+            "Large 3-D GPU job: %d tiles of %s. Per-tile 3-D segmentation is "
+            "slow on a single device (a live ETA is logged after the first "
+            "tiles). If per-slice results are acceptable, 2-D (z=1 tiles) is "
+            "typically ~10x faster, or segment a lower pyramid level.",
+            n_tiles,
+            _tile,
+        )
+
+    # Tile counters + timing (GIL-safe enough for the threaded / in-process
+    # schedulers patchworks uses) so the log shows live "tile k/N + ETA".
+    _progress = {"done": 0, "seen": 0, "time": 0.0}
 
     def active_fn(block, block_info=None):
         """Run *fn* on one tile, or return zeros for an empty tile.
@@ -437,21 +450,35 @@ def tile_process(
         np.ndarray
             Integer labels, or an all-zero tile when skipped.
         """
+        import time
+
         loc = block_info[0].get("chunk-location") if block_info else "?"
+        _progress["seen"] += 1
         if skip_empty and block.size and block.max() <= _skip_thr:
             if verbose:
                 logger.debug("skip empty tile %s (max<=%s)", loc, _skip_thr)
             return np.zeros(block.shape, dtype=np.int32)
-        _progress["done"] += 1
-        logger.info(
-            "processing tile %d/%d at %s shape=%s",
-            _progress["done"],
-            n_tiles,
-            loc,
-            block.shape,
-        )
+
+        t0 = time.perf_counter()
         out = fn(block)
-        logger.info("finished tile %d/%d", _progress["done"], n_tiles)
+        dt = time.perf_counter() - t0
+
+        _progress["done"] += 1
+        _progress["time"] += dt
+        done, seen = _progress["done"], _progress["seen"]
+        avg = _progress["time"] / done
+        # Extrapolate remaining non-empty tiles from the empty fraction seen.
+        remaining_nonempty = max(0, n_tiles - seen) * (done / seen)
+        eta_h = avg * remaining_nonempty / 3600
+        logger.info(
+            "tile %d done in %.1fs (avg %.1fs); %d/%d tiles seen; ETA ~%.1fh",
+            done,
+            dt,
+            avg,
+            seen,
+            n_tiles,
+            eta_h,
+        )
         return out
 
     _meta = np.empty((0,) * image.ndim, dtype=np.int32)
