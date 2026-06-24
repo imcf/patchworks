@@ -20,6 +20,71 @@ from ._relabel import relabel_sequential_zarr
 logger = logging.getLogger(__name__)
 
 
+def _attach_log_file(path: str) -> None:
+    """Tee the ``patchworks`` INFO log to *path* (replacing a prior auto file).
+
+    A previous auto-attached handler is removed first so repeated calls do not
+    stack handlers. The package logger level is raised to INFO if needed so the
+    messages are actually emitted.
+
+    Parameters
+    ----------
+    path : str
+        Destination log-file path.
+
+    Returns
+    -------
+    None
+    """
+    pkg = logging.getLogger("patchworks")
+    for h in list(pkg.handlers):
+        if getattr(h, "_patchworks_auto", False):
+            pkg.removeHandler(h)
+            h.close()
+    handler = logging.FileHandler(path)
+    handler._patchworks_auto = True  # tag so we can find/replace it later
+    handler.setLevel(logging.INFO)
+    handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+    )
+    pkg.addHandler(handler)
+    if pkg.level == logging.NOTSET or pkg.level > logging.INFO:
+        pkg.setLevel(logging.INFO)
+
+
+def _read_amplification(
+    native_chunks: tuple[int, ...], tile_shape: tuple[int, ...]
+) -> float:
+    """Estimate how much extra data each tile read pulls off disk.
+
+    When the store's on-disk chunks are larger than the tile, every tile read
+    decodes whole chunks and discards most of them. Returns the ratio of bytes
+    read to bytes used (1.0 = no waste).
+
+    Parameters
+    ----------
+    native_chunks : tuple of int
+        The store's on-disk chunk shape.
+    tile_shape : tuple of int
+        The processing tile shape.
+
+    Returns
+    -------
+    float
+        Read-amplification factor (``bytes_read / bytes_used``).
+    """
+    import math
+
+    read = used = 1.0
+    for n, t in zip(native_chunks, tile_shape):
+        if n <= 0 or t <= 0:
+            continue
+        touched = math.ceil(t / n)  # chunks a tile spans on this axis
+        read *= touched * n
+        used *= t
+    return read / used if used else 1.0
+
+
 def _stage_to_zarr(
     arr: da.Array, path: str, component: str, show_progress: bool
 ) -> None:
@@ -83,6 +148,7 @@ def tile_process(
     empty_threshold: float | None = None,
     stage_dir: Union[str, Path, None] = None,
     keep_stage: bool = False,
+    log_file: Union[str, Path, bool, None] = True,
     verbose: bool = False,
 ) -> da.Array:
     """Apply *fn* to every tile of *image* and merge labels globally.
@@ -180,6 +246,11 @@ def tile_process(
     keep_stage:
         Keep the temp stage store after merging (default: delete it). Useful
         for debugging or resuming an interrupted run.
+    log_file:
+        Where to tee the ``patchworks`` INFO log (including a per-tile
+        ``processing tile k/N`` counter). ``True`` (default) auto-writes
+        ``patchworks.log`` next to the output; a path writes there; ``False``/
+        ``None`` disables the file (logs still go to stderr).
     verbose:
         Log each tile's location and shape as it is processed.
 
@@ -250,10 +321,27 @@ def tile_process(
 
     # Load + tile
     image_source_path = None if isinstance(image, da.Array) else str(image)
+
+    # Auto log file (default): tee patchworks' INFO logs to a file next to the
+    # output, so a long run leaves a tailable record without notebook setup.
+    if log_file:
+        if log_file is True:
+            if write_to is not None:
+                _ldir = os.path.dirname(os.path.abspath(str(write_to)))
+            elif image_source_path is not None:
+                _ldir = os.path.dirname(os.path.abspath(image_source_path))
+            else:
+                _ldir = os.getcwd()
+            log_file = os.path.join(_ldir, "patchworks.log")
+        _attach_log_file(str(log_file))
+        logger.info("patchworks log → %s", log_file)
+
     _load_chunks: tuple[int, ...] | None = None
+    _native_chunks: tuple[int, ...] | None = None
 
     if not isinstance(image, da.Array):
         _peek = load_ome_zarr(image, channel=channel, level=level)
+        _native_chunks = _peek.chunksize  # on-disk zarr chunk shape
         if callable(tile_shape):
             _load_chunks = tuple(tile_shape(_peek.shape, _peek.dtype))
         elif isinstance(tile_shape, str):
@@ -291,12 +379,29 @@ def tile_process(
         logger.info("Rechunked to %s", tile_shape)
 
     n_tiles = int(np.prod([len(c) for c in image.chunks]))
+    _tile = tuple(c[0] for c in image.chunks)
     logger.info(
         "Processing %d tiles (per-axis %s, tile shape %s)",
         n_tiles,
         tuple(len(c) for c in image.chunks),
-        tuple(c[0] for c in image.chunks),
+        _tile,
     )
+
+    # Warn when the store's on-disk chunks are much larger than the tile: every
+    # tile read then decodes whole chunks and throws most away (slow I/O).
+    if _native_chunks is not None:
+        _amp = _read_amplification(_native_chunks, _tile)
+        if _amp >= 4:
+            logger.warning(
+                "Input chunks %s are much larger than the tile %s → ~%.0fx "
+                "read amplification (each tile decodes whole chunks and "
+                "discards most). Re-chunk the store near the tile size "
+                "(e.g. to_ome_zarr(..., chunks=...) without shard=) or read "
+                "the source file directly to avoid wasted I/O.",
+                _native_chunks,
+                _tile,
+                _amp,
+            )
 
     image_for_threshold = image
 
@@ -313,6 +418,23 @@ def tile_process(
     if skip_empty and _skip_thr is None:
         _skip_thr = _auto_empty_threshold(image_for_threshold, channel, level)
 
+    # Up-front heads-up for a big 3-D GPU job (z-stack tiles, many of them):
+    # an accurate ETA is logged after the first few tiles, but warn early that
+    # this is the expensive path and point at the faster alternatives.
+    if use_gpu and image.ndim >= 3 and _tile[0] > 4 and n_tiles >= 50:
+        logger.warning(
+            "Large 3-D GPU job: %d tiles of %s. Per-tile 3-D segmentation is "
+            "slow on a single device (a live ETA is logged after the first "
+            "tiles). If per-slice results are acceptable, 2-D (z=1 tiles) is "
+            "typically ~10x faster, or segment a lower pyramid level.",
+            n_tiles,
+            _tile,
+        )
+
+    # Tile counters + timing (GIL-safe enough for the threaded / in-process
+    # schedulers patchworks uses) so the log shows live "tile k/N + ETA".
+    _progress = {"done": 0, "seen": 0, "time": 0.0}
+
     def active_fn(block, block_info=None):
         """Run *fn* on one tile, or return zeros for an empty tile.
 
@@ -328,14 +450,36 @@ def tile_process(
         np.ndarray
             Integer labels, or an all-zero tile when skipped.
         """
+        import time
+
         loc = block_info[0].get("chunk-location") if block_info else "?"
+        _progress["seen"] += 1
         if skip_empty and block.size and block.max() <= _skip_thr:
             if verbose:
                 logger.debug("skip empty tile %s (max<=%s)", loc, _skip_thr)
             return np.zeros(block.shape, dtype=np.int32)
-        if verbose:
-            logger.debug("process tile %s shape=%s", loc, block.shape)
-        return fn(block)
+
+        t0 = time.perf_counter()
+        out = fn(block)
+        dt = time.perf_counter() - t0
+
+        _progress["done"] += 1
+        _progress["time"] += dt
+        done, seen = _progress["done"], _progress["seen"]
+        avg = _progress["time"] / done
+        # Extrapolate remaining non-empty tiles from the empty fraction seen.
+        remaining_nonempty = max(0, n_tiles - seen) * (done / seen)
+        eta_h = avg * remaining_nonempty / 3600
+        logger.info(
+            "tile %d done in %.1fs (avg %.1fs); %d/%d tiles seen; ETA ~%.1fh",
+            done,
+            dt,
+            avg,
+            seen,
+            n_tiles,
+            eta_h,
+        )
+        return out
 
     _meta = np.empty((0,) * image.ndim, dtype=np.int32)
     if overlap > 0:
