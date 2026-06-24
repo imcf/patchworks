@@ -52,6 +52,39 @@ def _attach_log_file(path: str) -> None:
         pkg.setLevel(logging.INFO)
 
 
+def _read_amplification(
+    native_chunks: tuple[int, ...], tile_shape: tuple[int, ...]
+) -> float:
+    """Estimate how much extra data each tile read pulls off disk.
+
+    When the store's on-disk chunks are larger than the tile, every tile read
+    decodes whole chunks and discards most of them. Returns the ratio of bytes
+    read to bytes used (1.0 = no waste).
+
+    Parameters
+    ----------
+    native_chunks : tuple of int
+        The store's on-disk chunk shape.
+    tile_shape : tuple of int
+        The processing tile shape.
+
+    Returns
+    -------
+    float
+        Read-amplification factor (``bytes_read / bytes_used``).
+    """
+    import math
+
+    read = used = 1.0
+    for n, t in zip(native_chunks, tile_shape):
+        if n <= 0 or t <= 0:
+            continue
+        touched = math.ceil(t / n)  # chunks a tile spans on this axis
+        read *= touched * n
+        used *= t
+    return read / used if used else 1.0
+
+
 def _stage_to_zarr(
     arr: da.Array, path: str, component: str, show_progress: bool
 ) -> None:
@@ -304,9 +337,11 @@ def tile_process(
         logger.info("patchworks log → %s", log_file)
 
     _load_chunks: tuple[int, ...] | None = None
+    _native_chunks: tuple[int, ...] | None = None
 
     if not isinstance(image, da.Array):
         _peek = load_ome_zarr(image, channel=channel, level=level)
+        _native_chunks = _peek.chunksize  # on-disk zarr chunk shape
         if callable(tile_shape):
             _load_chunks = tuple(tile_shape(_peek.shape, _peek.dtype))
         elif isinstance(tile_shape, str):
@@ -344,12 +379,29 @@ def tile_process(
         logger.info("Rechunked to %s", tile_shape)
 
     n_tiles = int(np.prod([len(c) for c in image.chunks]))
+    _tile = tuple(c[0] for c in image.chunks)
     logger.info(
         "Processing %d tiles (per-axis %s, tile shape %s)",
         n_tiles,
         tuple(len(c) for c in image.chunks),
-        tuple(c[0] for c in image.chunks),
+        _tile,
     )
+
+    # Warn when the store's on-disk chunks are much larger than the tile: every
+    # tile read then decodes whole chunks and throws most away (slow I/O).
+    if _native_chunks is not None:
+        _amp = _read_amplification(_native_chunks, _tile)
+        if _amp >= 4:
+            logger.warning(
+                "Input chunks %s are much larger than the tile %s → ~%.0fx "
+                "read amplification (each tile decodes whole chunks and "
+                "discards most). Re-chunk the store near the tile size "
+                "(e.g. to_ome_zarr(..., chunks=...) without shard=) or read "
+                "the source file directly to avoid wasted I/O.",
+                _native_chunks,
+                _tile,
+                _amp,
+            )
 
     image_for_threshold = image
 
