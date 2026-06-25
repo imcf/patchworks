@@ -191,6 +191,48 @@ def _resolve_labels(
     return arr.astype("int32")
 
 
+def _label_colormap(name: str | None):
+    """Build a cyclic napari label colormap from a colorcet glasbey palette.
+
+    Parameters
+    ----------
+    name : str or None
+        A ``colorcet`` palette attribute, e.g. ``"glasbey_dark"`` (glasbey on a
+        dark background). ``None`` falls back to napari's default label colours.
+
+    Returns
+    -------
+    napari.utils.colormaps.CyclicLabelColormap or None
+        The colormap to pass to ``add_labels``, or ``None`` for the default.
+    """
+    if not name:
+        return None
+    try:
+        import colorcet
+    except ImportError:
+        logger.warning(
+            "colorcet not installed; using napari's default label colours "
+            "(pip install colorcet, or it ships with patchworks[napari])."
+        )
+        return None
+
+    palette = getattr(colorcet, name, None)
+    if palette is None:
+        logger.warning("colorcet has no palette %r; using default colours.", name)
+        return None
+
+    import numpy as np
+    from napari.utils.colormaps import CyclicLabelColormap
+
+    def _hex_to_rgba(h: str):
+        h = h.lstrip("#")
+        return (int(h[0:2], 16) / 255, int(h[2:4], 16) / 255,
+                int(h[4:6], 16) / 255, 1.0)
+
+    colors = np.array([_hex_to_rgba(c) for c in palette], dtype=float)
+    return CyclicLabelColormap(colors=colors)
+
+
 def view_in_napari(
     image: Union[da.Array, str, Path],
     labels: Union[da.Array, str, Path, None] = None,
@@ -199,6 +241,7 @@ def view_in_napari(
     labels_component: str = "labels",
     image_name: str = "image",
     labels_name: str = "labels",
+    label_colormap: str | None = "glasbey_dark",
     show: bool = True,
     **add_image_kwargs: Any,
 ):
@@ -223,6 +266,12 @@ def view_in_napari(
         matching ``tile_process``'s ``output_component``).
     image_name, labels_name : str, optional
         Layer names shown in napari.
+    label_colormap : str or None, optional
+        ``colorcet`` palette for the label LUT; default ``"glasbey_dark"``
+        (glasbey on a dark background — many distinct, high-contrast colours).
+        Any colorcet name works (e.g. ``"glasbey_light"``); ``None`` uses
+        napari's default label colours. Needs ``colorcet`` (ships with
+        ``patchworks[napari]``).
     show : bool, optional
         Start the napari event loop (blocking). Set ``False`` in scripts/tests
         that manage the loop themselves.
@@ -250,9 +299,12 @@ def view_in_napari(
         **add_image_kwargs,
     )
 
+    cmap = _label_colormap(label_colormap)
+    label_kwargs = {"colormap": cmap} if cmap is not None else {}
+
     if labels is not None:
         lab = _resolve_labels(labels, labels_component)
-        viewer.add_labels(lab, name=labels_name)
+        viewer.add_labels(lab, name=labels_name, **label_kwargs)
     elif _is_zarr(image):
         # No labels given → auto-overlay every label image stored inside the
         # OME-ZARR under labels/<name>/ (the default place tile_process writes
@@ -260,7 +312,9 @@ def view_in_napari(
         for name in _inner_label_names(image):
             levels = _multiscale_levels(f"{image}/labels/{name}", None)
             lab = [lvl.astype("int32") for lvl in levels]
-            viewer.add_labels(lab if len(lab) > 1 else lab[0], name=name)
+            viewer.add_labels(
+                lab if len(lab) > 1 else lab[0], name=name, **label_kwargs
+            )
             logger.info("auto-loaded labels/%s from %s", name, image)
 
     if show:
