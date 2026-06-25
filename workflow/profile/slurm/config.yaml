@@ -17,7 +17,7 @@ keep-going: true
 
 # Defaults for every rule (CPU jobs).
 default-resources:
-  slurm_partition: "cpu"
+  slurm_partition: "scicore"
   # slurm_account: "my_account"
   mem_mb: 16000
   cpus_per_task: 4
@@ -32,12 +32,14 @@ set-resources:
   prepare:
     mem_mb: 32000
     runtime: 120
-  segment: # one GPU per tile — this is what spreads Cellpose across GPUs
-    slurm_partition: "gpu"
-    slurm_extra: "'--gres=gpu:1'"
-    mem_mb: 32000
+  segment:
+    # one GPU per tile — this is what spreads Cellpose across GPUs
+    slurm_partition: "rtx4090"
+    gpu: 1
+    qos: "rtx4090-6hours" # scicore: <partition>-<duration> QOS
+    mem_mb: 32000 # plenty — a tile used ~1G; the failure was a Python error
     cpus_per_task: 4
-    runtime: 120
+    runtime: 360 # 6 hours — must match the QOS, NOT 120 (=2h → killed early)
   merge:
     mem_mb: 128000
     cpus_per_task: 8

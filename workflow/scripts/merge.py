@@ -11,8 +11,9 @@ from pathlib import Path
 from patchworks import merge_tile_labels
 from patchworks.plugins.ome_zarr import write_labels
 
-from _pw import stage_path
+from _pw import stage_path, start_log
 
+start_log(snakemake.log[0])  # noqa: F821
 cfg = snakemake.config  # noqa: F821
 work_dir = cfg["work_dir"]
 image_store = str(Path(work_dir) / "image.zarr")

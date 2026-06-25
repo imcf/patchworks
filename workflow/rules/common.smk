@@ -15,6 +15,12 @@ STAGE = f"{WORK}/stage.zarr"
 STAGE_OK = f"{STAGE}.done"
 
 
+# Logs: one shared file for the sequential CPU steps (convert/prepare/merge),
+# one file per tile for the GPU segment jobs.
+LOGS = f"{WORK}/logs"
+STEPLOG = f"{LOGS}/steps.log"
+
+
 def occupied_done(wildcards):
     """Per-tile markers for the occupied tiles (resolved after the checkpoint)."""
     tiles = checkpoints.prepare.get().output.tiles

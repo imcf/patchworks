@@ -6,6 +6,8 @@ checkpoint prepare:
     output:
         tiles=TILES,
         stage=touch(STAGE_OK),
+    log:
+        STEPLOG,
     script:
         "../scripts/prepare_tiles.py"
 
@@ -18,5 +20,7 @@ rule segment:
         image=IMAGE_OK,
     output:
         f"{WORK}/seg/{{index}}.done",
+    log:
+        f"{LOGS}/segment/{{index}}.log",
     script:
         "../scripts/segment_tile.py"

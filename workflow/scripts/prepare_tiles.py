@@ -11,8 +11,9 @@ from patchworks import (
     spatial_tiles,
 )
 
-from _pw import open_image, stage_path
+from _pw import open_image, stage_path, start_log
 
+start_log(snakemake.log[0])  # noqa: F821
 cfg = snakemake.config  # noqa: F821
 work_dir = cfg["work_dir"]
 image = open_image(work_dir, cfg["channel"], cfg["level"])

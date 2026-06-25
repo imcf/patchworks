@@ -6,8 +6,9 @@ run in parallel. Each job writes a disjoint chunk of the stage store.
 
 from patchworks import stage_tile
 
-from _pw import build_fn, load_tiles_json, open_image, stage_path
+from _pw import build_fn, load_tiles_json, open_image, stage_path, start_log
 
+start_log(snakemake.log[0])  # noqa: F821
 cfg = snakemake.config  # noqa: F821
 index = int(snakemake.wildcards.index)  # noqa: F821
 work_dir = cfg["work_dir"]
