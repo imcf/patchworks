@@ -260,11 +260,26 @@ def view_in_napari(
     if glasbey:
         try:
             import glasbey as _glasbey
+            import numpy as np
+            from napari.utils.colormaps import CyclicLabelColormap
 
-            # bias lighter so colours read on napari's dark canvas
-            label_kwargs["colormap"] = _glasbey.create_palette(
-                256, lightness_bounds=(40, 100)
+            # glasbey palette (biased lighter so colours read on the dark
+            # canvas), wrapped in a CyclicLabelColormap so each label value
+            # cycles through a distinct colour. Passing the raw palette list
+            # makes napari map large label IDs past the end -> one flat colour.
+            palette = _glasbey.create_palette(256, lightness_bounds=(40, 100))
+            colors = np.array(
+                [
+                    [
+                        int(h[1:3], 16) / 255,
+                        int(h[3:5], 16) / 255,
+                        int(h[5:7], 16) / 255,
+                        1.0,
+                    ]
+                    for h in palette
+                ]
             )
+            label_kwargs["colormap"] = CyclicLabelColormap(colors=colors)
         except ImportError:
             logger.warning(
                 "glasbey not installed; using napari's default label colours "
