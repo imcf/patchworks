@@ -57,9 +57,11 @@ bioio = [
 # imaris reads .ims files natively (HDF5, no JVM) for OME-ZARR conversion.
 imaris = ["imaris-ims-file-reader"]
 # napari enables the interactive viewer plugin.
-# lxml-html-clean: napari's notebook_display imports lxml.html.clean, which
-# split into a separate package in lxml >= 5.2 (else ImportError on Viewer()).
-napari = ["napari[all]", "lxml-html-clean"]
+# - napari >= 0.5: NumPy 2.0 compatible (older 0.4.x uses np.array(copy=False),
+#   which raises under NumPy 2 -> ValidationError on Viewer()).
+# - lxml-html-clean: napari's notebook_display imports lxml.html.clean, split
+#   into a separate package in lxml >= 5.2 (else ImportError on Viewer()).
+napari = ["napari[all]>=0.5.5", "lxml-html-clean"]
 # workflow runs the Snakemake pipeline (per-tile SLURM jobs across GPUs).
 workflow = ["snakemake>=8", "snakemake-executor-plugin-slurm"]
 dev = ["pytest", "pytest-cov", "scikit-image", "psutil", "tqdm"]
