@@ -197,55 +197,142 @@ result. Keep `mtime` and reruns happen only when an output is missing or stale.
 ## Custom segmentation function
 
 Not using Cellpose? Run **your own** per-tile function — no need to edit the
-package. It just has to take one tile and return integer labels of the same
-spatial shape:
+package. You write one function; patchworks handles everything around it
+(tiling, halos, skipping empty tiles, the zarr-native merge, global relabelling,
+resume, logs).
+
+### The contract
+
+Your function is called **once per tile**:
+
+```python
+labels = segment(tile)          # plus any kwargs you configure
+```
+
+| | What you get / must return |
+| --- | --- |
+| **Input `tile`** | A NumPy array of **one** tile, with the overlap halo already included. The channel and pyramid level from the config are already selected, so it is purely spatial: `(z, y, x)` for a 3-D run, `(y, x)` for 2-D. Dtype is the image's (e.g. `uint16`). |
+| **Return** | An integer **label** array (not a boolean mask), **same shape** as `tile`. `0` = background; each object a distinct positive integer. |
+| **Labels** | Only need to be unique **within the tile**. Don't try to make them globally unique — the merge step stitches objects across tile borders and renumbers everything to a contiguous `1..N` (`sequential_labels: true`). |
+| **Shape** | Must match the input exactly — patchworks trims the halo off your output, so a wrong shape is an error. Don't crop or resize inside the function. |
+
+That is the whole interface. Anything that turns an image tile into a label
+image works: classic image processing, StarDist, a trained model, an external
+binary you shell out to, …
+
+### Minimal example (no GPU, no deps beyond scikit-image)
 
 ```python
 # my_seg.py
 import numpy as np
-from skimage.feature import blob_log
 from skimage.measure import label
 
-def segment(tile: np.ndarray) -> np.ndarray:
-    """One tile in, int32 label image out (0 = background)."""
-    mask = tile > tile.mean() + 2 * tile.std()
-    return label(mask).astype("int32")
-```
+def segment(tile: np.ndarray, sigma: float = 2.0) -> np.ndarray:
+    """Threshold + connected components. Returns int32 labels (0 = bg)."""
+    from skimage.filters import gaussian, threshold_otsu
 
-Point the config at it:
+    smooth = gaussian(tile, sigma=sigma, preserve_range=True)
+    thr = threshold_otsu(smooth) if smooth.max() > smooth.min() else np.inf
+    return label(smooth > thr).astype("int32")
+```
 
 ```yaml
 method: "custom"
 label_name: "my_labels"
 custom:
-  module: "my_seg"        # import name (see below)
+  module: "my_seg"        # import name (see "Make it importable")
   function: "segment"     # default is "segment"
-  kwargs: {}              # optional, forwarded as segment(tile, **kwargs)
+  kwargs:                 # optional — forwarded as segment(tile, **kwargs)
+    sigma: 1.5
+```
+
+### Real example: StarDist 3-D, with model caching
+
+Heavy models must be loaded **once**, not per tile. On SLURM each tile is its
+own process so this matters less, but for local runs one process segments many
+tiles — cache the model at module level (or with `functools.lru_cache`):
+
+```python
+# stardist_seg.py
+import numpy as np
+
+_MODEL = None
+
+def _model():
+    global _MODEL
+    if _MODEL is None:                       # loaded once per worker process
+        from stardist.models import StarDist3D
+        _MODEL = StarDist3D.from_pretrained("3D_demo")
+    return _MODEL
+
+def segment(tile: np.ndarray, prob_thresh: float = 0.5) -> np.ndarray:
+    from csbdeep.utils import normalize
+
+    labels, _ = _model().predict_instances(
+        normalize(tile), prob_thresh=prob_thresh
+    )
+    return labels.astype("int32")
+```
+
+```yaml
+method: "custom"
+label_name: "stardist"
+custom:
+  module: "stardist_seg"
+  function: "segment"
+  kwargs:
+    prob_thresh: 0.5
+```
+
+Using a GPU? The segment jobs already hold one (the `gres: "gpu:1"` request),
+so just let your framework see it — nothing extra in the config.
+
+### Test it before you submit
+
+Run your function on one real tile first — it catches shape/dtype bugs in
+seconds instead of after a queue wait. Output must be integer, same shape, `0`
+for background:
+
+```python
+from patchworks import load_ome_zarr
+from my_seg import segment
+
+img = load_ome_zarr("results/image.zarr", channel=0, level=0)
+tile = img[:, :512, :512].compute()      # a small spatial block
+out = segment(tile)
+
+assert out.shape == tile.shape, (out.shape, tile.shape)
+assert out.dtype.kind in "iu"            # integer labels, not a float mask
+print("objects in tile:", int(out.max()))
 ```
 
 ### Make it importable on the cluster
 
-Pick one (the workflow imports `module` in each segment job):
+The segment job runs `import <module>`, so the module must be on the path. Pick
+one:
 
-1. **Drop the file in `workflow/scripts/`** — Snakemake puts the script dir on
+1. **Drop the file in `workflow/scripts/`** — Snakemake adds the script dir to
    `sys.path`, so `module: "my_seg"` just works. Simplest for a single file.
-2. **Install it** into the run env: `pip install -e .` / `pixi add --pypi …`,
+2. **Install it** into the run env (`pip install -e .`, `pixi add --pypi …`),
    then use its import name. Best for a real package with dependencies.
-3. **Set `PYTHONPATH`** to wherever the file lives before launching Snakemake.
+3. **Set `PYTHONPATH`** to the file's directory before launching Snakemake.
 
 ### Cluster checklist
 
-- The env that runs the **segment** jobs must have your function's imports
-  (`pip`/`pixi add` them). A missing import shows up in `logs/segment/<i>.log`.
-- **Offline GPU nodes:** the `fetch_model` prefetch only covers Cellpose. If
-  your function downloads weights/data at run time, fetch them once on the
-  **login node** first (they must land in shared `$HOME`), or the segment jobs
-  hit `Network is unreachable` — see *Troubleshooting*.
-- Everything else is unchanged: tiling, halos, the zarr-native merge, resume,
-  and per-tile logs all work exactly as for Cellpose.
+- **Dependencies:** the env that runs the **segment** jobs must have everything
+  your function imports (`pip`/`pixi add` it). A missing import or any crash
+  shows up in `logs/segment/<index>.log`, not the (empty) SLURM log.
+- **Offline GPU nodes:** the built-in `fetch_model` prefetch covers Cellpose
+  only. If your function downloads weights/data on first use, fetch them once on
+  the **login node** (network access) so they land in shared `$HOME`; otherwise
+  the segment jobs fail with `Network is unreachable`. See *Troubleshooting*.
+- **Memory / walltime:** tune `segment:` in `profile/slurm/config.yaml` for your
+  model (`mem_mb`, `runtime`) just as for Cellpose.
+- Everything else — tiling, halos, empty-tile skipping, the zarr-native merge,
+  resume, and per-tile logs — is identical to a Cellpose run.
 
-For full control (your own tiling/merge loop, not the bundled rules), call the
-public API directly — see *How it works* below.
+For full control (your own tiling/merge loop instead of the bundled rules), call
+the public API directly — see *How it works* below.
 
 ## pixi (instead of conda)
 
