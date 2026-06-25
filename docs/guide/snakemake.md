@@ -223,10 +223,12 @@ prologue. The simplest path is a single shared env that the compute nodes see.
 | Symptom | Fix |
 |---------|-----|
 | `snakemake: command not found` | use `python -m snakemake` |
-| Segment jobs pend forever | wrong `slurm_partition`/`slurm_extra` GPU flag for your cluster |
+| Segment jobs pend forever | wrong `slurm_partition`/GPU request; on scicore use `gres: "gpu:1"` |
+| Segment dies, `Network is unreachable` | offline GPU nodes — the `fetch_model` localrule caches the model on the submit host first; if it still fails, your submit host has no network either (pre-download manually) |
 | `cellpose is not installed` in a job | the job's env lacks `patchworks[cellpose]` |
 | Reading the input fails | install the matching reader (`patchworks[imaris]`/`[bioio]` + a `bioio-*`) |
 | Out of GPU memory | smaller `tile_shape`, or `do_3D: false` |
+| A job fails with an empty SLURM log | read `logs/segment/<index>.log` (per tile) or `logs/steps.log` — the real traceback is there |
 | Very slow | confirm GPU is used (`nvidia-smi`); try 2-D or a lower `level` |
 
 ## How it works (for the curious)

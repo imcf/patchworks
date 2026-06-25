@@ -7,7 +7,7 @@
 # On a cluster, put this project on a shared filesystem the compute nodes can
 # read: the SLURM jobs re-launch snakemake from this env's interpreter.
 
-[project]
+[workspace]
 name = "patchworks-workflow"
 channels = ["conda-forge"]
 platforms = ["linux-64"]

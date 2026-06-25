@@ -1,5 +1,20 @@
 # Plan tiles (checkpoint) and segment each tile on a GPU.
 
+
+rule fetch_model:
+    """Cache the segmentation model on the (networked) submit host.
+
+    Declared local (see ``localrules`` in the Snakefile) so it never runs on an
+    offline GPU node — Cellpose downloads its weights here, into shared $HOME.
+    """
+    output:
+        touch(MODEL_OK),
+    log:
+        f"{LOGS}/fetch_model.log",
+    script:
+        "../scripts/fetch_model.py"
+
+
 checkpoint prepare:
     input:
         IMAGE_OK,
@@ -18,6 +33,7 @@ rule segment:
         tiles=TILES,
         stage=STAGE_OK,
         image=IMAGE_OK,
+        model=MODEL_OK,
     output:
         f"{WORK}/seg/{{index}}.done",
     log:

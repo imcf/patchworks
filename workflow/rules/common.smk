@@ -20,6 +20,10 @@ STAGE_OK = f"{STAGE}.done"
 LOGS = f"{WORK}/logs"
 STEPLOG = f"{LOGS}/steps.log"
 
+# Marker that the segmentation model is cached locally. Produced by a local
+# rule (runs on the networked submit host) so offline GPU nodes never download.
+MODEL_OK = f"{WORK}/model.ready"
+
 
 def occupied_done(wildcards):
     """Per-tile markers for the occupied tiles (resolved after the checkpoint)."""
