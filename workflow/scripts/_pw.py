@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import sys
+from functools import partial
 from pathlib import Path
 
 from patchworks import load_ome_zarr
@@ -124,8 +125,9 @@ def build_fn(cfg):
     Parameters
     ----------
     cfg : dict
-        Snakemake config. ``method`` selects ``"cellpose"`` (default) or a
-        simple ``"threshold"`` (handy for testing / no-GPU runs).
+        Snakemake config. ``method`` selects ``"cellpose"`` (default), a simple
+        ``"threshold"`` (testing / no-GPU), or ``"custom"`` to import your own
+        function (``cfg["custom"] = {module, function, kwargs}``).
 
     Returns
     -------
@@ -133,6 +135,21 @@ def build_fn(cfg):
         ``(ndarray) -> ndarray`` returning integer labels.
     """
     method = cfg.get("method", "cellpose")
+    if method == "custom":
+        # Import a user-provided function, e.g.
+        #   custom: {module: my_seg, function: segment, kwargs: {...}}
+        # The module must be importable on the cluster (a file in
+        # workflow/scripts/, on PYTHONPATH, or an installed package).
+        import importlib
+
+        spec = cfg["custom"]
+        fn = getattr(
+            importlib.import_module(spec["module"]),
+            spec.get("function", "segment"),
+        )
+        kwargs = spec.get("kwargs") or {}
+        return partial(fn, **kwargs) if kwargs else fn
+
     if method == "threshold":
 
         def fn(tile):
