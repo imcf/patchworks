@@ -5,6 +5,8 @@ copyright: Copyright &copy; 2025 IMCF Basel
 
 theme:
   name: material
+  logo: assets/logo.png
+  favicon: assets/logo.png
   palette:
   - scheme: default
     primary: deep orange

@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/logo.png" alt="patchworks logo" width="220">
+</p>
+
 # patchworks
 
 [![PyPI](https://img.shields.io/pypi/v/patchworks.svg)](https://pypi.org/project/patchworks/)
