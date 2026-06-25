@@ -29,7 +29,7 @@ skip_empty: true # skip background tiles
 empty_threshold: null # null → Otsu; or a number
 
 # ---- segmentation -----------------------------------------------------------
-method: "cellpose" # "cellpose" (GPU) or "threshold" (simple, no GPU; testing)
+method: "cellpose" # "cellpose" (GPU), "threshold" (no GPU; testing), "custom"
 label_name: "cellpose_labels"
 cellpose:
   model: "nuclei"
@@ -39,6 +39,13 @@ cellpose:
   # extra kwargs forwarded to model.eval(), e.g.:
   # flow_threshold: 0.4
   # cellprob_threshold: 0.0
+
+# Your own per-tile function (method: "custom"). See the "custom function"
+# section of docs/guide/snakemake.md.
+# custom:
+#   module: "my_seg"     # importable on the cluster (workflow/scripts/, PYTHONPATH, or pip-installed)
+#   function: "segment"  # def segment(tile: np.ndarray) -> np.ndarray (int32 labels)
+#   kwargs: {}           # optional extra keyword args
 
 # ---- pyramid for the labels -------------------------------------------------
 pyramid_levels: 5

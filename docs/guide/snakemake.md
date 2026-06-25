@@ -194,6 +194,59 @@ also re-runs a step when its **code, params or software environment** change —
 so upgrading patchworks would re-do the conversion and overwrite an existing
 result. Keep `mtime` and reruns happen only when an output is missing or stale.
 
+## Custom segmentation function
+
+Not using Cellpose? Run **your own** per-tile function — no need to edit the
+package. It just has to take one tile and return integer labels of the same
+spatial shape:
+
+```python
+# my_seg.py
+import numpy as np
+from skimage.feature import blob_log
+from skimage.measure import label
+
+def segment(tile: np.ndarray) -> np.ndarray:
+    """One tile in, int32 label image out (0 = background)."""
+    mask = tile > tile.mean() + 2 * tile.std()
+    return label(mask).astype("int32")
+```
+
+Point the config at it:
+
+```yaml
+method: "custom"
+label_name: "my_labels"
+custom:
+  module: "my_seg"        # import name (see below)
+  function: "segment"     # default is "segment"
+  kwargs: {}              # optional, forwarded as segment(tile, **kwargs)
+```
+
+### Make it importable on the cluster
+
+Pick one (the workflow imports `module` in each segment job):
+
+1. **Drop the file in `workflow/scripts/`** — Snakemake puts the script dir on
+   `sys.path`, so `module: "my_seg"` just works. Simplest for a single file.
+2. **Install it** into the run env: `pip install -e .` / `pixi add --pypi …`,
+   then use its import name. Best for a real package with dependencies.
+3. **Set `PYTHONPATH`** to wherever the file lives before launching Snakemake.
+
+### Cluster checklist
+
+- The env that runs the **segment** jobs must have your function's imports
+  (`pip`/`pixi add` them). A missing import shows up in `logs/segment/<i>.log`.
+- **Offline GPU nodes:** the `fetch_model` prefetch only covers Cellpose. If
+  your function downloads weights/data at run time, fetch them once on the
+  **login node** first (they must land in shared `$HOME`), or the segment jobs
+  hit `Network is unreachable` — see *Troubleshooting*.
+- Everything else is unchanged: tiling, halos, the zarr-native merge, resume,
+  and per-tile logs all work exactly as for Cellpose.
+
+For full control (your own tiling/merge loop, not the bundled rules), call the
+public API directly — see *How it works* below.
+
 ## pixi (instead of conda)
 
 Conda is **not** required — Snakemake runs in whatever environment launches it.
