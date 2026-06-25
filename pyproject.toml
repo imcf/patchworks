@@ -63,13 +63,13 @@ imaris = ["imaris-ims-file-reader"]
 # - ipykernel < 7: napari-console requires ipykernel < 7.
 # - lxml-html-clean: napari's notebook_display imports lxml.html.clean, split
 #   into a separate package in lxml >= 5.2 (else ImportError on Viewer()).
-# - colorcet: glasbey label LUTs for view_in_napari.
+# - glasbey: distinct high-contrast label LUTs for view_in_napari.
 napari = [
     "napari[all]>=0.5.5",
     "numpy<2.5",
     "ipykernel<7",
     "lxml-html-clean",
-    "colorcet",
+    "glasbey",
 ]
 # workflow runs the Snakemake pipeline (per-tile SLURM jobs across GPUs).
 workflow = ["snakemake>=8", "snakemake-executor-plugin-slurm"]
