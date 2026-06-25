@@ -8,6 +8,9 @@ conversion is not redone. To force a fresh conversion, delete ``image.zarr``
 
 from patchworks.plugins.ome_zarr import to_ome_zarr
 
+from _pw import start_log
+
+start_log(snakemake.log[0])  # noqa: F821
 cfg = snakemake.config  # noqa: F821  (injected by Snakemake)
 chunks = cfg.get("convert_chunks")
 to_ome_zarr(

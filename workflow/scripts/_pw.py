@@ -8,9 +8,60 @@ these helpers only turn the Snakemake config into the right arguments.
 from __future__ import annotations
 
 import json
+import logging
+import sys
 from pathlib import Path
 
 from patchworks import load_ome_zarr
+
+
+class _Tee:
+    """Write to several streams at once (e.g. the SLURM log and a file)."""
+
+    def __init__(self, *streams):
+        self._streams = streams
+
+    def write(self, data):
+        for stream in self._streams:
+            stream.write(data)
+
+    def flush(self):
+        for stream in self._streams:
+            stream.flush()
+
+
+def start_log(path, *, append=True):
+    """Tee stdout/stderr (and logging) into ``path``.
+
+    Captures prints, tracebacks and library logging into a file in the work
+    directory, independent of the (often empty) SLURM job log. Line-buffered,
+    so output up to a crash or OOM kill is preserved.
+
+    Parameters
+    ----------
+    path : str or Path
+        Log file to write. Parent directories are created.
+    append : bool, optional
+        Append to an existing log (keep retry history) instead of truncating.
+        Default True.
+
+    Returns
+    -------
+    TextIO
+        The open log file (kept open for the lifetime of the process).
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle = open(path, "a" if append else "w", buffering=1)
+    sys.stdout = _Tee(sys.__stdout__, handle)
+    sys.stderr = _Tee(sys.__stderr__, handle)
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        handlers=[logging.StreamHandler(sys.stdout)],
+        force=True,
+    )
+    return handle
 
 
 def open_image(work_dir, channel, level):
