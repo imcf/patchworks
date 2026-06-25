@@ -7,3 +7,5 @@ build/
 site/
 .pytest_cache/
 *.log
+.snakemake/
+.pixi/
