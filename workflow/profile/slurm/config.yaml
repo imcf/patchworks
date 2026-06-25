@@ -33,11 +33,14 @@ set-resources:
     mem_mb: 32000
     runtime: 120
   segment:
-    # one GPU per tile — this is what spreads Cellpose across GPUs
+    # one GPU per tile — this is what spreads Cellpose across GPUs.
+    # Use the plugin's native `gres` resource → emits --gres=gpu:1, which is
+    # how scicore binds a CUDA device. (The `gpu:` resource emits --gpus and
+    # leaves the job without a device.)
     slurm_partition: "rtx4090"
-    gpu: 1
+    gres: "gpu:1"
     qos: "rtx4090-6hours" # scicore: <partition>-<duration> QOS
-    mem_mb: 32000 # plenty — a tile used ~1G; the failure was a Python error
+    mem_mb: 32000 # plenty — a tile used ~1G
     cpus_per_task: 4
     runtime: 360 # 6 hours — must match the QOS, NOT 120 (=2h → killed early)
   merge:
