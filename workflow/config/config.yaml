@@ -12,7 +12,7 @@ work_dir: "/path/to/results" # everything is written under here
 #   image.zarr/labels/<name>/  — the segmentation (multi-scale), in the image
 
 # ---- conversion -------------------------------------------------------------
-reuse_pyramid: true # for .ims: copy its own pyramid (fast); else rebuild
+reuse_pyramid: false # for .ims: copy its own pyramid (fast); else rebuild
 convert_chunks: null # null → patchworks' bounded auto chunks; or [c,z,y,x]
 shard: false # true → pack chunks into shards (zarr v3; fewer files)
 # Re-running reuses an existing image.zarr automatically (skips conversion).
@@ -30,9 +30,9 @@ empty_threshold: null # null → Otsu; or a number
 
 # ---- segmentation -----------------------------------------------------------
 method: "cellpose" # "cellpose" (GPU) or "threshold" (simple, no GPU; testing)
-label_name: "cellpose"
+label_name: "cellpose_labels"
 cellpose:
-  model: "cyto3"
+  model: "nuclei"
   diameter: 30
   do_3D: true
   gpu: true
