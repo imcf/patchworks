@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/logo.png" alt="patchworks logo" width="220">
+  <img src="https://raw.githubusercontent.com/imcf/patchworks/main/docs/assets/logo.png" alt="patchworks logo" width="220">
 </p>
 
 # patchworks
