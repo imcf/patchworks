@@ -68,7 +68,8 @@ def create_stage(
     component : str, optional
         Array name inside the store (default ``"staged"``).
     dtype : data-type, optional
-        Label dtype (default ``int32``).
+        Label dtype (default ``int32``). Tiles write local labels; the merge's
+        first pass renumbers them to a compact global range that fits int32.
 
     Returns
     -------
@@ -135,6 +136,8 @@ def stage_tile(
         slice(left, out.shape[i] - right)
         for i, (left, right) in enumerate(trims)
     )
+    # Local labels (1..N) are fine here — they collide across tiles, but the
+    # merge's first pass makes them globally unique before stitching.
     dst = zarr.open_group(str(stage_path), mode="r+")[component]
     dst[sl] = out[sel].astype(dst.dtype)
     return index
