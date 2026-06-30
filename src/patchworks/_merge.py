@@ -103,7 +103,7 @@ def _relabel_chunk_worker(chunk_slice: tuple) -> None:
     block = np.asarray(src[chunk_slice], dtype=np.int64)
     max_b = int(block.max())
     if max_b == 0:
-        dst[chunk_slice] = block.astype(np.int32)
+        dst[chunk_slice] = block.astype(dst.dtype)
         return
     lut = _merge_lut
     if max_b < len(lut):
@@ -111,7 +111,7 @@ def _relabel_chunk_worker(chunk_slice: tuple) -> None:
     else:
         ext = np.arange(len(lut), max_b + 1, dtype=np.int64)
         out = np.concatenate([lut, ext])[block]
-    dst[chunk_slice] = out.astype(np.int32)
+    dst[chunk_slice] = out.astype(dst.dtype)
 
 
 def _boundary_face_specs(
@@ -238,9 +238,9 @@ def _build_relabel_lut(pairs: np.ndarray, max_label: int) -> np.ndarray:
 
 
 def _create_zarr_label_array(
-    group: zarr.Group, name: str, shape: tuple, chunks: tuple
+    group: zarr.Group, name: str, shape: tuple, chunks: tuple, dtype=np.int32
 ) -> zarr.Array:
-    """Create (replacing any existing) an int32 label array in *group*.
+    """Create (replacing any existing) a label array in *group*.
 
     Parameters
     ----------
@@ -252,6 +252,9 @@ def _create_zarr_label_array(
         Array shape.
     chunks : tuple
         Chunk shape.
+    dtype : data-type, optional
+        Label dtype (default ``int32``). Matched to the staged store so the
+        merge keeps wide (block-encoded) ids intact before they are compacted.
 
     Returns
     -------
@@ -261,12 +264,54 @@ def _create_zarr_label_array(
     if name in group:
         del group[name]
     if _ZARR_V3:
-        return group.create_array(
-            name, shape=shape, chunks=chunks, dtype=np.int32
-        )
+        return group.create_array(name, shape=shape, chunks=chunks, dtype=dtype)
     return group.zeros(
-        name, shape=shape, chunks=chunks, dtype=np.int32, overwrite=True
+        name, shape=shape, chunks=chunks, dtype=dtype, overwrite=True
     )
+
+
+def _make_globally_unique(arr, shape: tuple, chunk_shape: tuple) -> int:
+    """Renumber per-chunk local labels to a globally unique, compact range.
+
+    Each tile writes local labels (``1..N``) that repeat across tiles, so the
+    same value means different objects in different tiles. This streams the
+    chunks in row-major order and remaps every chunk's non-zero labels to a
+    fresh contiguous block ``[base+1, …]``, leaving the store globally unique
+    with ``max_label == total objects`` (compact, so the relabel LUT stays
+    ``O(n_objects)``). Background (0) stays 0. In place, one chunk in RAM.
+
+    Parameters
+    ----------
+    arr : zarr.Array
+        Writable staged label array.
+    shape : tuple
+        Array shape.
+    chunk_shape : tuple
+        Chunk (= tile) shape.
+
+    Returns
+    -------
+    int
+        New maximum label (number of objects across all tiles, before the
+        cross-boundary merge fuses touching pairs).
+    """
+    n_per_dim = [(s + c - 1) // c for s, c in zip(shape, chunk_shape)]
+    base = 0
+    for idx in _iproduct(*[range(n) for n in n_per_dim]):
+        sl = tuple(
+            slice(i * c, min((i + 1) * c, s))
+            for i, c, s in zip(idx, chunk_shape, shape)
+        )
+        block = np.asarray(arr[sl])
+        uniq = np.unique(block)
+        uniq = uniq[uniq > 0]
+        if uniq.size == 0:
+            continue
+        lut = np.zeros(int(uniq[-1]) + 1, dtype=np.int64)
+        lut[uniq] = np.arange(1, uniq.size + 1) + base
+        arr[sl] = lut[block].astype(arr.dtype)
+        base += int(uniq.size)
+    return base
 
 
 def zarr_native_merge(
@@ -302,13 +347,17 @@ def zarr_native_merge(
     -------
     None
     """
-    root = zarr.open_group(staged_path, mode="r")
+    root = zarr.open_group(staged_path, mode="r+")
     arr = root[staged_component]
     shape, chunk_shape = arr.shape, arr.chunks
 
-    max_label = int(
-        da.from_zarr(staged_path, component=staged_component).max().compute()
-    )
+    # Pass 0 — make labels globally unique. Each tile writes local labels
+    # (1..N) that collide across tiles (every tile has a "1"); without this the
+    # boundary merge would fuse unrelated objects that merely share a value.
+    # Stream chunks in order, remapping each chunk's labels into a fresh
+    # contiguous range [base+1, …] — unique *and* compact (so the relabel LUT
+    # stays O(n_objects), not O(n_voxels)).
+    max_label = _make_globally_unique(arr, shape, chunk_shape)
     logger.info(
         "zarr_native_merge: shape=%s chunks=%s max_label=%d",
         shape,
@@ -330,7 +379,11 @@ def zarr_native_merge(
     )
 
     out_root = zarr.open_group(out_path, mode="a")
-    _create_zarr_label_array(out_root, out_component, shape, chunk_shape)
+    # Match the staged dtype so block-encoded (wide) ids survive the merge;
+    # they are compacted to a small range afterwards by relabel_sequential_zarr.
+    _create_zarr_label_array(
+        out_root, out_component, shape, chunk_shape, dtype=arr.dtype
+    )
 
     n_per_dim = [(s + c - 1) // c for s, c in zip(shape, chunk_shape)]
     chunk_slices = [
