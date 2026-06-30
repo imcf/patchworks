@@ -6,7 +6,7 @@
 
 [![PyPI](https://img.shields.io/pypi/v/patchworks.svg)](https://pypi.org/project/patchworks/)
 [![Python versions](https://img.shields.io/pypi/pyversions/patchworks.svg)](https://pypi.org/project/patchworks/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License: GPLv3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Docs](https://img.shields.io/badge/docs-imcf.one%2Fpatchworks-blue)](https://imcf.one/patchworks/)
 
 > Tiled processing of arbitrarily large images — any image, any function.
@@ -313,4 +313,4 @@ Optional:
 
 ## License
 
-MIT
+GNU General Public License v3.0 (GPL-3.0). See [LICENSE](LICENSE).

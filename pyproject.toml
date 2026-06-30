@@ -7,7 +7,7 @@ name = "patchworks"
 dynamic = ["version"]
 description = "Tiled processing of arbitrarily large images with globally consistent labels"
 readme = "README.md"
-license = { text = "MIT" }
+license = { text = "GPL-3.0-only" }
 authors = [{ name = "IMCF Basel" }]
 keywords = [
     "image processing",
@@ -21,7 +21,7 @@ keywords = [
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
