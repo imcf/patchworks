@@ -41,6 +41,8 @@ dependencies = [
 [project.optional-dependencies]
 io = ["psutil", "tqdm"]
 cellpose = ["cellpose>=3.0"]
+cellpose3 = ["cellpose>=3.0,<4"]
+cellpose4 = ["cellpose>=4"]
 gpu = ["nvidia-ml-py"]
 # bioio enables converting any image format (CZI, LIF, ND2, OME-TIFF, …) to
 # OME-ZARR. Ships the common native readers (faster than going through Java)
