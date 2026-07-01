@@ -41,10 +41,17 @@ pip install "patchworks[workflow,cellpose,imaris,bioio]"
 Prefer pixi? No conda needed — a `pixi.toml` is included:
 
 ```bash
-pixi install
-pixi run dry    # dry-run
-pixi run go     # run locally
-pixi run slurm  # submit to SLURM
+pixi install               # default env (latest compatible Cellpose)
+pixi install -e cellpose3  # pin to Cellpose 3.x
+pixi install -e cellpose4  # pin to Cellpose 4+
+
+pixi run dry               # dry-run (default env)
+pixi run go                # run locally (default env)
+pixi run slurm             # submit to SLURM (default env)
+
+# To run with a specific Cellpose version:
+pixi run -e cellpose3 go
+pixi run -e cellpose4 go
 ```
 
 ## Configure

@@ -36,12 +36,14 @@ pip install patchworks
 Optional extras:
 
 ```bash
-pip install "patchworks[gpu]"      # GPU VRAM querying (nvidia-ml-py)
-pip install "patchworks[cellpose]" # Cellpose plugin
-pip install "patchworks[bioio]"    # convert any image format to OME-ZARR
-pip install "patchworks[imaris]"   # convert Imaris .ims files to OME-ZARR
-pip install "patchworks[napari]"   # interactive napari viewer plugin
-pip install "patchworks[all]"      # Everything, incl. the napari viewer
+pip install "patchworks[gpu]"       # GPU VRAM querying (nvidia-ml-py)
+pip install "patchworks[cellpose]"  # Cellpose plugin (>=3.0, v3 or v4)
+pip install "patchworks[cellpose3]" # Cellpose plugin, pinned to v3.x
+pip install "patchworks[cellpose4]" # Cellpose plugin, pinned to v4+
+pip install "patchworks[bioio]"     # convert any image format to OME-ZARR
+pip install "patchworks[imaris]"    # convert Imaris .ims files to OME-ZARR
+pip install "patchworks[napari]"    # interactive napari viewer plugin
+pip install "patchworks[all]"       # Everything, incl. the napari viewer
 ```
 
 > `bioio` reads CZI/LIF/ND2/OME-TIFF/… The `[bioio]` extra bundles the common
@@ -303,7 +305,8 @@ Optional:
 - `psutil` — accurate RAM sizing for `tile_shape="auto"`
 - `nvidia-ml-py` — accurate GPU VRAM sizing
 - `tqdm` — progress bars
-- `cellpose` — Cellpose plugin (`patchworks[cellpose]`)
+- `cellpose` — Cellpose plugin, v3 or v4 (`patchworks[cellpose]`);
+  pin with `[cellpose3]` or `[cellpose4]`
 - `bioio` + readers — convert CZI/LIF/ND2/OME-TIFF/… to OME-ZARR
   (`patchworks[bioio]`)
 - `imaris-ims-file-reader` — convert Imaris `.ims` (`patchworks[imaris]`)
