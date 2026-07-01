@@ -5,6 +5,7 @@ boundaries, optionally renumbers them) and writes the result back into the
 image store under ``labels/<name>/`` as a calibrated, multi-scale pyramid.
 """
 
+import os
 import shutil
 from pathlib import Path
 
@@ -19,11 +20,17 @@ work_dir = cfg["work_dir"]
 image_store = str(Path(work_dir) / "image.zarr")
 merged_store = str(Path(work_dir) / "_merged.zarr")
 
+# merge_tile_labels defaults to min(4, cpu_count) workers, so it ignores
+# whatever cpus_per_task the "merge" rule was actually allocated in the SLURM
+# profile. Read the real allocation (SLURM_CPUS_PER_TASK) so the job uses all
+# the cores it's paying for; merge_workers: in config.yaml can still override.
+default_workers = int(os.environ.get("SLURM_CPUS_PER_TASK", os.cpu_count() or 4))
 merged = merge_tile_labels(
     stage_path(work_dir),
     write_to=merged_store,
     input_component="staged",
     sequential_labels=cfg.get("sequential_labels", True),
+    n_workers=cfg.get("merge_workers", default_workers),
     progress=False,
 )
 group = write_labels(

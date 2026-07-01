@@ -51,3 +51,7 @@ cellpose:
 pyramid_levels: 5
 pyramid_downscale: 2
 sequential_labels: true # renumber merged labels to a contiguous 1..N range
+
+# ---- merge performance --------------------------------------------------
+# null -> use the "merge" rule's actual cpus_per_task (profile/slurm/config.yaml).
+merge_workers: null
