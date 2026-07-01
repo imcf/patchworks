@@ -5,7 +5,13 @@
 # Edit the partitions / account / GPU request for your cluster.
 
 executor: slurm
-jobs: 64 # max concurrent SLURM jobs (≈ how many GPUs you can grab at once)
+# Max concurrent SLURM jobs Snakemake will have in flight at once. This is a
+# submission-side cap, not a cluster limit — raising it just lets more
+# "segment" tiles queue/run together; scicore's scheduler still enforces your
+# real GPU quota (MaxTRESPU) and backfills the rest, so it's safe to raise.
+# Check your actual per-user GPU cap with:
+#   sacctmgr show assoc user=$USER format=account,partition,maxjobs,GrpTRES
+jobs: 128
 latency-wait: 60
 rerun-incomplete: true
 # Only re-run when an output is missing/stale — NOT when the patchworks code,
@@ -26,8 +32,12 @@ default-resources:
 # Per-rule overrides.
 set-resources:
   convert:
+    # bioio/dask's default threaded scheduler uses every visible core, so
+    # this scales conversion for free. Verify actual scaling with `seff
+    # <jobid>` after a run and dial back if efficiency is low (scicore
+    # fair-share asks you not to sit on idle cores).
     mem_mb: 64000
-    cpus_per_task: 8
+    cpus_per_task: 32
     runtime: 360
   prepare:
     mem_mb: 32000
@@ -44,6 +54,8 @@ set-resources:
     cpus_per_task: 4
     runtime: 360 # 6 hours — must match the QOS, NOT 120 (=2h → killed early)
   merge:
+    # merge_tile_labels now uses n_workers = this allocation (see merge.py /
+    # config.yaml's merge_workers) instead of silently capping at 4 threads.
     mem_mb: 128000
-    cpus_per_task: 8
+    cpus_per_task: 32
     runtime: 240
