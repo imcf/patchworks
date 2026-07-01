@@ -142,6 +142,36 @@ def _resolve_image(
     return source
 
 
+def _pyramid_scale(path: Union[str, Path], ndim: int) -> list[float] | None:
+    """Read the level-0 physical scale (µm/px) from an OME-ZARR's own metadata.
+
+    Without this, napari shows every axis with an implicit scale of 1, so a
+    volume with anisotropic voxels (e.g. z coarser than x/y) renders with the
+    wrong aspect ratio and no real-world units.
+
+    Parameters
+    ----------
+    path : str or Path
+        OME-ZARR store path (image or label group) — each carries its own
+        ``multiscales`` metadata, so image and label stores are read
+        independently.
+    ndim : int
+        Number of spatial dimensions of the loaded array (2 -> "yx", 3 ->
+        "zyx"), used to align the calibration to the right axes.
+
+    Returns
+    -------
+    list of float or None
+        Physical size per axis, or ``None`` if the store carries no
+        calibration (napari then falls back to its uncalibrated default).
+    """
+    from .ome_zarr import _base_scale, _default_axes, _read_zarr_calibration
+
+    axes = _default_axes(ndim)
+    pixel_size = _read_zarr_calibration(str(path), axes)
+    return _base_scale(axes, pixel_size) if pixel_size else None
+
+
 def _inner_label_names(store: Union[str, Path]) -> list[str]:
     """List label images registered under an OME-ZARR's ``labels/`` group.
 
@@ -248,11 +278,14 @@ def view_in_napari(
     napari = _require_napari()
 
     img = _resolve_image(image, channel)
+    img_ndim = img[0].ndim if isinstance(img, list) else img.ndim
+    img_scale = _pyramid_scale(image, img_ndim) if _is_zarr(image) else None
     viewer = napari.Viewer()
     viewer.add_image(
         img,
         name=image_name,
         multiscale=isinstance(img, list),
+        scale=img_scale,
         **add_image_kwargs,
     )
 
@@ -288,16 +321,32 @@ def view_in_napari(
 
     if labels is not None:
         lab = _resolve_labels(labels, labels_component)
-        viewer.add_labels(lab, name=labels_name, **label_kwargs)
+        lab_ndim = lab[0].ndim if isinstance(lab, list) else lab.ndim
+        lab_scale = _pyramid_scale(labels, lab_ndim) if _is_zarr(labels) else None
+        viewer.add_labels(
+            lab,
+            name=labels_name,
+            multiscale=isinstance(lab, list),
+            scale=lab_scale,
+            **label_kwargs,
+        )
     elif _is_zarr(image):
         # No labels given → auto-overlay every label image stored inside the
         # OME-ZARR under labels/<name>/ (the default place tile_process writes
-        # them), each as its own multi-scale Labels layer.
+        # them), each as its own multi-scale Labels layer. Kept as a list (not
+        # unwrapped to a single array) even for one level, so napari always
+        # treats it as multiscale — required for 3D resolution switching, see
+        # https://napari.org/stable/gallery/add_multiscale_volume.html
         for name in _inner_label_names(image):
-            levels = _multiscale_levels(f"{image}/labels/{name}", None)
+            store = f"{image}/labels/{name}"
+            levels = _multiscale_levels(store, None)
             lab = [lvl.astype("int32") for lvl in levels]
             viewer.add_labels(
-                lab if len(lab) > 1 else lab[0], name=name, **label_kwargs
+                lab,
+                name=name,
+                multiscale=True,
+                scale=_pyramid_scale(store, lab[0].ndim),
+                **label_kwargs,
             )
             logger.info("auto-loaded labels/%s from %s", name, image)
 
