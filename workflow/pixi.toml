@@ -15,8 +15,22 @@ platforms = ["linux-64"]
 [dependencies]
 python = "3.12.*"
 
+# Default env uses patchworks[cellpose] (>=3.0, resolves to latest compatible).
 [pypi-dependencies]
 patchworks = { version = "*", extras = ["workflow", "cellpose", "imaris", "bioio"] }
+
+# Cellpose-version-pinned features for explicit environments below.
+[feature.cp3.pypi-dependencies]
+cellpose = ">=3.0,<4"
+
+[feature.cp4.pypi-dependencies]
+cellpose = ">=4"
+
+# Named environments: pixi install -e cellpose3 / -e cellpose4
+# The base patchworks[cellpose] (>=3.0) is further constrained by each feature.
+[environments]
+cellpose3 = { features = ["cp3"], solve-group = "cp3" }
+cellpose4 = { features = ["cp4"], solve-group = "cp4" }
 
 [tasks]
 # --rerun-triggers mtime: don't redo finished steps (e.g. the conversion) just
