@@ -37,5 +37,10 @@ group = write_labels(
 
 shutil.rmtree(merged_store, ignore_errors=True)
 shutil.rmtree(stage_path(work_dir), ignore_errors=True)
+# Also drop the checkpoint's completion sentinel (stage.zarr.done): the
+# "prepare" rule's stage=touch(STAGE_OK) output must not outlive the store it
+# claims exists, or a future rerun (e.g. re-segmenting for new labels) skips
+# "prepare" and "segment" tries to open a stage.zarr that's already gone.
+Path(f"{stage_path(work_dir)}.done").unlink(missing_ok=True)
 print(f"[patchworks] labels written to {group}")
 open(snakemake.output[0], "w").close()  # noqa: F821
