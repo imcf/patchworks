@@ -36,6 +36,7 @@ from ._distributed import create_stage, spatial_tiles, stage_tile
 from ._io import estimate_empty_tiles, load_ome_zarr
 from ._merge import merge_tile_labels
 from ._relabel import relabel_sequential_array, relabel_sequential_zarr
+from ._relations import label_relations
 
 try:
     __version__ = _pkg_version("patchworks")
@@ -52,6 +53,7 @@ __all__ = [
     "make_local_cluster",
     "relabel_sequential_array",
     "relabel_sequential_zarr",
+    "label_relations",
     "spatial_tiles",
     "create_stage",
     "stage_tile",
