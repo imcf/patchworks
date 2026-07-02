@@ -59,15 +59,16 @@ bioio = [
 # imaris reads .ims files natively (HDF5, no JVM) for OME-ZARR conversion.
 imaris = ["imaris-ims-file-reader"]
 # napari enables the interactive viewer plugin.
-# - napari >= 0.5: NumPy 2.0 compatible (older 0.4.x uses np.array(copy=False),
-#   which raises under NumPy 2 -> ValidationError on Viewer()).
+# - napari >= 0.7.1: adds locked_data_level (manual multiscale resolution pin
+#   for 2D *and* 3D) — before this, 3D view always showed the coarsest
+#   pyramid level unconditionally, with no way to change it.
 # - numpy < 2.5: napari/numba don't support numpy 2.5 yet.
 # - ipykernel < 7: napari-console requires ipykernel < 7.
 # - lxml-html-clean: napari's notebook_display imports lxml.html.clean, split
 #   into a separate package in lxml >= 5.2 (else ImportError on Viewer()).
 # - glasbey: distinct high-contrast label LUTs for view_in_napari.
 napari = [
-    "napari[all]>=0.5.5",
+    "napari[all]>=0.7.1",
     "numpy<2.5",
     "ipykernel<7",
     "lxml-html-clean",

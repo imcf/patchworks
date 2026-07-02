@@ -142,12 +142,14 @@ def _resolve_image(
     return source
 
 
-def _pyramid_scale(path: Union[str, Path], ndim: int) -> list[float] | None:
-    """Read the level-0 physical scale (µm/px) from an OME-ZARR's own metadata.
+def _pyramid_calibration(
+    path: Union[str, Path], ndim: int
+) -> tuple[list[float], list[str]] | tuple[None, None]:
+    """Read the level-0 physical scale and units from an OME-ZARR's metadata.
 
-    Without this, napari shows every axis with an implicit scale of 1, so a
-    volume with anisotropic voxels (e.g. z coarser than x/y) renders with the
-    wrong aspect ratio and no real-world units.
+    Without this, napari shows every axis with an implicit scale of 1 and
+    "pixel" units, so a volume with anisotropic voxels (e.g. z coarser than
+    x/y) renders with the wrong aspect ratio and no real-world units.
 
     Parameters
     ----------
@@ -161,15 +163,20 @@ def _pyramid_scale(path: Union[str, Path], ndim: int) -> list[float] | None:
 
     Returns
     -------
-    list of float or None
-        Physical size per axis, or ``None`` if the store carries no
-        calibration (napari then falls back to its uncalibrated default).
+    tuple
+        ``(scale, units)`` — physical size and unit name per axis — or
+        ``(None, None)`` if the store carries no calibration (napari then
+        falls back to its uncalibrated pixel default).
     """
     from .ome_zarr import _base_scale, _default_axes, _read_zarr_calibration
 
     axes = _default_axes(ndim)
     pixel_size = _read_zarr_calibration(str(path), axes)
-    return _base_scale(axes, pixel_size) if pixel_size else None
+    if not pixel_size:
+        return None, None
+    scale = _base_scale(axes, pixel_size)
+    units = ["micrometer"] * len(scale)
+    return scale, units
 
 
 def _inner_label_names(store: Union[str, Path]) -> list[str]:
@@ -271,6 +278,18 @@ def view_in_napari(
     napari.Viewer
         The viewer instance (useful when ``show=False``).
 
+    Notes
+    -----
+    In 3-D view (the cube icon, or ``viewer.dims.ndisplay = 3``), napari
+    always shows the **coarsest** pyramid level — there is no automatic
+    zoom-based switching in 3-D, only in 2-D. To pin a specific resolution
+    (needs ``napari>=0.7.1``)::
+
+        viewer.layers["labels"].locked_data_level = 0   # full resolution
+        viewer.layers["labels"].locked_data_level = None  # back to coarsest
+
+    A widget for this is also in the layer controls panel in napari>=0.7.1.
+
     Examples
     --------
     >>> view_in_napari("scan.zarr")  # auto-loads scan.zarr/labels/*  # doctest: +SKIP
@@ -279,13 +298,16 @@ def view_in_napari(
 
     img = _resolve_image(image, channel)
     img_ndim = img[0].ndim if isinstance(img, list) else img.ndim
-    img_scale = _pyramid_scale(image, img_ndim) if _is_zarr(image) else None
+    img_scale, img_units = (
+        _pyramid_calibration(image, img_ndim) if _is_zarr(image) else (None, None)
+    )
     viewer = napari.Viewer()
     viewer.add_image(
         img,
         name=image_name,
         multiscale=isinstance(img, list),
         scale=img_scale,
+        units=img_units,
         **add_image_kwargs,
     )
 
@@ -322,12 +344,17 @@ def view_in_napari(
     if labels is not None:
         lab = _resolve_labels(labels, labels_component)
         lab_ndim = lab[0].ndim if isinstance(lab, list) else lab.ndim
-        lab_scale = _pyramid_scale(labels, lab_ndim) if _is_zarr(labels) else None
+        lab_scale, lab_units = (
+            _pyramid_calibration(labels, lab_ndim)
+            if _is_zarr(labels)
+            else (None, None)
+        )
         viewer.add_labels(
             lab,
             name=labels_name,
             multiscale=isinstance(lab, list),
             scale=lab_scale,
+            units=lab_units,
             **label_kwargs,
         )
     elif _is_zarr(image):
@@ -341,11 +368,13 @@ def view_in_napari(
             store = f"{image}/labels/{name}"
             levels = _multiscale_levels(store, None)
             lab = [lvl.astype("int32") for lvl in levels]
+            lab_scale, lab_units = _pyramid_calibration(store, lab[0].ndim)
             viewer.add_labels(
                 lab,
                 name=name,
                 multiscale=True,
-                scale=_pyramid_scale(store, lab[0].ndim),
+                scale=lab_scale,
+                units=lab_units,
                 **label_kwargs,
             )
             logger.info("auto-loaded labels/%s from %s", name, image)
