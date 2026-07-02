@@ -1045,6 +1045,7 @@ def register_labels(
     chunks: Union[tuple[int, ...], None] = None,
     shard: ShardSpec = False,
     progress: bool = True,
+    n_objects: Union[int, None] = None,
 ) -> str:
     """Pyramidalise and register an existing ``labels/<name>/0`` base level.
 
@@ -1076,6 +1077,14 @@ def register_labels(
         Sharding request (see :func:`to_ome_zarr`'s *shard*).
     progress : bool, optional
         Show a per-level dask progress bar (default ``True``).
+    n_objects : int or None, optional
+        Exact non-background object count, if known (e.g. from
+        :func:`patchworks.merge_tile_labels`'s ``return_count=True`` after
+        ``sequential_labels=True``, which means ``ids == range(1, n_objects
+        + 1)`` by construction). When given, written into the label group's
+        attrs as ``n_objects``/``sequential_labels`` so a downstream reader
+        (e.g. napari-dask-ndmeasure) can use the known id set instead of
+        re-deriving it with a full-volume scan of its own.
 
     Returns
     -------
@@ -1106,6 +1115,9 @@ def register_labels(
     )
     grp = zarr.open_group(group, mode="a")
     grp.attrs["image-label"] = {"version": _NGFF_VERSION}
+    if n_objects is not None:
+        grp.attrs["n_objects"] = int(n_objects)
+        grp.attrs["sequential_labels"] = True
 
     labels_grp = zarr.open_group(f"{store}/labels", mode="a")
     registered = list(labels_grp.attrs.get("labels", []))
@@ -1128,6 +1140,7 @@ def write_labels(
     shard: ShardSpec = False,
     progress: bool = True,
     overwrite: bool = False,
+    n_objects: Union[int, None] = None,
 ) -> str:
     """Store *labels* inside *image_store* under the NGFF ``labels/`` group.
 
@@ -1166,6 +1179,9 @@ def write_labels(
     overwrite : bool, optional
         Replace an existing label image of the same *name* (default
         ``False``).
+    n_objects : int or None, optional
+        Exact non-background object count, if known — forwarded to
+        :func:`register_labels`; see its docstring for what this enables.
 
     Returns
     -------
@@ -1175,10 +1191,16 @@ def write_labels(
     Examples
     --------
     >>> from patchworks import merge_tile_labels
-    >>> merged = merge_tile_labels(
-    ...     "stage.zarr", input_component="staged", write_to="merged.zarr"
+    >>> merged, n = merge_tile_labels(
+    ...     "stage.zarr",
+    ...     input_component="staged",
+    ...     write_to="merged.zarr",
+    ...     sequential_labels=True,
+    ...     return_count=True,
     ... )  # doctest: +SKIP
-    >>> write_labels("scan.zarr", merged, name="cells")  # doctest: +SKIP
+    >>> write_labels(
+    ...     "scan.zarr", merged, name="cells", n_objects=n
+    ... )  # doctest: +SKIP
     'scan.zarr/labels/cells'
     """
     arr = labels if isinstance(labels, da.Array) else da.asarray(labels)
@@ -1209,4 +1231,5 @@ def write_labels(
         chunks=chunks,
         shard=shard,
         progress=progress,
+        n_objects=n_objects,
     )

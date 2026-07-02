@@ -68,3 +68,39 @@ def test_inner_label_discovery_none(tmp_path):
         np.zeros((8, 8, 8), "uint16"), tmp_path / "img.zarr", n_levels=1
     )
     assert nplugin._inner_label_names(store) == []
+
+
+def test_label_hint_present_when_n_objects_written(tmp_path):
+    """write_labels(..., n_objects=...) is readable back via _label_hint."""
+    from patchworks.plugins.ome_zarr import to_ome_zarr, write_labels
+
+    store = to_ome_zarr(
+        np.zeros((8, 8, 8), "uint16"), tmp_path / "scan.zarr", n_levels=1
+    )
+    write_labels(
+        store,
+        np.ones((8, 8, 8), "int32"),
+        name="cells",
+        n_levels=1,
+        n_objects=17,
+    )
+
+    hint = nplugin._label_hint(f"{store}/labels/cells")
+    assert hint == {"n_objects": 17, "sequential_labels": True}
+
+
+def test_label_hint_empty_without_n_objects(tmp_path):
+    """No n_objects= at write time -> no hint, not a misleading default."""
+    from patchworks.plugins.ome_zarr import to_ome_zarr, write_labels
+
+    store = to_ome_zarr(
+        np.zeros((8, 8, 8), "uint16"), tmp_path / "scan.zarr", n_levels=1
+    )
+    write_labels(store, np.ones((8, 8, 8), "int32"), name="cells", n_levels=1)
+
+    assert nplugin._label_hint(f"{store}/labels/cells") == {}
+
+
+def test_label_hint_missing_store_returns_empty():
+    """A path that doesn't exist (or isn't a label group) just yields {}."""
+    assert nplugin._label_hint("/no/such/store.zarr") == {}

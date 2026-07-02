@@ -148,6 +148,62 @@ def test_merge_tile_labels_standalone(tmp_path):
     assert ids.size == 1, f"object split into {ids.size} labels, expected 1"
 
 
+def test_merge_tile_labels_return_count(tmp_path):
+    # sequential_labels=True already computes the exact object count while
+    # renumbering to 1..N — return_count=True surfaces it instead of
+    # discarding it, so a caller can persist it (e.g. write_labels'
+    # n_objects=) for a downstream consumer to skip re-deriving the id set.
+    import dask.array as da
+
+    from patchworks import merge_tile_labels
+
+    data = np.zeros((1, 16, 32), dtype="uint16")
+    data[0, 2:6, 2:6] = 1
+    data[0, 2:6, 10:14] = 1  # same tile-local label, different object
+    image = da.from_array(data, chunks=(1, 16, 16))
+
+    def fn(tile):
+        from skimage.measure import label
+
+        return label(tile > 0).astype("int32")
+
+    labeled = image.map_blocks(
+        fn, dtype="int32", meta=np.empty((0,) * image.ndim, dtype="int32")
+    )
+    out = str(tmp_path / "merged.zarr")
+    merged, n_objects = merge_tile_labels(
+        labeled, write_to=out, sequential_labels=True, return_count=True
+    )
+    arr = merged.compute()
+    ids = np.unique(arr[arr > 0])
+    assert n_objects == ids.size
+    assert n_objects == 2
+
+
+def test_merge_tile_labels_return_count_none_without_sequential(tmp_path):
+    import dask.array as da
+
+    from patchworks import merge_tile_labels
+
+    data = np.zeros((1, 16, 32), dtype="uint16")
+    data[0, 4:12, 8:24] = 1
+    image = da.from_array(data, chunks=(1, 16, 16))
+
+    def fn(tile):
+        from skimage.measure import label
+
+        return label(tile > 0).astype("int32")
+
+    labeled = image.map_blocks(
+        fn, dtype="int32", meta=np.empty((0,) * image.ndim, dtype="int32")
+    )
+    out = str(tmp_path / "merged.zarr")
+    merged, n_objects = merge_tile_labels(
+        labeled, write_to=out, sequential_labels=False, return_count=True
+    )
+    assert n_objects is None
+
+
 def test_merge_transitive_three_tiles(tmp_path):
     # A cell that spans 3 tiles (A→B→C) must be merged into one label even
     # though A and C never directly touch. Transitivity via connected_components.

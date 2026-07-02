@@ -28,13 +28,14 @@ merged_store = str(Path(work_dir) / label_name / "_merged.zarr")
 default_workers = int(
     os.environ.get("SLURM_CPUS_PER_TASK", os.cpu_count() or 4)
 )
-merged = merge_tile_labels(
+merged, n_objects = merge_tile_labels(
     stage_path(work_dir, label_name),
     write_to=merged_store,
     input_component="staged",
     sequential_labels=cfg.get("sequential_labels", True),
     n_workers=cfg.get("merge_workers", default_workers),
     progress=False,
+    return_count=True,
 )
 group = write_labels(
     image_store,
@@ -43,6 +44,7 @@ group = write_labels(
     n_levels=int(cfg.get("pyramid_levels", 5)),
     downscale=int(cfg.get("pyramid_downscale", 2)),
     overwrite=True,
+    n_objects=n_objects,
 )
 
 shutil.rmtree(merged_store, ignore_errors=True)
