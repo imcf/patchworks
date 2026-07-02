@@ -67,12 +67,16 @@ imaris = ["imaris-ims-file-reader"]
 # - lxml-html-clean: napari's notebook_display imports lxml.html.clean, split
 #   into a separate package in lxml >= 5.2 (else ImportError on Viewer()).
 # - glasbey: distinct high-contrast label LUTs for view_in_napari.
+# - napari-dask-ndmeasure: out-of-core regionprops-style measurements
+#   (area/centroid/intensity stats) for huge Labels layers, straight off
+#   their backing dask/zarr arrays — the "Measure" dock widget.
 napari = [
     "napari[all]>=0.7.1",
     "numpy<2.5",
     "ipykernel<7",
     "lxml-html-clean",
     "glasbey",
+    "napari-dask-ndmeasure>=0.1.0",
 ]
 # workflow runs the Snakemake pipeline (per-tile SLURM jobs across GPUs).
 workflow = ["snakemake>=8", "snakemake-executor-plugin-slurm"]
