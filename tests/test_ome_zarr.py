@@ -130,6 +130,34 @@ def test_write_labels_into_store(tmp_path):
     assert lg.attrs["image-label"]["version"]
 
 
+def test_write_labels_n_objects_persisted(tmp_path):
+    """n_objects lands in the label group's attrs for a downstream reader."""
+    store = to_ome_zarr(
+        np.zeros((8, 8, 8), "uint16"), tmp_path / "img.zarr", n_levels=2
+    )
+    labels = np.ones((8, 8, 8), dtype="int32")
+
+    group = write_labels(store, labels, name="cells", n_levels=2, n_objects=42)
+
+    lg = zarr.open_group(group, mode="r")
+    assert lg.attrs["n_objects"] == 42
+    assert lg.attrs["sequential_labels"] is True
+
+
+def test_write_labels_no_n_objects_by_default(tmp_path):
+    """Without n_objects=, no misleading count is written."""
+    store = to_ome_zarr(
+        np.zeros((8, 8, 8), "uint16"), tmp_path / "img.zarr", n_levels=2
+    )
+    labels = np.ones((8, 8, 8), dtype="int32")
+
+    group = write_labels(store, labels, name="cells", n_levels=2)
+
+    lg = zarr.open_group(group, mode="r")
+    assert "n_objects" not in lg.attrs
+    assert "sequential_labels" not in lg.attrs
+
+
 def test_reuse_pyramid_ignored_for_arrays(tmp_path):
     """reuse_pyramid only affects .ims inputs; arrays still rebuild."""
     out = to_ome_zarr(

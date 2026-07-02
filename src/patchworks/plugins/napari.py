@@ -179,6 +179,41 @@ def _pyramid_calibration(
     return scale, units
 
 
+def _label_hint(path: Union[str, Path]) -> dict[str, Any]:
+    """Read the known-object-count hint from a label group's zarr attrs.
+
+    ``write_labels(..., n_objects=...)`` persists this when the labels were
+    renumbered to a contiguous ``1..N`` range (``sequential_labels=True``
+    during the merge) — the exact id set is then ``range(1, n_objects +
+    1)`` by construction, with no scan needed. Passed through as a Labels
+    layer's ``metadata`` so a downstream consumer (e.g.
+    napari-dask-ndmeasure) can use it instead of re-deriving the id set
+    from the array itself.
+
+    Parameters
+    ----------
+    path : str or Path
+        Label group path (e.g. ``f"{image}/labels/{name}"``).
+
+    Returns
+    -------
+    dict
+        ``{"n_objects": int, "sequential_labels": True}`` if the group has
+        the hint, else ``{}`` — safe to splat straight into
+        ``metadata=``/merge into a bigger dict either way.
+    """
+    try:
+        attrs = zarr.open_group(str(path), mode="r").attrs
+    except Exception:
+        return {}
+    if "n_objects" not in attrs:
+        return {}
+    return {
+        "n_objects": attrs["n_objects"],
+        "sequential_labels": attrs.get("sequential_labels", False),
+    }
+
+
 def _inner_label_names(store: Union[str, Path]) -> list[str]:
     """List label images registered under an OME-ZARR's ``labels/`` group.
 
@@ -351,12 +386,14 @@ def view_in_napari(
             if _is_zarr(labels)
             else (None, None)
         )
+        metadata = _label_hint(labels) if _is_zarr(labels) else {}
         viewer.add_labels(
             lab,
             name=labels_name,
             multiscale=isinstance(lab, list),
             scale=lab_scale,
             units=lab_units,
+            metadata=metadata,
             **label_kwargs,
         )
     elif _is_zarr(image):
@@ -377,6 +414,7 @@ def view_in_napari(
                 multiscale=True,
                 scale=lab_scale,
                 units=lab_units,
+                metadata=_label_hint(store),
                 **label_kwargs,
             )
             logger.info("auto-loaded labels/%s from %s", name, image)

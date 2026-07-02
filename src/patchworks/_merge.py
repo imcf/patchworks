@@ -459,7 +459,8 @@ def merge_tile_labels(
     stage_dir: Union[str, Path, None] = None,
     keep_stage: bool = False,
     progress: bool = False,
-) -> "da.Array":
+    return_count: bool = False,
+) -> Union["da.Array", tuple["da.Array", Union[int, None]]]:
     """Merge per-tile labels into a globally consistent label array.
 
     Standalone merge step — use this when you already have per-tile labels
@@ -503,11 +504,21 @@ def merge_tile_labels(
         Keep the temp stage zarr after merging. Default False.
     progress:
         Show a progress bar during the relabel step.
+    return_count:
+        Also return the exact object count. Only meaningful (non-``None``)
+        when ``sequential_labels=True``, which already computes it for free
+        while renumbering to ``1..N`` — otherwise no step here knows the
+        final count without an extra full scan, so the second element is
+        ``None``. Useful to persist alongside the labels (e.g.
+        ``write_labels(..., n_objects=...)``) so a downstream consumer with
+        the count can skip re-deriving the id set from the array itself.
 
     Returns
     -------
     da.Array
-        Merged label array (int32) backed by ``write_to``.
+        Merged label array (int32) backed by ``write_to``. Or, when
+        ``return_count=True``, a ``(labels, n_objects)`` tuple —
+        ``n_objects`` is ``None`` unless ``sequential_labels=True``.
 
     Examples
     --------
@@ -600,9 +611,10 @@ def merge_tile_labels(
         show_progress=progress,
     )
 
+    n_objects = None
     if sequential_labels:
         logger.info("Relabelling to contiguous ids…")
-        relabel_sequential_zarr(effective_out, output_component)
+        n_objects = relabel_sequential_zarr(effective_out, output_component)
 
     # -- Cleanup temp stage (only when we created it) --
     if not isinstance(labeled, (str, Path)) and not keep_stage:
@@ -611,4 +623,5 @@ def merge_tile_labels(
         shutil.rmtree(stage_path, ignore_errors=True)
         logger.info("Removed stage store %s", stage_path)
 
-    return da.from_zarr(effective_out, component=output_component)
+    result = da.from_zarr(effective_out, component=output_component)
+    return (result, n_objects) if return_count else result
