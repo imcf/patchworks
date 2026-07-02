@@ -86,6 +86,15 @@ the one converted `image.zarr` and land side by side in
 for the two-config recipe and `patchworks.label_relations()` for mapping one
 segmentation onto the other (e.g. nucleus → containing cell).
 
+One command instead of juggling several manual runs: list your configs (and
+which label pairs to relate) in `config/multi.yaml`, then:
+
+```bash
+pixi run multi-dry    # dry-run every segmentation config
+pixi run multi        # run locally
+pixi run multi-slurm  # submit every segmentation to SLURM
+```
+
 ## Output
 
 `<work_dir>/image.zarr` — the image plus `labels/<label_name>/` (multi-scale,

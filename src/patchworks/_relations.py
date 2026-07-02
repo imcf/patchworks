@@ -14,7 +14,9 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 
-def _as_dask(source: Union["da.Array", str, Path], component: str) -> "da.Array":
+def _as_dask(
+    source: Union["da.Array", str, Path], component: str
+) -> "da.Array":
     if isinstance(source, (str, Path)):
         return da.from_zarr(str(source), component=component)
     return source
@@ -96,7 +98,9 @@ def label_relations(
 
     def _one(flat_idx: int) -> np.ndarray:
         idx = np.unravel_index(flat_idx, n_blocks)
-        return _chunk_pairs(np.asarray(a.blocks[idx]), np.asarray(b.blocks[idx]))
+        return _chunk_pairs(
+            np.asarray(a.blocks[idx]), np.asarray(b.blocks[idx])
+        )
 
     with ThreadPoolExecutor(max_workers=nw) as ex:
         parts = list(ex.map(_one, range(total)))
@@ -130,7 +134,9 @@ def label_relations(
             best[a_id] = (b_id, count)
 
     logger.info(
-        "label_relations: %d a-labels matched across %d chunks", len(best), total
+        "label_relations: %d a-labels matched across %d chunks",
+        len(best),
+        total,
     )
     return {
         a_id: {

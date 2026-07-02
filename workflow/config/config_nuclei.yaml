@@ -1,0 +1,33 @@
+# Example segmentation config: nuclei channel.
+# Paired with config_cyto.yaml via config/multi.yaml — see
+# docs/guide/snakemake.md "Running two segmentations". Both configs share
+# work_dir (and thus image.zarr) with config_cyto.yaml, but keep tile_shape
+# identical across the two so patchworks.label_relations() can compare them.
+
+input: "/path/to/scan.ims"
+work_dir: "/path/to/results"
+
+reuse_pyramid: false
+convert_chunks: null
+shard: false
+
+channel: 1 # nuclear stain channel
+level: 0
+tile_shape: [16, 1024, 1024] # keep identical to config_cyto.yaml
+gpu_memory_gb: null
+overlap: 30
+skip_empty: true
+empty_threshold: null
+
+method: "cellpose"
+label_name: "nuclei_labels"
+cellpose:
+  model: "nuclei"
+  diameter: 15
+  do_3D: true
+  gpu: true
+
+pyramid_levels: 5
+pyramid_downscale: 2
+sequential_labels: true
+merge_workers: null

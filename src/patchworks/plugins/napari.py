@@ -299,7 +299,9 @@ def view_in_napari(
     img = _resolve_image(image, channel)
     img_ndim = img[0].ndim if isinstance(img, list) else img.ndim
     img_scale, img_units = (
-        _pyramid_calibration(image, img_ndim) if _is_zarr(image) else (None, None)
+        _pyramid_calibration(image, img_ndim)
+        if _is_zarr(image)
+        else (None, None)
     )
     viewer = napari.Viewer()
     viewer.add_image(
