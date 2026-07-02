@@ -8,7 +8,7 @@ dynamic = ["version"]
 description = "Tiled processing of arbitrarily large images with globally consistent labels"
 readme = "README.md"
 license = { text = "GPL-3.0-only" }
-authors = [{ name = "IMCF Basel" }]
+authors = [{ name = "Laurent Guerard", email = "laurent.guerard@unibas.ch" }]
 keywords = [
     "image processing",
     "tiling",
