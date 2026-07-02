@@ -33,7 +33,7 @@ def relabel_sequential_array(labels: np.ndarray) -> np.ndarray:
     Examples
     --------
     >>> relabel_sequential_array(np.array([0, 500000, 500000, 7]))
-    array([0, 2, 2, 1])
+    array([0, 2, 2, 1], dtype=uint16)
     """
     uniq = np.unique(labels)
     max_label = int(uniq[-1])
@@ -53,11 +53,41 @@ def relabel_sequential_array(labels: np.ndarray) -> np.ndarray:
 
 
 def relabel_sequential_zarr(store_path: str, component: str = "labels") -> int:
-    """Relabel a written label zarr to contiguous ids, in place. Returns N.
+    """Relabel a written label zarr to contiguous ids, in place.
 
     Two-pass streaming algorithm — safe for arrays far larger than RAM.
-    Pass 1 collects unique ids (bounded memory: a set). Pass 2 applies the
-    lookup-table remap chunk by chunk.
+    Pass 1 collects unique ids (bounded memory: a Python ``set``, not the
+    voxels themselves). Pass 2 applies the lookup-table remap chunk by
+    chunk, writing back into the same store.
+
+    Parameters
+    ----------
+    store_path : str
+        Path to the zarr store containing the label array.
+    component : str, optional
+        Array name inside the store to relabel in place (default
+        ``"labels"``).
+
+    Returns
+    -------
+    int
+        Number of distinct objects (``N``); the array now holds ``1..N``
+        (background ``0`` unchanged).
+
+    Examples
+    --------
+    >>> import zarr
+    >>> root = zarr.open_group("staged.zarr", mode="w")  # doctest: +SKIP
+    >>> root.create_array(
+    ...     "labels", shape=(4, 4), chunks=(4, 4), dtype="int32"
+    ... )[:] = [
+    ...     [0, 500000, 500000, 0],
+    ...     [0, 0, 0, 7],
+    ...     [0, 0, 0, 0],
+    ...     [0, 0, 0, 0],
+    ... ]  # doctest: +SKIP
+    >>> relabel_sequential_zarr("staged.zarr")  # doctest: +SKIP
+    2
     """
     root = zarr.open_group(store_path, mode="r+")
     z = root[component]

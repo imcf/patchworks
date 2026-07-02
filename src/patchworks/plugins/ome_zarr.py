@@ -953,10 +953,41 @@ def add_pyramid(
     ``multiscales`` metadata. Existing calibration is preserved; pass
     *pixel_size* to set it.
 
+    Parameters
+    ----------
+    group_path : str or Path
+        Zarr group containing the full-resolution array at *base*.
+    base : str, optional
+        Component name of the existing full-resolution level (default
+        ``"0"``). Auto-detected from existing ``multiscales`` metadata if
+        present, overriding this.
+    axes : str, optional
+        One letter per axis, e.g. ``"zyx"``. ``None`` → inferred from
+        existing metadata, or from the array's dimensionality.
+    pixel_size : dict, tuple or None, optional
+        Physical voxel size in micrometers. ``None`` → read from the store's
+        existing calibration, if any.
+    n_levels : int, optional
+        Maximum number of levels including the existing full-resolution one
+        (default 5).
+    downscale : int, optional
+        Per-level X/Y downsampling factor (default 2).
+    chunks : tuple of int, optional
+        Chunk shape for the written levels. ``None`` → a bounded default.
+    shard : bool or tuple of int, optional
+        Sharding request (see :func:`to_ome_zarr`'s *shard*).
+    progress : bool, optional
+        Show a per-level dask progress bar (default ``True``).
+
     Returns
     -------
     str
         The path to the updated group.
+
+    Examples
+    --------
+    >>> add_pyramid("scan.zarr", n_levels=4)  # doctest: +SKIP
+    'scan.zarr'
     """
     if downscale < 2:
         raise ValueError("downscale must be >= 2")
@@ -1023,10 +1054,38 @@ def register_labels(
     ``labels/.zattrs``, and inherits the parent image's pixel calibration
     (unless *pixel_size* is given).
 
+    Parameters
+    ----------
+    image_store : str or Path
+        OME-ZARR store path containing the image this label belongs to.
+    name : str, optional
+        Label image name under ``labels/`` (default ``"labels"``).
+    axes : str, optional
+        One letter per axis. ``None`` → inferred from the label array.
+    pixel_size : dict, tuple or None, optional
+        Physical voxel size in micrometers. ``None`` → inherited from the
+        parent image's own calibration.
+    n_levels : int, optional
+        Maximum number of pyramid levels including full resolution
+        (default 5).
+    downscale : int, optional
+        Per-level X/Y downsampling factor (default 2).
+    chunks : tuple of int, optional
+        Chunk shape for the written levels. ``None`` → a bounded default.
+    shard : bool or tuple of int, optional
+        Sharding request (see :func:`to_ome_zarr`'s *shard*).
+    progress : bool, optional
+        Show a per-level dask progress bar (default ``True``).
+
     Returns
     -------
     str
         Path to the label group (``image_store/labels/<name>``).
+
+    Examples
+    --------
+    >>> register_labels("scan.zarr", "cells")  # doctest: +SKIP
+    'scan.zarr/labels/cells'
     """
     store = str(image_store)
     group = f"{store}/labels/{name}"
@@ -1078,10 +1137,49 @@ def write_labels(
     single OME-ZARR store. Calibration is inherited from the parent image
     unless *pixel_size* is given.
 
+    Parameters
+    ----------
+    image_store : str or Path
+        OME-ZARR store this label image belongs to.
+    labels : da.Array or np.ndarray
+        Integer label array (0 = background), same spatial shape as the
+        image.
+    name : str, optional
+        Label image name under ``labels/`` (default ``"labels"``).
+    axes : str, optional
+        One letter per axis. ``None`` → inferred from *labels*'
+        dimensionality.
+    pixel_size : dict, tuple or None, optional
+        Physical voxel size in micrometers. ``None`` → inherited from the
+        parent image's own calibration.
+    n_levels : int, optional
+        Maximum number of pyramid levels including full resolution
+        (default 5).
+    downscale : int, optional
+        Per-level X/Y downsampling factor (default 2).
+    chunks : tuple of int, optional
+        Chunk shape for the written levels. ``None`` → a bounded default.
+    shard : bool or tuple of int, optional
+        Sharding request (see :func:`to_ome_zarr`'s *shard*).
+    progress : bool, optional
+        Show a per-level dask progress bar (default ``True``).
+    overwrite : bool, optional
+        Replace an existing label image of the same *name* (default
+        ``False``).
+
     Returns
     -------
     str
         Path to the written label group (``image_store/labels/<name>``).
+
+    Examples
+    --------
+    >>> from patchworks import merge_tile_labels
+    >>> merged = merge_tile_labels(
+    ...     "stage.zarr", input_component="staged", write_to="merged.zarr"
+    ... )  # doctest: +SKIP
+    >>> write_labels("scan.zarr", merged, name="cells")  # doctest: +SKIP
+    'scan.zarr/labels/cells'
     """
     arr = labels if isinstance(labels, da.Array) else da.asarray(labels)
     if axes is None:

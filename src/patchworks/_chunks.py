@@ -179,7 +179,7 @@ def auto_tile_shape(
     --------
     >>> tile = auto_tile_shape((128, 2048, 2048), "uint16")
     >>> tile
-    (8, 2048, 2048)
+    (128, 512, 512)
     """
     n_workers = n_workers or os.cpu_count() or 1
     itemsize = np.dtype(dtype).itemsize
