@@ -25,7 +25,9 @@ merged_store = str(Path(work_dir) / label_name / "_merged.zarr")
 # whatever cpus_per_task the "merge" rule was actually allocated in the SLURM
 # profile. Read the real allocation (SLURM_CPUS_PER_TASK) so the job uses all
 # the cores it's paying for; merge_workers: in config.yaml can still override.
-default_workers = int(os.environ.get("SLURM_CPUS_PER_TASK", os.cpu_count() or 4))
+default_workers = int(
+    os.environ.get("SLURM_CPUS_PER_TASK", os.cpu_count() or 4)
+)
 merged = merge_tile_labels(
     stage_path(work_dir, label_name),
     write_to=merged_store,

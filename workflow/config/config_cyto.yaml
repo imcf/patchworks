@@ -1,0 +1,33 @@
+# Example segmentation config: cytoplasm/membrane channel.
+# Paired with config_nuclei.yaml via config/multi.yaml — see
+# docs/guide/snakemake.md "Running two segmentations". Same work_dir as
+# config_nuclei.yaml, and the same tile_shape so patchworks.label_relations()
+# can compare the two label arrays chunk-for-chunk.
+
+input: "/path/to/scan.ims"
+work_dir: "/path/to/results"
+
+reuse_pyramid: false
+convert_chunks: null
+shard: false
+
+channel: 0 # cytoplasm/membrane channel
+level: 0
+tile_shape: [16, 1024, 1024] # keep identical to config_nuclei.yaml
+gpu_memory_gb: null
+overlap: 30
+skip_empty: true
+empty_threshold: null
+
+method: "cellpose"
+label_name: "cyto_labels"
+cellpose:
+  model: "cyto3"
+  diameter: 30
+  do_3D: true
+  gpu: true
+
+pyramid_levels: 5
+pyramid_downscale: 2
+sequential_labels: true
+merge_workers: null

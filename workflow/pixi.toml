@@ -1,8 +1,11 @@
 # pixi environment for the patchworks Snakemake workflow.
 #   pixi install
-#   pixi run dry      # dry-run (plan only)
-#   pixi run go       # run locally
-#   pixi run slurm    # submit to SLURM (edit profile/slurm/config.yaml first)
+#   pixi run dry          # dry-run (plan only)
+#   pixi run go           # run locally
+#   pixi run slurm        # submit to SLURM (edit profile/slurm/config.yaml first)
+#   pixi run multi        # run several segmentations + relate their labels (local)
+#   pixi run multi-slurm  # same, on SLURM
+#   pixi run multi-dry    # dry-run every segmentation in config/multi.yaml
 #
 # On a cluster, put this project on a shared filesystem the compute nodes can
 # read: the SLURM jobs re-launch snakemake from this env's interpreter.
@@ -38,3 +41,11 @@ cellpose4 = { features = ["cp4"], solve-group = "cp4" }
 dry = "snakemake -s Snakefile --configfile config/config.yaml --rerun-triggers mtime -n -p"
 go = "snakemake -s Snakefile --configfile config/config.yaml --rerun-triggers mtime --cores 8"
 slurm = "snakemake --workflow-profile profile/slurm --configfile config/config.yaml"
+
+# Run every segmentation config listed in config/multi.yaml (in order), then
+# relate their labels by voxel overlap (patchworks.label_relations) and write
+# a CSV per configured pair — see config/multi.yaml and
+# docs/guide/snakemake.md "Running two segmentations".
+multi-dry = "python scripts/run_multi.py --config config/multi.yaml -n"
+multi = "python scripts/run_multi.py --config config/multi.yaml"
+multi-slurm = "python scripts/run_multi.py --config config/multi.yaml --profile profile/slurm"

@@ -236,6 +236,12 @@ snakemake --workflow-profile profile/slurm --configfile config/config_nuclei.yam
 snakemake --workflow-profile profile/slurm --configfile config/config_cyto.yaml
 ```
 
+!!! tip "One command for several segmentations + relations"
+    `config/multi.yaml` lists any number of segmentation configs plus which
+    pairs to relate afterward; `pixi run multi` (or `multi-slurm`) runs them
+    in order and writes a CSV per pair — see *One command: multiple
+    segmentations + relations* below for the config format.
+
 Both land side by side in the same store:
 
 ```text
@@ -280,6 +286,43 @@ with open("nuclei_to_cell.csv", "w", newline="") as f:
     for nucleus_id, m in table.items():
         w.writerow([nucleus_id, m["match"], m["overlap_voxels"], m["overlap_fraction"]])
 ```
+
+### One command: multiple segmentations + relations
+
+`scripts/run_multi.py` (wired up as `pixi run multi`) sequences the above
+manually: run every segmentation config listed, then compute + save every
+configured relation — one command instead of juggling several `snakemake`
+calls and a separate Python step.
+
+```yaml
+# config/multi.yaml
+segmentations:
+  - config/config_nuclei.yaml
+  - config/config_cyto.yaml
+
+relations:
+  - a: nuclei_labels
+    b: cyto_labels
+    output: nuclei_to_cyto.csv # written into work_dir
+```
+
+```bash
+pixi run multi-dry    # dry-run every segmentation config (skips relations)
+pixi run multi        # run locally
+pixi run multi-slurm  # submit every segmentation to SLURM
+```
+
+Every listed segmentation config must share the same `work_dir` (so
+`label_relations` has one `image.zarr` to read both label groups from) — the
+script checks this and errors out otherwise. `relations` is optional; omit it
+to just chain segmentations without a relation step.
+
+Both lists are ordinary lists, so 3+ segmentations work the same way — add
+more entries to `segmentations`, then list whichever pairs to relate. There's
+no automatic "chain": list every pair explicitly, e.g. for nuclei + cyto +
+membrane you'd add `nuclei_labels -> cyto_labels`, `nuclei_labels ->
+membrane_labels`, and `cyto_labels -> membrane_labels` as three separate
+entries under `relations`.
 
 ## Measurements (fast, whole-volume regionprops)
 
