@@ -17,7 +17,9 @@ def test_label_relations_majority_overlap():
     b[0:2, 6:8] = 21  # 4 voxels overlap with label 2 -> tie, but let's skew it
     b[0:2, 6:7] = 20  # tip the tie: label 20 now has 6 voxels vs 21's 2
 
-    table = label_relations(da.from_array(a, chunks=(2, 5)), da.from_array(b, chunks=(2, 5)))
+    table = label_relations(
+        da.from_array(a, chunks=(2, 5)), da.from_array(b, chunks=(2, 5))
+    )
 
     assert table[1]["match"] == 10
     assert table[1]["overlap_voxels"] == 4
@@ -32,7 +34,9 @@ def test_label_relations_no_overlap_omitted():
     a[0, 0] = 1
     b = np.zeros((2, 2), dtype=np.int32)  # all background, no overlap anywhere
 
-    table = label_relations(da.from_array(a, chunks=(2, 2)), da.from_array(b, chunks=(2, 2)))
+    table = label_relations(
+        da.from_array(a, chunks=(2, 2)), da.from_array(b, chunks=(2, 2))
+    )
     assert table == {}
 
 
