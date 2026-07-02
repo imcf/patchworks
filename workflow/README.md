@@ -75,6 +75,17 @@ The GPU request lives in `profile/slurm/config.yaml` under
 `set-resources: segment:` (`--gres=gpu:1`). Raise `jobs:` to use more GPUs at
 once.
 
+## Multiple segmentations (nuclei + cytoplasm, …)
+
+Every intermediate path is namespaced under `work_dir/<label_name>/`, so
+running the workflow **twice with two configs** (different `label_name`,
+`channel`, `cellpose:`) against the **same `work_dir`** is safe — both reuse
+the one converted `image.zarr` and land side by side in
+`image.zarr/labels/<label_name>/`. See the
+[full guide](https://imcf.one/patchworks/guide/snakemake/#running-two-segmentations-eg-nuclei--cytoplasm)
+for the two-config recipe and `patchworks.label_relations()` for mapping one
+segmentation onto the other (e.g. nucleus → containing cell).
+
 ## Output
 
 `<work_dir>/image.zarr` — the image plus `labels/<label_name>/` (multi-scale,

@@ -194,6 +194,129 @@ also re-runs a step when its **code, params or software environment** change —
 so upgrading patchworks would re-do the conversion and overwrite an existing
 result. Keep `mtime` and reruns happen only when an output is missing or stale.
 
+## Running two segmentations (e.g. nuclei + cytoplasm)
+
+Every path the workflow writes — `tiles.json`, `stage.zarr`, per-tile `seg/`,
+the cached model, `labels.done` — lives under `work_dir/<label_name>/`, so
+running the workflow **twice with two configs against the same `work_dir`**
+never collides: each run gets its own private subdirectory, and both reuse
+the *same* already-converted `image.zarr` (conversion never re-runs).
+
+```yaml
+# config/config_nuclei.yaml
+input: "/data/scan.ims"
+work_dir: "/scratch/results"
+label_name: "nuclei_labels"
+channel: 1                # nuclear stain channel
+tile_shape: [16, 1024, 1024]
+cellpose:
+  model: "nuclei"
+  diameter: 15
+  do_3D: true
+```
+
+```yaml
+# config/config_cyto.yaml
+input: "/data/scan.ims"
+work_dir: "/scratch/results"   # same work_dir — image.zarr is reused
+label_name: "cyto_labels"
+channel: 0                # cytoplasm/membrane channel
+tile_shape: [16, 1024, 1024]   # keep this identical across configs — see below
+cellpose:
+  model: "cyto3"
+  diameter: 30
+  do_3D: true
+```
+
+Run them one after another (or as two independent SLURM submissions, even
+concurrently — they touch disjoint files):
+
+```bash
+snakemake --workflow-profile profile/slurm --configfile config/config_nuclei.yaml
+snakemake --workflow-profile profile/slurm --configfile config/config_cyto.yaml
+```
+
+Both land side by side in the same store:
+
+```text
+results/image.zarr/labels/nuclei_labels/
+results/image.zarr/labels/cyto_labels/
+```
+
+!!! tip "Keep `tile_shape` (and `level`) identical across configs"
+    Different segmentations of the same image can use different `channel` and
+    `cellpose:` settings freely, but keep `tile_shape`/`level` the same across
+    configs — the label arrays then share the exact same chunk layout, which
+    `label_relations()` (below) requires.
+
+### Relating labels across segmentations
+
+Once you have two segmentations of the same image (e.g. nuclei inside cells),
+`label_relations()` maps each label in one to the label it overlaps most in
+the other — by streaming both arrays chunk by chunk, so it scales to
+hundreds of thousands of objects without loading anything fully into RAM:
+
+```python
+import dask.array as da
+from patchworks import label_relations
+
+nuclei = da.from_zarr("results/image.zarr", component="labels/nuclei_labels/0")
+cells = da.from_zarr("results/image.zarr", component="labels/cyto_labels/0")
+
+table = label_relations(nuclei, cells)
+table[2]
+# {'match': 3, 'overlap_voxels': 4821, 'overlap_fraction': 0.94}
+# -> nucleus 2 belongs to cell 3, 94% of its voxels fall inside it
+```
+
+Save it as a table:
+
+```python
+import csv
+
+with open("nuclei_to_cell.csv", "w", newline="") as f:
+    w = csv.writer(f)
+    w.writerow(["nucleus_id", "cell_id", "overlap_voxels", "overlap_fraction"])
+    for nucleus_id, m in table.items():
+        w.writerow([nucleus_id, m["match"], m["overlap_voxels"], m["overlap_fraction"]])
+```
+
+## Measurements (fast, whole-volume regionprops)
+
+`skimage.measure.regionprops` needs the full labelled + intensity array in
+RAM — fine for one tile, not for a hundred-thousand-object OME-ZARR. Use
+[`dask-image`](https://image.dask.org)'s `ndmeasure`, which computes directly
+on the dask/zarr-backed arrays, chunk-parallel, without materializing the
+volume:
+
+```bash
+pip install dask-image
+```
+
+```python
+import dask.array as da
+from dask_image.ndmeasure import area, center_of_mass, mean, standard_deviation
+
+labels = da.from_zarr("results/image.zarr", component="labels/cyto_labels/0")
+image = da.from_zarr("results/image.zarr", component="0")[0]  # channel 0, level 0
+
+ids = da.unique(labels[labels > 0]).compute()
+areas = area(image, labels, ids).compute()               # voxel counts
+means = mean(image, labels, ids).compute()                # mean intensity
+stds = standard_deviation(image, labels, ids).compute()
+centroids = center_of_mass(image, labels, ids).compute()  # voxel coords (z, y, x)
+```
+
+Multiply `areas` by the voxel's physical volume and `centroids` by the pixel
+size (both read straight from the OME-ZARR's own `multiscales` metadata) to
+get µm-scale measurements.
+
+For interactively inspecting individual cells by clicking in the viewer
+(not all objects at once), the
+[napari-skimage-regionprops](https://github.com/haesleinhuepf/napari-skimage-regionprops)
+plugin's table widget works well — point it at a cropped region rather than
+the full volume, since it loads its input fully into memory.
+
 ## Custom segmentation function
 
 Not using Cellpose? Run **your own** per-tile function — no need to edit the

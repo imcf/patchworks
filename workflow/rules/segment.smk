@@ -35,7 +35,7 @@ rule segment:
         image=IMAGE_OK,
         model=MODEL_OK,
     output:
-        f"{WORK}/seg/{{index}}.done",
+        f"{RUN}/seg/{{index}}.done",
     log:
         f"{LOGS}/segment/{{index}}.log",
     script:

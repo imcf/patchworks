@@ -87,20 +87,26 @@ def open_image(work_dir, channel, level):
     )
 
 
-def stage_path(work_dir):
-    """Path of the staged-labels store.
+def stage_path(work_dir, label_name):
+    """Path of the staged-labels store for one segmentation run.
+
+    Namespaced under ``<work_dir>/<label_name>/`` so two segmentations
+    (different ``label_name``) can target the same ``work_dir`` without
+    colliding — see docs/guide/snakemake.md "Running two segmentations".
 
     Parameters
     ----------
     work_dir : str or Path
         Workflow output directory.
+    label_name : str
+        This run's ``label_name`` (from config).
 
     Returns
     -------
     str
-        ``<work_dir>/stage.zarr``.
+        ``<work_dir>/<label_name>/stage.zarr``.
     """
-    return str(Path(work_dir) / "stage.zarr")
+    return str(Path(work_dir) / label_name / "stage.zarr")
 
 
 def load_tiles_json(path):

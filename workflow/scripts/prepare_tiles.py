@@ -16,6 +16,8 @@ from _pw import open_image, stage_path, start_log
 start_log(snakemake.log[0])  # noqa: F821
 cfg = snakemake.config  # noqa: F821
 work_dir = cfg["work_dir"]
+label_name = cfg.get("label_name", "labels")
+Path(work_dir, label_name).mkdir(parents=True, exist_ok=True)
 image = open_image(work_dir, cfg["channel"], cfg["level"])
 
 ts = cfg.get("tile_shape", "auto")
@@ -46,9 +48,9 @@ if cfg.get("skip_empty", True):
     occ = info["occupancy"].ravel()  # row-major, matches spatial_tiles
     occupied = [i for i in range(len(tiles)) if occ[i]]
 
-create_stage(stage_path(work_dir), image.shape, tile_shape)
+create_stage(stage_path(work_dir, label_name), image.shape, tile_shape)
 
-Path(work_dir, "tiles.json").write_text(
+Path(work_dir, label_name, "tiles.json").write_text(
     json.dumps(
         {
             "tile_shape": list(tile_shape),

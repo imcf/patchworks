@@ -30,6 +30,10 @@ empty_threshold: null # null → Otsu; or a number
 
 # ---- segmentation -----------------------------------------------------------
 method: "cellpose" # "cellpose" (GPU), "threshold" (no GPU; testing), "custom"
+# Also namespaces this run's intermediate files under work_dir/<label_name>/,
+# so a second segmentation (different label_name, e.g. nuclei vs cytoplasm)
+# can safely target the same work_dir — see docs/guide/snakemake.md
+# "Running two segmentations".
 label_name: "cellpose_labels"
 cellpose:
   model: "nuclei"

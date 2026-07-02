@@ -26,4 +26,4 @@ localrules:
 
 rule all:
     input:
-        f"{WORK}/labels.done",
+        f"{RUN}/labels.done",

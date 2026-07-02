@@ -12,6 +12,7 @@ start_log(snakemake.log[0])  # noqa: F821
 cfg = snakemake.config  # noqa: F821
 index = int(snakemake.wildcards.index)  # noqa: F821
 work_dir = cfg["work_dir"]
+label_name = cfg.get("label_name", "labels")
 
 manifest = load_tiles_json(snakemake.input.tiles)  # noqa: F821
 image = open_image(work_dir, cfg["channel"], cfg["level"])
@@ -19,7 +20,7 @@ image = open_image(work_dir, cfg["channel"], cfg["level"])
 stage_tile(
     image,
     build_fn(cfg),
-    stage_path(work_dir),
+    stage_path(work_dir, label_name),
     index,
     tile_shape=tuple(manifest["tile_shape"]),
     overlap=int(manifest["overlap"]),

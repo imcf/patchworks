@@ -4,7 +4,7 @@ rule merge:
     input:
         occupied_done,
     output:
-        touch(f"{WORK}/labels.done"),
+        touch(f"{RUN}/labels.done"),
     log:
         STEPLOG,
     script:
