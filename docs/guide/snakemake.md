@@ -324,6 +324,14 @@ membrane you'd add `nuclei_labels -> cyto_labels`, `nuclei_labels ->
 membrane_labels`, and `cyto_labels -> membrane_labels` as three separate
 entries under `relations`.
 
+The shipped `config/multi.yaml` is actually a three-way example: nuclei +
+cytoplasm (Cellpose) plus cilia (`method: "custom"` ->
+[`patchworks.plugins.dog`](../examples/dog.md), deconvolution + a
+difference-of-Gaussians detector), related both ways (`cilia_labels ->
+cyto_labels` and `cilia_labels -> nuclei_labels`) so you can use whichever
+fits a given dataset. See `config/config_cilia.yaml`. Its deconvolution step
+needs `pip install "patchworks[dog]"` in the segment jobs' environment.
+
 ## Measurements (fast, whole-volume regionprops)
 
 `skimage.measure.regionprops` needs the full labelled + intensity array in
