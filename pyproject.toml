@@ -86,7 +86,9 @@ napari = [
     "napari-chunked-regionprops>=0.1.0",
 ]
 # workflow runs the Snakemake pipeline (per-tile SLURM jobs across GPUs).
-workflow = ["snakemake>=8", "snakemake-executor-plugin-slurm"]
+# openpyxl -> scripts/run_multi.py writes label_relations() output as an
+# Excel workbook (per-object + per-container sheets), not a plain CSV.
+workflow = ["snakemake>=8", "snakemake-executor-plugin-slurm", "openpyxl"]
 dev = ["pytest", "pytest-cov", "scikit-image", "psutil", "tqdm"]
 docs = ["mkdocs-material>=9.0", "mkdocstrings[python]>=0.24"]
 all = [
