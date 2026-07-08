@@ -303,7 +303,7 @@ segmentations:
 relations:
   - a: nuclei_labels
     b: cyto_labels
-    output: nuclei_to_cyto.csv # written into work_dir
+    output: nuclei_to_cyto.xlsx # written into work_dir
 ```
 
 ```bash
@@ -316,6 +316,19 @@ Every listed segmentation config must share the same `work_dir` (so
 `label_relations` has one `image.zarr` to read both label groups from) — the
 script checks this and errors out otherwise. `relations` is optional; omit it
 to just chain segmentations without a relation step.
+
+Each `output:` is an Excel workbook (`openpyxl`, part of the `workflow`
+extra) with two sheets:
+
+| Sheet | One row per | Columns |
+| --- | --- | --- |
+| `<a>` | every non-background `a` label, **including unmatched ones** | `<a>_id`, `<b>_id` (blank if unmatched), `overlap_voxels`, `overlap_fraction` (0 if unmatched) |
+| `<b>` | every non-background `b` label, **including ones with zero matches** | `<b>_id`, `<a>_count`, `total_overlap_voxels` |
+
+Unlike calling `label_relations()` directly (which only returns matched `a`
+labels — see below), the workbook always covers every object in both
+segmentations, so counts (e.g. "how many nuclei have no matching cell",
+"how many cells have zero cilia") aren't silently dropped.
 
 Both lists are ordinary lists, so 3+ segmentations work the same way — add
 more entries to `segmentations`, then list whichever pairs to relate. There's
