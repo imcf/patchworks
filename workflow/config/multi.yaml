@@ -14,8 +14,15 @@
 segmentations:
 - config/config_nuclei.yaml
 - config/config_cyto.yaml
+- config/config_cilia.yaml
 
 relations:
 - a: nuclei_labels
   b: cyto_labels
   output: nuclei_to_cyto.csv
+- a: cilia_labels
+  b: cyto_labels
+  output: cilia_to_cell.csv
+- a: cilia_labels
+  b: nuclei_labels
+  output: cilia_to_nucleus.csv
