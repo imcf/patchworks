@@ -12,13 +12,15 @@ a Snakemake rule — the segmentations already namespace their own paths under
 work_dir/<label_name>/, so running them one after another here is exactly
 equivalent to running each snakemake command by hand). Once all segmentations
 finish, each configured relation pair is computed via
-patchworks.label_relations and written as a CSV in work_dir.
+patchworks.label_relations and written as an Excel workbook in work_dir,
+with two sheets: one row per a-object (unmatched ones included, with an
+empty b-id and zeros) and one row per b-object (a-object count + total
+overlap, including b-objects with zero matches).
 """
 
 from __future__ import annotations
 
 import argparse
-import csv
 import subprocess
 import sys
 from pathlib import Path
@@ -121,39 +123,61 @@ def main() -> None:
     image_store = f"{work_dir}/image.zarr"
 
     import dask.array as da
+    import openpyxl
 
     from patchworks import label_relations
 
     for rel in relations:
         a_name, b_name = rel["a"], rel["b"]
         out_path = Path(work_dir) / rel.get(
-            "output", f"{a_name}_to_{b_name}.csv"
+            "output", f"{a_name}_to_{b_name}.xlsx"
         )
         print(f"[run_multi] relating {a_name} -> {b_name} …", flush=True)
         a = da.from_zarr(image_store, component=f"labels/{a_name}/0")
         b = da.from_zarr(image_store, component=f"labels/{b_name}/0")
         table = label_relations(a, b)
 
-        with open(out_path, "w", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow(
-                [
-                    f"{a_name}_id",
-                    f"{b_name}_id",
-                    "overlap_voxels",
-                    "overlap_fraction",
-                ]
-            )
-            for a_id, m in table.items():
-                writer.writerow(
-                    [
-                        a_id,
-                        m["match"],
-                        m["overlap_voxels"],
-                        m["overlap_fraction"],
-                    ]
+        # label_relations() only returns a-objects that touch a b-object.
+        # Pull the full id sets so unmatched a-objects (zero overlap) and
+        # b-objects with no matches at all still get a row -- otherwise
+        # they'd silently vanish instead of counting as zero.
+        a_ids = sorted(int(x) for x in da.unique(a[a > 0]).compute())
+        b_ids = sorted(int(x) for x in da.unique(b[b > 0]).compute())
+
+        per_b = {b_id: {"count": 0, "overlap_voxels": 0} for b_id in b_ids}
+        for m in table.values():
+            agg = per_b.get(m["match"])
+            if agg is not None:
+                agg["count"] += 1
+                agg["overlap_voxels"] += m["overlap_voxels"]
+
+        wb = openpyxl.Workbook()
+        ws_a = wb.active
+        ws_a.title = a_name[:31]  # Excel sheet-name length limit
+        ws_a.append(
+            [f"{a_name}_id", f"{b_name}_id", "overlap_voxels", "overlap_fraction"]
+        )
+        for a_id in a_ids:
+            m = table.get(a_id)
+            if m is None:
+                ws_a.append([a_id, None, 0, 0])  # no overlap -- still counted
+            else:
+                ws_a.append(
+                    [a_id, m["match"], m["overlap_voxels"], m["overlap_fraction"]]
                 )
-        print(f"[run_multi] wrote {out_path} ({len(table)} rows)", flush=True)
+
+        ws_b = wb.create_sheet(title=b_name[:31])
+        ws_b.append([f"{b_name}_id", f"{a_name}_count", "total_overlap_voxels"])
+        for b_id in b_ids:
+            agg = per_b[b_id]
+            ws_b.append([b_id, agg["count"], agg["overlap_voxels"]])
+
+        wb.save(out_path)
+        print(
+            f"[run_multi] wrote {out_path} "
+            f"({len(a_ids)} {a_name}, {len(b_ids)} {b_name})",
+            flush=True,
+        )
 
 
 if __name__ == "__main__":
