@@ -1,6 +1,8 @@
 # Drives `pixi run multi` / `scripts/run_multi.py`: runs several segmentation
 # configs (in order) against the same work_dir, then relates their labels by
-# voxel overlap (patchworks.label_relations) and writes a CSV per pair.
+# voxel overlap (patchworks.label_relations) and writes an Excel workbook per
+# pair (two sheets: one row per a-object incl. unmatched ones, one row per
+# b-object incl. ones with zero matches — see docs/guide/snakemake.md).
 #
 # All listed segmentation configs must share the same work_dir/image.zarr and
 # the same tile_shape/level, so the resulting label arrays are directly
@@ -19,10 +21,10 @@ segmentations:
 relations:
 - a: nuclei_labels
   b: cyto_labels
-  output: nuclei_to_cyto.csv
+  output: nuclei_to_cyto.xlsx
 - a: cilia_labels
   b: cyto_labels
-  output: cilia_to_cell.csv
+  output: cilia_to_cell.xlsx
 - a: cilia_labels
   b: nuclei_labels
-  output: cilia_to_nucleus.csv
+  output: cilia_to_nucleus.xlsx
