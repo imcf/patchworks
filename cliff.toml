@@ -11,8 +11,9 @@ body = """
 {% if github.contributors | length > 0 %}
 ### 👥 Contributors
 
-{% for contributor in github.contributors | sort(attribute="username") %}\
-* @{{ contributor.username }}
+{% for contributor in github.contributors %}\
+{% if contributor.username %}* @{{ contributor.username }}
+{% endif %}\
 {% endfor %}
 {% endif %}\
 """
