@@ -1,0 +1,50 @@
+# Example segmentation config: cilia channel, via method: "custom" ->
+# patchworks.plugins.dog.segment (deconvolution + difference-of-Gaussians).
+# Cilia are thin/small structures a cell-body model like Cellpose isn't
+# shaped for. Paired with config_cyto.yaml / config_nuclei.yaml via
+# config/multi.yaml to relate cilia -> containing cell / nucleus. Same
+# work_dir and tile_shape as those two so patchworks.label_relations() can
+# compare the label arrays chunk-for-chunk.
+#
+# pycudadecon is CUDA-only, so this segment job needs a GPU too — same
+# profile/slurm as the Cellpose configs already covers it.
+
+input: "/path/to/scan.ims"
+work_dir: "/path/to/results"
+
+reuse_pyramid: false
+convert_chunks: null
+shard: false
+
+channel: 2 # cilia marker channel
+level: 0
+tile_shape: [16, 1024, 1024] # keep identical to config_cyto.yaml/config_nuclei.yaml
+gpu_memory_gb: null
+overlap: 30 # cover the PSF support (decon) + the DoG's high_sigma
+skip_empty: true
+empty_threshold: null
+
+method: "custom"
+label_name: "cilia_labels"
+custom:
+  module: "patchworks.plugins.dog"
+  function: "segment"
+  kwargs:
+    low_sigma: 1.0
+    high_sigma: 3.0
+    threshold: 0.02
+    # use_gpu: true          # optional: also run the blur/label step on GPU
+    decon_kwargs:
+      psf: "/path/to/psf.tif"
+      dxpsf: 0.1
+      dxdata: 0.1
+      dzpsf: 0.2
+      dzdata: 0.2
+      wavelength: 525
+      na: 1.4
+      nimm: 1.515
+
+pyramid_levels: 5
+pyramid_downscale: 2
+sequential_labels: true
+merge_workers: null
