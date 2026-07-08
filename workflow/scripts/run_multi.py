@@ -155,7 +155,12 @@ def main() -> None:
         ws_a = wb.active
         ws_a.title = a_name[:31]  # Excel sheet-name length limit
         ws_a.append(
-            [f"{a_name}_id", f"{b_name}_id", "overlap_voxels", "overlap_fraction"]
+            [
+                f"{a_name}_id",
+                f"{b_name}_id",
+                "overlap_voxels",
+                "overlap_fraction",
+            ]
         )
         for a_id in a_ids:
             m = table.get(a_id)
@@ -163,7 +168,12 @@ def main() -> None:
                 ws_a.append([a_id, None, 0, 0])  # no overlap -- still counted
             else:
                 ws_a.append(
-                    [a_id, m["match"], m["overlap_voxels"], m["overlap_fraction"]]
+                    [
+                        a_id,
+                        m["match"],
+                        m["overlap_voxels"],
+                        m["overlap_fraction"],
+                    ]
                 )
 
         ws_b = wb.create_sheet(title=b_name[:31])
