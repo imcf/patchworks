@@ -48,6 +48,7 @@ nav:
   - Cellpose 2-D: examples/cellpose_2d.md
   - Cellpose 3-D: examples/cellpose_3d.md
   - StarDist: examples/stardist.md
+  - Difference of Gaussians: examples/dog.md
   - Custom function: examples/custom.md
   - Standalone merge: examples/standalone_merge.md
 - API Reference:
@@ -59,6 +60,7 @@ nav:
   - Cluster helpers: api/cluster.md
   - Plugins:
     - Cellpose: api/plugins/cellpose.md
+    - Difference of Gaussians: api/plugins/dog.md
     - OME-ZARR conversion: api/plugins/ome_zarr.md
     - napari viewer: api/plugins/napari.md
 
