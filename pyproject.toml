@@ -43,6 +43,11 @@ io = ["psutil", "tqdm"]
 cellpose = ["cellpose>=3.0"]
 cellpose3 = ["cellpose>=3.0,<4"]
 cellpose4 = ["cellpose>=4"]
+# dog enables the deconvolution step in patchworks.plugins.dog (method:
+# "custom" -> segment). cupy, for that plugin's use_gpu=True blur/label
+# path, isn't included here — it's CUDA-version-specific (e.g.
+# cupy-cuda12x), install it separately to match your CUDA version.
+dog = ["pycudadecon"]
 gpu = ["nvidia-ml-py"]
 # bioio enables converting any image format (CZI, LIF, ND2, OME-TIFF, …) to
 # OME-ZARR. Ships the common native readers (faster than going through Java)
