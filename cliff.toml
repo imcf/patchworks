@@ -8,11 +8,13 @@ body = """
 - {% if commit.scope %}**{{ commit.scope }}**: {% endif %}{{ commit.message | split(pat="\n") | first }}
 {% endfor %}
 {% endfor %}\
-{% if github.contributors | length > 0 %}
+{% set contributor_commits = commits | unique(attribute="author.name") %}
+{% if contributor_commits | length > 0 %}
 ### 👥 Contributors
 
-{% for contributor in github.contributors %}\
-{% if contributor.username %}* @{{ contributor.username }}
+{% for c in contributor_commits %}\
+{% if c.github.username %}* @{{ c.github.username }}
+{% else %}* {{ c.author.name }}
 {% endif %}\
 {% endfor %}
 {% endif %}\
