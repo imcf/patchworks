@@ -77,6 +77,11 @@ imaris = ["imaris-ims-file-reader"]
 #   their backing dask/zarr arrays — the "Measure" dock widget. Formerly
 #   napari-dask-ndmeasure; renamed when its engine dropped dask_image.ndmeasure
 #   for a chunk-local map/merge that scales with chunk count, not object count.
+# - pyqt6 < 6.10: PyQt6-Qt6 6.10.2's Windows wheel fails to import (`DLL load
+#   failed while importing QtWidgets: The specified procedure could not be
+#   found`) — confirmed unrelated to napari/qtpy, reproduces on a bare
+#   `from PyQt6.QtWidgets import QApplication`. 6.9.1 works; excluding the
+#   whole 6.10.x line until a fixed release is confirmed.
 napari = [
     "napari[all]>=0.7.1",
     "numpy<2.5",
@@ -84,6 +89,7 @@ napari = [
     "lxml-html-clean",
     "glasbey",
     "napari-chunked-regionprops>=0.1.0",
+    "pyqt6<6.10",
 ]
 # workflow runs the Snakemake pipeline (per-tile SLURM jobs across GPUs).
 # openpyxl -> scripts/run_multi.py writes label_relations() output as an
