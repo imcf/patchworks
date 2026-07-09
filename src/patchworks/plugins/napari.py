@@ -267,7 +267,7 @@ def view_in_napari(
     image: Union[da.Array, str, Path],
     labels: Union[da.Array, str, Path, None] = None,
     *,
-    channel: int | None = 0,
+    channel: int | None = None,
     labels_component: str = "labels",
     image_name: str = "image",
     labels_name: str = "labels",
@@ -290,7 +290,9 @@ def view_in_napari(
         place ``tile_process`` writes them by default — each as its own Labels
         layer. (Falls back to image-only if there are none.)
     channel : int or None, optional
-        Channel to display from the image (``None`` keeps all channels).
+        Channel to display from the image. ``None`` (default) shows every
+        channel — the segmentation channel doesn't need to match what you
+        view. Pass an int to show just that one.
     labels_component : str, optional
         Array name inside a plain-zarr label store (default ``"labels"``,
         matching ``tile_process``'s ``output_component``).
