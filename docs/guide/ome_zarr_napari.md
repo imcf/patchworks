@@ -136,12 +136,17 @@ image found under `scan.zarr/labels/`:
 ```python
 from patchworks.plugins.napari import view_in_napari
 
-# auto-loads scan.zarr/labels/* as Labels layers:
+# auto-loads scan.zarr/labels/* as Labels layers, all image channels shown:
 view_in_napari("scan.zarr")
 
 # or point at a separate plain label store written with write_to=:
 view_in_napari("scan.zarr", labels="labels.zarr")
 ```
+
+By default every channel of the image is shown (`channel=None`), independent
+of which one you segmented on — Cellpose might run on channel 0 while you
+still want to see the whole multi-channel acquisition. Pass an int to view
+just one channel instead: `view_in_napari("scan.zarr", channel=0)`.
 
 !!! note
     napari ships in `patchworks[all]`, or install just it with
