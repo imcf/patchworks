@@ -101,6 +101,68 @@ custom:
 See `workflow/config/config_cilia.yaml` for a full example, including
 deconvolution.
 
+### With deconvolution, on SLURM
+
+Add `decon_kwargs` under `custom.kwargs` — same keys as the plain-Python
+example above — and the segment job deconvolves each tile with
+`pycudadecon` before running the DoG detector:
+
+```yaml
+# config/config_cilia.yaml (excerpt)
+channel: 2
+tile_shape: [16, 1024, 1024]
+overlap: 30 # cover the PSF support (decon) + the DoG's high_sigma
+skip_empty: true
+
+method: "custom"
+label_name: "cilia_labels"
+custom:
+  module: "patchworks.plugins.dog"
+  function: "segment"
+  kwargs:
+    low_sigma: 1.0
+    high_sigma: 3.0
+    threshold: 0.02
+    decon_kwargs:
+      psf: "/path/to/psf.tif"
+      dxpsf: 0.1
+      dxdata: 0.1
+      dzpsf: 0.2
+      dzdata: 0.2
+      wavelength: 525
+      na: 1.4
+      nimm: 1.515
+```
+
+Run it exactly like a Cellpose config:
+
+```bash
+python -m snakemake --workflow-profile profile/slurm \
+                    --configfile config/config_cilia.yaml
+```
+
+Checklist specific to this config:
+
+- **Env:** the segment job's environment needs `patchworks[dog]`
+  (`pip install "patchworks[dog]"`) on top of whatever else it uses — plain
+  `dog_label_fn` only needs scipy, but `decon_kwargs` pulls in
+  `pycudadecon`.
+- **GPU always required:** `pycudadecon` is CUDA-only regardless of the
+  detector's own `use_gpu` flag, so `set-resources: segment:` in
+  `profile/slurm/config.yaml` must request a GPU (`slurm_extra:
+  "'--gres=gpu:1'"`) the same as for Cellpose.
+- **`overlap`:** widen it past the PSF support, not just past `high_sigma` —
+  a thin intensity/threshold halo isn't enough once deconvolution is in the
+  loop.
+- **`skip_empty`:** the `prepare` rule (`workflow/scripts/prepare_tiles.py`)
+  calls `estimate_empty_tiles()` before submitting any `segment` jobs,
+  regardless of `method`, so cilia/DoG runs skip background tiles exactly
+  like Cellpose runs — no extra config needed beyond `skip_empty: true`
+  (the default).
+- Run alongside `config_cyto.yaml`/`config_nuclei.yaml` via `config/multi.yaml`
+  to also get the cilia→cell/nucleus relation — see *Relating cilia to their
+  cell*, below.
+
 ## Relating cilia to their cell
 
 Segment the cell body with Cellpose and the cilia with `dog_label_fn` as two
