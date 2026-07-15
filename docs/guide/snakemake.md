@@ -361,10 +361,20 @@ needs `pip install "patchworks[dog]"` in the segment jobs' environment.
 ## Measurements (fast, whole-volume regionprops)
 
 `skimage.measure.regionprops` needs the full labelled + intensity array in
-RAM — fine for one tile, not for a hundred-thousand-object OME-ZARR. Use
-[`dask-image`](https://image.dask.org)'s `ndmeasure`, which computes directly
-on the dask/zarr-backed arrays, chunk-parallel, without materializing the
-volume:
+RAM — fine for one tile, not for a hundred-thousand-object OME-ZARR.
+
+**Interactively, in napari**, this is what
+[napari-chunked-regionprops](https://github.com/imcf/napari-chunked-regionprops)
+is for — its "Measure" dock widget computes area/centroid/intensity stats
+directly off a Labels layer's dask/zarr-backed array, out-of-core, and scales
+with chunk count rather than object count. It's the best fit for measuring
+*every* object in a store this size, not just a cropped region — see
+[View image + labels in napari](ome_zarr_napari.md#view-image--labels-in-napari).
+Bundled in `patchworks[napari]`.
+
+**Headless/scripted**, use [`dask-image`](https://image.dask.org)'s
+`ndmeasure`, which computes directly on the dask/zarr-backed arrays,
+chunk-parallel, without materializing the volume:
 
 ```bash
 pip install dask-image
@@ -392,7 +402,10 @@ For interactively inspecting individual cells by clicking in the viewer
 (not all objects at once), the
 [napari-skimage-regionprops](https://github.com/haesleinhuepf/napari-skimage-regionprops)
 plugin's table widget works well — point it at a cropped region rather than
-the full volume, since it loads its input fully into memory.
+the full volume, since it loads its input fully into memory. For measuring
+*all* objects at once, use
+[napari-chunked-regionprops](https://github.com/imcf/napari-chunked-regionprops)
+instead (see above) — it doesn't have this in-memory limitation.
 
 ## Custom segmentation function
 
