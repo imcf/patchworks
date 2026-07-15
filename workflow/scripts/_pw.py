@@ -133,7 +133,34 @@ def build_fn(cfg):
     cfg : dict
         Snakemake config. ``method`` selects ``"cellpose"`` (default), a simple
         ``"threshold"`` (testing / no-GPU), or ``"custom"`` to import your own
-        function (``cfg["custom"] = {module, function, kwargs}``).
+        function (``cfg["custom"] = {module, function, kwargs}``). Optional
+        ``cfg["dilate"]``: int, pixels to grow labels by after segmentation
+        (via ``patchworks.dilate_labels``), applied regardless of ``method``.
+        Omitted/0 disables dilation.
+
+    Returns
+    -------
+    callable
+        ``(ndarray) -> ndarray`` returning integer labels.
+    """
+    fn = _build_method_fn(cfg)
+
+    dilate = cfg.get("dilate")
+    if dilate:
+        from patchworks import dilate_labels
+
+        fn = dilate_labels(fn, iterations=dilate)
+
+    return fn
+
+
+def _build_method_fn(cfg):
+    """Build the per-tile segmentation function for ``cfg["method"]``.
+
+    Parameters
+    ----------
+    cfg : dict
+        Snakemake config, see :func:`build_fn`.
 
     Returns
     -------

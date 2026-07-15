@@ -25,6 +25,7 @@ skip_empty: true
 empty_threshold: null
 
 method: "custom"
+# dilate: 2 # optional: pixels to grow labels by after segmentation
 label_name: "cilia_labels"
 custom:
   module: "patchworks.plugins.dog"
