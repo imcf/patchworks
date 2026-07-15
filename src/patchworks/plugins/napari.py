@@ -187,8 +187,8 @@ def _label_hint(path: Union[str, Path]) -> dict[str, Any]:
     during the merge) — the exact id set is then ``range(1, n_objects +
     1)`` by construction, with no scan needed. Passed through as a Labels
     layer's ``metadata`` so a downstream consumer (e.g.
-    napari-chunked-regionprops) can use it instead of re-deriving the id
-    set from the array itself.
+    napari-chunked-regionprops, https://github.com/imcf/napari-chunked-regionprops)
+    can use it instead of re-deriving the id set from the array itself.
 
     Parameters
     ----------

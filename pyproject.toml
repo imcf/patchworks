@@ -72,11 +72,12 @@ imaris = ["imaris-ims-file-reader"]
 # - lxml-html-clean: napari's notebook_display imports lxml.html.clean, split
 #   into a separate package in lxml >= 5.2 (else ImportError on Viewer()).
 # - glasbey: distinct high-contrast label LUTs for view_in_napari.
-# - napari-chunked-regionprops: out-of-core regionprops-style measurements
-#   (area/centroid/intensity stats) for huge Labels layers, straight off
-#   their backing dask/zarr arrays — the "Measure" dock widget. Formerly
-#   napari-dask-ndmeasure; renamed when its engine dropped dask_image.ndmeasure
-#   for a chunk-local map/merge that scales with chunk count, not object count.
+# - napari-chunked-regionprops (https://github.com/imcf/napari-chunked-regionprops):
+#   out-of-core regionprops-style measurements (area/centroid/intensity
+#   stats) for huge Labels layers, straight off their backing dask/zarr
+#   arrays — the "Measure" dock widget. Formerly napari-dask-ndmeasure;
+#   renamed when its engine dropped dask_image.ndmeasure for a chunk-local
+#   map/merge that scales with chunk count, not object count.
 # - pyqt6 < 6.10: PyQt6-Qt6 6.10.2's Windows wheel fails to import (`DLL load
 #   failed while importing QtWidgets: The specified procedure could not be
 #   found`) — confirmed unrelated to napari/qtpy, reproduces on a bare
