@@ -36,11 +36,24 @@ patchworks can be installed from PyPI on all operating systems, for Python ≥ 3
     pip install "patchworks[cellpose]"
     ```
 
+=== "With deconvolution + DoG plugin"
+
+    ```bash
+    pip install "patchworks[dog]"
+    ```
+
 === "Everything"
 
     ```bash
     pip install "patchworks[all]"
     ```
+
+!!! note "cupy is always a manual install"
+    `use_gpu=True` (the `dog` plugin, `dilate_labels`) needs `cupy`, but it's
+    never pulled in automatically — unlike Cellpose, which gets GPU support
+    for free via PyTorch's self-contained CUDA wheels, `cupy` ships one wheel
+    per CUDA major version. Install the one matching your CUDA version
+    yourself, e.g. `pip install cupy-cuda12x`.
 
 ---
 
