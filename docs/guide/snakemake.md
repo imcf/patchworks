@@ -65,6 +65,7 @@ empty_threshold: null          # null → Otsu
 method: "cellpose"             # "cellpose" (GPU), "threshold" (no GPU), "custom"
 label_name: "cellpose"         # name under image.zarr/labels/
 dilate: 0                      # optional: pixels to grow labels by, any method
+dilate_gpu: false               # dilate via cupy instead of scipy (needs a GPU)
 cellpose:
   model: "cyto3"
   diameter: 30
@@ -80,8 +81,15 @@ sequential_labels: true        # renumber labels to a contiguous 1..N
 
 !!! tip "Growing labels after segmentation"
     `dilate: N` grows every label by `N` pixels once segmentation finishes,
-    regardless of `method`. `0` (default) disables it. See [Growing labels
-    afterwards](custom_segmentation.md#growing-labels-afterwards-dilation)
+    regardless of `method`. `0` (default) disables it. Runs on CPU (scipy)
+    by default; set `dilate_gpu: true` to dilate via cupy instead — that
+    needs `cupy` installed in the segment job's environment (matching your
+    CUDA version, e.g. `pip install cupy-cuda12x`) and a GPU allocated for
+    that job (`set-resources: segment:` in `profile/slurm/config.yaml`,
+    same as for a GPU `method`). It's independent of whatever `method`
+    itself runs on — you can dilate on GPU even with `method: "threshold"`
+    (CPU), or on CPU even with `method: "cellpose"` (GPU). See [Growing
+    labels afterwards](custom_segmentation.md#growing-labels-afterwards-dilation)
     for how it works and the equivalent direct-API call.
 
 !!! tip "Tile size vs runtime"
