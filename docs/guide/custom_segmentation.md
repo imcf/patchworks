@@ -78,10 +78,15 @@ By default the dilation itself runs on CPU (scipy), independent of whatever
 backend `fn` used — pass `use_gpu=True` to dilate via cupy instead:
 
 ```python
-fn = dilate_labels(fn, iterations=2, use_gpu=True)  # needs cupy installed
+fn = dilate_labels(fn, iterations=2, use_gpu=True)
 ```
 
-On the cluster, this is the `dilate_gpu: true` config key.
+Needs `cupy` installed **manually**, matching your CUDA version (e.g.
+`pip install cupy-cuda12x`) — it's never installed automatically by
+patchworks, unlike Cellpose's GPU support (which comes for free via
+PyTorch's self-contained CUDA wheels); cupy ships one wheel per CUDA major
+version, so there's no single generic pin that works everywhere. On the
+cluster, this is the `dilate_gpu: true` config key.
 
 ## Real example: StarDist 3-D, with model caching
 
