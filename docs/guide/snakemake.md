@@ -80,15 +80,9 @@ sequential_labels: true        # renumber labels to a contiguous 1..N
 
 !!! tip "Growing labels after segmentation"
     `dilate: N` grows every label by `N` pixels once segmentation finishes,
-    regardless of `method` (`cellpose`, `threshold`, or `custom`). It runs
-    per-tile, before the overlap halo is trimmed and tiles are merged, so
-    dilated labels still stitch correctly across tile boundaries — just make
-    sure `overlap` covers the dilation amount plus the usual object-diameter
-    halo. `0` (default) disables it. Under the hood this wraps whatever
-    segmentation function `method` builds with
-    [`patchworks.dilate_labels`](../api/postprocess.md); see [Custom
-    segmentation function](#custom-segmentation-function) below for using it
-    directly from Python instead of via config.
+    regardless of `method`. `0` (default) disables it. See [Growing labels
+    afterwards](custom_segmentation.md#growing-labels-afterwards-dilation)
+    for how it works and the equivalent direct-API call.
 
 !!! tip "Tile size vs runtime"
     `tile_shape: "auto"` sizes each tile to your GPU's VRAM. Smaller tiles =
@@ -266,39 +260,11 @@ results/image.zarr/labels/cyto_labels/
     Different segmentations of the same image can use different `channel` and
     `cellpose:` settings freely, but keep `tile_shape`/`level` the same across
     configs — the label arrays then share the exact same chunk layout, which
-    `label_relations()` (below) requires.
+    [`label_relations()`](label_relations.md) requires.
 
-### Relating labels across segmentations
-
-Once you have two segmentations of the same image (e.g. nuclei inside cells),
-`label_relations()` maps each label in one to the label it overlaps most in
-the other — by streaming both arrays chunk by chunk, so it scales to
-hundreds of thousands of objects without loading anything fully into RAM:
-
-```python
-import dask.array as da
-from patchworks import label_relations
-
-nuclei = da.from_zarr("results/image.zarr", component="labels/nuclei_labels/0")
-cells = da.from_zarr("results/image.zarr", component="labels/cyto_labels/0")
-
-table = label_relations(nuclei, cells)
-table[2]
-# {'match': 3, 'overlap_voxels': 4821, 'overlap_fraction': 0.94}
-# -> nucleus 2 belongs to cell 3, 94% of its voxels fall inside it
-```
-
-Save it as a table:
-
-```python
-import csv
-
-with open("nuclei_to_cell.csv", "w", newline="") as f:
-    w = csv.writer(f)
-    w.writerow(["nucleus_id", "cell_id", "overlap_voxels", "overlap_fraction"])
-    for nucleus_id, m in table.items():
-        w.writerow([nucleus_id, m["match"], m["overlap_voxels"], m["overlap_fraction"]])
-```
+See [Relating labels across segmentations](label_relations.md) for what
+`label_relations()` returns and how to save it yourself — the cluster
+workflow's own automation is below.
 
 ### One command: multiple segmentations + relations
 
@@ -338,9 +304,9 @@ extra) with two sheets:
 | `<a>` | every non-background `a` label, **including unmatched ones** | `<a>_id`, `<b>_id` (blank if unmatched), `overlap_voxels`, `overlap_fraction` (0 if unmatched) |
 | `<b>` | every non-background `b` label, **including ones with zero matches** | `<b>_id`, `<a>_count`, `total_overlap_voxels` |
 
-Unlike calling `label_relations()` directly (which only returns matched `a`
-labels — see below), the workbook always covers every object in both
-segmentations, so counts (e.g. "how many nuclei have no matching cell",
+Unlike calling [`label_relations()`](label_relations.md) directly (which
+only returns matched `a` labels), the workbook always covers every object in
+both segmentations, so counts (e.g. "how many nuclei have no matching cell",
 "how many cells have zero cilia") aren't silently dropped.
 
 Both lists are ordinary lists, so 3+ segmentations work the same way — add
@@ -358,189 +324,19 @@ cyto_labels` and `cilia_labels -> nuclei_labels`) so you can use whichever
 fits a given dataset. See `config/config_cilia.yaml`. Its deconvolution step
 needs `pip install "patchworks[dog]"` in the segment jobs' environment.
 
-## Measurements (fast, whole-volume regionprops)
+## Measurements
 
-`skimage.measure.regionprops` needs the full labelled + intensity array in
-RAM — fine for one tile, not for a hundred-thousand-object OME-ZARR.
-
-**Interactively, in napari**, this is what
-[napari-chunked-regionprops](https://github.com/imcf/napari-chunked-regionprops)
-is for — its "Measure" dock widget computes area/centroid/intensity stats
-directly off a Labels layer's dask/zarr-backed array, out-of-core, and scales
-with chunk count rather than object count. It's the best fit for measuring
-*every* object in a store this size, not just a cropped region — see
-[View image + labels in napari](ome_zarr_napari.md#view-image--labels-in-napari).
-Bundled in `patchworks[napari]`.
-
-**Headless/scripted**, use [`dask-image`](https://image.dask.org)'s
-`ndmeasure`, which computes directly on the dask/zarr-backed arrays,
-chunk-parallel, without materializing the volume:
-
-```bash
-pip install dask-image
-```
-
-```python
-import dask.array as da
-from dask_image.ndmeasure import area, center_of_mass, mean, standard_deviation
-
-labels = da.from_zarr("results/image.zarr", component="labels/cyto_labels/0")
-image = da.from_zarr("results/image.zarr", component="0")[0]  # channel 0, level 0
-
-ids = da.unique(labels[labels > 0]).compute()
-areas = area(image, labels, ids).compute()               # voxel counts
-means = mean(image, labels, ids).compute()                # mean intensity
-stds = standard_deviation(image, labels, ids).compute()
-centroids = center_of_mass(image, labels, ids).compute()  # voxel coords (z, y, x)
-```
-
-Multiply `areas` by the voxel's physical volume and `centroids` by the pixel
-size (both read straight from the OME-ZARR's own `multiscales` metadata) to
-get µm-scale measurements.
-
-For interactively inspecting individual cells by clicking in the viewer
-(not all objects at once), the
-[napari-skimage-regionprops](https://github.com/haesleinhuepf/napari-skimage-regionprops)
-plugin's table widget works well — point it at a cropped region rather than
-the full volume, since it loads its input fully into memory. For measuring
-*all* objects at once, use
-[napari-chunked-regionprops](https://github.com/imcf/napari-chunked-regionprops)
-instead (see above) — it doesn't have this in-memory limitation.
+See [Measurements](measurements.md) for computing area/centroid/intensity
+stats on a whole label store, interactively in napari or headless/scripted —
+`skimage.measure.regionprops` alone doesn't scale to a store this size.
 
 ## Custom segmentation function
 
-Not using Cellpose? Run **your own** per-tile function — no need to edit the
-package. You write one function; patchworks handles everything around it
-(tiling, halos, skipping empty tiles, the zarr-native merge, global relabelling,
-resume, logs).
-
-### The contract
-
-Your function is called **once per tile**:
-
-```python
-labels = segment(tile)          # plus any kwargs you configure
-```
-
-| | What you get / must return |
-| --- | --- |
-| **Input `tile`** | A NumPy array of **one** tile, with the overlap halo already included. The channel and pyramid level from the config are already selected, so it is purely spatial: `(z, y, x)` for a 3-D run, `(y, x)` for 2-D. Dtype is the image's (e.g. `uint16`). |
-| **Return** | An integer **label** array (not a boolean mask), **same shape** as `tile`. `0` = background; each object a distinct positive integer. |
-| **Labels** | Only need to be unique **within the tile**. Don't try to make them globally unique — the merge step stitches objects across tile borders and renumbers everything to a contiguous `1..N` (`sequential_labels: true`). |
-| **Shape** | Must match the input exactly — patchworks trims the halo off your output, so a wrong shape is an error. Don't crop or resize inside the function. |
-
-That is the whole interface. Anything that turns an image tile into a label
-image works: classic image processing, StarDist, a trained model, an external
-binary you shell out to, …
-
-### Minimal example (no GPU, no deps beyond scikit-image)
-
-```python
-# my_seg.py
-import numpy as np
-from skimage.measure import label
-
-def segment(tile: np.ndarray, sigma: float = 2.0) -> np.ndarray:
-    """Threshold + connected components. Returns int32 labels (0 = bg)."""
-    from skimage.filters import gaussian, threshold_otsu
-
-    smooth = gaussian(tile, sigma=sigma, preserve_range=True)
-    thr = threshold_otsu(smooth) if smooth.max() > smooth.min() else np.inf
-    return label(smooth > thr).astype("int32")
-```
-
-```yaml
-method: "custom"
-label_name: "my_labels"
-custom:
-  module: "my_seg"        # import name (see "Make it importable")
-  function: "segment"     # default is "segment"
-  kwargs:                 # optional — forwarded as segment(tile, **kwargs)
-    sigma: 1.5
-```
-
-### Growing labels afterwards (dilation)
-
-To grow every label by a few pixels after segmentation — any method, not
-just `custom` — set `dilate: N` in the config (see the tip above), or wrap
-your function directly with
-[`patchworks.dilate_labels`](../api/postprocess.md) when calling the API
-yourself:
-
-```python
-from patchworks import tile_process, dilate_labels
-from patchworks.plugins.dog import dog_label_fn
-
-fn = dog_label_fn(low_sigma=1.0, high_sigma=3.0, threshold=0.02)
-fn = dilate_labels(fn, iterations=2)   # grow each label by 2 px, then run
-result = tile_process("image.zarr", fn, tile_shape=(1, 2048, 2048),
-                       overlap=8, write_to="labels.zarr")
-```
-
-`dilate_labels` wraps any `(tile) -> labels` function — the same contract
-described above — so it works with `dog_label_fn`, `cellpose_fn`, or your
-own `segment`. It dilates each tile's labels before the halo is trimmed and
-tiles are merged, so `overlap` must still cover the dilation amount.
-
-### Real example: StarDist 3-D, with model caching
-
-Heavy models must be loaded **once**, not per tile. On SLURM each tile is its
-own process so this matters less, but for local runs one process segments many
-tiles — cache the model at module level (or with `functools.lru_cache`):
-
-```python
-# stardist_seg.py
-import numpy as np
-
-_MODEL = None
-
-def _model():
-    global _MODEL
-    if _MODEL is None:                       # loaded once per worker process
-        from stardist.models import StarDist3D
-        _MODEL = StarDist3D.from_pretrained("3D_demo")
-    return _MODEL
-
-def segment(tile: np.ndarray, prob_thresh: float = 0.5) -> np.ndarray:
-    from csbdeep.utils import normalize
-
-    labels, _ = _model().predict_instances(
-        normalize(tile), prob_thresh=prob_thresh
-    )
-    return labels.astype("int32")
-```
-
-```yaml
-method: "custom"
-label_name: "stardist"
-custom:
-  module: "stardist_seg"
-  function: "segment"
-  kwargs:
-    prob_thresh: 0.5
-```
-
-Using a GPU? The segment jobs already hold one (the `gres: "gpu:1"` request),
-so just let your framework see it — nothing extra in the config.
-
-### Test it before you submit
-
-Run your function on one real tile first — it catches shape/dtype bugs in
-seconds instead of after a queue wait. Output must be integer, same shape, `0`
-for background:
-
-```python
-from patchworks import load_ome_zarr
-from my_seg import segment
-
-img = load_ome_zarr("results/image.zarr", channel=0, level=0)
-tile = img[:, :512, :512].compute()      # a small spatial block
-out = segment(tile)
-
-assert out.shape == tile.shape, (out.shape, tile.shape)
-assert out.dtype.kind in "iu"            # integer labels, not a float mask
-print("objects in tile:", int(out.max()))
-```
+Not using Cellpose? See [Custom segmentation function](custom_segmentation.md)
+for the function contract, examples (including label dilation), and how to
+test it before submitting. The rest of this section covers what's specific to
+running it **on the cluster**: getting the module importable and the
+checklist below.
 
 ### Make it importable on the cluster
 
