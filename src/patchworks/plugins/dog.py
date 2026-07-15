@@ -25,7 +25,7 @@ With deconvolution first (widen ``overlap`` to cover the PSF support):
 >>> result = tile_process("image.zarr", fn, tile_shape=(1, 2048, 2048), overlap=32)
 
 For the Snakemake workflow's ``method: "custom"`` (see
-docs/guide/snakemake.md "Custom segmentation function"), use the
+docs/guide/custom_segmentation.md), use the
 :func:`segment` adapter instead of the factory directly:
 
 >>> # custom: {module: "patchworks.plugins.dog", function: "segment",

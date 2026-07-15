@@ -159,7 +159,7 @@ just one channel instead: `view_in_napari("scan.zarr", channel=0)`.
     out-of-core straight off the Labels layer's backing dask/zarr array, so
     it scales to the same huge label images `tile_process` writes, unlike
     plain `skimage.measure.regionprops`. Bundled in `patchworks[napari]`. See
-    [Measurements](snakemake.md#measurements-fast-whole-volume-regionprops)
+    [Measurements](measurements.md)
     for the non-interactive/headless equivalent.
 
 ## End-to-end

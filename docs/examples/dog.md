@@ -97,12 +97,12 @@ tile_process(IMAGE, fn, tile_shape=(1, 1024, 1024), overlap=8, write_to=OUTPUT)
 
 On the cluster, set `dilate: 2` in the YAML config instead — it applies to
 `method: "custom"` (this plugin) the same way it does for `cellpose`/
-`threshold`, see [Growing labels after segmentation](../guide/snakemake.md#growing-labels-afterwards-dilation).
+`threshold`, see [Growing labels afterwards](../guide/custom_segmentation.md#growing-labels-afterwards-dilation).
 
 ## Using it in the Snakemake workflow
 
 No dedicated wiring needed — `patchworks.plugins.dog` exposes a `segment(tile, **kwargs)`
-adapter for the documented [`"custom"` method](../guide/snakemake.md#custom-segmentation-function):
+adapter for the documented [`"custom"` method](../guide/custom_segmentation.md):
 
 ```yaml
 method: "custom"
@@ -185,6 +185,6 @@ Checklist specific to this config:
 
 Segment the cell body with Cellpose and the cilia with `dog_label_fn` as two
 separate `tile_process` runs (same image, same `tile_shape`), then use
-[`label_relations`](../guide/snakemake.md#relating-labels-across-segmentations)
+[`label_relations`](../guide/label_relations.md)
 to map each cilium to the cell it belongs to — see
 `workflow/config/multi.yaml` for the same thing wired up as a cluster job.
