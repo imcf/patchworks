@@ -35,6 +35,7 @@ from ._core import tile_process
 from ._distributed import create_stage, spatial_tiles, stage_tile
 from ._io import estimate_empty_tiles, load_ome_zarr
 from ._merge import merge_tile_labels
+from ._postprocess import dilate_labels
 from ._relabel import relabel_sequential_array, relabel_sequential_zarr
 from ._relations import label_relations
 
@@ -57,4 +58,5 @@ __all__ = [
     "spatial_tiles",
     "create_stage",
     "stage_tile",
+    "dilate_labels",
 ]
