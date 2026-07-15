@@ -54,6 +54,7 @@ nav:
 - API Reference:
   - tile_process: api/tile_process.md
   - merge_tile_labels: api/merge_tile_labels.md
+  - dilate_labels: api/postprocess.md
   - Tile sizing: api/chunks.md
   - I/O helpers: api/io.md
   - Relabelling: api/relabel.md
