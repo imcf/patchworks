@@ -136,7 +136,10 @@ def build_fn(cfg):
         function (``cfg["custom"] = {module, function, kwargs}``). Optional
         ``cfg["dilate"]``: int, pixels to grow labels by after segmentation
         (via ``patchworks.dilate_labels``), applied regardless of ``method``.
-        Omitted/0 disables dilation.
+        Omitted/0 disables dilation. ``cfg["dilate_gpu"]``: bool, dilate via
+        cupyx instead of scipy (default ``False``); only takes effect when
+        ``dilate`` is set, and needs a GPU allocated for the segment job
+        (independent of whether ``method`` itself uses one).
 
     Returns
     -------
@@ -149,7 +152,7 @@ def build_fn(cfg):
     if dilate:
         from patchworks import dilate_labels
 
-        fn = dilate_labels(fn, iterations=dilate)
+        fn = dilate_labels(fn, iterations=dilate, use_gpu=cfg.get("dilate_gpu", False))
 
     return fn
 
