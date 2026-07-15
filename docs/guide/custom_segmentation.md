@@ -74,6 +74,15 @@ tiles are merged, so `overlap` must still cover the dilation amount. On the
 cluster, set `dilate: N` in the config instead — see [Configure the
 run](snakemake.md#3-configure-the-run).
 
+By default the dilation itself runs on CPU (scipy), independent of whatever
+backend `fn` used — pass `use_gpu=True` to dilate via cupy instead:
+
+```python
+fn = dilate_labels(fn, iterations=2, use_gpu=True)  # needs cupy installed
+```
+
+On the cluster, this is the `dilate_gpu: true` config key.
+
 ## Real example: StarDist 3-D, with model caching
 
 Heavy models must be loaded **once**, not per tile. On SLURM each tile is its
