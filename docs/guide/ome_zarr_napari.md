@@ -152,6 +152,16 @@ just one channel instead: `view_in_napari("scan.zarr", channel=0)`.
     napari ships in `patchworks[all]`, or install just it with
     `pip install "patchworks[napari]"`.
 
+!!! tip "Measuring all the objects"
+    Once labels are loaded, use
+    [napari-chunked-regionprops](https://github.com/imcf/napari-chunked-regionprops)'s
+    "Measure" dock widget for area/centroid/intensity stats — it works
+    out-of-core straight off the Labels layer's backing dask/zarr array, so
+    it scales to the same huge label images `tile_process` writes, unlike
+    plain `skimage.measure.regionprops`. Bundled in `patchworks[napari]`. See
+    [Measurements](snakemake.md#measurements-fast-whole-volume-regionprops)
+    for the non-interactive/headless equivalent.
+
 ## End-to-end
 
 ```python

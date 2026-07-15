@@ -1083,8 +1083,10 @@ def register_labels(
         ``sequential_labels=True``, which means ``ids == range(1, n_objects
         + 1)`` by construction). When given, written into the label group's
         attrs as ``n_objects``/``sequential_labels`` so a downstream reader
-        (e.g. napari-chunked-regionprops) can use the known id set instead
-        of re-deriving it with a full-volume scan of its own.
+        (e.g. napari-chunked-regionprops,
+        https://github.com/imcf/napari-chunked-regionprops) can use the
+        known id set instead of re-deriving it with a full-volume scan of
+        its own.
 
     Returns
     -------
