@@ -40,6 +40,7 @@ pip install "patchworks[gpu]"       # GPU VRAM querying (nvidia-ml-py)
 pip install "patchworks[cellpose]"  # Cellpose plugin (>=3.0, v3 or v4)
 pip install "patchworks[cellpose3]" # Cellpose plugin, pinned to v3.x
 pip install "patchworks[cellpose4]" # Cellpose plugin, pinned to v4+
+pip install "patchworks[dog]"       # deconvolution + DoG plugin (pycudadecon)
 pip install "patchworks[bioio]"     # convert any image format to OME-ZARR
 pip install "patchworks[imaris]"    # convert Imaris .ims files to OME-ZARR
 pip install "patchworks[napari]"    # interactive napari viewer plugin
@@ -51,6 +52,14 @@ pip install "patchworks[all]"       # Everything, incl. the napari viewer
 > `bioio-lif`) plus `bioio-bioformats`, the Bio-Formats catch-all reader (JVM).
 > `[imaris]` adds native `.ims` support (HDF5, no JVM). Physical pixel
 > calibration is read from the input and written into the OME-ZARR.
+
+> **`cupy` is never installed automatically**, unlike Cellpose's GPU support
+> (which comes for free via PyTorch's self-contained CUDA wheels). Any
+> `use_gpu=True`/`dilate_gpu: true` option (the `dog` plugin, `dilate_labels`)
+> needs `cupy` installed separately, matching your CUDA version — e.g.
+> `pip install cupy-cuda12x`. Not bundled because cupy ships one wheel per
+> CUDA major version; a generic pin would resolve to the wrong build (or fail
+> to resolve) depending on the machine.
 
 ---
 
@@ -307,10 +316,14 @@ Optional:
 - `tqdm` — progress bars
 - `cellpose` — Cellpose plugin, v3 or v4 (`patchworks[cellpose]`);
   pin with `[cellpose3]` or `[cellpose4]`
+- `pycudadecon` — deconvolution step of the `dog` plugin (`patchworks[dog]`)
 - `bioio` + readers — convert CZI/LIF/ND2/OME-TIFF/… to OME-ZARR
   (`patchworks[bioio]`)
 - `imaris-ims-file-reader` — convert Imaris `.ims` (`patchworks[imaris]`)
 - `napari` — interactive viewer plugin (`patchworks[napari]`)
+- `cupy` — **install manually**, matching your CUDA version (e.g.
+  `pip install cupy-cuda12x`); not offered as an extra since it isn't one
+  generic pin. Needed for `use_gpu=True`/`dilate_gpu: true`.
 
 ---
 
