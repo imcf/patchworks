@@ -81,6 +81,24 @@ result = tile_process(IMAGE, fn, tile_shape=(1, 1024, 1024), overlap=32)
     so edge tiles keep enough context (a plain intensity/threshold halo is
     too thin).
 
+## Growing the labels afterwards
+
+DoG spots/threads are often thin — grow each label by a few pixels with
+[`dilate_labels`](../api/postprocess.md):
+
+```python
+from patchworks import tile_process, dilate_labels
+from patchworks.plugins.dog import dog_label_fn
+
+fn = dog_label_fn(low_sigma=1.0, high_sigma=3.0, threshold=0.02)
+fn = dilate_labels(fn, iterations=2)
+tile_process(IMAGE, fn, tile_shape=(1, 1024, 1024), overlap=8, write_to=OUTPUT)
+```
+
+On the cluster, set `dilate: 2` in the YAML config instead — it applies to
+`method: "custom"` (this plugin) the same way it does for `cellpose`/
+`threshold`, see [Growing labels after segmentation](../guide/snakemake.md#growing-labels-afterwards-dilation).
+
 ## Using it in the Snakemake workflow
 
 No dedicated wiring needed — `patchworks.plugins.dog` exposes a `segment(tile, **kwargs)`

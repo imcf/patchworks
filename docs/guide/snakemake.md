@@ -62,8 +62,9 @@ skip_empty: true               # skip background tiles
 empty_threshold: null          # null → Otsu
 
 # segmentation
-method: "cellpose"             # "cellpose" (GPU) or "threshold" (no GPU)
+method: "cellpose"             # "cellpose" (GPU), "threshold" (no GPU), "custom"
 label_name: "cellpose"         # name under image.zarr/labels/
+dilate: 0                      # optional: pixels to grow labels by, any method
 cellpose:
   model: "cyto3"
   diameter: 30
@@ -76,6 +77,18 @@ pyramid_levels: 5
 pyramid_downscale: 2
 sequential_labels: true        # renumber labels to a contiguous 1..N
 ```
+
+!!! tip "Growing labels after segmentation"
+    `dilate: N` grows every label by `N` pixels once segmentation finishes,
+    regardless of `method` (`cellpose`, `threshold`, or `custom`). It runs
+    per-tile, before the overlap halo is trimmed and tiles are merged, so
+    dilated labels still stitch correctly across tile boundaries — just make
+    sure `overlap` covers the dilation amount plus the usual object-diameter
+    halo. `0` (default) disables it. Under the hood this wraps whatever
+    segmentation function `method` builds with
+    [`patchworks.dilate_labels`](../api/postprocess.md); see [Custom
+    segmentation function](#custom-segmentation-function) below for using it
+    directly from Python instead of via config.
 
 !!! tip "Tile size vs runtime"
     `tile_shape: "auto"` sizes each tile to your GPU's VRAM. Smaller tiles =
@@ -432,6 +445,29 @@ custom:
   kwargs:                 # optional — forwarded as segment(tile, **kwargs)
     sigma: 1.5
 ```
+
+### Growing labels afterwards (dilation)
+
+To grow every label by a few pixels after segmentation — any method, not
+just `custom` — set `dilate: N` in the config (see the tip above), or wrap
+your function directly with
+[`patchworks.dilate_labels`](../api/postprocess.md) when calling the API
+yourself:
+
+```python
+from patchworks import tile_process, dilate_labels
+from patchworks.plugins.dog import dog_label_fn
+
+fn = dog_label_fn(low_sigma=1.0, high_sigma=3.0, threshold=0.02)
+fn = dilate_labels(fn, iterations=2)   # grow each label by 2 px, then run
+result = tile_process("image.zarr", fn, tile_shape=(1, 2048, 2048),
+                       overlap=8, write_to="labels.zarr")
+```
+
+`dilate_labels` wraps any `(tile) -> labels` function — the same contract
+described above — so it works with `dog_label_fn`, `cellpose_fn`, or your
+own `segment`. It dilates each tile's labels before the halo is trimmed and
+tiles are merged, so `overlap` must still cover the dilation amount.
 
 ### Real example: StarDist 3-D, with model caching
 
