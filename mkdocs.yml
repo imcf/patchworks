@@ -41,8 +41,11 @@ nav:
   - Empty tile skipping: guide/skip_empty.md
   - GPU & distributed: guide/gpu_distributed.md
   - Performance & memory: guide/performance.md
-  - Cluster workflow (Snakemake): guide/snakemake.md
+  - Custom segmentation function: guide/custom_segmentation.md
+  - Relating labels across segmentations: guide/label_relations.md
+  - Measurements: guide/measurements.md
   - OME-ZARR & napari: guide/ome_zarr_napari.md
+  - Cluster workflow (Snakemake): guide/snakemake.md
   - Pitfalls: guide/pitfalls.md
 - Examples:
   - Cellpose 2-D: examples/cellpose_2d.md
