@@ -6,6 +6,9 @@ label the connected components. CPU (scipy) by default, GPU (cupy) optional.
 Optionally deconvolve each tile first with
 [pycudadecon](https://github.com/tlambert03/pycudadecon).
 
+> Cilia DoG + deconvolution approach courtesy of
+> [angelo-angonezi](https://github.com/angelo-angonezi).
+
 ## Installation
 
 `dog_label_fn` itself only needs patchworks' core deps (scipy). The

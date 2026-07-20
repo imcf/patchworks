@@ -5,7 +5,9 @@
 # GPUs run in parallel; the merge is a single CPU job.
 
 # ---- input / output ---------------------------------------------------------
-input: "/path/to/scan.ims" # .ims, .czi, .lif, .nd2, ome-tiff, or an .zarr
+input: "/path/to/scan.ims" # .ims, .czi, .lif, .nd2, ome-tiff, .zarr, or a
+#                             glob (e.g. "/path/*.tif") when sequence_pattern
+#                             is set below
 work_dir: "/path/to/results" # everything is written under here
 # Final outputs (under work_dir):
 #   image.zarr            — converted, pyramidal OME-ZARR
@@ -15,6 +17,10 @@ work_dir: "/path/to/results" # everything is written under here
 reuse_pyramid: false # for .ims: copy its own pyramid (fast); else rebuild
 convert_chunks: null # null → patchworks' bounded auto chunks; or [c,z,y,x]
 shard: false # true → pack chunks into shards (zarr v3; fewer files)
+# For a folder of single-plane TIFFs (input: a glob), set the filename regex
+# below; named groups become axes, e.g. one file per Z/C plane:
+# sequence_pattern: '_T(?P<T>\d+)_Z(?P<Z>\d+)_C(?P<C>\d+)_V\d+'
+sequence_pattern: null
 # Re-running reuses an existing image.zarr automatically (skips conversion).
 # To force a rebuild: delete image.zarr, or `snakemake --forcerun convert`.
 
