@@ -152,7 +152,9 @@ def build_fn(cfg):
     if dilate:
         from patchworks import dilate_labels
 
-        fn = dilate_labels(fn, iterations=dilate, use_gpu=cfg.get("dilate_gpu", False))
+        fn = dilate_labels(
+            fn, iterations=dilate, use_gpu=cfg.get("dilate_gpu", False)
+        )
 
     return fn
 

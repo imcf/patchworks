@@ -53,6 +53,8 @@ pip install "patchworks[all]"       # Everything, incl. the napari viewer
 > `[imaris]` adds native `.ims` support (HDF5, no JVM). Physical pixel
 > calibration is read from the input and written into the OME-ZARR.
 
+<!-- -->
+
 > **`cupy` is never installed automatically**, unlike Cellpose's GPU support
 > (which comes for free via PyTorch's self-contained CUDA wheels). Any
 > `use_gpu=True`/`dilate_gpu: true` option (the `dog` plugin, `dilate_labels`)
