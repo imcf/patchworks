@@ -104,7 +104,10 @@ def test_tiff_sequence_conversion(tmp_path):
     result = np.asarray(load_ome_zarr(out, channel=None))
     assert result.shape == (n_z, n_c, size, size)
     # each plane's constant value encodes its (z, c) position.
-    assert (result[:, :, 0, 0] == [[z * 10 + c for c in range(n_c)] for z in range(n_z)]).all()
+    assert (
+        result[:, :, 0, 0]
+        == [[z * 10 + c for c in range(n_c)] for z in range(n_z)]
+    ).all()
     assert _level_scale(out, 0) == pytest.approx([1.0, 1.0, 0.5, 0.5])
 
 
