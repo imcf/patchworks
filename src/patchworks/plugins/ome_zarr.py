@@ -9,14 +9,18 @@ Input handling, in order:
 * a ``.zarr`` path → read through :func:`patchworks.load_ome_zarr`;
 * a ``.ims`` (Imaris) path → read lazily with ``imaris-ims-file-reader``
   (HDF5, no JVM); install with ``pip install "patchworks[imaris]"``;
+* with ``sequence_pattern=`` set, a glob over a folder of single-plane TIFFs
+  → each file becomes one chunk of a lazy dask array via
+  :func:`tifffile.TiffSequence`, no data duplicated;
 * any other path (CZI, LIF, ND2, OME-TIFF, …) → opened lazily with
   `bioio <https://github.com/bioio-devs/bioio>`_.
 
 Pixel calibration (physical voxel size) is read from the input — bioio's
-``physical_pixel_sizes``, the Imaris resolution metadata, or an existing
-OME-ZARR's scale transform — and written into the NGFF ``coordinate
-Transformations`` so the µm/pixel sizing is preserved. Pass ``pixel_size=`` to
-override or to supply it for bare arrays.
+``physical_pixel_sizes``, the Imaris resolution metadata, an existing
+OME-ZARR's scale transform, or (for a TIFF sequence) the first file's own
+ImageJ/resolution tags — and written into the NGFF ``coordinateTransformations``
+so the µm/pixel sizing is preserved. Pass ``pixel_size=`` to override or to
+supply it for bare arrays.
 
 Downsampling uses strided (nearest-neighbour) subsampling — the correct,
 label-preserving choice — and only on **X and Y**; ``z`` (and channel/time)
@@ -620,6 +624,116 @@ def _open_bioio(path: str, scene: int) -> tuple[da.Array, str, PixelSize]:
     return arr, axes, pixel_size
 
 
+_UNIT_TO_UM = {
+    "micron": 1.0,
+    "um": 1.0,
+    "µm": 1.0,
+    "mm": 1000.0,
+    "cm": 10000.0,
+    "centimeter": 10000.0,
+    "inch": 25400.0,
+}
+# TIFF ResolutionUnit tag values (RESUNIT): 2 == INCH, 3 == CENTIMETER.
+_RESUNIT_TO_UM = {2: 25400.0, 3: 10000.0}
+
+
+def _tiff_pixel_size(path: str) -> PixelSize:
+    """Read physical voxel size from a TIFF file's own metadata.
+
+    Z comes from ImageJ metadata (``spacing`` + ``unit``), if present. X/Y
+    come from the page's ``XResolution``/``YResolution`` tags (pixels per
+    unit); the unit itself is taken from the ``ResolutionUnit`` tag when set
+    (plain TIFFs), or falls back to ImageJ metadata's ``unit`` — ImageJ
+    itself writes ``ResolutionUnit=NONE`` and keeps the unit as a string in
+    its metadata instead. Unrecognized units are ignored (treated as
+    uncalibrated).
+
+    Parameters
+    ----------
+    path : str
+        Path of one TIFF file in the sequence.
+
+    Returns
+    -------
+    dict
+        ``{axis: micrometers}`` for whichever axes could be determined
+        (empty if none).
+    """
+    import tifffile
+
+    pixel_size: PixelSize = {}
+    with tifffile.TiffFile(path) as tif:
+        ij = tif.imagej_metadata or {}
+        spacing = ij.get("spacing")
+        if spacing:
+            factor = _UNIT_TO_UM.get(str(ij.get("unit", "micron")).lower(), 1.0)
+            pixel_size["z"] = float(spacing) * factor
+
+        page = tif.pages[0]
+        unit_tag = page.tags.get("ResolutionUnit")
+        um_per_unit = _RESUNIT_TO_UM.get(
+            unit_tag.value if unit_tag else None
+        ) or _UNIT_TO_UM.get(str(ij.get("unit", "")).lower())
+        if um_per_unit is not None:
+            for axis, tag_name in (("y", "YResolution"), ("x", "XResolution")):
+                tag = page.tags.get(tag_name)
+                if tag and tag.value[0]:
+                    num, den = tag.value
+                    pixel_size[axis] = um_per_unit / (num / den)
+    return pixel_size
+
+
+def _open_tiff_sequence(
+    pattern: str, sequence_pattern: str
+) -> tuple[da.Array, str, PixelSize]:
+    """Open a folder of single-plane TIFFs as one lazy dask array.
+
+    Each file becomes exactly one chunk, decoded on access — no data is
+    duplicated or eagerly loaded. See
+    :func:`tifffile.TiffSequence`/``ZarrFileSequenceStore`` (the same
+    mechanism used by Cellpose's own distributed pipeline,
+    ``cellpose.contrib.distributed_segmentation.wrap_folder_of_tiffs``).
+
+    Parameters
+    ----------
+    pattern : str
+        Glob pattern matching all the files, e.g. ``"folder/*.tif"``.
+    sequence_pattern : str
+        Regular expression parsing each file name into axis labels and
+        indices, e.g. ``r"_T(?P<T>\\d+)_Z(?P<Z>\\d+)_C(?P<C>\\d+)_V\\d+"``.
+        Named groups become axis labels directly; axis order follows the
+        order groups appear in the pattern.
+
+    Returns
+    -------
+    tuple
+        ``(array, axes, pixel_size)`` — a lazy dask array, its axes string
+        (parsed axes + trailing ``"yx"``) and a ``{axis: micrometers}``
+        calibration dict read from the first file.
+    """
+    try:
+        import tifffile
+    except ImportError as exc:
+        raise ImportError(
+            "reading a folder of TIFFs requires tifffile. Install it with:\n"
+            "    pip install tifffile\n"
+            "(already pulled in by patchworks[bioio] via bioio-tifffile)."
+        ) from exc
+
+    ts = tifffile.TiffSequence(pattern, pattern=sequence_pattern)
+    arr = da.from_zarr(zarr.open(store=ts.aszarr()))
+    axes = ts.axes.lower() + "yx"
+    pixel_size = _tiff_pixel_size(ts[0])
+    logger.info(
+        "tifffile sequence opened %s files as %s %s cal=%s",
+        len(ts),
+        axes,
+        arr.shape,
+        pixel_size,
+    )
+    return arr, axes, pixel_size
+
+
 def _open_imaris(path: str, level: int = 0) -> tuple[da.Array, str, PixelSize]:
     """Open one Imaris ``.ims`` resolution level lazily.
 
@@ -769,12 +883,14 @@ def _to_dask(
     source: Union[da.Array, np.ndarray, str, Path],
     axes: Union[str, None],
     scene: int,
+    sequence_pattern: Union[str, None] = None,
 ) -> tuple[da.Array, str, PixelSize]:
     """Resolve *source* into a lazy ``(array, axes, pixel_size)`` triple.
 
     Dispatches by type: dask/NumPy arrays pass through; ``.zarr`` paths use the
-    OME-ZARR loader; ``.ims`` paths use the Imaris reader; anything else uses
-    bioio.
+    OME-ZARR loader; ``.ims`` paths use the Imaris reader; a *sequence_pattern*
+    treats *source* as a glob over a folder of single-plane TIFFs; anything
+    else uses bioio.
 
     Parameters
     ----------
@@ -784,6 +900,10 @@ def _to_dask(
         Explicit axes, or ``None`` to infer them.
     scene : int
         Scene index for bioio inputs.
+    sequence_pattern : str or None
+        When given, *source* is a glob pattern over a folder of single-plane
+        TIFFs and this is the filename-parsing regex; see
+        :func:`_open_tiff_sequence`.
 
     Returns
     -------
@@ -796,6 +916,9 @@ def _to_dask(
         return da.asarray(source), axes or _default_axes(source.ndim), {}
 
     path = str(source)
+    if sequence_pattern is not None:
+        arr, detected, ps = _open_tiff_sequence(path, sequence_pattern)
+        return arr, axes or detected, ps
     if path.endswith(".zarr"):
         arr = load_ome_zarr(source, channel=None)
         ax = axes or _default_axes(arr.ndim)
@@ -815,6 +938,7 @@ def to_ome_zarr(
     axes: Union[str, None] = None,
     pixel_size: Union[PixelSize, tuple, None] = None,
     scene: int = 0,
+    sequence_pattern: Union[str, None] = None,
     n_levels: int = 5,
     downscale: int = 2,
     chunks: Union[tuple[int, ...], None] = None,
@@ -826,7 +950,8 @@ def to_ome_zarr(
     """Write *source* as a pyramidal, calibrated OME-ZARR store.
 
     *source* may be a dask/NumPy array, a ``.zarr`` store, an Imaris ``.ims``
-    file, or any image format readable by bioio (CZI, LIF, ND2, OME-TIFF, …).
+    file, any image format readable by bioio (CZI, LIF, ND2, OME-TIFF, …), or
+    (with *sequence_pattern* set) a glob over a folder of single-plane TIFFs.
     File inputs are read lazily; the pyramid is built level-by-level from disk
     with bounded chunks, so the full volume never needs to fit in RAM. Only
     ``x``/``y`` are downsampled; ``z`` (and channel/time) stay full-resolution.
@@ -847,6 +972,15 @@ def to_ome_zarr(
         arrays.
     scene : int, optional
         Scene index for multi-scene bioio files.
+    sequence_pattern : str, optional
+        When given, *source* is treated as a glob pattern over a folder of
+        single-plane TIFFs (e.g. ``"folder/*.tif"``) instead of a single
+        file, and this is the regex parsing each file name into axis labels
+        and indices via named groups, e.g.
+        ``r"_T(?P<T>\\d+)_Z(?P<Z>\\d+)_C(?P<C>\\d+)_V\\d+"``. Each file
+        becomes exactly one chunk, read lazily on access (no data
+        duplicated) — see :func:`tifffile.TiffSequence`. Axis order follows
+        the order named groups appear in the pattern.
     n_levels : int, optional
         Maximum number of pyramid levels including full resolution.
     downscale : int, optional
@@ -881,6 +1015,13 @@ def to_ome_zarr(
     >>> from patchworks.plugins.ome_zarr import to_ome_zarr
     >>> to_ome_zarr("scan.ims", "scan.zarr", n_levels=4)
     'scan.zarr'
+    >>> to_ome_zarr(
+    ...     "ZT18_Male4_Left/*.tif",
+    ...     "ZT18_Male4_Left.zarr",
+    ...     sequence_pattern=r"_T(?P<T>\\d+)_Z(?P<Z>\\d+)_C(?P<C>\\d+)_V\\d+",
+    ...     shard=True,
+    ... )  # doctest: +SKIP
+    'ZT18_Male4_Left.zarr'
     """
     if downscale < 2:
         raise ValueError("downscale must be >= 2")
@@ -908,7 +1049,7 @@ def to_ome_zarr(
                 exc,
             )
 
-    arr, axes, detected = _to_dask(source, axes, scene)
+    arr, axes, detected = _to_dask(source, axes, scene, sequence_pattern)
     if len(axes) != arr.ndim:
         raise ValueError(
             f"axes {axes!r} has {len(axes)} entries but array is {arr.ndim}-D"
