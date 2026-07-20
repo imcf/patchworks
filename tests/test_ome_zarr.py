@@ -79,6 +79,35 @@ def test_non_spatial_axis_not_downsampled(tmp_path):
     assert load_ome_zarr(out, channel=None, level=1).shape == (3, 8, 8)
 
 
+def test_tiff_sequence_conversion(tmp_path):
+    """A folder of single-plane TIFFs is wrapped lazily and converted."""
+    tifffile = pytest.importorskip("tifffile")
+    n_z, n_c, size = 3, 2, 8
+    for z in range(n_z):
+        for c in range(n_c):
+            img = np.full((size, size), z * 10 + c, dtype="uint16")
+            tifffile.imwrite(
+                tmp_path / f"sample_Z{z:03d}_C{c}_V0.tif",
+                img,
+                resolution=(20000.0, 20000.0),
+                resolutionunit="CENTIMETER",
+            )
+
+    out = tmp_path / "out.zarr"
+    to_ome_zarr(
+        str(tmp_path / "*.tif"),
+        out,
+        sequence_pattern=r"_Z(?P<Z>\d+)_C(?P<C>\d+)_V\d+",
+        n_levels=1,
+    )
+
+    result = np.asarray(load_ome_zarr(out, channel=None))
+    assert result.shape == (n_z, n_c, size, size)
+    # each plane's constant value encodes its (z, c) position.
+    assert (result[:, :, 0, 0] == [[z * 10 + c for c in range(n_c)] for z in range(n_z)]).all()
+    assert _level_scale(out, 0) == pytest.approx([1.0, 1.0, 0.5, 0.5])
+
+
 def test_axes_length_mismatch(tmp_path):
     with pytest.raises(ValueError):
         to_ome_zarr(
