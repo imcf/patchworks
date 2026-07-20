@@ -16,6 +16,7 @@ chunks = cfg.get("convert_chunks")
 to_ome_zarr(
     cfg["input"],
     str(snakemake.output[0]).removesuffix("/zarr.json"),  # noqa: F821
+    sequence_pattern=cfg.get("sequence_pattern"),
     chunks=tuple(chunks) if chunks else None,
     shard=bool(cfg.get("shard", False)),
     reuse_pyramid=bool(cfg.get("reuse_pyramid", False)),
