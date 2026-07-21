@@ -701,15 +701,19 @@ def _open_tiff_sequence(
     sequence_pattern : str
         Regular expression parsing each file name into axis labels and
         indices, e.g. ``r"_T(?P<T>\\d+)_Z(?P<Z>\\d+)_C(?P<C>\\d+)_V\\d+"``.
-        Named groups become axis labels directly; axis order follows the
-        order groups appear in the pattern.
+        Named groups become axis labels directly — the order they appear in
+        the *pattern* (not the filename) doesn't matter, the result is
+        always reordered to patchworks' ``tczyx`` convention and any
+        singleton non-spatial axis (e.g. a constant ``T0``) is dropped, same
+        as the bioio/Imaris readers, so a real channel axis always ends up
+        first (required by :func:`patchworks.load_ome_zarr`).
 
     Returns
     -------
     tuple
         ``(array, axes, pixel_size)`` — a lazy dask array, its axes string
-        (parsed axes + trailing ``"yx"``) and a ``{axis: micrometers}``
-        calibration dict read from the first file.
+        (parsed axes, canonicalised, + trailing ``"yx"``) and a
+        ``{axis: micrometers}`` calibration dict read from the first file.
     """
     try:
         import tifffile
@@ -722,7 +726,33 @@ def _open_tiff_sequence(
 
     ts = tifffile.TiffSequence(pattern, pattern=sequence_pattern)
     arr = da.from_zarr(zarr.open(store=ts.aszarr()))
-    axes = ts.axes.lower() + "yx"
+    full_axes = ts.axes.lower() + "yx"
+
+    # Canonicalise to patchworks' tczyx axis order regardless of the order
+    # sequence_pattern's groups happen to appear in (unrecognised axes sort
+    # last, before y/x).
+    order = sorted(
+        range(len(full_axes)),
+        key=lambda i: (
+            _DEFAULT_ORDER.index(full_axes[i])
+            if full_axes[i] in _DEFAULT_ORDER
+            else len(_DEFAULT_ORDER)
+        ),
+    )
+    arr = arr.transpose(order)
+    ordered_axes = "".join(full_axes[i] for i in order)
+
+    # Drop singleton non-spatial axes (e.g. a constant T), matching
+    # _open_bioio/_open_imaris, so a real channel axis lands at position 0.
+    keep = [
+        i
+        for i, a in enumerate(ordered_axes)
+        if a in _SPATIAL_AXES or arr.shape[i] > 1
+    ]
+    index = tuple(slice(None) if i in keep else 0 for i in range(arr.ndim))
+    arr = arr[index]
+    axes = "".join(ordered_axes[i] for i in keep)
+
     pixel_size = _tiff_pixel_size(ts[0])
     logger.info(
         "tifffile sequence opened %s files as %s %s cal=%s",
@@ -979,8 +1009,11 @@ def to_ome_zarr(
         and indices via named groups, e.g.
         ``r"_T(?P<T>\\d+)_Z(?P<Z>\\d+)_C(?P<C>\\d+)_V\\d+"``. Each file
         becomes exactly one chunk, read lazily on access (no data
-        duplicated) — see :func:`tifffile.TiffSequence`. Axis order follows
-        the order named groups appear in the pattern.
+        duplicated) — see :func:`tifffile.TiffSequence`. The result is
+        always reordered to patchworks' ``czyx`` convention regardless of
+        the order named groups appear in the pattern, and any singleton
+        non-spatial axis (e.g. a constant ``T0``) is dropped, so a real
+        channel axis always ends up first.
     n_levels : int, optional
         Maximum number of pyramid levels including full resolution.
     downscale : int, optional
