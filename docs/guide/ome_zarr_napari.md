@@ -66,7 +66,7 @@ sample_T0_Z001_C1_V0.tif
 
 Pass `sequence_pattern=` and let `source` be a glob over the folder instead of
 one file path. The pattern is a regex whose **named groups** map to axis
-labels — axis order follows the order the groups appear in the pattern:
+labels — one file per group of indices:
 
 ```python
 to_ome_zarr(
@@ -76,6 +76,13 @@ to_ome_zarr(
     shard=True,  # recommended for large sequences, see Sharding below
 )
 ```
+
+You don't need to order the named groups to match how the axes should come
+out: the result is always reordered to patchworks' `c, z, y, x` convention —
+required for `channel=` selection (`load_ome_zarr`/`tile_process` always read
+the channel from axis 0) — and a constant axis like `T0` above (one value, no
+real time series) is dropped automatically, the same way the bioio/Imaris
+readers already drop a singleton time axis.
 
 Each file becomes exactly **one dask chunk**, decoded lazily on access — no
 data is duplicated or eagerly loaded, so this scales to huge (multi-TB)
