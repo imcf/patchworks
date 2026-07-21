@@ -727,19 +727,23 @@ def _open_tiff_sequence(
     ts = tifffile.TiffSequence(pattern, pattern=sequence_pattern)
 
     # Each file should be a single 2D (y, x) plane, but tifffile.imread can
-    # report extra leading singleton dims (e.g. a page/sample axis) even for
-    # a plain single-page TIFF — drop those so one file maps to exactly (y, x).
+    # report extra singleton dims — leading, trailing, or both (e.g. a stray
+    # page or samples-per-pixel axis) — even for a plain single-page TIFF.
+    # Drop whichever ones are singleton so one file maps to exactly (y, x).
     chunkshape = tifffile.imread(ts[0]).shape
-    lead = len(chunkshape) - 2
-    if lead < 0 or any(s != 1 for s in chunkshape[:lead]):
+    keep_chunk = [i for i, s in enumerate(chunkshape) if s != 1]
+    if len(keep_chunk) != 2:
         raise ValueError(
             f"expected single 2D (y, x) planes per file, got shape "
             f"{chunkshape} for {ts[0]!r}"
         )
 
     arr = da.from_zarr(zarr.open(store=ts.aszarr()))
-    if lead:
-        arr = arr[(slice(None),) * len(ts.axes) + (0,) * lead]
+    n_seq = len(ts.axes)
+    index = tuple(
+        slice(None) if i in keep_chunk else 0 for i in range(len(chunkshape))
+    )
+    arr = arr[(slice(None),) * n_seq + index]
     full_axes = ts.axes.lower() + "yx"
 
     # Canonicalise to patchworks' tczyx axis order regardless of the order
