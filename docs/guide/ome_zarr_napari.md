@@ -39,9 +39,10 @@ existed.
 ## Convert any image to OME-ZARR
 
 `to_ome_zarr` accepts a dask/NumPy array, an existing `.zarr` store, an
-**Imaris `.ims`** file, or **any format** readable by
-[bioio](https://github.com/bioio-devs/bioio) (CZI, LIF, ND2, OME-TIFF, …). File
-inputs are read **lazily**.
+**Imaris `.ims`** file, **any format** readable by
+[bioio](https://github.com/bioio-devs/bioio) (CZI, LIF, ND2, OME-TIFF, …), or
+a **folder of single-plane TIFFs** (see below). File inputs are read
+**lazily**.
 
 ```python
 from patchworks.plugins.ome_zarr import to_ome_zarr
@@ -49,6 +50,44 @@ from patchworks.plugins.ome_zarr import to_ome_zarr
 to_ome_zarr("scan.czi", "scan.zarr", n_levels=5)   # via bioio
 to_ome_zarr("scan.ims", "scan.zarr")               # Imaris, native HDF5
 ```
+
+### A folder of single-plane TIFFs
+
+Some acquisitions/stitching tools save **one TIFF per Z/C plane** instead of a
+single multi-page file, e.g.:
+
+```text
+sample_T0_Z000_C0_V0.tif
+sample_T0_Z000_C1_V0.tif
+sample_T0_Z001_C0_V0.tif
+sample_T0_Z001_C1_V0.tif
+...
+```
+
+Pass `sequence_pattern=` and let `source` be a glob over the folder instead of
+one file path. The pattern is a regex whose **named groups** map to axis
+labels — axis order follows the order the groups appear in the pattern:
+
+```python
+to_ome_zarr(
+    "sample/*.tif",
+    "sample.zarr",
+    sequence_pattern=r"_T(?P<T>\d+)_Z(?P<Z>\d+)_C(?P<C>\d+)_V\d+",
+    shard=True,  # recommended for large sequences, see Sharding below
+)
+```
+
+Each file becomes exactly **one dask chunk**, decoded lazily on access — no
+data is duplicated or eagerly loaded, so this scales to huge (multi-TB)
+sequences (built on `tifffile.TiffSequence`, the same mechanism Cellpose's
+own distributed pipeline uses). Pixel calibration is read automatically from
+the first file's own metadata — see [Pixel calibration](#pixel-calibration)
+below.
+
+Available on the cluster too: the Snakemake `convert` rule reads a
+`sequence_pattern:` key from the config (`input:` then being the glob), so a
+folder-of-TIFFs conversion runs through the same SLURM profile as any other
+input — see [Cluster usage](snakemake.md).
 
 !!! note "Imaris pyramids: rebuild (default) or reuse"
     `.ims` files carry their own resolution pyramid. By default `to_ome_zarr`
@@ -64,9 +103,11 @@ to_ome_zarr("scan.ims", "scan.zarr")               # Imaris, native HDF5
 ### Pixel calibration
 
 The physical voxel size is read from the input — bioio's `physical_pixel_sizes`,
-the Imaris resolution metadata, or an existing OME-ZARR's scale — and written
-into the NGFF `coordinateTransformations` (in micrometers), so calibration is
-preserved regardless of input. Override or supply it for bare arrays with
+the Imaris resolution metadata, an existing OME-ZARR's scale, or (for a TIFF
+sequence) the first file's own ImageJ metadata (`spacing`/`unit`) or
+`XResolution`/`YResolution` tags — and written into the NGFF
+`coordinateTransformations` (in micrometers), so calibration is preserved
+regardless of input. Override or supply it for bare arrays with
 `pixel_size={"z": 2.0, "y": 0.32, "x": 0.32}`.
 
 ### Won't OOM
