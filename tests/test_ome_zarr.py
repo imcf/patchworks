@@ -122,12 +122,18 @@ def test_tiff_sequence_conversion(tmp_path):
 
 
 def test_tiff_sequence_drops_singleton_time_axis(tmp_path):
-    """A constant T in the pattern is dropped, keeping channel at axis 0."""
+    """A constant T in the pattern is dropped, keeping channel at axis 0.
+
+    Each file's own array has leading singleton dims (1, 1, y, x) — what
+    tifffile.imread reports even for a plain single-page TIFF in practice —
+    to make sure those get stripped instead of being mistaken for real
+    sequence axes.
+    """
     tifffile = pytest.importorskip("tifffile")
     n_z, n_c, size = 2, 3, 8
     for z in range(n_z):
         for c in range(n_c):
-            img = np.full((size, size), z * 10 + c, dtype="uint16")
+            img = np.full((1, 1, size, size), z * 10 + c, dtype="uint16")
             tifffile.imwrite(tmp_path / f"sample_T0_Z{z:03d}_C{c}_V0.tif", img)
 
     out = tmp_path / "out.zarr"
