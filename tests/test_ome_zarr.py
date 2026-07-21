@@ -80,7 +80,12 @@ def test_non_spatial_axis_not_downsampled(tmp_path):
 
 
 def test_tiff_sequence_conversion(tmp_path):
-    """A folder of single-plane TIFFs is wrapped lazily and converted."""
+    """A folder of single-plane TIFFs is wrapped lazily and converted.
+
+    The filename pattern lists Z before C, but the output must still come
+    out channel-first (patchworks' tczyx convention), since load_ome_zarr /
+    tile_process hard-assume axis 0 is the channel axis.
+    """
     tifffile = pytest.importorskip("tifffile")
     n_z, n_c, size = 3, 2, 8
     for z in range(n_z):
@@ -102,13 +107,42 @@ def test_tiff_sequence_conversion(tmp_path):
     )
 
     result = np.asarray(load_ome_zarr(out, channel=None))
-    assert result.shape == (n_z, n_c, size, size)
+    assert result.shape == (n_c, n_z, size, size)  # channel-first, not z-first
     # each plane's constant value encodes its (z, c) position.
     assert (
         result[:, :, 0, 0]
-        == [[z * 10 + c for c in range(n_c)] for z in range(n_z)]
+        == [[z * 10 + c for z in range(n_z)] for c in range(n_c)]
     ).all()
     assert _level_scale(out, 0) == pytest.approx([1.0, 1.0, 0.5, 0.5])
+
+    # per-channel selection picks the right plane regardless of pattern order.
+    ch1 = np.asarray(load_ome_zarr(out, channel=1))
+    assert ch1.shape == (n_z, size, size)
+    assert (ch1[:, 0, 0] == [z * 10 + 1 for z in range(n_z)]).all()
+
+
+def test_tiff_sequence_drops_singleton_time_axis(tmp_path):
+    """A constant T in the pattern is dropped, keeping channel at axis 0."""
+    tifffile = pytest.importorskip("tifffile")
+    n_z, n_c, size = 2, 3, 8
+    for z in range(n_z):
+        for c in range(n_c):
+            img = np.full((size, size), z * 10 + c, dtype="uint16")
+            tifffile.imwrite(tmp_path / f"sample_T0_Z{z:03d}_C{c}_V0.tif", img)
+
+    out = tmp_path / "out.zarr"
+    to_ome_zarr(
+        str(tmp_path / "*.tif"),
+        out,
+        sequence_pattern=r"_T(?P<T>\d+)_Z(?P<Z>\d+)_C(?P<C>\d+)_V\d+",
+        n_levels=1,
+    )
+
+    result = np.asarray(load_ome_zarr(out, channel=None))
+    assert result.shape == (n_c, n_z, size, size)  # no leftover T axis
+    ch2 = np.asarray(load_ome_zarr(out, channel=2))
+    assert ch2.shape == (n_z, size, size)
+    assert (ch2[:, 0, 0] == [z * 10 + 2 for z in range(n_z)]).all()
 
 
 def test_axes_length_mismatch(tmp_path):
