@@ -196,6 +196,82 @@ def _get_model(cellpose_dict: dict[str, Any]) -> Any:
     return _model_cache[key]
 
 
+def _is_cuda_oom(exc: Exception) -> bool:
+    """Return whether *exc* looks like a CUDA out-of-memory error.
+
+    Parameters
+    ----------
+    exc : Exception
+        Exception raised by ``model.eval``.
+
+    Returns
+    -------
+    bool
+        True if the exception is a CUDA OOM.
+    """
+    return "out of memory" in str(exc).lower()
+
+
+_OOM_RETRIES = 4
+_OOM_BACKOFF_SECONDS = 30
+
+
+def _eval_with_oom_fallback(
+    model: Any, img: np.ndarray, kwargs: dict[str, Any], cellpose_dict: dict[str, Any]
+) -> np.ndarray:
+    """Run ``model.eval``, surviving transient GPU contention.
+
+    Cluster GPUs are often shared: another job's memory footprint can grow
+    mid-run and push an otherwise-fine tile size over the edge. Staying on
+    GPU matters — this tile can take well over an hour, so falling back to
+    CPU would be far worse than waiting. Instead this clears the allocator
+    cache (fixes fragmentation) and retries with a backoff, giving the
+    cotenant job time to free memory, before finally giving up.
+
+    Parameters
+    ----------
+    model : Any
+        Cellpose model instance.
+    img : np.ndarray
+        Image to segment.
+    kwargs : dict
+        Keyword arguments for ``model.eval``.
+    cellpose_dict : dict
+        Configuration from :func:`_make_config`.
+
+    Returns
+    -------
+    np.ndarray
+        Label array from ``model.eval``.
+    """
+    import time
+
+    for attempt in range(_OOM_RETRIES + 1):
+        try:
+            return model.eval(img, **kwargs)[0]
+        except RuntimeError as exc:
+            if not cellpose_dict.get("gpu", False) or not _is_cuda_oom(exc):
+                raise
+            import torch
+
+            torch.cuda.empty_cache()
+            if attempt == _OOM_RETRIES:
+                logger.error(
+                    "CUDA OOM persisted after %d retries; giving up on tile.",
+                    _OOM_RETRIES,
+                )
+                raise
+            wait = _OOM_BACKOFF_SECONDS * (attempt + 1)
+            logger.warning(
+                "CUDA OOM on tile (likely GPU contention); cleared cache, "
+                "retrying in %ds (attempt %d/%d).",
+                wait,
+                attempt + 1,
+                _OOM_RETRIES,
+            )
+            time.sleep(wait)
+
+
 def _run(block: np.ndarray, cellpose_dict: dict[str, Any]) -> np.ndarray:
     """Segment one tile with a cached Cellpose model.
 
@@ -231,12 +307,15 @@ def _run(block: np.ndarray, cellpose_dict: dict[str, Any]) -> np.ndarray:
 
     if do_3D:
         kwargs["z_axis"] = 0
-        return model.eval(block, **kwargs)[0].astype("int32")
+        masks = _eval_with_oom_fallback(model, block, kwargs, cellpose_dict)
+        return masks.astype("int32")
     else:
         # Squeeze singleton z so Cellpose gets a clean 2-D image
         squeeze = block.ndim == 3 and block.shape[0] == 1
         img = block[0] if squeeze else block
-        masks = model.eval(img, **kwargs)[0].astype("int32")
+        masks = _eval_with_oom_fallback(model, img, kwargs, cellpose_dict).astype(
+            "int32"
+        )
         return masks[np.newaxis] if squeeze else masks
 
 
