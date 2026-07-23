@@ -217,7 +217,10 @@ _OOM_BACKOFF_SECONDS = 30
 
 
 def _eval_with_oom_fallback(
-    model: Any, img: np.ndarray, kwargs: dict[str, Any], cellpose_dict: dict[str, Any]
+    model: Any,
+    img: np.ndarray,
+    kwargs: dict[str, Any],
+    cellpose_dict: dict[str, Any],
 ) -> np.ndarray:
     """Run ``model.eval``, surviving transient GPU contention.
 
@@ -313,9 +316,8 @@ def _run(block: np.ndarray, cellpose_dict: dict[str, Any]) -> np.ndarray:
         # Squeeze singleton z so Cellpose gets a clean 2-D image
         squeeze = block.ndim == 3 and block.shape[0] == 1
         img = block[0] if squeeze else block
-        masks = _eval_with_oom_fallback(model, img, kwargs, cellpose_dict).astype(
-            "int32"
-        )
+        masks = _eval_with_oom_fallback(model, img, kwargs, cellpose_dict)
+        masks = masks.astype("int32")
         return masks[np.newaxis] if squeeze else masks
 
 
