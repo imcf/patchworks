@@ -1,0 +1,3545 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+      
+        <link rel="prev" href="../dog/">
+      
+      
+        <link rel="next" href="../napari/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../../assets/logo.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>OME-ZARR conversion - patchworks</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="deep-orange" data-md-color-accent="orange">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#ome-zarr-conversion-plugin" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../../.." title="patchworks" class="md-header__button md-logo" aria-label="patchworks" data-md-component="logo">
+      
+  <img src="../../../assets/logo.png" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            patchworks
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              OME-ZARR conversion
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="deep-orange" data-md-color-accent="orange"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="deep-orange" data-md-color-accent="orange"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="Share" aria-label="Share" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/imcf/patchworks" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    imcf/patchworks
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+  
+
+<nav class="md-nav md-nav--primary md-nav--integrated" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../.." title="patchworks" class="md-nav__button md-logo" aria-label="patchworks" data-md-component="logo">
+      
+  <img src="../../../assets/logo.png" alt="logo">
+
+    </a>
+    patchworks
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/imcf/patchworks" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    imcf/patchworks
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting_started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    User Guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    User Guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../guide/tiling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tiling strategy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../guide/merging/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Merging labels
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../guide/skip_empty/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Empty tile skipping
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../guide/gpu_distributed/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GPU & distributed
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../guide/performance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Performance & memory
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../guide/custom_segmentation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Custom segmentation function
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../guide/label_relations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Relating labels across segmentations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../guide/measurements/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Measurements
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../guide/ome_zarr_napari/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    OME-ZARR & napari
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../guide/snakemake/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cluster workflow (Snakemake)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../guide/pitfalls/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pitfalls
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Examples
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Examples
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../examples/cellpose_2d/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cellpose 2-D
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../examples/cellpose_3d/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cellpose 3-D
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../examples/stardist/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    StarDist
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../examples/dog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Difference of Gaussians
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../examples/custom/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Custom function
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../examples/standalone_merge/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Standalone merge
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    API Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tile_process/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    tile_process
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../merge_tile_labels/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    merge_tile_labels
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../postprocess/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    dilate_labels
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../chunks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tile sizing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../io/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    I/O helpers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../relabel/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Relabelling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cluster/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cluster helpers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_8" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_5_8" id="__nav_5_8_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Plugins
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_5_8_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_5_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Plugins
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../cellpose/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cellpose
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../dog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Difference of Gaussians
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    OME-ZARR conversion
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    OME-ZARR conversion
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#to_ome_zarr" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        to_ome_zarr
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#patchworks.plugins.ome_zarr.to_ome_zarr" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        to_ome_zarr
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#add_pyramid" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        add_pyramid
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#patchworks.plugins.ome_zarr.add_pyramid" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        add_pyramid
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#write_labels" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        write_labels
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#patchworks.plugins.ome_zarr.write_labels" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        write_labels
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#register_labels" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        register_labels
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#patchworks.plugins.ome_zarr.register_labels" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        register_labels
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../napari/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    napari viewer
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="ome-zarr-conversion-plugin">OME-ZARR conversion plugin</h1>
+<p>Write any array or image file to a pyramidal OME-ZARR store, add resolution
+levels to an existing store, or store a label image inside an OME-ZARR under
+the NGFF <code>labels/</code> group. Uses only the core dependencies for arrays and
+<code>.zarr</code> inputs; reading other file formats needs the optional <code>bioio</code> extra
+(<code>pip install "patchworks[bioio]"</code>).</p>
+<p>Pyramids downsample <strong>X and Y only</strong> — <code>Z</code> (and channel/time) are kept at full
+resolution, matching anisotropic microscopy stacks.</p>
+<h2 id="to_ome_zarr">to_ome_zarr</h2>
+
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="patchworks.plugins.ome_zarr.to_ome_zarr" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">patchworks</span><span class="o">.</span><span class="n">plugins</span><span class="o">.</span><span class="n">ome_zarr</span><span class="o">.</span><span class="n">to_ome_zarr</span><span class="p">(</span><span class="n">source</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">da</span><span class="o">.</span><span class="n">Array</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="nb">str</span><span class="p">,</span> <span class="n">Path</span><span class="p">],</span> <span class="n">out_path</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Path</span><span class="p">],</span> <span class="o">*</span><span class="p">,</span> <span class="n">axes</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">pixel_size</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">PixelSize</span><span class="p">,</span> <span class="nb">tuple</span><span class="p">,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">scene</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span> <span class="n">sequence_pattern</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">n_levels</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">5</span><span class="p">,</span> <span class="n">downscale</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">2</span><span class="p">,</span> <span class="n">chunks</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="o">...</span><span class="p">],</span> <span class="kc">None</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">shard</span><span class="p">:</span> <span class="n">ShardSpec</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span> <span class="n">reuse_pyramid</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span> <span class="n">progress</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span> <span class="n">overwrite</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span></code>
+
+</h2>
+
+
+    <div class="doc doc-contents first">
+
+        <p>Write <em>source</em> as a pyramidal, calibrated OME-ZARR store.</p>
+<p><em>source</em> may be a dask/NumPy array, a <code>.zarr</code> store, an Imaris <code>.ims</code>
+file, any image format readable by bioio (CZI, LIF, ND2, OME-TIFF, …), or
+(with <em>sequence_pattern</em> set) a glob over a folder of single-plane TIFFs.
+File inputs are read lazily; the pyramid is built level-by-level from disk
+with bounded chunks, so the full volume never needs to fit in RAM. Only
+<code>x</code>/<code>y</code> are downsampled; <code>z</code> (and channel/time) stay full-resolution.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>source</code>
+            </td>
+            <td>
+                  <code>(<span title="dask.array.Array">Array</span>, <span title="numpy.ndarray">ndarray</span>, <span title="str">str</span> or <span title="pathlib.Path">Path</span>)</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Array or path to convert.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>out_path</code>
+            </td>
+            <td>
+                  <code><span title="str">str</span> or <span title="pathlib.Path">Path</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Destination <code>.zarr</code> store (a directory).</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>axes</code>
+            </td>
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>One character per array dimension, e.g. <code>"zyx"</code> or <code>"cyx"</code>.
+<code>None</code> → inferred from the file metadata or the array dimensions.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>pixel_size</code>
+            </td>
+            <td>
+                  <code>(<span title="dict">dict</span>, <span title="tuple">tuple</span> or None)</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Physical voxel size in micrometers, as <code>{"z": .., "y": .., "x": ..}</code>
+or a tuple aligned to the spatial axes. <code>None</code> → read from the input
+(bioio/Imaris/OME-ZARR); falls back to 1.0 (uncalibrated) for bare
+arrays.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>scene</code>
+            </td>
+            <td>
+                  <code><span title="int">int</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Scene index for multi-scene bioio files.</p>
+              </div>
+            </td>
+            <td>
+                  <code>0</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>sequence_pattern</code>
+            </td>
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>When given, <em>source</em> is treated as a glob pattern over a folder of
+single-plane TIFFs (e.g. <code>"folder/*.tif"</code>) instead of a single
+file, and this is the regex parsing each file name into axis labels
+and indices via named groups, e.g.
+<code>r"_T(?P&lt;T&gt;\d+)_Z(?P&lt;Z&gt;\d+)_C(?P&lt;C&gt;\d+)_V\d+"</code>. Each file
+becomes exactly one chunk, read lazily on access (no data
+duplicated) — see :func:<code>tifffile.TiffSequence</code>. The result is
+always reordered to patchworks' <code>czyx</code> convention regardless of
+the order named groups appear in the pattern, and any singleton
+non-spatial axis (e.g. a constant <code>T0</code>) is dropped, so a real
+channel axis always ends up first.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>n_levels</code>
+            </td>
+            <td>
+                  <code><span title="int">int</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Maximum number of pyramid levels including full resolution.</p>
+              </div>
+            </td>
+            <td>
+                  <code>5</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>downscale</code>
+            </td>
+            <td>
+                  <code><span title="int">int</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Per-level X/Y downsampling factor (default 2).</p>
+              </div>
+            </td>
+            <td>
+                  <code>2</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>chunks</code>
+            </td>
+            <td>
+                  <code>tuple of int</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Chunk shape for the written levels. <code>None</code> → a bounded default.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>shard</code>
+            </td>
+            <td>
+                  <code>bool or tuple of int</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Pack many chunks into one shard file (zarr v3), cutting the file count
+~100× on huge arrays. <code>False</code> (default) → unsharded, maximum reader
+compatibility. <code>True</code> → auto-pick a ~512 MB shard. A tuple sets an
+explicit shard shape (clamped to a chunk multiple). Sharded writes hold
+~one shard per worker in RAM. Requires zarr v3 (ignored otherwise).</p>
+              </div>
+            </td>
+            <td>
+                  <code>False</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>progress</code>
+            </td>
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Show a per-level dask progress bar (default <code>True</code>). Set <code>False</code> to
+silence it.</p>
+              </div>
+            </td>
+            <td>
+                  <code>True</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>reuse_pyramid</code>
+            </td>
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p><em>Imaris <code>.ims</code> only.</em> Copy the file's <strong>own</strong> resolution levels
+instead of rebuilding the pyramid (faster, no recompute), keeping each
+level's native scale. Ignored for other inputs; falls back to a
+rebuild if the Imaris levels can't be read. Default <code>False</code> (rebuild,
+for a consistent XY-only, nearest-neighbour NGFF pyramid).</p>
+              </div>
+            </td>
+            <td>
+                  <code>False</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>overwrite</code>
+            </td>
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Overwrite an existing store at <em>out_path</em>.</p>
+              </div>
+            </td>
+            <td>
+                  <code>False</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>The path to the written store (<code>str(out_path)</code>).</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+<p><span class="doc-section-title">Examples:</span></p>
+    <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span><span class="w"> </span><span class="nn">patchworks.plugins.ome_zarr</span><span class="w"> </span><span class="kn">import</span> <span class="n">to_ome_zarr</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="gp">&gt;&gt;&gt; </span><span class="n">to_ome_zarr</span><span class="p">(</span><span class="s2">&quot;scan.ims&quot;</span><span class="p">,</span> <span class="s2">&quot;scan.zarr&quot;</span><span class="p">,</span> <span class="n">n_levels</span><span class="o">=</span><span class="mi">4</span><span class="p">)</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="go">&#39;scan.zarr&#39;</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="gp">&gt;&gt;&gt; </span><span class="n">to_ome_zarr</span><span class="p">(</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="gp">... </span>    <span class="s2">&quot;ZT18_Male4_Left/*.tif&quot;</span><span class="p">,</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="gp">... </span>    <span class="s2">&quot;ZT18_Male4_Left.zarr&quot;</span><span class="p">,</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="gp">... </span>    <span class="n">sequence_pattern</span><span class="o">=</span><span class="sa">r</span><span class="s2">&quot;_T(?P&lt;T&gt;\d+)_Z(?P&lt;Z&gt;\d+)_C(?P&lt;C&gt;\d+)_V\d+&quot;</span><span class="p">,</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="gp">... </span>    <span class="n">shard</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="gp">... </span><span class="p">)</span>
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="go">&#39;ZT18_Male4_Left.zarr&#39;</span>
+</code></pre></div>
+
+
+            <details class="mkdocstrings-source">
+              <summary>Source code in <code>src/patchworks/plugins/ome_zarr.py</code></summary>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-982"> 982</a></span>
+<span class="normal"><a href="#__codelineno-0-983"> 983</a></span>
+<span class="normal"><a href="#__codelineno-0-984"> 984</a></span>
+<span class="normal"><a href="#__codelineno-0-985"> 985</a></span>
+<span class="normal"><a href="#__codelineno-0-986"> 986</a></span>
+<span class="normal"><a href="#__codelineno-0-987"> 987</a></span>
+<span class="normal"><a href="#__codelineno-0-988"> 988</a></span>
+<span class="normal"><a href="#__codelineno-0-989"> 989</a></span>
+<span class="normal"><a href="#__codelineno-0-990"> 990</a></span>
+<span class="normal"><a href="#__codelineno-0-991"> 991</a></span>
+<span class="normal"><a href="#__codelineno-0-992"> 992</a></span>
+<span class="normal"><a href="#__codelineno-0-993"> 993</a></span>
+<span class="normal"><a href="#__codelineno-0-994"> 994</a></span>
+<span class="normal"><a href="#__codelineno-0-995"> 995</a></span>
+<span class="normal"><a href="#__codelineno-0-996"> 996</a></span>
+<span class="normal"><a href="#__codelineno-0-997"> 997</a></span>
+<span class="normal"><a href="#__codelineno-0-998"> 998</a></span>
+<span class="normal"><a href="#__codelineno-0-999"> 999</a></span>
+<span class="normal"><a href="#__codelineno-0-1000">1000</a></span>
+<span class="normal"><a href="#__codelineno-0-1001">1001</a></span>
+<span class="normal"><a href="#__codelineno-0-1002">1002</a></span>
+<span class="normal"><a href="#__codelineno-0-1003">1003</a></span>
+<span class="normal"><a href="#__codelineno-0-1004">1004</a></span>
+<span class="normal"><a href="#__codelineno-0-1005">1005</a></span>
+<span class="normal"><a href="#__codelineno-0-1006">1006</a></span>
+<span class="normal"><a href="#__codelineno-0-1007">1007</a></span>
+<span class="normal"><a href="#__codelineno-0-1008">1008</a></span>
+<span class="normal"><a href="#__codelineno-0-1009">1009</a></span>
+<span class="normal"><a href="#__codelineno-0-1010">1010</a></span>
+<span class="normal"><a href="#__codelineno-0-1011">1011</a></span>
+<span class="normal"><a href="#__codelineno-0-1012">1012</a></span>
+<span class="normal"><a href="#__codelineno-0-1013">1013</a></span>
+<span class="normal"><a href="#__codelineno-0-1014">1014</a></span>
+<span class="normal"><a href="#__codelineno-0-1015">1015</a></span>
+<span class="normal"><a href="#__codelineno-0-1016">1016</a></span>
+<span class="normal"><a href="#__codelineno-0-1017">1017</a></span>
+<span class="normal"><a href="#__codelineno-0-1018">1018</a></span>
+<span class="normal"><a href="#__codelineno-0-1019">1019</a></span>
+<span class="normal"><a href="#__codelineno-0-1020">1020</a></span>
+<span class="normal"><a href="#__codelineno-0-1021">1021</a></span>
+<span class="normal"><a href="#__codelineno-0-1022">1022</a></span>
+<span class="normal"><a href="#__codelineno-0-1023">1023</a></span>
+<span class="normal"><a href="#__codelineno-0-1024">1024</a></span>
+<span class="normal"><a href="#__codelineno-0-1025">1025</a></span>
+<span class="normal"><a href="#__codelineno-0-1026">1026</a></span>
+<span class="normal"><a href="#__codelineno-0-1027">1027</a></span>
+<span class="normal"><a href="#__codelineno-0-1028">1028</a></span>
+<span class="normal"><a href="#__codelineno-0-1029">1029</a></span>
+<span class="normal"><a href="#__codelineno-0-1030">1030</a></span>
+<span class="normal"><a href="#__codelineno-0-1031">1031</a></span>
+<span class="normal"><a href="#__codelineno-0-1032">1032</a></span>
+<span class="normal"><a href="#__codelineno-0-1033">1033</a></span>
+<span class="normal"><a href="#__codelineno-0-1034">1034</a></span>
+<span class="normal"><a href="#__codelineno-0-1035">1035</a></span>
+<span class="normal"><a href="#__codelineno-0-1036">1036</a></span>
+<span class="normal"><a href="#__codelineno-0-1037">1037</a></span>
+<span class="normal"><a href="#__codelineno-0-1038">1038</a></span>
+<span class="normal"><a href="#__codelineno-0-1039">1039</a></span>
+<span class="normal"><a href="#__codelineno-0-1040">1040</a></span>
+<span class="normal"><a href="#__codelineno-0-1041">1041</a></span>
+<span class="normal"><a href="#__codelineno-0-1042">1042</a></span>
+<span class="normal"><a href="#__codelineno-0-1043">1043</a></span>
+<span class="normal"><a href="#__codelineno-0-1044">1044</a></span>
+<span class="normal"><a href="#__codelineno-0-1045">1045</a></span>
+<span class="normal"><a href="#__codelineno-0-1046">1046</a></span>
+<span class="normal"><a href="#__codelineno-0-1047">1047</a></span>
+<span class="normal"><a href="#__codelineno-0-1048">1048</a></span>
+<span class="normal"><a href="#__codelineno-0-1049">1049</a></span>
+<span class="normal"><a href="#__codelineno-0-1050">1050</a></span>
+<span class="normal"><a href="#__codelineno-0-1051">1051</a></span>
+<span class="normal"><a href="#__codelineno-0-1052">1052</a></span>
+<span class="normal"><a href="#__codelineno-0-1053">1053</a></span>
+<span class="normal"><a href="#__codelineno-0-1054">1054</a></span>
+<span class="normal"><a href="#__codelineno-0-1055">1055</a></span>
+<span class="normal"><a href="#__codelineno-0-1056">1056</a></span>
+<span class="normal"><a href="#__codelineno-0-1057">1057</a></span>
+<span class="normal"><a href="#__codelineno-0-1058">1058</a></span>
+<span class="normal"><a href="#__codelineno-0-1059">1059</a></span>
+<span class="normal"><a href="#__codelineno-0-1060">1060</a></span>
+<span class="normal"><a href="#__codelineno-0-1061">1061</a></span>
+<span class="normal"><a href="#__codelineno-0-1062">1062</a></span>
+<span class="normal"><a href="#__codelineno-0-1063">1063</a></span>
+<span class="normal"><a href="#__codelineno-0-1064">1064</a></span>
+<span class="normal"><a href="#__codelineno-0-1065">1065</a></span>
+<span class="normal"><a href="#__codelineno-0-1066">1066</a></span>
+<span class="normal"><a href="#__codelineno-0-1067">1067</a></span>
+<span class="normal"><a href="#__codelineno-0-1068">1068</a></span>
+<span class="normal"><a href="#__codelineno-0-1069">1069</a></span>
+<span class="normal"><a href="#__codelineno-0-1070">1070</a></span>
+<span class="normal"><a href="#__codelineno-0-1071">1071</a></span>
+<span class="normal"><a href="#__codelineno-0-1072">1072</a></span>
+<span class="normal"><a href="#__codelineno-0-1073">1073</a></span>
+<span class="normal"><a href="#__codelineno-0-1074">1074</a></span>
+<span class="normal"><a href="#__codelineno-0-1075">1075</a></span>
+<span class="normal"><a href="#__codelineno-0-1076">1076</a></span>
+<span class="normal"><a href="#__codelineno-0-1077">1077</a></span>
+<span class="normal"><a href="#__codelineno-0-1078">1078</a></span>
+<span class="normal"><a href="#__codelineno-0-1079">1079</a></span>
+<span class="normal"><a href="#__codelineno-0-1080">1080</a></span>
+<span class="normal"><a href="#__codelineno-0-1081">1081</a></span>
+<span class="normal"><a href="#__codelineno-0-1082">1082</a></span>
+<span class="normal"><a href="#__codelineno-0-1083">1083</a></span>
+<span class="normal"><a href="#__codelineno-0-1084">1084</a></span>
+<span class="normal"><a href="#__codelineno-0-1085">1085</a></span>
+<span class="normal"><a href="#__codelineno-0-1086">1086</a></span>
+<span class="normal"><a href="#__codelineno-0-1087">1087</a></span>
+<span class="normal"><a href="#__codelineno-0-1088">1088</a></span>
+<span class="normal"><a href="#__codelineno-0-1089">1089</a></span>
+<span class="normal"><a href="#__codelineno-0-1090">1090</a></span>
+<span class="normal"><a href="#__codelineno-0-1091">1091</a></span>
+<span class="normal"><a href="#__codelineno-0-1092">1092</a></span>
+<span class="normal"><a href="#__codelineno-0-1093">1093</a></span>
+<span class="normal"><a href="#__codelineno-0-1094">1094</a></span>
+<span class="normal"><a href="#__codelineno-0-1095">1095</a></span>
+<span class="normal"><a href="#__codelineno-0-1096">1096</a></span>
+<span class="normal"><a href="#__codelineno-0-1097">1097</a></span>
+<span class="normal"><a href="#__codelineno-0-1098">1098</a></span>
+<span class="normal"><a href="#__codelineno-0-1099">1099</a></span>
+<span class="normal"><a href="#__codelineno-0-1100">1100</a></span>
+<span class="normal"><a href="#__codelineno-0-1101">1101</a></span>
+<span class="normal"><a href="#__codelineno-0-1102">1102</a></span>
+<span class="normal"><a href="#__codelineno-0-1103">1103</a></span>
+<span class="normal"><a href="#__codelineno-0-1104">1104</a></span>
+<span class="normal"><a href="#__codelineno-0-1105">1105</a></span>
+<span class="normal"><a href="#__codelineno-0-1106">1106</a></span>
+<span class="normal"><a href="#__codelineno-0-1107">1107</a></span>
+<span class="normal"><a href="#__codelineno-0-1108">1108</a></span>
+<span class="normal"><a href="#__codelineno-0-1109">1109</a></span>
+<span class="normal"><a href="#__codelineno-0-1110">1110</a></span>
+<span class="normal"><a href="#__codelineno-0-1111">1111</a></span>
+<span class="normal"><a href="#__codelineno-0-1112">1112</a></span>
+<span class="normal"><a href="#__codelineno-0-1113">1113</a></span>
+<span class="normal"><a href="#__codelineno-0-1114">1114</a></span>
+<span class="normal"><a href="#__codelineno-0-1115">1115</a></span>
+<span class="normal"><a href="#__codelineno-0-1116">1116</a></span>
+<span class="normal"><a href="#__codelineno-0-1117">1117</a></span>
+<span class="normal"><a href="#__codelineno-0-1118">1118</a></span>
+<span class="normal"><a href="#__codelineno-0-1119">1119</a></span>
+<span class="normal"><a href="#__codelineno-0-1120">1120</a></span>
+<span class="normal"><a href="#__codelineno-0-1121">1121</a></span>
+<span class="normal"><a href="#__codelineno-0-1122">1122</a></span>
+<span class="normal"><a href="#__codelineno-0-1123">1123</a></span>
+<span class="normal"><a href="#__codelineno-0-1124">1124</a></span>
+<span class="normal"><a href="#__codelineno-0-1125">1125</a></span>
+<span class="normal"><a href="#__codelineno-0-1126">1126</a></span></pre></div></td><td class="code"><div><pre><span></span><code><a id="__codelineno-0-982" name="__codelineno-0-982"></a><span class="k">def</span><span class="w"> </span><span class="nf">to_ome_zarr</span><span class="p">(</span>
+<a id="__codelineno-0-983" name="__codelineno-0-983"></a>    <span class="n">source</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">da</span><span class="o">.</span><span class="n">Array</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="nb">str</span><span class="p">,</span> <span class="n">Path</span><span class="p">],</span>
+<a id="__codelineno-0-984" name="__codelineno-0-984"></a>    <span class="n">out_path</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Path</span><span class="p">],</span>
+<a id="__codelineno-0-985" name="__codelineno-0-985"></a>    <span class="o">*</span><span class="p">,</span>
+<a id="__codelineno-0-986" name="__codelineno-0-986"></a>    <span class="n">axes</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+<a id="__codelineno-0-987" name="__codelineno-0-987"></a>    <span class="n">pixel_size</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">PixelSize</span><span class="p">,</span> <span class="nb">tuple</span><span class="p">,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+<a id="__codelineno-0-988" name="__codelineno-0-988"></a>    <span class="n">scene</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span>
+<a id="__codelineno-0-989" name="__codelineno-0-989"></a>    <span class="n">sequence_pattern</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+<a id="__codelineno-0-990" name="__codelineno-0-990"></a>    <span class="n">n_levels</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">5</span><span class="p">,</span>
+<a id="__codelineno-0-991" name="__codelineno-0-991"></a>    <span class="n">downscale</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">2</span><span class="p">,</span>
+<a id="__codelineno-0-992" name="__codelineno-0-992"></a>    <span class="n">chunks</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="o">...</span><span class="p">],</span> <span class="kc">None</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+<a id="__codelineno-0-993" name="__codelineno-0-993"></a>    <span class="n">shard</span><span class="p">:</span> <span class="n">ShardSpec</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+<a id="__codelineno-0-994" name="__codelineno-0-994"></a>    <span class="n">reuse_pyramid</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+<a id="__codelineno-0-995" name="__codelineno-0-995"></a>    <span class="n">progress</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+<a id="__codelineno-0-996" name="__codelineno-0-996"></a>    <span class="n">overwrite</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+<a id="__codelineno-0-997" name="__codelineno-0-997"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+<a id="__codelineno-0-998" name="__codelineno-0-998"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Write *source* as a pyramidal, calibrated OME-ZARR store.</span>
+<a id="__codelineno-0-999" name="__codelineno-0-999"></a>
+<a id="__codelineno-0-1000" name="__codelineno-0-1000"></a><span class="sd">    *source* may be a dask/NumPy array, a ``.zarr`` store, an Imaris ``.ims``</span>
+<a id="__codelineno-0-1001" name="__codelineno-0-1001"></a><span class="sd">    file, any image format readable by bioio (CZI, LIF, ND2, OME-TIFF, …), or</span>
+<a id="__codelineno-0-1002" name="__codelineno-0-1002"></a><span class="sd">    (with *sequence_pattern* set) a glob over a folder of single-plane TIFFs.</span>
+<a id="__codelineno-0-1003" name="__codelineno-0-1003"></a><span class="sd">    File inputs are read lazily; the pyramid is built level-by-level from disk</span>
+<a id="__codelineno-0-1004" name="__codelineno-0-1004"></a><span class="sd">    with bounded chunks, so the full volume never needs to fit in RAM. Only</span>
+<a id="__codelineno-0-1005" name="__codelineno-0-1005"></a><span class="sd">    ``x``/``y`` are downsampled; ``z`` (and channel/time) stay full-resolution.</span>
+<a id="__codelineno-0-1006" name="__codelineno-0-1006"></a>
+<a id="__codelineno-0-1007" name="__codelineno-0-1007"></a><span class="sd">    Parameters</span>
+<a id="__codelineno-0-1008" name="__codelineno-0-1008"></a><span class="sd">    ----------</span>
+<a id="__codelineno-0-1009" name="__codelineno-0-1009"></a><span class="sd">    source : da.Array, np.ndarray, str or Path</span>
+<a id="__codelineno-0-1010" name="__codelineno-0-1010"></a><span class="sd">        Array or path to convert.</span>
+<a id="__codelineno-0-1011" name="__codelineno-0-1011"></a><span class="sd">    out_path : str or Path</span>
+<a id="__codelineno-0-1012" name="__codelineno-0-1012"></a><span class="sd">        Destination ``.zarr`` store (a directory).</span>
+<a id="__codelineno-0-1013" name="__codelineno-0-1013"></a><span class="sd">    axes : str, optional</span>
+<a id="__codelineno-0-1014" name="__codelineno-0-1014"></a><span class="sd">        One character per array dimension, e.g. ``&quot;zyx&quot;`` or ``&quot;cyx&quot;``.</span>
+<a id="__codelineno-0-1015" name="__codelineno-0-1015"></a><span class="sd">        ``None`` → inferred from the file metadata or the array dimensions.</span>
+<a id="__codelineno-0-1016" name="__codelineno-0-1016"></a><span class="sd">    pixel_size : dict, tuple or None, optional</span>
+<a id="__codelineno-0-1017" name="__codelineno-0-1017"></a><span class="sd">        Physical voxel size in micrometers, as ``{&quot;z&quot;: .., &quot;y&quot;: .., &quot;x&quot;: ..}``</span>
+<a id="__codelineno-0-1018" name="__codelineno-0-1018"></a><span class="sd">        or a tuple aligned to the spatial axes. ``None`` → read from the input</span>
+<a id="__codelineno-0-1019" name="__codelineno-0-1019"></a><span class="sd">        (bioio/Imaris/OME-ZARR); falls back to 1.0 (uncalibrated) for bare</span>
+<a id="__codelineno-0-1020" name="__codelineno-0-1020"></a><span class="sd">        arrays.</span>
+<a id="__codelineno-0-1021" name="__codelineno-0-1021"></a><span class="sd">    scene : int, optional</span>
+<a id="__codelineno-0-1022" name="__codelineno-0-1022"></a><span class="sd">        Scene index for multi-scene bioio files.</span>
+<a id="__codelineno-0-1023" name="__codelineno-0-1023"></a><span class="sd">    sequence_pattern : str, optional</span>
+<a id="__codelineno-0-1024" name="__codelineno-0-1024"></a><span class="sd">        When given, *source* is treated as a glob pattern over a folder of</span>
+<a id="__codelineno-0-1025" name="__codelineno-0-1025"></a><span class="sd">        single-plane TIFFs (e.g. ``&quot;folder/*.tif&quot;``) instead of a single</span>
+<a id="__codelineno-0-1026" name="__codelineno-0-1026"></a><span class="sd">        file, and this is the regex parsing each file name into axis labels</span>
+<a id="__codelineno-0-1027" name="__codelineno-0-1027"></a><span class="sd">        and indices via named groups, e.g.</span>
+<a id="__codelineno-0-1028" name="__codelineno-0-1028"></a><span class="sd">        ``r&quot;_T(?P&lt;T&gt;\\d+)_Z(?P&lt;Z&gt;\\d+)_C(?P&lt;C&gt;\\d+)_V\\d+&quot;``. Each file</span>
+<a id="__codelineno-0-1029" name="__codelineno-0-1029"></a><span class="sd">        becomes exactly one chunk, read lazily on access (no data</span>
+<a id="__codelineno-0-1030" name="__codelineno-0-1030"></a><span class="sd">        duplicated) — see :func:`tifffile.TiffSequence`. The result is</span>
+<a id="__codelineno-0-1031" name="__codelineno-0-1031"></a><span class="sd">        always reordered to patchworks&#39; ``czyx`` convention regardless of</span>
+<a id="__codelineno-0-1032" name="__codelineno-0-1032"></a><span class="sd">        the order named groups appear in the pattern, and any singleton</span>
+<a id="__codelineno-0-1033" name="__codelineno-0-1033"></a><span class="sd">        non-spatial axis (e.g. a constant ``T0``) is dropped, so a real</span>
+<a id="__codelineno-0-1034" name="__codelineno-0-1034"></a><span class="sd">        channel axis always ends up first.</span>
+<a id="__codelineno-0-1035" name="__codelineno-0-1035"></a><span class="sd">    n_levels : int, optional</span>
+<a id="__codelineno-0-1036" name="__codelineno-0-1036"></a><span class="sd">        Maximum number of pyramid levels including full resolution.</span>
+<a id="__codelineno-0-1037" name="__codelineno-0-1037"></a><span class="sd">    downscale : int, optional</span>
+<a id="__codelineno-0-1038" name="__codelineno-0-1038"></a><span class="sd">        Per-level X/Y downsampling factor (default 2).</span>
+<a id="__codelineno-0-1039" name="__codelineno-0-1039"></a><span class="sd">    chunks : tuple of int, optional</span>
+<a id="__codelineno-0-1040" name="__codelineno-0-1040"></a><span class="sd">        Chunk shape for the written levels. ``None`` → a bounded default.</span>
+<a id="__codelineno-0-1041" name="__codelineno-0-1041"></a><span class="sd">    shard : bool or tuple of int, optional</span>
+<a id="__codelineno-0-1042" name="__codelineno-0-1042"></a><span class="sd">        Pack many chunks into one shard file (zarr v3), cutting the file count</span>
+<a id="__codelineno-0-1043" name="__codelineno-0-1043"></a><span class="sd">        ~100× on huge arrays. ``False`` (default) → unsharded, maximum reader</span>
+<a id="__codelineno-0-1044" name="__codelineno-0-1044"></a><span class="sd">        compatibility. ``True`` → auto-pick a ~512 MB shard. A tuple sets an</span>
+<a id="__codelineno-0-1045" name="__codelineno-0-1045"></a><span class="sd">        explicit shard shape (clamped to a chunk multiple). Sharded writes hold</span>
+<a id="__codelineno-0-1046" name="__codelineno-0-1046"></a><span class="sd">        ~one shard per worker in RAM. Requires zarr v3 (ignored otherwise).</span>
+<a id="__codelineno-0-1047" name="__codelineno-0-1047"></a><span class="sd">    progress : bool, optional</span>
+<a id="__codelineno-0-1048" name="__codelineno-0-1048"></a><span class="sd">        Show a per-level dask progress bar (default ``True``). Set ``False`` to</span>
+<a id="__codelineno-0-1049" name="__codelineno-0-1049"></a><span class="sd">        silence it.</span>
+<a id="__codelineno-0-1050" name="__codelineno-0-1050"></a><span class="sd">    reuse_pyramid : bool, optional</span>
+<a id="__codelineno-0-1051" name="__codelineno-0-1051"></a><span class="sd">        *Imaris ``.ims`` only.* Copy the file&#39;s **own** resolution levels</span>
+<a id="__codelineno-0-1052" name="__codelineno-0-1052"></a><span class="sd">        instead of rebuilding the pyramid (faster, no recompute), keeping each</span>
+<a id="__codelineno-0-1053" name="__codelineno-0-1053"></a><span class="sd">        level&#39;s native scale. Ignored for other inputs; falls back to a</span>
+<a id="__codelineno-0-1054" name="__codelineno-0-1054"></a><span class="sd">        rebuild if the Imaris levels can&#39;t be read. Default ``False`` (rebuild,</span>
+<a id="__codelineno-0-1055" name="__codelineno-0-1055"></a><span class="sd">        for a consistent XY-only, nearest-neighbour NGFF pyramid).</span>
+<a id="__codelineno-0-1056" name="__codelineno-0-1056"></a><span class="sd">    overwrite : bool, optional</span>
+<a id="__codelineno-0-1057" name="__codelineno-0-1057"></a><span class="sd">        Overwrite an existing store at *out_path*.</span>
+<a id="__codelineno-0-1058" name="__codelineno-0-1058"></a>
+<a id="__codelineno-0-1059" name="__codelineno-0-1059"></a><span class="sd">    Returns</span>
+<a id="__codelineno-0-1060" name="__codelineno-0-1060"></a><span class="sd">    -------</span>
+<a id="__codelineno-0-1061" name="__codelineno-0-1061"></a><span class="sd">    str</span>
+<a id="__codelineno-0-1062" name="__codelineno-0-1062"></a><span class="sd">        The path to the written store (``str(out_path)``).</span>
+<a id="__codelineno-0-1063" name="__codelineno-0-1063"></a>
+<a id="__codelineno-0-1064" name="__codelineno-0-1064"></a><span class="sd">    Examples</span>
+<a id="__codelineno-0-1065" name="__codelineno-0-1065"></a><span class="sd">    --------</span>
+<a id="__codelineno-0-1066" name="__codelineno-0-1066"></a><span class="sd">    &gt;&gt;&gt; from patchworks.plugins.ome_zarr import to_ome_zarr</span>
+<a id="__codelineno-0-1067" name="__codelineno-0-1067"></a><span class="sd">    &gt;&gt;&gt; to_ome_zarr(&quot;scan.ims&quot;, &quot;scan.zarr&quot;, n_levels=4)</span>
+<a id="__codelineno-0-1068" name="__codelineno-0-1068"></a><span class="sd">    &#39;scan.zarr&#39;</span>
+<a id="__codelineno-0-1069" name="__codelineno-0-1069"></a><span class="sd">    &gt;&gt;&gt; to_ome_zarr(</span>
+<a id="__codelineno-0-1070" name="__codelineno-0-1070"></a><span class="sd">    ...     &quot;ZT18_Male4_Left/*.tif&quot;,</span>
+<a id="__codelineno-0-1071" name="__codelineno-0-1071"></a><span class="sd">    ...     &quot;ZT18_Male4_Left.zarr&quot;,</span>
+<a id="__codelineno-0-1072" name="__codelineno-0-1072"></a><span class="sd">    ...     sequence_pattern=r&quot;_T(?P&lt;T&gt;\\d+)_Z(?P&lt;Z&gt;\\d+)_C(?P&lt;C&gt;\\d+)_V\\d+&quot;,</span>
+<a id="__codelineno-0-1073" name="__codelineno-0-1073"></a><span class="sd">    ...     shard=True,</span>
+<a id="__codelineno-0-1074" name="__codelineno-0-1074"></a><span class="sd">    ... )  # doctest: +SKIP</span>
+<a id="__codelineno-0-1075" name="__codelineno-0-1075"></a><span class="sd">    &#39;ZT18_Male4_Left.zarr&#39;</span>
+<a id="__codelineno-0-1076" name="__codelineno-0-1076"></a><span class="sd">    &quot;&quot;&quot;</span>
+<a id="__codelineno-0-1077" name="__codelineno-0-1077"></a>    <span class="k">if</span> <span class="n">downscale</span> <span class="o">&lt;</span> <span class="mi">2</span><span class="p">:</span>
+<a id="__codelineno-0-1078" name="__codelineno-0-1078"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;downscale must be &gt;= 2&quot;</span><span class="p">)</span>
+<a id="__codelineno-0-1079" name="__codelineno-0-1079"></a>    <span class="k">if</span> <span class="n">n_levels</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
+<a id="__codelineno-0-1080" name="__codelineno-0-1080"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;n_levels must be &gt;= 1&quot;</span><span class="p">)</span>
+<a id="__codelineno-0-1081" name="__codelineno-0-1081"></a>
+<a id="__codelineno-0-1082" name="__codelineno-0-1082"></a>    <span class="c1"># Reuse an Imaris file&#39;s own resolution pyramid instead of rebuilding it.</span>
+<a id="__codelineno-0-1083" name="__codelineno-0-1083"></a>    <span class="k">if</span> <span class="p">(</span>
+<a id="__codelineno-0-1084" name="__codelineno-0-1084"></a>        <span class="n">reuse_pyramid</span>
+<a id="__codelineno-0-1085" name="__codelineno-0-1085"></a>        <span class="ow">and</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">source</span><span class="p">,</span> <span class="p">(</span><span class="nb">str</span><span class="p">,</span> <span class="n">Path</span><span class="p">))</span>
+<a id="__codelineno-0-1086" name="__codelineno-0-1086"></a>        <span class="ow">and</span> <span class="nb">str</span><span class="p">(</span><span class="n">source</span><span class="p">)</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span><span class="o">.</span><span class="n">endswith</span><span class="p">(</span><span class="s2">&quot;.ims&quot;</span><span class="p">)</span>
+<a id="__codelineno-0-1087" name="__codelineno-0-1087"></a>    <span class="p">):</span>
+<a id="__codelineno-0-1088" name="__codelineno-0-1088"></a>        <span class="k">try</span><span class="p">:</span>
+<a id="__codelineno-0-1089" name="__codelineno-0-1089"></a>            <span class="k">return</span> <span class="n">_write_imaris_pyramid</span><span class="p">(</span>
+<a id="__codelineno-0-1090" name="__codelineno-0-1090"></a>                <span class="nb">str</span><span class="p">(</span><span class="n">source</span><span class="p">),</span>
+<a id="__codelineno-0-1091" name="__codelineno-0-1091"></a>                <span class="nb">str</span><span class="p">(</span><span class="n">out_path</span><span class="p">),</span>
+<a id="__codelineno-0-1092" name="__codelineno-0-1092"></a>                <span class="n">chunks</span><span class="o">=</span><span class="n">chunks</span><span class="p">,</span>
+<a id="__codelineno-0-1093" name="__codelineno-0-1093"></a>                <span class="n">overwrite</span><span class="o">=</span><span class="n">overwrite</span><span class="p">,</span>
+<a id="__codelineno-0-1094" name="__codelineno-0-1094"></a>                <span class="n">shard</span><span class="o">=</span><span class="n">shard</span><span class="p">,</span>
+<a id="__codelineno-0-1095" name="__codelineno-0-1095"></a>                <span class="n">progress</span><span class="o">=</span><span class="n">progress</span><span class="p">,</span>
+<a id="__codelineno-0-1096" name="__codelineno-0-1096"></a>            <span class="p">)</span>
+<a id="__codelineno-0-1097" name="__codelineno-0-1097"></a>        <span class="k">except</span> <span class="ne">Exception</span> <span class="k">as</span> <span class="n">exc</span><span class="p">:</span>
+<a id="__codelineno-0-1098" name="__codelineno-0-1098"></a>            <span class="n">logger</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span>
+<a id="__codelineno-0-1099" name="__codelineno-0-1099"></a>                <span class="s2">&quot;reuse_pyramid failed (</span><span class="si">%s</span><span class="s2">); rebuilding the pyramid instead.&quot;</span><span class="p">,</span>
+<a id="__codelineno-0-1100" name="__codelineno-0-1100"></a>                <span class="n">exc</span><span class="p">,</span>
+<a id="__codelineno-0-1101" name="__codelineno-0-1101"></a>            <span class="p">)</span>
+<a id="__codelineno-0-1102" name="__codelineno-0-1102"></a>
+<a id="__codelineno-0-1103" name="__codelineno-0-1103"></a>    <span class="n">arr</span><span class="p">,</span> <span class="n">axes</span><span class="p">,</span> <span class="n">detected</span> <span class="o">=</span> <span class="n">_to_dask</span><span class="p">(</span><span class="n">source</span><span class="p">,</span> <span class="n">axes</span><span class="p">,</span> <span class="n">scene</span><span class="p">,</span> <span class="n">sequence_pattern</span><span class="p">)</span>
+<a id="__codelineno-0-1104" name="__codelineno-0-1104"></a>    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">axes</span><span class="p">)</span> <span class="o">!=</span> <span class="n">arr</span><span class="o">.</span><span class="n">ndim</span><span class="p">:</span>
+<a id="__codelineno-0-1105" name="__codelineno-0-1105"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+<a id="__codelineno-0-1106" name="__codelineno-0-1106"></a>            <span class="sa">f</span><span class="s2">&quot;axes </span><span class="si">{</span><span class="n">axes</span><span class="si">!r}</span><span class="s2"> has </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">axes</span><span class="p">)</span><span class="si">}</span><span class="s2"> entries but array is </span><span class="si">{</span><span class="n">arr</span><span class="o">.</span><span class="n">ndim</span><span class="si">}</span><span class="s2">-D&quot;</span>
+<a id="__codelineno-0-1107" name="__codelineno-0-1107"></a>        <span class="p">)</span>
+<a id="__codelineno-0-1108" name="__codelineno-0-1108"></a>
+<a id="__codelineno-0-1109" name="__codelineno-0-1109"></a>    <span class="n">ps</span> <span class="o">=</span> <span class="n">_normalize_pixel_size</span><span class="p">(</span><span class="n">pixel_size</span><span class="p">,</span> <span class="n">axes</span><span class="p">)</span> <span class="k">if</span> <span class="n">pixel_size</span> <span class="k">else</span> <span class="n">detected</span>
+<a id="__codelineno-0-1110" name="__codelineno-0-1110"></a>    <span class="n">base_scale</span> <span class="o">=</span> <span class="n">_base_scale</span><span class="p">(</span><span class="n">axes</span><span class="p">,</span> <span class="n">ps</span><span class="p">)</span>
+<a id="__codelineno-0-1111" name="__codelineno-0-1111"></a>
+<a id="__codelineno-0-1112" name="__codelineno-0-1112"></a>    <span class="n">out</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">out_path</span><span class="p">)</span>
+<a id="__codelineno-0-1113" name="__codelineno-0-1113"></a>    <span class="n">zarr</span><span class="o">.</span><span class="n">open_group</span><span class="p">(</span><span class="n">out</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="s2">&quot;w&quot;</span> <span class="k">if</span> <span class="n">overwrite</span> <span class="k">else</span> <span class="s2">&quot;w-&quot;</span><span class="p">)</span>
+<a id="__codelineno-0-1114" name="__codelineno-0-1114"></a>    <span class="n">datasets</span> <span class="o">=</span> <span class="n">_write_pyramid</span><span class="p">(</span>
+<a id="__codelineno-0-1115" name="__codelineno-0-1115"></a>        <span class="n">arr</span><span class="p">,</span>
+<a id="__codelineno-0-1116" name="__codelineno-0-1116"></a>        <span class="n">axes</span><span class="p">,</span>
+<a id="__codelineno-0-1117" name="__codelineno-0-1117"></a>        <span class="n">out</span><span class="p">,</span>
+<a id="__codelineno-0-1118" name="__codelineno-0-1118"></a>        <span class="n">n_levels</span><span class="o">=</span><span class="n">n_levels</span><span class="p">,</span>
+<a id="__codelineno-0-1119" name="__codelineno-0-1119"></a>        <span class="n">downscale</span><span class="o">=</span><span class="n">downscale</span><span class="p">,</span>
+<a id="__codelineno-0-1120" name="__codelineno-0-1120"></a>        <span class="n">chunks</span><span class="o">=</span><span class="n">chunks</span><span class="p">,</span>
+<a id="__codelineno-0-1121" name="__codelineno-0-1121"></a>        <span class="n">base_scale</span><span class="o">=</span><span class="n">base_scale</span><span class="p">,</span>
+<a id="__codelineno-0-1122" name="__codelineno-0-1122"></a>        <span class="n">shard</span><span class="o">=</span><span class="n">shard</span><span class="p">,</span>
+<a id="__codelineno-0-1123" name="__codelineno-0-1123"></a>        <span class="n">progress</span><span class="o">=</span><span class="n">progress</span><span class="p">,</span>
+<a id="__codelineno-0-1124" name="__codelineno-0-1124"></a>    <span class="p">)</span>
+<a id="__codelineno-0-1125" name="__codelineno-0-1125"></a>    <span class="n">_write_multiscales</span><span class="p">(</span><span class="n">out</span><span class="p">,</span> <span class="n">axes</span><span class="p">,</span> <span class="n">datasets</span><span class="p">,</span> <span class="n">Path</span><span class="p">(</span><span class="n">out</span><span class="p">)</span><span class="o">.</span><span class="n">stem</span><span class="p">,</span> <span class="n">calibrated</span><span class="o">=</span><span class="nb">bool</span><span class="p">(</span><span class="n">ps</span><span class="p">))</span>
+<a id="__codelineno-0-1126" name="__codelineno-0-1126"></a>    <span class="k">return</span> <span class="n">out</span>
+</code></pre></div></td></tr></table></div>
+            </details>
+    </div>
+
+</div><h2 id="add_pyramid">add_pyramid</h2>
+
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="patchworks.plugins.ome_zarr.add_pyramid" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">patchworks</span><span class="o">.</span><span class="n">plugins</span><span class="o">.</span><span class="n">ome_zarr</span><span class="o">.</span><span class="n">add_pyramid</span><span class="p">(</span><span class="n">group_path</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Path</span><span class="p">],</span> <span class="o">*</span><span class="p">,</span> <span class="n">base</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">&#39;0&#39;</span><span class="p">,</span> <span class="n">axes</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">pixel_size</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">PixelSize</span><span class="p">,</span> <span class="nb">tuple</span><span class="p">,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">n_levels</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">5</span><span class="p">,</span> <span class="n">downscale</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">2</span><span class="p">,</span> <span class="n">chunks</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="o">...</span><span class="p">],</span> <span class="kc">None</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">shard</span><span class="p">:</span> <span class="n">ShardSpec</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span> <span class="n">progress</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span></code>
+
+</h2>
+
+
+    <div class="doc doc-contents first">
+
+        <p>Add downsampled pyramid levels to an existing single-resolution zarr.</p>
+<p>Reads the full-resolution array already at <code>group_path/base</code>, writes the
+missing levels next to it (lazily, from disk), and (re)writes the NGFF
+<code>multiscales</code> metadata. Existing calibration is preserved; pass
+<em>pixel_size</em> to set it.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>group_path</code>
+            </td>
+            <td>
+                  <code><span title="str">str</span> or <span title="pathlib.Path">Path</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Zarr group containing the full-resolution array at <em>base</em>.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>base</code>
+            </td>
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Component name of the existing full-resolution level (default
+<code>"0"</code>). Auto-detected from existing <code>multiscales</code> metadata if
+present, overriding this.</p>
+              </div>
+            </td>
+            <td>
+                  <code>&#39;0&#39;</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>axes</code>
+            </td>
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>One letter per axis, e.g. <code>"zyx"</code>. <code>None</code> → inferred from
+existing metadata, or from the array's dimensionality.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>pixel_size</code>
+            </td>
+            <td>
+                  <code>(<span title="dict">dict</span>, <span title="tuple">tuple</span> or None)</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Physical voxel size in micrometers. <code>None</code> → read from the store's
+existing calibration, if any.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>n_levels</code>
+            </td>
+            <td>
+                  <code><span title="int">int</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Maximum number of levels including the existing full-resolution one
+(default 5).</p>
+              </div>
+            </td>
+            <td>
+                  <code>5</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>downscale</code>
+            </td>
+            <td>
+                  <code><span title="int">int</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Per-level X/Y downsampling factor (default 2).</p>
+              </div>
+            </td>
+            <td>
+                  <code>2</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>chunks</code>
+            </td>
+            <td>
+                  <code>tuple of int</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Chunk shape for the written levels. <code>None</code> → a bounded default.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>shard</code>
+            </td>
+            <td>
+                  <code>bool or tuple of int</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Sharding request (see :func:<code>to_ome_zarr</code>'s <em>shard</em>).</p>
+              </div>
+            </td>
+            <td>
+                  <code>False</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>progress</code>
+            </td>
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Show a per-level dask progress bar (default <code>True</code>).</p>
+              </div>
+            </td>
+            <td>
+                  <code>True</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>The path to the updated group.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+<p><span class="doc-section-title">Examples:</span></p>
+    <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="gp">&gt;&gt;&gt; </span><span class="n">add_pyramid</span><span class="p">(</span><span class="s2">&quot;scan.zarr&quot;</span><span class="p">,</span> <span class="n">n_levels</span><span class="o">=</span><span class="mi">4</span><span class="p">)</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="go">&#39;scan.zarr&#39;</span>
+</code></pre></div>
+
+
+            <details class="mkdocstrings-source">
+              <summary>Source code in <code>src/patchworks/plugins/ome_zarr.py</code></summary>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1129">1129</a></span>
+<span class="normal"><a href="#__codelineno-0-1130">1130</a></span>
+<span class="normal"><a href="#__codelineno-0-1131">1131</a></span>
+<span class="normal"><a href="#__codelineno-0-1132">1132</a></span>
+<span class="normal"><a href="#__codelineno-0-1133">1133</a></span>
+<span class="normal"><a href="#__codelineno-0-1134">1134</a></span>
+<span class="normal"><a href="#__codelineno-0-1135">1135</a></span>
+<span class="normal"><a href="#__codelineno-0-1136">1136</a></span>
+<span class="normal"><a href="#__codelineno-0-1137">1137</a></span>
+<span class="normal"><a href="#__codelineno-0-1138">1138</a></span>
+<span class="normal"><a href="#__codelineno-0-1139">1139</a></span>
+<span class="normal"><a href="#__codelineno-0-1140">1140</a></span>
+<span class="normal"><a href="#__codelineno-0-1141">1141</a></span>
+<span class="normal"><a href="#__codelineno-0-1142">1142</a></span>
+<span class="normal"><a href="#__codelineno-0-1143">1143</a></span>
+<span class="normal"><a href="#__codelineno-0-1144">1144</a></span>
+<span class="normal"><a href="#__codelineno-0-1145">1145</a></span>
+<span class="normal"><a href="#__codelineno-0-1146">1146</a></span>
+<span class="normal"><a href="#__codelineno-0-1147">1147</a></span>
+<span class="normal"><a href="#__codelineno-0-1148">1148</a></span>
+<span class="normal"><a href="#__codelineno-0-1149">1149</a></span>
+<span class="normal"><a href="#__codelineno-0-1150">1150</a></span>
+<span class="normal"><a href="#__codelineno-0-1151">1151</a></span>
+<span class="normal"><a href="#__codelineno-0-1152">1152</a></span>
+<span class="normal"><a href="#__codelineno-0-1153">1153</a></span>
+<span class="normal"><a href="#__codelineno-0-1154">1154</a></span>
+<span class="normal"><a href="#__codelineno-0-1155">1155</a></span>
+<span class="normal"><a href="#__codelineno-0-1156">1156</a></span>
+<span class="normal"><a href="#__codelineno-0-1157">1157</a></span>
+<span class="normal"><a href="#__codelineno-0-1158">1158</a></span>
+<span class="normal"><a href="#__codelineno-0-1159">1159</a></span>
+<span class="normal"><a href="#__codelineno-0-1160">1160</a></span>
+<span class="normal"><a href="#__codelineno-0-1161">1161</a></span>
+<span class="normal"><a href="#__codelineno-0-1162">1162</a></span>
+<span class="normal"><a href="#__codelineno-0-1163">1163</a></span>
+<span class="normal"><a href="#__codelineno-0-1164">1164</a></span>
+<span class="normal"><a href="#__codelineno-0-1165">1165</a></span>
+<span class="normal"><a href="#__codelineno-0-1166">1166</a></span>
+<span class="normal"><a href="#__codelineno-0-1167">1167</a></span>
+<span class="normal"><a href="#__codelineno-0-1168">1168</a></span>
+<span class="normal"><a href="#__codelineno-0-1169">1169</a></span>
+<span class="normal"><a href="#__codelineno-0-1170">1170</a></span>
+<span class="normal"><a href="#__codelineno-0-1171">1171</a></span>
+<span class="normal"><a href="#__codelineno-0-1172">1172</a></span>
+<span class="normal"><a href="#__codelineno-0-1173">1173</a></span>
+<span class="normal"><a href="#__codelineno-0-1174">1174</a></span>
+<span class="normal"><a href="#__codelineno-0-1175">1175</a></span>
+<span class="normal"><a href="#__codelineno-0-1176">1176</a></span>
+<span class="normal"><a href="#__codelineno-0-1177">1177</a></span>
+<span class="normal"><a href="#__codelineno-0-1178">1178</a></span>
+<span class="normal"><a href="#__codelineno-0-1179">1179</a></span>
+<span class="normal"><a href="#__codelineno-0-1180">1180</a></span>
+<span class="normal"><a href="#__codelineno-0-1181">1181</a></span>
+<span class="normal"><a href="#__codelineno-0-1182">1182</a></span>
+<span class="normal"><a href="#__codelineno-0-1183">1183</a></span>
+<span class="normal"><a href="#__codelineno-0-1184">1184</a></span>
+<span class="normal"><a href="#__codelineno-0-1185">1185</a></span>
+<span class="normal"><a href="#__codelineno-0-1186">1186</a></span>
+<span class="normal"><a href="#__codelineno-0-1187">1187</a></span>
+<span class="normal"><a href="#__codelineno-0-1188">1188</a></span>
+<span class="normal"><a href="#__codelineno-0-1189">1189</a></span>
+<span class="normal"><a href="#__codelineno-0-1190">1190</a></span>
+<span class="normal"><a href="#__codelineno-0-1191">1191</a></span>
+<span class="normal"><a href="#__codelineno-0-1192">1192</a></span>
+<span class="normal"><a href="#__codelineno-0-1193">1193</a></span>
+<span class="normal"><a href="#__codelineno-0-1194">1194</a></span>
+<span class="normal"><a href="#__codelineno-0-1195">1195</a></span>
+<span class="normal"><a href="#__codelineno-0-1196">1196</a></span>
+<span class="normal"><a href="#__codelineno-0-1197">1197</a></span>
+<span class="normal"><a href="#__codelineno-0-1198">1198</a></span>
+<span class="normal"><a href="#__codelineno-0-1199">1199</a></span>
+<span class="normal"><a href="#__codelineno-0-1200">1200</a></span>
+<span class="normal"><a href="#__codelineno-0-1201">1201</a></span>
+<span class="normal"><a href="#__codelineno-0-1202">1202</a></span>
+<span class="normal"><a href="#__codelineno-0-1203">1203</a></span>
+<span class="normal"><a href="#__codelineno-0-1204">1204</a></span>
+<span class="normal"><a href="#__codelineno-0-1205">1205</a></span>
+<span class="normal"><a href="#__codelineno-0-1206">1206</a></span>
+<span class="normal"><a href="#__codelineno-0-1207">1207</a></span>
+<span class="normal"><a href="#__codelineno-0-1208">1208</a></span>
+<span class="normal"><a href="#__codelineno-0-1209">1209</a></span>
+<span class="normal"><a href="#__codelineno-0-1210">1210</a></span>
+<span class="normal"><a href="#__codelineno-0-1211">1211</a></span>
+<span class="normal"><a href="#__codelineno-0-1212">1212</a></span>
+<span class="normal"><a href="#__codelineno-0-1213">1213</a></span>
+<span class="normal"><a href="#__codelineno-0-1214">1214</a></span>
+<span class="normal"><a href="#__codelineno-0-1215">1215</a></span>
+<span class="normal"><a href="#__codelineno-0-1216">1216</a></span>
+<span class="normal"><a href="#__codelineno-0-1217">1217</a></span>
+<span class="normal"><a href="#__codelineno-0-1218">1218</a></span>
+<span class="normal"><a href="#__codelineno-0-1219">1219</a></span>
+<span class="normal"><a href="#__codelineno-0-1220">1220</a></span>
+<span class="normal"><a href="#__codelineno-0-1221">1221</a></span>
+<span class="normal"><a href="#__codelineno-0-1222">1222</a></span>
+<span class="normal"><a href="#__codelineno-0-1223">1223</a></span>
+<span class="normal"><a href="#__codelineno-0-1224">1224</a></span>
+<span class="normal"><a href="#__codelineno-0-1225">1225</a></span>
+<span class="normal"><a href="#__codelineno-0-1226">1226</a></span></pre></div></td><td class="code"><div><pre><span></span><code><a id="__codelineno-0-1129" name="__codelineno-0-1129"></a><span class="k">def</span><span class="w"> </span><span class="nf">add_pyramid</span><span class="p">(</span>
+<a id="__codelineno-0-1130" name="__codelineno-0-1130"></a>    <span class="n">group_path</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Path</span><span class="p">],</span>
+<a id="__codelineno-0-1131" name="__codelineno-0-1131"></a>    <span class="o">*</span><span class="p">,</span>
+<a id="__codelineno-0-1132" name="__codelineno-0-1132"></a>    <span class="n">base</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;0&quot;</span><span class="p">,</span>
+<a id="__codelineno-0-1133" name="__codelineno-0-1133"></a>    <span class="n">axes</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+<a id="__codelineno-0-1134" name="__codelineno-0-1134"></a>    <span class="n">pixel_size</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">PixelSize</span><span class="p">,</span> <span class="nb">tuple</span><span class="p">,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+<a id="__codelineno-0-1135" name="__codelineno-0-1135"></a>    <span class="n">n_levels</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">5</span><span class="p">,</span>
+<a id="__codelineno-0-1136" name="__codelineno-0-1136"></a>    <span class="n">downscale</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">2</span><span class="p">,</span>
+<a id="__codelineno-0-1137" name="__codelineno-0-1137"></a>    <span class="n">chunks</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="o">...</span><span class="p">],</span> <span class="kc">None</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+<a id="__codelineno-0-1138" name="__codelineno-0-1138"></a>    <span class="n">shard</span><span class="p">:</span> <span class="n">ShardSpec</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+<a id="__codelineno-0-1139" name="__codelineno-0-1139"></a>    <span class="n">progress</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+<a id="__codelineno-0-1140" name="__codelineno-0-1140"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+<a id="__codelineno-0-1141" name="__codelineno-0-1141"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Add downsampled pyramid levels to an existing single-resolution zarr.</span>
+<a id="__codelineno-0-1142" name="__codelineno-0-1142"></a>
+<a id="__codelineno-0-1143" name="__codelineno-0-1143"></a><span class="sd">    Reads the full-resolution array already at ``group_path/base``, writes the</span>
+<a id="__codelineno-0-1144" name="__codelineno-0-1144"></a><span class="sd">    missing levels next to it (lazily, from disk), and (re)writes the NGFF</span>
+<a id="__codelineno-0-1145" name="__codelineno-0-1145"></a><span class="sd">    ``multiscales`` metadata. Existing calibration is preserved; pass</span>
+<a id="__codelineno-0-1146" name="__codelineno-0-1146"></a><span class="sd">    *pixel_size* to set it.</span>
+<a id="__codelineno-0-1147" name="__codelineno-0-1147"></a>
+<a id="__codelineno-0-1148" name="__codelineno-0-1148"></a><span class="sd">    Parameters</span>
+<a id="__codelineno-0-1149" name="__codelineno-0-1149"></a><span class="sd">    ----------</span>
+<a id="__codelineno-0-1150" name="__codelineno-0-1150"></a><span class="sd">    group_path : str or Path</span>
+<a id="__codelineno-0-1151" name="__codelineno-0-1151"></a><span class="sd">        Zarr group containing the full-resolution array at *base*.</span>
+<a id="__codelineno-0-1152" name="__codelineno-0-1152"></a><span class="sd">    base : str, optional</span>
+<a id="__codelineno-0-1153" name="__codelineno-0-1153"></a><span class="sd">        Component name of the existing full-resolution level (default</span>
+<a id="__codelineno-0-1154" name="__codelineno-0-1154"></a><span class="sd">        ``&quot;0&quot;``). Auto-detected from existing ``multiscales`` metadata if</span>
+<a id="__codelineno-0-1155" name="__codelineno-0-1155"></a><span class="sd">        present, overriding this.</span>
+<a id="__codelineno-0-1156" name="__codelineno-0-1156"></a><span class="sd">    axes : str, optional</span>
+<a id="__codelineno-0-1157" name="__codelineno-0-1157"></a><span class="sd">        One letter per axis, e.g. ``&quot;zyx&quot;``. ``None`` → inferred from</span>
+<a id="__codelineno-0-1158" name="__codelineno-0-1158"></a><span class="sd">        existing metadata, or from the array&#39;s dimensionality.</span>
+<a id="__codelineno-0-1159" name="__codelineno-0-1159"></a><span class="sd">    pixel_size : dict, tuple or None, optional</span>
+<a id="__codelineno-0-1160" name="__codelineno-0-1160"></a><span class="sd">        Physical voxel size in micrometers. ``None`` → read from the store&#39;s</span>
+<a id="__codelineno-0-1161" name="__codelineno-0-1161"></a><span class="sd">        existing calibration, if any.</span>
+<a id="__codelineno-0-1162" name="__codelineno-0-1162"></a><span class="sd">    n_levels : int, optional</span>
+<a id="__codelineno-0-1163" name="__codelineno-0-1163"></a><span class="sd">        Maximum number of levels including the existing full-resolution one</span>
+<a id="__codelineno-0-1164" name="__codelineno-0-1164"></a><span class="sd">        (default 5).</span>
+<a id="__codelineno-0-1165" name="__codelineno-0-1165"></a><span class="sd">    downscale : int, optional</span>
+<a id="__codelineno-0-1166" name="__codelineno-0-1166"></a><span class="sd">        Per-level X/Y downsampling factor (default 2).</span>
+<a id="__codelineno-0-1167" name="__codelineno-0-1167"></a><span class="sd">    chunks : tuple of int, optional</span>
+<a id="__codelineno-0-1168" name="__codelineno-0-1168"></a><span class="sd">        Chunk shape for the written levels. ``None`` → a bounded default.</span>
+<a id="__codelineno-0-1169" name="__codelineno-0-1169"></a><span class="sd">    shard : bool or tuple of int, optional</span>
+<a id="__codelineno-0-1170" name="__codelineno-0-1170"></a><span class="sd">        Sharding request (see :func:`to_ome_zarr`&#39;s *shard*).</span>
+<a id="__codelineno-0-1171" name="__codelineno-0-1171"></a><span class="sd">    progress : bool, optional</span>
+<a id="__codelineno-0-1172" name="__codelineno-0-1172"></a><span class="sd">        Show a per-level dask progress bar (default ``True``).</span>
+<a id="__codelineno-0-1173" name="__codelineno-0-1173"></a>
+<a id="__codelineno-0-1174" name="__codelineno-0-1174"></a><span class="sd">    Returns</span>
+<a id="__codelineno-0-1175" name="__codelineno-0-1175"></a><span class="sd">    -------</span>
+<a id="__codelineno-0-1176" name="__codelineno-0-1176"></a><span class="sd">    str</span>
+<a id="__codelineno-0-1177" name="__codelineno-0-1177"></a><span class="sd">        The path to the updated group.</span>
+<a id="__codelineno-0-1178" name="__codelineno-0-1178"></a>
+<a id="__codelineno-0-1179" name="__codelineno-0-1179"></a><span class="sd">    Examples</span>
+<a id="__codelineno-0-1180" name="__codelineno-0-1180"></a><span class="sd">    --------</span>
+<a id="__codelineno-0-1181" name="__codelineno-0-1181"></a><span class="sd">    &gt;&gt;&gt; add_pyramid(&quot;scan.zarr&quot;, n_levels=4)  # doctest: +SKIP</span>
+<a id="__codelineno-0-1182" name="__codelineno-0-1182"></a><span class="sd">    &#39;scan.zarr&#39;</span>
+<a id="__codelineno-0-1183" name="__codelineno-0-1183"></a><span class="sd">    &quot;&quot;&quot;</span>
+<a id="__codelineno-0-1184" name="__codelineno-0-1184"></a>    <span class="k">if</span> <span class="n">downscale</span> <span class="o">&lt;</span> <span class="mi">2</span><span class="p">:</span>
+<a id="__codelineno-0-1185" name="__codelineno-0-1185"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;downscale must be &gt;= 2&quot;</span><span class="p">)</span>
+<a id="__codelineno-0-1186" name="__codelineno-0-1186"></a>    <span class="k">if</span> <span class="n">n_levels</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
+<a id="__codelineno-0-1187" name="__codelineno-0-1187"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;n_levels must be &gt;= 1&quot;</span><span class="p">)</span>
+<a id="__codelineno-0-1188" name="__codelineno-0-1188"></a>
+<a id="__codelineno-0-1189" name="__codelineno-0-1189"></a>    <span class="n">gp</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">group_path</span><span class="p">)</span>
+<a id="__codelineno-0-1190" name="__codelineno-0-1190"></a>    <span class="n">root</span> <span class="o">=</span> <span class="n">zarr</span><span class="o">.</span><span class="n">open_group</span><span class="p">(</span><span class="n">gp</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="s2">&quot;r&quot;</span><span class="p">)</span>
+<a id="__codelineno-0-1191" name="__codelineno-0-1191"></a>    <span class="n">multiscales</span> <span class="o">=</span> <span class="n">root</span><span class="o">.</span><span class="n">attrs</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;multiscales&quot;</span><span class="p">)</span>
+<a id="__codelineno-0-1192" name="__codelineno-0-1192"></a>    <span class="k">if</span> <span class="n">multiscales</span><span class="p">:</span>
+<a id="__codelineno-0-1193" name="__codelineno-0-1193"></a>        <span class="n">base</span> <span class="o">=</span> <span class="n">multiscales</span><span class="p">[</span><span class="mi">0</span><span class="p">][</span><span class="s2">&quot;datasets&quot;</span><span class="p">][</span><span class="mi">0</span><span class="p">][</span><span class="s2">&quot;path&quot;</span><span class="p">]</span>
+<a id="__codelineno-0-1194" name="__codelineno-0-1194"></a>        <span class="k">if</span> <span class="n">axes</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+<a id="__codelineno-0-1195" name="__codelineno-0-1195"></a>            <span class="n">axes</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">a</span><span class="p">[</span><span class="s2">&quot;name&quot;</span><span class="p">]</span> <span class="k">for</span> <span class="n">a</span> <span class="ow">in</span> <span class="n">multiscales</span><span class="p">[</span><span class="mi">0</span><span class="p">][</span><span class="s2">&quot;axes&quot;</span><span class="p">])</span>
+<a id="__codelineno-0-1196" name="__codelineno-0-1196"></a>
+<a id="__codelineno-0-1197" name="__codelineno-0-1197"></a>    <span class="n">base_arr</span> <span class="o">=</span> <span class="n">da</span><span class="o">.</span><span class="n">from_zarr</span><span class="p">(</span><span class="n">gp</span><span class="p">,</span> <span class="n">component</span><span class="o">=</span><span class="n">base</span><span class="p">)</span>
+<a id="__codelineno-0-1198" name="__codelineno-0-1198"></a>    <span class="k">if</span> <span class="n">axes</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+<a id="__codelineno-0-1199" name="__codelineno-0-1199"></a>        <span class="n">axes</span> <span class="o">=</span> <span class="n">_default_axes</span><span class="p">(</span><span class="n">base_arr</span><span class="o">.</span><span class="n">ndim</span><span class="p">)</span>
+<a id="__codelineno-0-1200" name="__codelineno-0-1200"></a>    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">axes</span><span class="p">)</span> <span class="o">!=</span> <span class="n">base_arr</span><span class="o">.</span><span class="n">ndim</span><span class="p">:</span>
+<a id="__codelineno-0-1201" name="__codelineno-0-1201"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+<a id="__codelineno-0-1202" name="__codelineno-0-1202"></a>            <span class="sa">f</span><span class="s2">&quot;axes </span><span class="si">{</span><span class="n">axes</span><span class="si">!r}</span><span class="s2"> has </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">axes</span><span class="p">)</span><span class="si">}</span><span class="s2"> entries but array is &quot;</span>
+<a id="__codelineno-0-1203" name="__codelineno-0-1203"></a>            <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">base_arr</span><span class="o">.</span><span class="n">ndim</span><span class="si">}</span><span class="s2">-D&quot;</span>
+<a id="__codelineno-0-1204" name="__codelineno-0-1204"></a>        <span class="p">)</span>
+<a id="__codelineno-0-1205" name="__codelineno-0-1205"></a>
+<a id="__codelineno-0-1206" name="__codelineno-0-1206"></a>    <span class="k">if</span> <span class="n">pixel_size</span><span class="p">:</span>
+<a id="__codelineno-0-1207" name="__codelineno-0-1207"></a>        <span class="n">ps</span> <span class="o">=</span> <span class="n">_normalize_pixel_size</span><span class="p">(</span><span class="n">pixel_size</span><span class="p">,</span> <span class="n">axes</span><span class="p">)</span>
+<a id="__codelineno-0-1208" name="__codelineno-0-1208"></a>    <span class="k">else</span><span class="p">:</span>
+<a id="__codelineno-0-1209" name="__codelineno-0-1209"></a>        <span class="n">ps</span> <span class="o">=</span> <span class="n">_read_zarr_calibration</span><span class="p">(</span><span class="n">gp</span><span class="p">,</span> <span class="n">axes</span><span class="p">)</span>
+<a id="__codelineno-0-1210" name="__codelineno-0-1210"></a>    <span class="n">base_scale</span> <span class="o">=</span> <span class="n">_base_scale</span><span class="p">(</span><span class="n">axes</span><span class="p">,</span> <span class="n">ps</span><span class="p">)</span>
+<a id="__codelineno-0-1211" name="__codelineno-0-1211"></a>
+<a id="__codelineno-0-1212" name="__codelineno-0-1212"></a>    <span class="n">datasets</span> <span class="o">=</span> <span class="n">_write_pyramid</span><span class="p">(</span>
+<a id="__codelineno-0-1213" name="__codelineno-0-1213"></a>        <span class="n">base_arr</span><span class="p">,</span>
+<a id="__codelineno-0-1214" name="__codelineno-0-1214"></a>        <span class="n">axes</span><span class="p">,</span>
+<a id="__codelineno-0-1215" name="__codelineno-0-1215"></a>        <span class="n">gp</span><span class="p">,</span>
+<a id="__codelineno-0-1216" name="__codelineno-0-1216"></a>        <span class="n">n_levels</span><span class="o">=</span><span class="n">n_levels</span><span class="p">,</span>
+<a id="__codelineno-0-1217" name="__codelineno-0-1217"></a>        <span class="n">downscale</span><span class="o">=</span><span class="n">downscale</span><span class="p">,</span>
+<a id="__codelineno-0-1218" name="__codelineno-0-1218"></a>        <span class="n">chunks</span><span class="o">=</span><span class="n">chunks</span><span class="p">,</span>
+<a id="__codelineno-0-1219" name="__codelineno-0-1219"></a>        <span class="n">base_scale</span><span class="o">=</span><span class="n">base_scale</span><span class="p">,</span>
+<a id="__codelineno-0-1220" name="__codelineno-0-1220"></a>        <span class="n">base_name</span><span class="o">=</span><span class="n">base</span><span class="p">,</span>
+<a id="__codelineno-0-1221" name="__codelineno-0-1221"></a>        <span class="n">write_base</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+<a id="__codelineno-0-1222" name="__codelineno-0-1222"></a>        <span class="n">shard</span><span class="o">=</span><span class="n">shard</span><span class="p">,</span>
+<a id="__codelineno-0-1223" name="__codelineno-0-1223"></a>        <span class="n">progress</span><span class="o">=</span><span class="n">progress</span><span class="p">,</span>
+<a id="__codelineno-0-1224" name="__codelineno-0-1224"></a>    <span class="p">)</span>
+<a id="__codelineno-0-1225" name="__codelineno-0-1225"></a>    <span class="n">_write_multiscales</span><span class="p">(</span><span class="n">gp</span><span class="p">,</span> <span class="n">axes</span><span class="p">,</span> <span class="n">datasets</span><span class="p">,</span> <span class="n">Path</span><span class="p">(</span><span class="n">gp</span><span class="p">)</span><span class="o">.</span><span class="n">stem</span><span class="p">,</span> <span class="n">calibrated</span><span class="o">=</span><span class="nb">bool</span><span class="p">(</span><span class="n">ps</span><span class="p">))</span>
+<a id="__codelineno-0-1226" name="__codelineno-0-1226"></a>    <span class="k">return</span> <span class="n">gp</span>
+</code></pre></div></td></tr></table></div>
+            </details>
+    </div>
+
+</div><h2 id="write_labels">write_labels</h2>
+
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="patchworks.plugins.ome_zarr.write_labels" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">patchworks</span><span class="o">.</span><span class="n">plugins</span><span class="o">.</span><span class="n">ome_zarr</span><span class="o">.</span><span class="n">write_labels</span><span class="p">(</span><span class="n">image_store</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Path</span><span class="p">],</span> <span class="n">labels</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">da</span><span class="o">.</span><span class="n">Array</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">],</span> <span class="o">*</span><span class="p">,</span> <span class="n">name</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">&#39;labels&#39;</span><span class="p">,</span> <span class="n">axes</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">pixel_size</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">PixelSize</span><span class="p">,</span> <span class="nb">tuple</span><span class="p">,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">n_levels</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">5</span><span class="p">,</span> <span class="n">downscale</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">2</span><span class="p">,</span> <span class="n">chunks</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="o">...</span><span class="p">],</span> <span class="kc">None</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">shard</span><span class="p">:</span> <span class="n">ShardSpec</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span> <span class="n">progress</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span> <span class="n">overwrite</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span> <span class="n">n_objects</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span></code>
+
+</h2>
+
+
+    <div class="doc doc-contents first">
+
+        <p>Store <em>labels</em> inside <em>image_store</em> under the NGFF <code>labels/</code> group.</p>
+<p>The labels are written as their own multi-scale pyramid at
+<code>image_store/labels/&lt;name&gt;/</code> and registered in
+<code>image_store/labels/.zattrs</code>, so the image and its segmentation live in a
+single OME-ZARR store. Calibration is inherited from the parent image
+unless <em>pixel_size</em> is given.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>image_store</code>
+            </td>
+            <td>
+                  <code><span title="str">str</span> or <span title="pathlib.Path">Path</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>OME-ZARR store this label image belongs to.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>labels</code>
+            </td>
+            <td>
+                  <code><span title="dask.array.Array">Array</span> or <span title="numpy.ndarray">ndarray</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Integer label array (0 = background), same spatial shape as the
+image.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>name</code>
+            </td>
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Label image name under <code>labels/</code> (default <code>"labels"</code>).</p>
+              </div>
+            </td>
+            <td>
+                  <code>&#39;labels&#39;</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>axes</code>
+            </td>
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>One letter per axis. <code>None</code> → inferred from <em>labels</em>'
+dimensionality.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>pixel_size</code>
+            </td>
+            <td>
+                  <code>(<span title="dict">dict</span>, <span title="tuple">tuple</span> or None)</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Physical voxel size in micrometers. <code>None</code> → inherited from the
+parent image's own calibration.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>n_levels</code>
+            </td>
+            <td>
+                  <code><span title="int">int</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Maximum number of pyramid levels including full resolution
+(default 5).</p>
+              </div>
+            </td>
+            <td>
+                  <code>5</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>downscale</code>
+            </td>
+            <td>
+                  <code><span title="int">int</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Per-level X/Y downsampling factor (default 2).</p>
+              </div>
+            </td>
+            <td>
+                  <code>2</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>chunks</code>
+            </td>
+            <td>
+                  <code>tuple of int</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Chunk shape for the written levels. <code>None</code> → a bounded default.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>shard</code>
+            </td>
+            <td>
+                  <code>bool or tuple of int</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Sharding request (see :func:<code>to_ome_zarr</code>'s <em>shard</em>).</p>
+              </div>
+            </td>
+            <td>
+                  <code>False</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>progress</code>
+            </td>
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Show a per-level dask progress bar (default <code>True</code>).</p>
+              </div>
+            </td>
+            <td>
+                  <code>True</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>overwrite</code>
+            </td>
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Replace an existing label image of the same <em>name</em> (default
+<code>False</code>).</p>
+              </div>
+            </td>
+            <td>
+                  <code>False</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>n_objects</code>
+            </td>
+            <td>
+                  <code><span title="int">int</span> or None</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Exact non-background object count, if known — forwarded to
+:func:<code>register_labels</code>; see its docstring for what this enables.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Path to the written label group (<code>image_store/labels/&lt;name&gt;</code>).</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+<p><span class="doc-section-title">Examples:</span></p>
+    <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span><span class="w"> </span><span class="nn">patchworks</span><span class="w"> </span><span class="kn">import</span> <span class="n">merge_tile_labels</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="gp">&gt;&gt;&gt; </span><span class="n">merged</span><span class="p">,</span> <span class="n">n</span> <span class="o">=</span> <span class="n">merge_tile_labels</span><span class="p">(</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="gp">... </span>    <span class="s2">&quot;stage.zarr&quot;</span><span class="p">,</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="gp">... </span>    <span class="n">input_component</span><span class="o">=</span><span class="s2">&quot;staged&quot;</span><span class="p">,</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="gp">... </span>    <span class="n">write_to</span><span class="o">=</span><span class="s2">&quot;merged.zarr&quot;</span><span class="p">,</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="gp">... </span>    <span class="n">sequential_labels</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="gp">... </span>    <span class="n">return_count</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="gp">... </span><span class="p">)</span>
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="gp">&gt;&gt;&gt; </span><span class="n">write_labels</span><span class="p">(</span>
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="gp">... </span>    <span class="s2">&quot;scan.zarr&quot;</span><span class="p">,</span> <span class="n">merged</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s2">&quot;cells&quot;</span><span class="p">,</span> <span class="n">n_objects</span><span class="o">=</span><span class="n">n</span>
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="gp">... </span><span class="p">)</span>
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="go">&#39;scan.zarr/labels/cells&#39;</span>
+</code></pre></div>
+
+
+            <details class="mkdocstrings-source">
+              <summary>Source code in <code>src/patchworks/plugins/ome_zarr.py</code></summary>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1324">1324</a></span>
+<span class="normal"><a href="#__codelineno-0-1325">1325</a></span>
+<span class="normal"><a href="#__codelineno-0-1326">1326</a></span>
+<span class="normal"><a href="#__codelineno-0-1327">1327</a></span>
+<span class="normal"><a href="#__codelineno-0-1328">1328</a></span>
+<span class="normal"><a href="#__codelineno-0-1329">1329</a></span>
+<span class="normal"><a href="#__codelineno-0-1330">1330</a></span>
+<span class="normal"><a href="#__codelineno-0-1331">1331</a></span>
+<span class="normal"><a href="#__codelineno-0-1332">1332</a></span>
+<span class="normal"><a href="#__codelineno-0-1333">1333</a></span>
+<span class="normal"><a href="#__codelineno-0-1334">1334</a></span>
+<span class="normal"><a href="#__codelineno-0-1335">1335</a></span>
+<span class="normal"><a href="#__codelineno-0-1336">1336</a></span>
+<span class="normal"><a href="#__codelineno-0-1337">1337</a></span>
+<span class="normal"><a href="#__codelineno-0-1338">1338</a></span>
+<span class="normal"><a href="#__codelineno-0-1339">1339</a></span>
+<span class="normal"><a href="#__codelineno-0-1340">1340</a></span>
+<span class="normal"><a href="#__codelineno-0-1341">1341</a></span>
+<span class="normal"><a href="#__codelineno-0-1342">1342</a></span>
+<span class="normal"><a href="#__codelineno-0-1343">1343</a></span>
+<span class="normal"><a href="#__codelineno-0-1344">1344</a></span>
+<span class="normal"><a href="#__codelineno-0-1345">1345</a></span>
+<span class="normal"><a href="#__codelineno-0-1346">1346</a></span>
+<span class="normal"><a href="#__codelineno-0-1347">1347</a></span>
+<span class="normal"><a href="#__codelineno-0-1348">1348</a></span>
+<span class="normal"><a href="#__codelineno-0-1349">1349</a></span>
+<span class="normal"><a href="#__codelineno-0-1350">1350</a></span>
+<span class="normal"><a href="#__codelineno-0-1351">1351</a></span>
+<span class="normal"><a href="#__codelineno-0-1352">1352</a></span>
+<span class="normal"><a href="#__codelineno-0-1353">1353</a></span>
+<span class="normal"><a href="#__codelineno-0-1354">1354</a></span>
+<span class="normal"><a href="#__codelineno-0-1355">1355</a></span>
+<span class="normal"><a href="#__codelineno-0-1356">1356</a></span>
+<span class="normal"><a href="#__codelineno-0-1357">1357</a></span>
+<span class="normal"><a href="#__codelineno-0-1358">1358</a></span>
+<span class="normal"><a href="#__codelineno-0-1359">1359</a></span>
+<span class="normal"><a href="#__codelineno-0-1360">1360</a></span>
+<span class="normal"><a href="#__codelineno-0-1361">1361</a></span>
+<span class="normal"><a href="#__codelineno-0-1362">1362</a></span>
+<span class="normal"><a href="#__codelineno-0-1363">1363</a></span>
+<span class="normal"><a href="#__codelineno-0-1364">1364</a></span>
+<span class="normal"><a href="#__codelineno-0-1365">1365</a></span>
+<span class="normal"><a href="#__codelineno-0-1366">1366</a></span>
+<span class="normal"><a href="#__codelineno-0-1367">1367</a></span>
+<span class="normal"><a href="#__codelineno-0-1368">1368</a></span>
+<span class="normal"><a href="#__codelineno-0-1369">1369</a></span>
+<span class="normal"><a href="#__codelineno-0-1370">1370</a></span>
+<span class="normal"><a href="#__codelineno-0-1371">1371</a></span>
+<span class="normal"><a href="#__codelineno-0-1372">1372</a></span>
+<span class="normal"><a href="#__codelineno-0-1373">1373</a></span>
+<span class="normal"><a href="#__codelineno-0-1374">1374</a></span>
+<span class="normal"><a href="#__codelineno-0-1375">1375</a></span>
+<span class="normal"><a href="#__codelineno-0-1376">1376</a></span>
+<span class="normal"><a href="#__codelineno-0-1377">1377</a></span>
+<span class="normal"><a href="#__codelineno-0-1378">1378</a></span>
+<span class="normal"><a href="#__codelineno-0-1379">1379</a></span>
+<span class="normal"><a href="#__codelineno-0-1380">1380</a></span>
+<span class="normal"><a href="#__codelineno-0-1381">1381</a></span>
+<span class="normal"><a href="#__codelineno-0-1382">1382</a></span>
+<span class="normal"><a href="#__codelineno-0-1383">1383</a></span>
+<span class="normal"><a href="#__codelineno-0-1384">1384</a></span>
+<span class="normal"><a href="#__codelineno-0-1385">1385</a></span>
+<span class="normal"><a href="#__codelineno-0-1386">1386</a></span>
+<span class="normal"><a href="#__codelineno-0-1387">1387</a></span>
+<span class="normal"><a href="#__codelineno-0-1388">1388</a></span>
+<span class="normal"><a href="#__codelineno-0-1389">1389</a></span>
+<span class="normal"><a href="#__codelineno-0-1390">1390</a></span>
+<span class="normal"><a href="#__codelineno-0-1391">1391</a></span>
+<span class="normal"><a href="#__codelineno-0-1392">1392</a></span>
+<span class="normal"><a href="#__codelineno-0-1393">1393</a></span>
+<span class="normal"><a href="#__codelineno-0-1394">1394</a></span>
+<span class="normal"><a href="#__codelineno-0-1395">1395</a></span>
+<span class="normal"><a href="#__codelineno-0-1396">1396</a></span>
+<span class="normal"><a href="#__codelineno-0-1397">1397</a></span>
+<span class="normal"><a href="#__codelineno-0-1398">1398</a></span>
+<span class="normal"><a href="#__codelineno-0-1399">1399</a></span>
+<span class="normal"><a href="#__codelineno-0-1400">1400</a></span>
+<span class="normal"><a href="#__codelineno-0-1401">1401</a></span>
+<span class="normal"><a href="#__codelineno-0-1402">1402</a></span>
+<span class="normal"><a href="#__codelineno-0-1403">1403</a></span>
+<span class="normal"><a href="#__codelineno-0-1404">1404</a></span>
+<span class="normal"><a href="#__codelineno-0-1405">1405</a></span>
+<span class="normal"><a href="#__codelineno-0-1406">1406</a></span>
+<span class="normal"><a href="#__codelineno-0-1407">1407</a></span>
+<span class="normal"><a href="#__codelineno-0-1408">1408</a></span>
+<span class="normal"><a href="#__codelineno-0-1409">1409</a></span>
+<span class="normal"><a href="#__codelineno-0-1410">1410</a></span>
+<span class="normal"><a href="#__codelineno-0-1411">1411</a></span>
+<span class="normal"><a href="#__codelineno-0-1412">1412</a></span>
+<span class="normal"><a href="#__codelineno-0-1413">1413</a></span>
+<span class="normal"><a href="#__codelineno-0-1414">1414</a></span>
+<span class="normal"><a href="#__codelineno-0-1415">1415</a></span>
+<span class="normal"><a href="#__codelineno-0-1416">1416</a></span>
+<span class="normal"><a href="#__codelineno-0-1417">1417</a></span>
+<span class="normal"><a href="#__codelineno-0-1418">1418</a></span>
+<span class="normal"><a href="#__codelineno-0-1419">1419</a></span>
+<span class="normal"><a href="#__codelineno-0-1420">1420</a></span>
+<span class="normal"><a href="#__codelineno-0-1421">1421</a></span>
+<span class="normal"><a href="#__codelineno-0-1422">1422</a></span>
+<span class="normal"><a href="#__codelineno-0-1423">1423</a></span>
+<span class="normal"><a href="#__codelineno-0-1424">1424</a></span>
+<span class="normal"><a href="#__codelineno-0-1425">1425</a></span>
+<span class="normal"><a href="#__codelineno-0-1426">1426</a></span>
+<span class="normal"><a href="#__codelineno-0-1427">1427</a></span>
+<span class="normal"><a href="#__codelineno-0-1428">1428</a></span>
+<span class="normal"><a href="#__codelineno-0-1429">1429</a></span></pre></div></td><td class="code"><div><pre><span></span><code><a id="__codelineno-0-1324" name="__codelineno-0-1324"></a><span class="k">def</span><span class="w"> </span><span class="nf">write_labels</span><span class="p">(</span>
+<a id="__codelineno-0-1325" name="__codelineno-0-1325"></a>    <span class="n">image_store</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Path</span><span class="p">],</span>
+<a id="__codelineno-0-1326" name="__codelineno-0-1326"></a>    <span class="n">labels</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">da</span><span class="o">.</span><span class="n">Array</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">],</span>
+<a id="__codelineno-0-1327" name="__codelineno-0-1327"></a>    <span class="o">*</span><span class="p">,</span>
+<a id="__codelineno-0-1328" name="__codelineno-0-1328"></a>    <span class="n">name</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;labels&quot;</span><span class="p">,</span>
+<a id="__codelineno-0-1329" name="__codelineno-0-1329"></a>    <span class="n">axes</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+<a id="__codelineno-0-1330" name="__codelineno-0-1330"></a>    <span class="n">pixel_size</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">PixelSize</span><span class="p">,</span> <span class="nb">tuple</span><span class="p">,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+<a id="__codelineno-0-1331" name="__codelineno-0-1331"></a>    <span class="n">n_levels</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">5</span><span class="p">,</span>
+<a id="__codelineno-0-1332" name="__codelineno-0-1332"></a>    <span class="n">downscale</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">2</span><span class="p">,</span>
+<a id="__codelineno-0-1333" name="__codelineno-0-1333"></a>    <span class="n">chunks</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="o">...</span><span class="p">],</span> <span class="kc">None</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+<a id="__codelineno-0-1334" name="__codelineno-0-1334"></a>    <span class="n">shard</span><span class="p">:</span> <span class="n">ShardSpec</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+<a id="__codelineno-0-1335" name="__codelineno-0-1335"></a>    <span class="n">progress</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+<a id="__codelineno-0-1336" name="__codelineno-0-1336"></a>    <span class="n">overwrite</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+<a id="__codelineno-0-1337" name="__codelineno-0-1337"></a>    <span class="n">n_objects</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+<a id="__codelineno-0-1338" name="__codelineno-0-1338"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+<a id="__codelineno-0-1339" name="__codelineno-0-1339"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Store *labels* inside *image_store* under the NGFF ``labels/`` group.</span>
+<a id="__codelineno-0-1340" name="__codelineno-0-1340"></a>
+<a id="__codelineno-0-1341" name="__codelineno-0-1341"></a><span class="sd">    The labels are written as their own multi-scale pyramid at</span>
+<a id="__codelineno-0-1342" name="__codelineno-0-1342"></a><span class="sd">    ``image_store/labels/&lt;name&gt;/`` and registered in</span>
+<a id="__codelineno-0-1343" name="__codelineno-0-1343"></a><span class="sd">    ``image_store/labels/.zattrs``, so the image and its segmentation live in a</span>
+<a id="__codelineno-0-1344" name="__codelineno-0-1344"></a><span class="sd">    single OME-ZARR store. Calibration is inherited from the parent image</span>
+<a id="__codelineno-0-1345" name="__codelineno-0-1345"></a><span class="sd">    unless *pixel_size* is given.</span>
+<a id="__codelineno-0-1346" name="__codelineno-0-1346"></a>
+<a id="__codelineno-0-1347" name="__codelineno-0-1347"></a><span class="sd">    Parameters</span>
+<a id="__codelineno-0-1348" name="__codelineno-0-1348"></a><span class="sd">    ----------</span>
+<a id="__codelineno-0-1349" name="__codelineno-0-1349"></a><span class="sd">    image_store : str or Path</span>
+<a id="__codelineno-0-1350" name="__codelineno-0-1350"></a><span class="sd">        OME-ZARR store this label image belongs to.</span>
+<a id="__codelineno-0-1351" name="__codelineno-0-1351"></a><span class="sd">    labels : da.Array or np.ndarray</span>
+<a id="__codelineno-0-1352" name="__codelineno-0-1352"></a><span class="sd">        Integer label array (0 = background), same spatial shape as the</span>
+<a id="__codelineno-0-1353" name="__codelineno-0-1353"></a><span class="sd">        image.</span>
+<a id="__codelineno-0-1354" name="__codelineno-0-1354"></a><span class="sd">    name : str, optional</span>
+<a id="__codelineno-0-1355" name="__codelineno-0-1355"></a><span class="sd">        Label image name under ``labels/`` (default ``&quot;labels&quot;``).</span>
+<a id="__codelineno-0-1356" name="__codelineno-0-1356"></a><span class="sd">    axes : str, optional</span>
+<a id="__codelineno-0-1357" name="__codelineno-0-1357"></a><span class="sd">        One letter per axis. ``None`` → inferred from *labels*&#39;</span>
+<a id="__codelineno-0-1358" name="__codelineno-0-1358"></a><span class="sd">        dimensionality.</span>
+<a id="__codelineno-0-1359" name="__codelineno-0-1359"></a><span class="sd">    pixel_size : dict, tuple or None, optional</span>
+<a id="__codelineno-0-1360" name="__codelineno-0-1360"></a><span class="sd">        Physical voxel size in micrometers. ``None`` → inherited from the</span>
+<a id="__codelineno-0-1361" name="__codelineno-0-1361"></a><span class="sd">        parent image&#39;s own calibration.</span>
+<a id="__codelineno-0-1362" name="__codelineno-0-1362"></a><span class="sd">    n_levels : int, optional</span>
+<a id="__codelineno-0-1363" name="__codelineno-0-1363"></a><span class="sd">        Maximum number of pyramid levels including full resolution</span>
+<a id="__codelineno-0-1364" name="__codelineno-0-1364"></a><span class="sd">        (default 5).</span>
+<a id="__codelineno-0-1365" name="__codelineno-0-1365"></a><span class="sd">    downscale : int, optional</span>
+<a id="__codelineno-0-1366" name="__codelineno-0-1366"></a><span class="sd">        Per-level X/Y downsampling factor (default 2).</span>
+<a id="__codelineno-0-1367" name="__codelineno-0-1367"></a><span class="sd">    chunks : tuple of int, optional</span>
+<a id="__codelineno-0-1368" name="__codelineno-0-1368"></a><span class="sd">        Chunk shape for the written levels. ``None`` → a bounded default.</span>
+<a id="__codelineno-0-1369" name="__codelineno-0-1369"></a><span class="sd">    shard : bool or tuple of int, optional</span>
+<a id="__codelineno-0-1370" name="__codelineno-0-1370"></a><span class="sd">        Sharding request (see :func:`to_ome_zarr`&#39;s *shard*).</span>
+<a id="__codelineno-0-1371" name="__codelineno-0-1371"></a><span class="sd">    progress : bool, optional</span>
+<a id="__codelineno-0-1372" name="__codelineno-0-1372"></a><span class="sd">        Show a per-level dask progress bar (default ``True``).</span>
+<a id="__codelineno-0-1373" name="__codelineno-0-1373"></a><span class="sd">    overwrite : bool, optional</span>
+<a id="__codelineno-0-1374" name="__codelineno-0-1374"></a><span class="sd">        Replace an existing label image of the same *name* (default</span>
+<a id="__codelineno-0-1375" name="__codelineno-0-1375"></a><span class="sd">        ``False``).</span>
+<a id="__codelineno-0-1376" name="__codelineno-0-1376"></a><span class="sd">    n_objects : int or None, optional</span>
+<a id="__codelineno-0-1377" name="__codelineno-0-1377"></a><span class="sd">        Exact non-background object count, if known — forwarded to</span>
+<a id="__codelineno-0-1378" name="__codelineno-0-1378"></a><span class="sd">        :func:`register_labels`; see its docstring for what this enables.</span>
+<a id="__codelineno-0-1379" name="__codelineno-0-1379"></a>
+<a id="__codelineno-0-1380" name="__codelineno-0-1380"></a><span class="sd">    Returns</span>
+<a id="__codelineno-0-1381" name="__codelineno-0-1381"></a><span class="sd">    -------</span>
+<a id="__codelineno-0-1382" name="__codelineno-0-1382"></a><span class="sd">    str</span>
+<a id="__codelineno-0-1383" name="__codelineno-0-1383"></a><span class="sd">        Path to the written label group (``image_store/labels/&lt;name&gt;``).</span>
+<a id="__codelineno-0-1384" name="__codelineno-0-1384"></a>
+<a id="__codelineno-0-1385" name="__codelineno-0-1385"></a><span class="sd">    Examples</span>
+<a id="__codelineno-0-1386" name="__codelineno-0-1386"></a><span class="sd">    --------</span>
+<a id="__codelineno-0-1387" name="__codelineno-0-1387"></a><span class="sd">    &gt;&gt;&gt; from patchworks import merge_tile_labels</span>
+<a id="__codelineno-0-1388" name="__codelineno-0-1388"></a><span class="sd">    &gt;&gt;&gt; merged, n = merge_tile_labels(</span>
+<a id="__codelineno-0-1389" name="__codelineno-0-1389"></a><span class="sd">    ...     &quot;stage.zarr&quot;,</span>
+<a id="__codelineno-0-1390" name="__codelineno-0-1390"></a><span class="sd">    ...     input_component=&quot;staged&quot;,</span>
+<a id="__codelineno-0-1391" name="__codelineno-0-1391"></a><span class="sd">    ...     write_to=&quot;merged.zarr&quot;,</span>
+<a id="__codelineno-0-1392" name="__codelineno-0-1392"></a><span class="sd">    ...     sequential_labels=True,</span>
+<a id="__codelineno-0-1393" name="__codelineno-0-1393"></a><span class="sd">    ...     return_count=True,</span>
+<a id="__codelineno-0-1394" name="__codelineno-0-1394"></a><span class="sd">    ... )  # doctest: +SKIP</span>
+<a id="__codelineno-0-1395" name="__codelineno-0-1395"></a><span class="sd">    &gt;&gt;&gt; write_labels(</span>
+<a id="__codelineno-0-1396" name="__codelineno-0-1396"></a><span class="sd">    ...     &quot;scan.zarr&quot;, merged, name=&quot;cells&quot;, n_objects=n</span>
+<a id="__codelineno-0-1397" name="__codelineno-0-1397"></a><span class="sd">    ... )  # doctest: +SKIP</span>
+<a id="__codelineno-0-1398" name="__codelineno-0-1398"></a><span class="sd">    &#39;scan.zarr/labels/cells&#39;</span>
+<a id="__codelineno-0-1399" name="__codelineno-0-1399"></a><span class="sd">    &quot;&quot;&quot;</span>
+<a id="__codelineno-0-1400" name="__codelineno-0-1400"></a>    <span class="n">arr</span> <span class="o">=</span> <span class="n">labels</span> <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">labels</span><span class="p">,</span> <span class="n">da</span><span class="o">.</span><span class="n">Array</span><span class="p">)</span> <span class="k">else</span> <span class="n">da</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">labels</span><span class="p">)</span>
+<a id="__codelineno-0-1401" name="__codelineno-0-1401"></a>    <span class="k">if</span> <span class="n">axes</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+<a id="__codelineno-0-1402" name="__codelineno-0-1402"></a>        <span class="n">axes</span> <span class="o">=</span> <span class="n">_default_axes</span><span class="p">(</span><span class="n">arr</span><span class="o">.</span><span class="n">ndim</span><span class="p">)</span>
+<a id="__codelineno-0-1403" name="__codelineno-0-1403"></a>    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">axes</span><span class="p">)</span> <span class="o">!=</span> <span class="n">arr</span><span class="o">.</span><span class="n">ndim</span><span class="p">:</span>
+<a id="__codelineno-0-1404" name="__codelineno-0-1404"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+<a id="__codelineno-0-1405" name="__codelineno-0-1405"></a>            <span class="sa">f</span><span class="s2">&quot;axes </span><span class="si">{</span><span class="n">axes</span><span class="si">!r}</span><span class="s2"> has </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">axes</span><span class="p">)</span><span class="si">}</span><span class="s2"> entries but array is </span><span class="si">{</span><span class="n">arr</span><span class="o">.</span><span class="n">ndim</span><span class="si">}</span><span class="s2">-D&quot;</span>
+<a id="__codelineno-0-1406" name="__codelineno-0-1406"></a>        <span class="p">)</span>
+<a id="__codelineno-0-1407" name="__codelineno-0-1407"></a>
+<a id="__codelineno-0-1408" name="__codelineno-0-1408"></a>    <span class="n">store</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">image_store</span><span class="p">)</span>
+<a id="__codelineno-0-1409" name="__codelineno-0-1409"></a>    <span class="n">root</span> <span class="o">=</span> <span class="n">zarr</span><span class="o">.</span><span class="n">open_group</span><span class="p">(</span><span class="n">store</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="s2">&quot;a&quot;</span><span class="p">)</span>
+<a id="__codelineno-0-1410" name="__codelineno-0-1410"></a>    <span class="n">parent</span> <span class="o">=</span> <span class="n">root</span><span class="o">.</span><span class="n">require_group</span><span class="p">(</span><span class="s2">&quot;labels&quot;</span><span class="p">)</span>
+<a id="__codelineno-0-1411" name="__codelineno-0-1411"></a>    <span class="k">if</span> <span class="n">overwrite</span> <span class="ow">and</span> <span class="n">name</span> <span class="ow">in</span> <span class="n">parent</span><span class="p">:</span>
+<a id="__codelineno-0-1412" name="__codelineno-0-1412"></a>        <span class="k">del</span> <span class="n">parent</span><span class="p">[</span><span class="n">name</span><span class="p">]</span>
+<a id="__codelineno-0-1413" name="__codelineno-0-1413"></a>    <span class="n">parent</span><span class="o">.</span><span class="n">require_group</span><span class="p">(</span><span class="n">name</span><span class="p">)</span>
+<a id="__codelineno-0-1414" name="__codelineno-0-1414"></a>
+<a id="__codelineno-0-1415" name="__codelineno-0-1415"></a>    <span class="n">label_group</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">store</span><span class="si">}</span><span class="s2">/labels/</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">&quot;</span>
+<a id="__codelineno-0-1416" name="__codelineno-0-1416"></a>    <span class="n">base</span> <span class="o">=</span> <span class="n">arr</span><span class="o">.</span><span class="n">rechunk</span><span class="p">(</span><span class="n">chunks</span> <span class="ow">or</span> <span class="n">_default_chunks</span><span class="p">(</span><span class="n">arr</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="n">axes</span><span class="p">))</span>
+<a id="__codelineno-0-1417" name="__codelineno-0-1417"></a>    <span class="n">_to_zarr_level</span><span class="p">(</span><span class="n">base</span><span class="p">,</span> <span class="n">label_group</span><span class="p">,</span> <span class="s2">&quot;0&quot;</span><span class="p">,</span> <span class="n">shard</span><span class="p">,</span> <span class="n">progress</span><span class="p">)</span>
+<a id="__codelineno-0-1418" name="__codelineno-0-1418"></a>    <span class="k">return</span> <span class="n">register_labels</span><span class="p">(</span>
+<a id="__codelineno-0-1419" name="__codelineno-0-1419"></a>        <span class="n">store</span><span class="p">,</span>
+<a id="__codelineno-0-1420" name="__codelineno-0-1420"></a>        <span class="n">name</span><span class="p">,</span>
+<a id="__codelineno-0-1421" name="__codelineno-0-1421"></a>        <span class="n">axes</span><span class="o">=</span><span class="n">axes</span><span class="p">,</span>
+<a id="__codelineno-0-1422" name="__codelineno-0-1422"></a>        <span class="n">pixel_size</span><span class="o">=</span><span class="n">pixel_size</span><span class="p">,</span>
+<a id="__codelineno-0-1423" name="__codelineno-0-1423"></a>        <span class="n">n_levels</span><span class="o">=</span><span class="n">n_levels</span><span class="p">,</span>
+<a id="__codelineno-0-1424" name="__codelineno-0-1424"></a>        <span class="n">downscale</span><span class="o">=</span><span class="n">downscale</span><span class="p">,</span>
+<a id="__codelineno-0-1425" name="__codelineno-0-1425"></a>        <span class="n">chunks</span><span class="o">=</span><span class="n">chunks</span><span class="p">,</span>
+<a id="__codelineno-0-1426" name="__codelineno-0-1426"></a>        <span class="n">shard</span><span class="o">=</span><span class="n">shard</span><span class="p">,</span>
+<a id="__codelineno-0-1427" name="__codelineno-0-1427"></a>        <span class="n">progress</span><span class="o">=</span><span class="n">progress</span><span class="p">,</span>
+<a id="__codelineno-0-1428" name="__codelineno-0-1428"></a>        <span class="n">n_objects</span><span class="o">=</span><span class="n">n_objects</span><span class="p">,</span>
+<a id="__codelineno-0-1429" name="__codelineno-0-1429"></a>    <span class="p">)</span>
+</code></pre></div></td></tr></table></div>
+            </details>
+    </div>
+
+</div><h2 id="register_labels">register_labels</h2>
+
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="patchworks.plugins.ome_zarr.register_labels" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">patchworks</span><span class="o">.</span><span class="n">plugins</span><span class="o">.</span><span class="n">ome_zarr</span><span class="o">.</span><span class="n">register_labels</span><span class="p">(</span><span class="n">image_store</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Path</span><span class="p">],</span> <span class="n">name</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">&#39;labels&#39;</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">axes</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">pixel_size</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">PixelSize</span><span class="p">,</span> <span class="nb">tuple</span><span class="p">,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">n_levels</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">5</span><span class="p">,</span> <span class="n">downscale</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">2</span><span class="p">,</span> <span class="n">chunks</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="o">...</span><span class="p">],</span> <span class="kc">None</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">shard</span><span class="p">:</span> <span class="n">ShardSpec</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span> <span class="n">progress</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span> <span class="n">n_objects</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span></code>
+
+</h2>
+
+
+    <div class="doc doc-contents first">
+
+        <p>Pyramidalise and register an existing <code>labels/&lt;name&gt;/0</code> base level.</p>
+<p>Assumes the full-resolution label array already exists at
+<code>image_store/labels/&lt;name&gt;/0</code>. Adds the downsampled levels, tags the
+group with NGFF <code>image-label</code> metadata, lists <em>name</em> in
+<code>labels/.zattrs</code>, and inherits the parent image's pixel calibration
+(unless <em>pixel_size</em> is given).</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>image_store</code>
+            </td>
+            <td>
+                  <code><span title="str">str</span> or <span title="pathlib.Path">Path</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>OME-ZARR store path containing the image this label belongs to.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>name</code>
+            </td>
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Label image name under <code>labels/</code> (default <code>"labels"</code>).</p>
+              </div>
+            </td>
+            <td>
+                  <code>&#39;labels&#39;</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>axes</code>
+            </td>
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>One letter per axis. <code>None</code> → inferred from the label array.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>pixel_size</code>
+            </td>
+            <td>
+                  <code>(<span title="dict">dict</span>, <span title="tuple">tuple</span> or None)</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Physical voxel size in micrometers. <code>None</code> → inherited from the
+parent image's own calibration.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>n_levels</code>
+            </td>
+            <td>
+                  <code><span title="int">int</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Maximum number of pyramid levels including full resolution
+(default 5).</p>
+              </div>
+            </td>
+            <td>
+                  <code>5</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>downscale</code>
+            </td>
+            <td>
+                  <code><span title="int">int</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Per-level X/Y downsampling factor (default 2).</p>
+              </div>
+            </td>
+            <td>
+                  <code>2</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>chunks</code>
+            </td>
+            <td>
+                  <code>tuple of int</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Chunk shape for the written levels. <code>None</code> → a bounded default.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>shard</code>
+            </td>
+            <td>
+                  <code>bool or tuple of int</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Sharding request (see :func:<code>to_ome_zarr</code>'s <em>shard</em>).</p>
+              </div>
+            </td>
+            <td>
+                  <code>False</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>progress</code>
+            </td>
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Show a per-level dask progress bar (default <code>True</code>).</p>
+              </div>
+            </td>
+            <td>
+                  <code>True</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>n_objects</code>
+            </td>
+            <td>
+                  <code><span title="int">int</span> or None</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Exact non-background object count, if known (e.g. from
+:func:<code>patchworks.merge_tile_labels</code>'s <code>return_count=True</code> after
+<code>sequential_labels=True</code>, which means <code>ids == range(1, n_objects
++ 1)</code> by construction). When given, written into the label group's
+attrs as <code>n_objects</code>/<code>sequential_labels</code> so a downstream reader
+(e.g. napari-chunked-regionprops,
+https://github.com/imcf/napari-chunked-regionprops) can use the
+known id set instead of re-deriving it with a full-volume scan of
+its own.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Path to the label group (<code>image_store/labels/&lt;name&gt;</code>).</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+<p><span class="doc-section-title">Examples:</span></p>
+    <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="gp">&gt;&gt;&gt; </span><span class="n">register_labels</span><span class="p">(</span><span class="s2">&quot;scan.zarr&quot;</span><span class="p">,</span> <span class="s2">&quot;cells&quot;</span><span class="p">)</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="go">&#39;scan.zarr/labels/cells&#39;</span>
+</code></pre></div>
+
+
+            <details class="mkdocstrings-source">
+              <summary>Source code in <code>src/patchworks/plugins/ome_zarr.py</code></summary>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1229">1229</a></span>
+<span class="normal"><a href="#__codelineno-0-1230">1230</a></span>
+<span class="normal"><a href="#__codelineno-0-1231">1231</a></span>
+<span class="normal"><a href="#__codelineno-0-1232">1232</a></span>
+<span class="normal"><a href="#__codelineno-0-1233">1233</a></span>
+<span class="normal"><a href="#__codelineno-0-1234">1234</a></span>
+<span class="normal"><a href="#__codelineno-0-1235">1235</a></span>
+<span class="normal"><a href="#__codelineno-0-1236">1236</a></span>
+<span class="normal"><a href="#__codelineno-0-1237">1237</a></span>
+<span class="normal"><a href="#__codelineno-0-1238">1238</a></span>
+<span class="normal"><a href="#__codelineno-0-1239">1239</a></span>
+<span class="normal"><a href="#__codelineno-0-1240">1240</a></span>
+<span class="normal"><a href="#__codelineno-0-1241">1241</a></span>
+<span class="normal"><a href="#__codelineno-0-1242">1242</a></span>
+<span class="normal"><a href="#__codelineno-0-1243">1243</a></span>
+<span class="normal"><a href="#__codelineno-0-1244">1244</a></span>
+<span class="normal"><a href="#__codelineno-0-1245">1245</a></span>
+<span class="normal"><a href="#__codelineno-0-1246">1246</a></span>
+<span class="normal"><a href="#__codelineno-0-1247">1247</a></span>
+<span class="normal"><a href="#__codelineno-0-1248">1248</a></span>
+<span class="normal"><a href="#__codelineno-0-1249">1249</a></span>
+<span class="normal"><a href="#__codelineno-0-1250">1250</a></span>
+<span class="normal"><a href="#__codelineno-0-1251">1251</a></span>
+<span class="normal"><a href="#__codelineno-0-1252">1252</a></span>
+<span class="normal"><a href="#__codelineno-0-1253">1253</a></span>
+<span class="normal"><a href="#__codelineno-0-1254">1254</a></span>
+<span class="normal"><a href="#__codelineno-0-1255">1255</a></span>
+<span class="normal"><a href="#__codelineno-0-1256">1256</a></span>
+<span class="normal"><a href="#__codelineno-0-1257">1257</a></span>
+<span class="normal"><a href="#__codelineno-0-1258">1258</a></span>
+<span class="normal"><a href="#__codelineno-0-1259">1259</a></span>
+<span class="normal"><a href="#__codelineno-0-1260">1260</a></span>
+<span class="normal"><a href="#__codelineno-0-1261">1261</a></span>
+<span class="normal"><a href="#__codelineno-0-1262">1262</a></span>
+<span class="normal"><a href="#__codelineno-0-1263">1263</a></span>
+<span class="normal"><a href="#__codelineno-0-1264">1264</a></span>
+<span class="normal"><a href="#__codelineno-0-1265">1265</a></span>
+<span class="normal"><a href="#__codelineno-0-1266">1266</a></span>
+<span class="normal"><a href="#__codelineno-0-1267">1267</a></span>
+<span class="normal"><a href="#__codelineno-0-1268">1268</a></span>
+<span class="normal"><a href="#__codelineno-0-1269">1269</a></span>
+<span class="normal"><a href="#__codelineno-0-1270">1270</a></span>
+<span class="normal"><a href="#__codelineno-0-1271">1271</a></span>
+<span class="normal"><a href="#__codelineno-0-1272">1272</a></span>
+<span class="normal"><a href="#__codelineno-0-1273">1273</a></span>
+<span class="normal"><a href="#__codelineno-0-1274">1274</a></span>
+<span class="normal"><a href="#__codelineno-0-1275">1275</a></span>
+<span class="normal"><a href="#__codelineno-0-1276">1276</a></span>
+<span class="normal"><a href="#__codelineno-0-1277">1277</a></span>
+<span class="normal"><a href="#__codelineno-0-1278">1278</a></span>
+<span class="normal"><a href="#__codelineno-0-1279">1279</a></span>
+<span class="normal"><a href="#__codelineno-0-1280">1280</a></span>
+<span class="normal"><a href="#__codelineno-0-1281">1281</a></span>
+<span class="normal"><a href="#__codelineno-0-1282">1282</a></span>
+<span class="normal"><a href="#__codelineno-0-1283">1283</a></span>
+<span class="normal"><a href="#__codelineno-0-1284">1284</a></span>
+<span class="normal"><a href="#__codelineno-0-1285">1285</a></span>
+<span class="normal"><a href="#__codelineno-0-1286">1286</a></span>
+<span class="normal"><a href="#__codelineno-0-1287">1287</a></span>
+<span class="normal"><a href="#__codelineno-0-1288">1288</a></span>
+<span class="normal"><a href="#__codelineno-0-1289">1289</a></span>
+<span class="normal"><a href="#__codelineno-0-1290">1290</a></span>
+<span class="normal"><a href="#__codelineno-0-1291">1291</a></span>
+<span class="normal"><a href="#__codelineno-0-1292">1292</a></span>
+<span class="normal"><a href="#__codelineno-0-1293">1293</a></span>
+<span class="normal"><a href="#__codelineno-0-1294">1294</a></span>
+<span class="normal"><a href="#__codelineno-0-1295">1295</a></span>
+<span class="normal"><a href="#__codelineno-0-1296">1296</a></span>
+<span class="normal"><a href="#__codelineno-0-1297">1297</a></span>
+<span class="normal"><a href="#__codelineno-0-1298">1298</a></span>
+<span class="normal"><a href="#__codelineno-0-1299">1299</a></span>
+<span class="normal"><a href="#__codelineno-0-1300">1300</a></span>
+<span class="normal"><a href="#__codelineno-0-1301">1301</a></span>
+<span class="normal"><a href="#__codelineno-0-1302">1302</a></span>
+<span class="normal"><a href="#__codelineno-0-1303">1303</a></span>
+<span class="normal"><a href="#__codelineno-0-1304">1304</a></span>
+<span class="normal"><a href="#__codelineno-0-1305">1305</a></span>
+<span class="normal"><a href="#__codelineno-0-1306">1306</a></span>
+<span class="normal"><a href="#__codelineno-0-1307">1307</a></span>
+<span class="normal"><a href="#__codelineno-0-1308">1308</a></span>
+<span class="normal"><a href="#__codelineno-0-1309">1309</a></span>
+<span class="normal"><a href="#__codelineno-0-1310">1310</a></span>
+<span class="normal"><a href="#__codelineno-0-1311">1311</a></span>
+<span class="normal"><a href="#__codelineno-0-1312">1312</a></span>
+<span class="normal"><a href="#__codelineno-0-1313">1313</a></span>
+<span class="normal"><a href="#__codelineno-0-1314">1314</a></span>
+<span class="normal"><a href="#__codelineno-0-1315">1315</a></span>
+<span class="normal"><a href="#__codelineno-0-1316">1316</a></span>
+<span class="normal"><a href="#__codelineno-0-1317">1317</a></span>
+<span class="normal"><a href="#__codelineno-0-1318">1318</a></span>
+<span class="normal"><a href="#__codelineno-0-1319">1319</a></span>
+<span class="normal"><a href="#__codelineno-0-1320">1320</a></span>
+<span class="normal"><a href="#__codelineno-0-1321">1321</a></span></pre></div></td><td class="code"><div><pre><span></span><code><a id="__codelineno-0-1229" name="__codelineno-0-1229"></a><span class="k">def</span><span class="w"> </span><span class="nf">register_labels</span><span class="p">(</span>
+<a id="__codelineno-0-1230" name="__codelineno-0-1230"></a>    <span class="n">image_store</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Path</span><span class="p">],</span>
+<a id="__codelineno-0-1231" name="__codelineno-0-1231"></a>    <span class="n">name</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;labels&quot;</span><span class="p">,</span>
+<a id="__codelineno-0-1232" name="__codelineno-0-1232"></a>    <span class="o">*</span><span class="p">,</span>
+<a id="__codelineno-0-1233" name="__codelineno-0-1233"></a>    <span class="n">axes</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+<a id="__codelineno-0-1234" name="__codelineno-0-1234"></a>    <span class="n">pixel_size</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">PixelSize</span><span class="p">,</span> <span class="nb">tuple</span><span class="p">,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+<a id="__codelineno-0-1235" name="__codelineno-0-1235"></a>    <span class="n">n_levels</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">5</span><span class="p">,</span>
+<a id="__codelineno-0-1236" name="__codelineno-0-1236"></a>    <span class="n">downscale</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">2</span><span class="p">,</span>
+<a id="__codelineno-0-1237" name="__codelineno-0-1237"></a>    <span class="n">chunks</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="o">...</span><span class="p">],</span> <span class="kc">None</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+<a id="__codelineno-0-1238" name="__codelineno-0-1238"></a>    <span class="n">shard</span><span class="p">:</span> <span class="n">ShardSpec</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+<a id="__codelineno-0-1239" name="__codelineno-0-1239"></a>    <span class="n">progress</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+<a id="__codelineno-0-1240" name="__codelineno-0-1240"></a>    <span class="n">n_objects</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+<a id="__codelineno-0-1241" name="__codelineno-0-1241"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+<a id="__codelineno-0-1242" name="__codelineno-0-1242"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Pyramidalise and register an existing ``labels/&lt;name&gt;/0`` base level.</span>
+<a id="__codelineno-0-1243" name="__codelineno-0-1243"></a>
+<a id="__codelineno-0-1244" name="__codelineno-0-1244"></a><span class="sd">    Assumes the full-resolution label array already exists at</span>
+<a id="__codelineno-0-1245" name="__codelineno-0-1245"></a><span class="sd">    ``image_store/labels/&lt;name&gt;/0``. Adds the downsampled levels, tags the</span>
+<a id="__codelineno-0-1246" name="__codelineno-0-1246"></a><span class="sd">    group with NGFF ``image-label`` metadata, lists *name* in</span>
+<a id="__codelineno-0-1247" name="__codelineno-0-1247"></a><span class="sd">    ``labels/.zattrs``, and inherits the parent image&#39;s pixel calibration</span>
+<a id="__codelineno-0-1248" name="__codelineno-0-1248"></a><span class="sd">    (unless *pixel_size* is given).</span>
+<a id="__codelineno-0-1249" name="__codelineno-0-1249"></a>
+<a id="__codelineno-0-1250" name="__codelineno-0-1250"></a><span class="sd">    Parameters</span>
+<a id="__codelineno-0-1251" name="__codelineno-0-1251"></a><span class="sd">    ----------</span>
+<a id="__codelineno-0-1252" name="__codelineno-0-1252"></a><span class="sd">    image_store : str or Path</span>
+<a id="__codelineno-0-1253" name="__codelineno-0-1253"></a><span class="sd">        OME-ZARR store path containing the image this label belongs to.</span>
+<a id="__codelineno-0-1254" name="__codelineno-0-1254"></a><span class="sd">    name : str, optional</span>
+<a id="__codelineno-0-1255" name="__codelineno-0-1255"></a><span class="sd">        Label image name under ``labels/`` (default ``&quot;labels&quot;``).</span>
+<a id="__codelineno-0-1256" name="__codelineno-0-1256"></a><span class="sd">    axes : str, optional</span>
+<a id="__codelineno-0-1257" name="__codelineno-0-1257"></a><span class="sd">        One letter per axis. ``None`` → inferred from the label array.</span>
+<a id="__codelineno-0-1258" name="__codelineno-0-1258"></a><span class="sd">    pixel_size : dict, tuple or None, optional</span>
+<a id="__codelineno-0-1259" name="__codelineno-0-1259"></a><span class="sd">        Physical voxel size in micrometers. ``None`` → inherited from the</span>
+<a id="__codelineno-0-1260" name="__codelineno-0-1260"></a><span class="sd">        parent image&#39;s own calibration.</span>
+<a id="__codelineno-0-1261" name="__codelineno-0-1261"></a><span class="sd">    n_levels : int, optional</span>
+<a id="__codelineno-0-1262" name="__codelineno-0-1262"></a><span class="sd">        Maximum number of pyramid levels including full resolution</span>
+<a id="__codelineno-0-1263" name="__codelineno-0-1263"></a><span class="sd">        (default 5).</span>
+<a id="__codelineno-0-1264" name="__codelineno-0-1264"></a><span class="sd">    downscale : int, optional</span>
+<a id="__codelineno-0-1265" name="__codelineno-0-1265"></a><span class="sd">        Per-level X/Y downsampling factor (default 2).</span>
+<a id="__codelineno-0-1266" name="__codelineno-0-1266"></a><span class="sd">    chunks : tuple of int, optional</span>
+<a id="__codelineno-0-1267" name="__codelineno-0-1267"></a><span class="sd">        Chunk shape for the written levels. ``None`` → a bounded default.</span>
+<a id="__codelineno-0-1268" name="__codelineno-0-1268"></a><span class="sd">    shard : bool or tuple of int, optional</span>
+<a id="__codelineno-0-1269" name="__codelineno-0-1269"></a><span class="sd">        Sharding request (see :func:`to_ome_zarr`&#39;s *shard*).</span>
+<a id="__codelineno-0-1270" name="__codelineno-0-1270"></a><span class="sd">    progress : bool, optional</span>
+<a id="__codelineno-0-1271" name="__codelineno-0-1271"></a><span class="sd">        Show a per-level dask progress bar (default ``True``).</span>
+<a id="__codelineno-0-1272" name="__codelineno-0-1272"></a><span class="sd">    n_objects : int or None, optional</span>
+<a id="__codelineno-0-1273" name="__codelineno-0-1273"></a><span class="sd">        Exact non-background object count, if known (e.g. from</span>
+<a id="__codelineno-0-1274" name="__codelineno-0-1274"></a><span class="sd">        :func:`patchworks.merge_tile_labels`&#39;s ``return_count=True`` after</span>
+<a id="__codelineno-0-1275" name="__codelineno-0-1275"></a><span class="sd">        ``sequential_labels=True``, which means ``ids == range(1, n_objects</span>
+<a id="__codelineno-0-1276" name="__codelineno-0-1276"></a><span class="sd">        + 1)`` by construction). When given, written into the label group&#39;s</span>
+<a id="__codelineno-0-1277" name="__codelineno-0-1277"></a><span class="sd">        attrs as ``n_objects``/``sequential_labels`` so a downstream reader</span>
+<a id="__codelineno-0-1278" name="__codelineno-0-1278"></a><span class="sd">        (e.g. napari-chunked-regionprops,</span>
+<a id="__codelineno-0-1279" name="__codelineno-0-1279"></a><span class="sd">        https://github.com/imcf/napari-chunked-regionprops) can use the</span>
+<a id="__codelineno-0-1280" name="__codelineno-0-1280"></a><span class="sd">        known id set instead of re-deriving it with a full-volume scan of</span>
+<a id="__codelineno-0-1281" name="__codelineno-0-1281"></a><span class="sd">        its own.</span>
+<a id="__codelineno-0-1282" name="__codelineno-0-1282"></a>
+<a id="__codelineno-0-1283" name="__codelineno-0-1283"></a><span class="sd">    Returns</span>
+<a id="__codelineno-0-1284" name="__codelineno-0-1284"></a><span class="sd">    -------</span>
+<a id="__codelineno-0-1285" name="__codelineno-0-1285"></a><span class="sd">    str</span>
+<a id="__codelineno-0-1286" name="__codelineno-0-1286"></a><span class="sd">        Path to the label group (``image_store/labels/&lt;name&gt;``).</span>
+<a id="__codelineno-0-1287" name="__codelineno-0-1287"></a>
+<a id="__codelineno-0-1288" name="__codelineno-0-1288"></a><span class="sd">    Examples</span>
+<a id="__codelineno-0-1289" name="__codelineno-0-1289"></a><span class="sd">    --------</span>
+<a id="__codelineno-0-1290" name="__codelineno-0-1290"></a><span class="sd">    &gt;&gt;&gt; register_labels(&quot;scan.zarr&quot;, &quot;cells&quot;)  # doctest: +SKIP</span>
+<a id="__codelineno-0-1291" name="__codelineno-0-1291"></a><span class="sd">    &#39;scan.zarr/labels/cells&#39;</span>
+<a id="__codelineno-0-1292" name="__codelineno-0-1292"></a><span class="sd">    &quot;&quot;&quot;</span>
+<a id="__codelineno-0-1293" name="__codelineno-0-1293"></a>    <span class="n">store</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">image_store</span><span class="p">)</span>
+<a id="__codelineno-0-1294" name="__codelineno-0-1294"></a>    <span class="n">group</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">store</span><span class="si">}</span><span class="s2">/labels/</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">&quot;</span>
+<a id="__codelineno-0-1295" name="__codelineno-0-1295"></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">pixel_size</span><span class="p">:</span>
+<a id="__codelineno-0-1296" name="__codelineno-0-1296"></a>        <span class="n">arr0</span> <span class="o">=</span> <span class="n">da</span><span class="o">.</span><span class="n">from_zarr</span><span class="p">(</span><span class="n">group</span><span class="p">,</span> <span class="n">component</span><span class="o">=</span><span class="s2">&quot;0&quot;</span><span class="p">)</span>
+<a id="__codelineno-0-1297" name="__codelineno-0-1297"></a>        <span class="n">lab_axes</span> <span class="o">=</span> <span class="n">axes</span> <span class="ow">or</span> <span class="n">_default_axes</span><span class="p">(</span><span class="n">arr0</span><span class="o">.</span><span class="n">ndim</span><span class="p">)</span>
+<a id="__codelineno-0-1298" name="__codelineno-0-1298"></a>        <span class="n">pixel_size</span> <span class="o">=</span> <span class="n">_read_zarr_calibration</span><span class="p">(</span><span class="n">store</span><span class="p">,</span> <span class="n">lab_axes</span><span class="p">)</span>
+<a id="__codelineno-0-1299" name="__codelineno-0-1299"></a>    <span class="n">add_pyramid</span><span class="p">(</span>
+<a id="__codelineno-0-1300" name="__codelineno-0-1300"></a>        <span class="n">group</span><span class="p">,</span>
+<a id="__codelineno-0-1301" name="__codelineno-0-1301"></a>        <span class="n">base</span><span class="o">=</span><span class="s2">&quot;0&quot;</span><span class="p">,</span>
+<a id="__codelineno-0-1302" name="__codelineno-0-1302"></a>        <span class="n">axes</span><span class="o">=</span><span class="n">axes</span><span class="p">,</span>
+<a id="__codelineno-0-1303" name="__codelineno-0-1303"></a>        <span class="n">pixel_size</span><span class="o">=</span><span class="n">pixel_size</span><span class="p">,</span>
+<a id="__codelineno-0-1304" name="__codelineno-0-1304"></a>        <span class="n">n_levels</span><span class="o">=</span><span class="n">n_levels</span><span class="p">,</span>
+<a id="__codelineno-0-1305" name="__codelineno-0-1305"></a>        <span class="n">downscale</span><span class="o">=</span><span class="n">downscale</span><span class="p">,</span>
+<a id="__codelineno-0-1306" name="__codelineno-0-1306"></a>        <span class="n">chunks</span><span class="o">=</span><span class="n">chunks</span><span class="p">,</span>
+<a id="__codelineno-0-1307" name="__codelineno-0-1307"></a>        <span class="n">shard</span><span class="o">=</span><span class="n">shard</span><span class="p">,</span>
+<a id="__codelineno-0-1308" name="__codelineno-0-1308"></a>        <span class="n">progress</span><span class="o">=</span><span class="n">progress</span><span class="p">,</span>
+<a id="__codelineno-0-1309" name="__codelineno-0-1309"></a>    <span class="p">)</span>
+<a id="__codelineno-0-1310" name="__codelineno-0-1310"></a>    <span class="n">grp</span> <span class="o">=</span> <span class="n">zarr</span><span class="o">.</span><span class="n">open_group</span><span class="p">(</span><span class="n">group</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="s2">&quot;a&quot;</span><span class="p">)</span>
+<a id="__codelineno-0-1311" name="__codelineno-0-1311"></a>    <span class="n">grp</span><span class="o">.</span><span class="n">attrs</span><span class="p">[</span><span class="s2">&quot;image-label&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;version&quot;</span><span class="p">:</span> <span class="n">_NGFF_VERSION</span><span class="p">}</span>
+<a id="__codelineno-0-1312" name="__codelineno-0-1312"></a>    <span class="k">if</span> <span class="n">n_objects</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+<a id="__codelineno-0-1313" name="__codelineno-0-1313"></a>        <span class="n">grp</span><span class="o">.</span><span class="n">attrs</span><span class="p">[</span><span class="s2">&quot;n_objects&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">n_objects</span><span class="p">)</span>
+<a id="__codelineno-0-1314" name="__codelineno-0-1314"></a>        <span class="n">grp</span><span class="o">.</span><span class="n">attrs</span><span class="p">[</span><span class="s2">&quot;sequential_labels&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span>
+<a id="__codelineno-0-1315" name="__codelineno-0-1315"></a>
+<a id="__codelineno-0-1316" name="__codelineno-0-1316"></a>    <span class="n">labels_grp</span> <span class="o">=</span> <span class="n">zarr</span><span class="o">.</span><span class="n">open_group</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">store</span><span class="si">}</span><span class="s2">/labels&quot;</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="s2">&quot;a&quot;</span><span class="p">)</span>
+<a id="__codelineno-0-1317" name="__codelineno-0-1317"></a>    <span class="n">registered</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="n">labels_grp</span><span class="o">.</span><span class="n">attrs</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;labels&quot;</span><span class="p">,</span> <span class="p">[]))</span>
+<a id="__codelineno-0-1318" name="__codelineno-0-1318"></a>    <span class="k">if</span> <span class="n">name</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">registered</span><span class="p">:</span>
+<a id="__codelineno-0-1319" name="__codelineno-0-1319"></a>        <span class="n">registered</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">name</span><span class="p">)</span>
+<a id="__codelineno-0-1320" name="__codelineno-0-1320"></a>    <span class="n">labels_grp</span><span class="o">.</span><span class="n">attrs</span><span class="p">[</span><span class="s2">&quot;labels&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">registered</span>
+<a id="__codelineno-0-1321" name="__codelineno-0-1321"></a>    <span class="k">return</span> <span class="n">group</span>
+</code></pre></div></td></tr></table></div>
+            </details>
+    </div>
+
+</div>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../dog/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Difference of Gaussians">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Difference of Gaussians
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../napari/" class="md-footer__link md-footer__link--next" aria-label="Next: napari viewer">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                napari viewer
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      Copyright &copy; 2025 IMCF Basel
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["content.code.annotate", "content.code.copy", "content.tabs.link", "navigation.expand", "navigation.sections", "navigation.top", "navigation.footer", "toc.integrate", "search.highlight", "search.share"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>
