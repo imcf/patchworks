@@ -56,8 +56,16 @@ print(
 # counts in lets the merge compute global id ranges by a cumulative sum,
 # replacing a full read+write of the store that existed only to renumber it.
 label_counts = {}
-for marker in snakemake.input.markers:  # noqa: F821
-    for index, n in json.loads(Path(marker).read_text())["counts"].items():
+# Derive the marker paths from the manifest rather than reading
+# snakemake.input: when the `prepare` checkpoint cannot be resolved (see the
+# STAGE_OK note at the end of this file), Snakemake substitutes a placeholder
+# for a checkpoint-dependent input function, and `markers` then points at
+# tiles.json instead of the seg markers. The paths are deterministic, so
+# building them here is both simpler and immune to that.
+seg_dir = Path(work_dir) / label_name / "seg"
+for batch in range(len(manifest["batches"])):
+    marker = seg_dir / f"{batch}.done"
+    for index, n in json.loads(marker.read_text())["counts"].items():
         label_counts[int(index)] = int(n)
 
 if in_place:
@@ -97,11 +105,16 @@ group = register_labels(
 )
 
 if not in_place:
+    # Only the scratch route creates a store to clean up -- and only it has to
+    # drop the checkpoint's completion sentinel, because that sentinel would
+    # otherwise outlive the store it claims exists and a rerun would skip
+    # "prepare" and segment into something already deleted.
+    #
+    # Deleting a checkpoint output is not free: it leaves `prepare`
+    # permanently unresolvable, so a later DAG evaluation cannot expand
+    # batch_done and hands dependent rules a placeholder input instead. That
+    # is why the label counts above are read by path, not from snakemake.input.
     shutil.rmtree(stage_path(work_dir, label_name), ignore_errors=True)
-# Drop the checkpoint's completion sentinel (stage.zarr.done): the "prepare"
-# rule's stage=touch(STAGE_OK) output must not outlive what it claims exists,
-# or a future rerun (e.g. re-segmenting for new labels) skips "prepare" and
-# "segment" writes into a target that is already gone or already merged.
-Path(f"{stage_path(work_dir, label_name)}.done").unlink(missing_ok=True)
+    Path(f"{stage_path(work_dir, label_name)}.done").unlink(missing_ok=True)
 print(f"[patchworks] labels written to {group}")
 open(snakemake.output[0], "w").close()  # noqa: F821
