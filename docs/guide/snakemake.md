@@ -57,7 +57,7 @@ channel: 0                     # channel to segment (null = keep all)
 level: 0                       # pyramid level (0 = full resolution)
 tile_shape: "auto"             # "auto", or e.g. [16, 1024, 1024] (zyx)
 gpu_memory_gb: null            # for "auto" on SLURM: your segment GPU's VRAM
-overlap: 30                    # halo ≈ one object diameter
+overlap: [4, 30, 30]           # halo ≈ one object diameter; scalar or [z,y,x]
 skip_empty: true               # skip background tiles
 empty_threshold: null          # null → Otsu
 
@@ -427,7 +427,8 @@ tiles = spatial_tiles(img.shape, tile_shape=(16, 1024, 1024))
 create_stage("stage.zarr", img.shape, (16, 1024, 1024))
 # (distribute these across jobs:)
 for i in range(len(tiles)):
-    stage_tile(img, my_fn, "stage.zarr", i, tile_shape=(16, 1024, 1024), overlap=30)
+    stage_tile(img, my_fn, "stage.zarr", i, tile_shape=(16, 1024, 1024),
+               overlap=[4, 30, 30])
 merged = merge_tile_labels("stage.zarr", input_component="staged",
                            write_to="merged.zarr", sequential_labels=True)
 write_labels("image.zarr", merged, name="cells")

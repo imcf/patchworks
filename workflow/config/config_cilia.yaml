@@ -20,7 +20,13 @@ channel: 2 # cilia marker channel
 level: 0
 tile_shape: [16, 1024, 1024] # keep identical to config_cyto.yaml/config_nuclei.yaml
 gpu_memory_gb: null
-overlap: 30 # cover the PSF support (decon) + the DoG's high_sigma
+# Per-axis halo [z, y, x], covering the PSF support (decon) + the DoG's
+# high_sigma. Lateral 30 px at dxdata 0.1 = 3 um; at dzdata 0.2 that is 15
+# z-planes -- almost the whole 16-plane tile. Deconvolution genuinely wants a
+# deeper z tile than this: if cilia quality matters, raise tile_shape's z for
+# all three configs together (label_relations needs them identical) rather
+# than pushing the halo up against the tile depth.
+overlap: [8, 30, 30]
 skip_empty: true
 empty_threshold: null
 

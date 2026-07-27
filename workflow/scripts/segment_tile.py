@@ -23,7 +23,8 @@ stage_tile(
     stage_path(work_dir, label_name),
     index,
     tile_shape=tuple(manifest["tile_shape"]),
-    overlap=int(manifest["overlap"]),
+    # Scalar (older manifests) or per-axis list; stage_tile normalizes both.
+    overlap=manifest["overlap"],
 )
 
 open(snakemake.output[0], "w").close()  # noqa: F821

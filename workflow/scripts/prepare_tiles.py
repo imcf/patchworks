@@ -4,10 +4,13 @@ import json
 from functools import partial
 from pathlib import Path
 
+import numpy as np
+
 from patchworks import (
     auto_tile_shape_cellpose,
     create_stage,
     estimate_empty_tiles,
+    normalize_overlap,
     spatial_tiles,
 )
 
@@ -39,6 +42,22 @@ if ts == "auto":
 else:
     tile_shape = tuple(ts)
 
+# A halo wider than the tile itself is not boundary context -- it means every
+# tile re-reads and re-segments its neighbours. Catch it here rather than
+# paying 5x the GPU time for results that get trimmed away.
+overlap = normalize_overlap(cfg.get("overlap", 0), len(tile_shape))
+for axis, (ov, ts) in enumerate(zip(overlap, tile_shape)):
+    if ov >= ts:
+        raise ValueError(
+            f"overlap[{axis}]={ov} >= tile_shape[{axis}]={ts}: each tile would "
+            f"read past its neighbours. Use a per-axis overlap, e.g. "
+            f"overlap: {list(max(1, t // 4) for t in tile_shape)}"
+        )
+amplification = np.prod(
+    [(t + 2 * o) for t, o in zip(tile_shape, overlap)]
+) / np.prod(tile_shape)
+print(f"[patchworks] halo read amplification: {amplification:.2f}x")
+
 tiles = spatial_tiles(image.shape, tile_shape)
 occupied = list(range(len(tiles)))
 if cfg.get("skip_empty", True):
@@ -54,7 +73,7 @@ Path(work_dir, label_name, "tiles.json").write_text(
     json.dumps(
         {
             "tile_shape": list(tile_shape),
-            "overlap": int(cfg.get("overlap", 0)),
+            "overlap": list(overlap),
             "n_tiles": len(tiles),
             "occupied": occupied,
         },
