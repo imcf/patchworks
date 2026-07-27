@@ -5,6 +5,7 @@ from functools import partial
 from pathlib import Path
 
 import numpy as np
+import zarr
 
 from patchworks import (
     auto_empty_threshold,
@@ -12,6 +13,7 @@ from patchworks import (
     auto_tile_shape_cellpose,
     block_for_tile,
     build_occupancy_map,
+    capped_output_chunks,
     create_stage,
     normalize_overlap,
     spatial_tiles,
@@ -19,6 +21,9 @@ from patchworks import (
 )
 
 from _pw import open_image, stage_path, start_log, validate_config
+
+# Chunking ceiling for the written labels, so a viewer can page them lazily.
+LABEL_CHUNK_CAP = (16, 1024, 1024)
 
 start_log(snakemake.log[0])  # noqa: F821
 cfg = snakemake.config  # noqa: F821
@@ -134,7 +139,31 @@ batches = [
     for i in range(0, len(occupied), tiles_per_job)
 ]
 
-create_stage(stage_path(work_dir, label_name), image.shape, tile_shape)
+# Where the segment jobs write. When the tile is already within the label
+# chunk cap, they can write straight into the label group's level 0 and the
+# merge relabels it in place -- one full write of the volume less than
+# staging to a scratch store and copying it across. An oversized tile keeps
+# the scratch store, so level 0 can still be chunked for lazy viewing.
+image_store = str(Path(work_dir) / "image.zarr")
+in_place = capped_output_chunks(tile_shape, LABEL_CHUNK_CAP) == tuple(
+    tile_shape
+)
+if in_place:
+    target_path, target_component = f"{image_store}/labels/{label_name}", "0"
+    root = zarr.open_group(image_store, mode="a")
+    parent = root.require_group("labels")
+    if label_name in parent:
+        del parent[label_name]
+    parent.require_group(label_name)
+    print("[patchworks] segmenting straight into the label group (in place)")
+else:
+    target_path, target_component = stage_path(work_dir, label_name), "staged"
+    print(
+        f"[patchworks] tile {tuple(tile_shape)} exceeds the label chunk cap "
+        f"{LABEL_CHUNK_CAP}; staging to a scratch store so level 0 stays "
+        "chunked for viewing"
+    )
+create_stage(target_path, image.shape, tile_shape, component=target_component)
 
 Path(work_dir, label_name, "tiles.json").write_text(
     json.dumps(
@@ -145,6 +174,9 @@ Path(work_dir, label_name, "tiles.json").write_text(
             "occupied": occupied,
             "tiles_per_job": tiles_per_job,
             "batches": batches,
+            "target_path": target_path,
+            "target_component": target_component,
+            "in_place": in_place,
         },
         indent=2,
     )

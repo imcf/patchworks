@@ -20,7 +20,7 @@ from patchworks import (
 from patchworks._chunks import _get_available_memory
 from patchworks.plugins.ome_zarr import register_labels
 
-from _pw import stage_path, start_log
+from _pw import load_tiles_json, stage_path, start_log
 
 start_log(snakemake.log[0])  # noqa: F821
 cfg = snakemake.config  # noqa: F821
@@ -29,7 +29,14 @@ label_name = cfg.get("label_name", "labels")
 image_store = str(Path(work_dir) / "image.zarr")
 label_group = f"{image_store}/labels/{label_name}"
 
-staged = zarr.open_group(stage_path(work_dir, label_name), mode="r")["staged"]
+# prepare recorded where the segment jobs wrote: the label group's level 0
+# (merged in place) or a scratch stage store.
+manifest = load_tiles_json(snakemake.input.tiles)  # noqa: F821
+target_path = manifest["target_path"]
+target_component = manifest.get("target_component", "staged")
+in_place = bool(manifest.get("in_place", False))
+
+staged = zarr.open_group(target_path, mode="r")[target_component]
 
 # Size the relabel pool against what this job was actually granted, not the
 # node. Each worker holds roughly a few copies of one chunk, so the RAM budget
@@ -49,29 +56,30 @@ print(
 # counts in lets the merge compute global id ranges by a cumulative sum,
 # replacing a full read+write of the store that existed only to renumber it.
 label_counts = {}
-for marker in snakemake.input:  # noqa: F821
+for marker in snakemake.input.markers:  # noqa: F821
     for index, n in json.loads(Path(marker).read_text())["counts"].items():
         label_counts[int(index)] = int(n)
 
-# Merge straight into the label group's level 0. Writing to a scratch
-# _merged.zarr and letting write_labels copy it across cost a full extra
-# read+write of the volume plus the scratch store's disk; register_labels
-# already expects level 0 to exist and only adds the pyramid and metadata.
-root = zarr.open_group(image_store, mode="a")
-parent = root.require_group("labels")
-if label_name in parent:
-    del parent[label_name]
-parent.require_group(label_name)
-
-# Level 0 keeps napari-friendly chunks even when tiles are much larger; the
-# cap has to divide the tile shape so merge workers still write whole chunks.
-out_chunks = capped_output_chunks(staged.chunks, (16, 1024, 1024))
+if in_place:
+    # The tiles already sit in labels/<name>/0, so the merge rewrites them
+    # where they are: no scratch store, and one full write of the volume less.
+    # Safe because the boundary scan finishes before any chunk is rewritten.
+    out_chunks = None
+else:
+    # Level 0 keeps napari-friendly chunks even when tiles are much larger;
+    # the cap must divide the tile so workers still write whole chunks.
+    root = zarr.open_group(image_store, mode="a")
+    parent = root.require_group("labels")
+    if label_name in parent:
+        del parent[label_name]
+    parent.require_group(label_name)
+    out_chunks = capped_output_chunks(staged.chunks, (16, 1024, 1024))
 
 _, n_objects = merge_tile_labels(
-    stage_path(work_dir, label_name),
-    write_to=label_group,
-    input_component="staged",
-    output_component="0",
+    target_path,
+    write_to=label_group if not in_place else target_path,
+    input_component=target_component,
+    output_component="0" if not in_place else target_component,
     output_chunks=out_chunks,
     sequential_labels=cfg.get("sequential_labels", True),
     n_workers=cfg.get("merge_workers") or default_workers,
@@ -88,11 +96,12 @@ group = register_labels(
     n_objects=n_objects,
 )
 
-shutil.rmtree(stage_path(work_dir, label_name), ignore_errors=True)
-# Also drop the checkpoint's completion sentinel (stage.zarr.done): the
-# "prepare" rule's stage=touch(STAGE_OK) output must not outlive the store it
-# claims exists, or a future rerun (e.g. re-segmenting for new labels) skips
-# "prepare" and "segment" tries to open a stage.zarr that's already gone.
+if not in_place:
+    shutil.rmtree(stage_path(work_dir, label_name), ignore_errors=True)
+# Drop the checkpoint's completion sentinel (stage.zarr.done): the "prepare"
+# rule's stage=touch(STAGE_OK) output must not outlive what it claims exists,
+# or a future rerun (e.g. re-segmenting for new labels) skips "prepare" and
+# "segment" writes into a target that is already gone or already merged.
 Path(f"{stage_path(work_dir, label_name)}.done").unlink(missing_ok=True)
 print(f"[patchworks] labels written to {group}")
 open(snakemake.output[0], "w").close()  # noqa: F821

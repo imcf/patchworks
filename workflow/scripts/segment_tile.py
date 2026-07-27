@@ -11,7 +11,7 @@ import json
 
 from patchworks import stage_tile
 
-from _pw import build_fn, load_tiles_json, open_image, stage_path, start_log
+from _pw import build_fn, load_tiles_json, open_image, start_log
 
 start_log(snakemake.log[0])  # noqa: F821
 cfg = snakemake.config  # noqa: F821
@@ -25,7 +25,11 @@ indices = manifest["batches"][batch]
 
 # Built once for the whole batch: this is what makes the model load amortize.
 fn = build_fn(cfg)
-stage = stage_path(work_dir, label_name)
+# prepare decides where tiles land: the label group's level 0 directly when
+# the tile fits the chunk cap (the merge then relabels it in place), else a
+# scratch stage store.
+stage = manifest["target_path"]
+component = manifest.get("target_component", "staged")
 tile_shape = tuple(manifest["tile_shape"])
 
 counts = {}
@@ -38,6 +42,7 @@ for index in indices:
         tile_shape=tile_shape,
         # Scalar (older manifests) or per-axis list; stage_tile normalizes both.
         overlap=manifest["overlap"],
+        component=component,
     )
     print(f"[patchworks] segmented tile {index}: {counts[index]} label(s)")
 

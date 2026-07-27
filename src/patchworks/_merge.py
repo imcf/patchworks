@@ -622,6 +622,21 @@ def zarr_native_merge(
             "zarr_native_merge: renumbered to 1..%d in the same LUT", n_objects
         )
 
+    # Relabelling straight back into the source array saves writing the whole
+    # volume a second time. It is safe because the boundary scan has already
+    # finished by this point, so nothing still needs the original ids, and
+    # each worker owns a disjoint, chunk-aligned region.
+    in_place = (staged_path, staged_component) == (out_path, out_component)
+    if in_place:
+        if output_chunks is not None and tuple(output_chunks) != tuple(
+            chunk_shape
+        ):
+            raise ValueError(
+                "output_chunks cannot differ from the source chunking when "
+                "merging in place (the array is rewritten, not recreated)"
+            )
+        logger.info("zarr_native_merge: relabeling in place, no second store")
+
     out_root = zarr.open_group(out_path, mode="a")
     out_chunks = tuple(chunk_shape)
     if output_chunks is not None:
@@ -636,11 +651,14 @@ def zarr_native_merge(
                 "output_chunks must divide the staged chunk shape so workers "
                 f"write whole chunks; axis/staged/output mismatches: {bad}"
             )
-    # Match the staged dtype: ids are already compact (dense by construction,
-    # and compacted again above when sequential), so nothing needs a wider one.
-    _create_zarr_label_array(
-        out_root, out_component, shape, out_chunks, dtype=arr.dtype
-    )
+    if not in_place:
+        # Match the staged dtype: ids are already compact (dense by
+        # construction, and compacted again above when sequential), so nothing
+        # needs a wider one. Creating this in place would delete the very
+        # array we are about to read.
+        _create_zarr_label_array(
+            out_root, out_component, shape, out_chunks, dtype=arr.dtype
+        )
 
     # Row-major, matching spatial_tiles' order -- so chunk i is tile i and the
     # offsets line up with the per-tile counts.
@@ -669,7 +687,7 @@ def zarr_native_merge(
     n_w = max(1, min(n_workers, max(1, len(tasks))))
     logger.info(
         "zarr_native_merge: relabeling %d chunks with %d worker(s)…",
-        n_chunks,
+        len(tasks),
         n_w,
     )
 

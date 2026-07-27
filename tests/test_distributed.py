@@ -192,6 +192,59 @@ def test_empty_chunks_are_skipped_not_just_short_circuited(tmp_path):
     assert written == ["0"], f"only the occupied chunk should exist: {written}"
 
 
+def test_in_place_merge_matches_the_two_store_merge(tmp_path):
+    """Relabelling back into the source must give the same labelling.
+
+    It is safe because the boundary scan finishes before any chunk is
+    rewritten, so nothing still needs the original ids -- and it saves writing
+    the whole volume a second time.
+    """
+    img = np.zeros((8, 48), "uint16")
+    img[1:4, 4:12] = 500  # inside tile 0
+    img[2:6, 14:26] = 500  # straddles the x=16 boundary
+    tile = (8, 16)
+
+    results = {}
+    for name in ("two_store", "in_place"):
+        stage = str(tmp_path / f"stage_{name}.zarr")
+        create_stage(stage, img.shape, tile)
+        counts = {
+            i: stage_tile(img, _fn, stage, i, tile_shape=tile, overlap=2)
+            for i in range(len(spatial_tiles(img.shape, tile)))
+        }
+        # in place = the merge's output *is* its input
+        out = (
+            stage if name == "in_place" else str(tmp_path / f"out_{name}.zarr")
+        )
+        component = "staged" if name == "in_place" else "labels"
+        results[name] = merge_tile_labels(
+            stage,
+            write_to=out,
+            input_component="staged",
+            output_component=component,
+            sequential_labels=True,
+            label_counts=counts,
+        ).compute()
+
+    assert np.array_equal(results["two_store"], results["in_place"]), (
+        "in-place relabelling changed the result"
+    )
+    assert set(np.unique(results["in_place"]).tolist()) == {0, 1, 2}
+
+    # And it must refuse a rechunk it cannot honour, rather than silently
+    # ignoring it: in place the array is rewritten, never recreated.
+    stage = str(tmp_path / "stage_guard.zarr")
+    create_stage(stage, img.shape, tile)
+    with pytest.raises(ValueError, match="cannot differ"):
+        merge_tile_labels(
+            stage,
+            write_to=stage,
+            input_component="staged",
+            output_component="staged",
+            output_chunks=(8, 8),
+        )
+
+
 def test_stage_tile_returns_dense_label_count(tmp_path):
     """stage_tile reports how many labels it wrote, and writes exactly 1..n."""
     img = np.zeros((8, 16), "uint16")
