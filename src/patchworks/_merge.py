@@ -32,6 +32,8 @@ import dask.array as da
 import numpy as np
 import zarr
 
+from ._chunks import cpu_allocation
+
 try:
     from tqdm.auto import tqdm as _tqdm
 except ImportError:
@@ -746,7 +748,7 @@ def merge_tile_labels(
     """
     import dask.array as da
 
-    nw = n_workers if n_workers is not None else min(4, os.cpu_count() or 1)
+    nw = n_workers if n_workers is not None else min(4, cpu_allocation())
 
     # -- Stage dask array to zarr if needed --
     stage_path: str | None = None

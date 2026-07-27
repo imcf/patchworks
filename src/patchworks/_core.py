@@ -11,7 +11,7 @@ from typing import Any, Callable, Union
 import dask.array as da
 import numpy as np
 
-from ._chunks import auto_tile_shape, safe_worker_count
+from ._chunks import auto_tile_shape, cpu_allocation, safe_worker_count
 from ._cluster import _client_is_in_process, _distributed_client
 from ._io import auto_empty_threshold, load_ome_zarr
 from ._merge import zarr_native_merge
@@ -537,7 +537,7 @@ def tile_process(
             if max_workers is not None
             else safe_worker_count(_tile_nbytes, use_gpu=use_gpu)
         )
-        _workers = max(1, min(_workers, os.cpu_count() or 1))
+        _workers = max(1, min(_workers, cpu_allocation()))
         logger.info("Staging with %d worker thread(s)", _workers)
         _sched_ctx: Any = _dask.config.set(
             scheduler="threads", num_workers=_workers

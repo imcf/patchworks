@@ -6,12 +6,18 @@ image store under ``labels/<name>/`` as a calibrated, multi-scale pyramid.
 """
 
 import json
-import os
 import shutil
 from pathlib import Path
 
+import numpy as np
 import zarr
-from patchworks import capped_output_chunks, merge_tile_labels
+from patchworks import (
+    capped_output_chunks,
+    cpu_allocation,
+    merge_tile_labels,
+    safe_worker_count,
+)
+from patchworks._chunks import _get_available_memory
 from patchworks.plugins.ome_zarr import register_labels
 
 from _pw import stage_path, start_log
@@ -23,12 +29,21 @@ label_name = cfg.get("label_name", "labels")
 image_store = str(Path(work_dir) / "image.zarr")
 label_group = f"{image_store}/labels/{label_name}"
 
-# merge_tile_labels defaults to min(4, cpu_count) workers, so it ignores
-# whatever cpus_per_task the "merge" rule was actually allocated in the SLURM
-# profile. Read the real allocation (SLURM_CPUS_PER_TASK) so the job uses all
-# the cores it's paying for; merge_workers: in config.yaml can still override.
-default_workers = int(
-    os.environ.get("SLURM_CPUS_PER_TASK", os.cpu_count() or 4)
+staged = zarr.open_group(stage_path(work_dir, label_name), mode="r")["staged"]
+
+# Size the relabel pool against what this job was actually granted, not the
+# node. Each worker holds roughly a few copies of one chunk, so the RAM budget
+# -- and not the core count -- is what has to bound it: merge_workers: null
+# used to leave merge_tile_labels capping itself at 4, while the profile's
+# comment claimed the full allocation was in use.
+chunk_nbytes = int(np.prod(staged.chunks)) * staged.dtype.itemsize
+default_workers = min(
+    cpu_allocation(), safe_worker_count(chunk_nbytes, fn_overhead=3)
+)
+print(
+    f"[patchworks] merge: {cpu_allocation()} cpu(s), "
+    f"{_get_available_memory() / 1024**3:.0f} GiB budget, "
+    f"{default_workers} worker(s) for {chunk_nbytes / 1024**2:.0f} MB chunks"
 )
 # Each segment job recorded how many labels every tile wrote. Feeding those
 # counts in lets the merge compute global id ranges by a cumulative sum,
@@ -48,7 +63,6 @@ if label_name in parent:
     del parent[label_name]
 parent.require_group(label_name)
 
-staged = zarr.open_group(stage_path(work_dir, label_name), mode="r")["staged"]
 # Level 0 keeps napari-friendly chunks even when tiles are much larger; the
 # cap has to divide the tile shape so merge workers still write whole chunks.
 out_chunks = capped_output_chunks(staged.chunks, (16, 1024, 1024))
@@ -60,7 +74,7 @@ _, n_objects = merge_tile_labels(
     output_component="0",
     output_chunks=out_chunks,
     sequential_labels=cfg.get("sequential_labels", True),
-    n_workers=cfg.get("merge_workers", default_workers),
+    n_workers=cfg.get("merge_workers") or default_workers,
     progress=False,
     return_count=True,
     label_counts=label_counts,

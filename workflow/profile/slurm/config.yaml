@@ -20,6 +20,10 @@ rerun-incomplete: true
 rerun-triggers: mtime
 printshellcmds: true
 keep-going: true
+# Retry a failed job twice, asking for more memory each time (see the
+# attempt-scaled mem_mb below). A transient OOM or a node hiccup then costs a
+# resubmission instead of failing the run and requiring a manual rerun.
+retries: 2
 
 # Defaults for every rule (CPU jobs).
 default-resources:
@@ -32,30 +36,40 @@ default-resources:
 # Per-rule overrides.
 set-resources:
   convert:
-    # bioio/dask's default threaded scheduler uses every visible core, so
-    # this scales conversion for free. Verify actual scaling with `seff
-    # <jobid>` after a run and dial back if efficiency is low (scicore
-    # fair-share asks you not to sit on idle cores).
-    mem_mb: 64000
+    # convert.py pins dask's threaded scheduler to cpus_per_task, so this
+    # scales conversion without the scheduler quietly running one worker per
+    # *machine* core. Verify actual scaling with `seff <jobid>` after a run
+    # and dial back if efficiency is low (scicore fair-share asks you not to
+    # sit on idle cores).
+    mem_mb: "attempt * 64000"
     cpus_per_task: 32
     runtime: 360
   prepare:
-    mem_mb: 32000
+    # Also builds the max-pooled occupancy map on first use for an image.zarr
+    # that predates it (one bounded streaming pass, then shared by every
+    # config against that store).
+    mem_mb: "attempt * 32000"
     runtime: 120
   segment:
-    # one GPU per tile — this is what spreads Cellpose across GPUs.
+    # one GPU per job — this is what spreads Cellpose across GPUs.
     # Use the plugin's native `gres` resource → emits --gres=gpu:1, which is
     # how scicore binds a CUDA device. (The `gpu:` resource emits --gpus and
     # leaves the job without a device.)
     slurm_partition: "rtx4090"
     gres: "gpu:1"
     qos: "rtx4090-6hours" # scicore: <partition>-<duration> QOS
-    mem_mb: 32000 # plenty — a tile used ~1G
+    # A job now processes `tiles_per_job` tiles sequentially, so both memory
+    # and runtime scale with that setting — raise it there and re-check here.
+    # The old "a tile used ~1G" note predates tile_shape: "auto", which sizes
+    # tiles against the real GPU and makes them far bigger.
+    mem_mb: "attempt * 32000"
     cpus_per_task: 4
     runtime: 360 # 6 hours — must match the QOS, NOT 120 (=2h → killed early)
   merge:
-    # merge_tile_labels now uses n_workers = this allocation (see merge.py /
-    # config.yaml's merge_workers) instead of silently capping at 4 threads.
-    mem_mb: 128000
+    # merge.py sizes its worker pool from the cgroup/SLURM budget rather than
+    # the node's core count, and the pyramid is written zarr-natively (one
+    # source chunk per task) instead of through a dask rechunk — so this no
+    # longer has to cover an unbounded scheduler.
+    mem_mb: "attempt * 64000"
     cpus_per_task: 32
     runtime: 240

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+from pathlib import Path
 from typing import Any, Sequence, Union
 
 import numpy as np
@@ -71,21 +72,100 @@ def auto_overlap(
 _GPU_MEMORY_FALLBACK = 8 * 1024**3
 
 
-def _get_available_memory() -> int:
-    """Return available system RAM in bytes.
+def cpu_allocation() -> int:
+    """Return the number of CPUs this process may actually use.
+
+    ``os.cpu_count()`` reports the machine's cores, which on a shared cluster
+    node is wildly more than a job was granted -- a 4-core allocation on a
+    128-core node would size itself for 128. Prefer what the scheduler says,
+    then the process' CPU affinity mask, and only then the machine.
 
     Returns
     -------
     int
-        Available memory via ``psutil``, or an 8 GiB fallback if it is not
-        installed.
+        Usable CPU count (always >= 1).
     """
+    for var in ("SLURM_CPUS_PER_TASK", "SLURM_CPUS_ON_NODE"):
+        try:
+            value = int(os.environ[var])
+        except (KeyError, ValueError):
+            continue
+        if value > 0:
+            return value
+    try:
+        return max(1, len(os.sched_getaffinity(0)))
+    except AttributeError:  # not POSIX
+        return max(1, os.cpu_count() or 1)
+
+
+def _cgroup_memory_limit() -> "int | None":
+    """Memory ceiling from the process' cgroup, if one applies.
+
+    SLURM confines jobs with cgroups, so this is the limit that actually gets
+    the process OOM-killed -- unlike the node-wide figure ``psutil`` reports.
+    """
+    for path in (
+        "/sys/fs/cgroup/memory.max",  # cgroup v2
+        "/sys/fs/cgroup/memory/memory.limit_in_bytes",  # cgroup v1
+    ):
+        try:
+            raw = Path(path).read_text().strip()
+        except OSError:
+            continue
+        if raw == "max":
+            continue
+        try:
+            value = int(raw)
+        except ValueError:
+            continue
+        # v1 reports a sentinel near 2**63 when unlimited.
+        if 0 < value < 2**62:
+            return value
+    return None
+
+
+def _get_available_memory() -> int:
+    """Return the memory this process may actually use, in bytes.
+
+    Takes the **smallest** of everything that can constrain it: the SLURM
+    allocation, the cgroup limit, and the node's free RAM. A node with 512 GB
+    free must never convince a 128 GB job that it has room -- that mismatch is
+    exactly how a job sizes itself into an OOM kill.
+
+    Returns
+    -------
+    int
+        Usable memory in bytes, or an 8 GiB fallback if nothing is knowable.
+    """
+    limits = []
+
+    per_node = os.environ.get("SLURM_MEM_PER_NODE")
+    if per_node:
+        try:
+            limits.append(int(per_node) * 1024**2)  # SLURM reports MB
+        except ValueError:
+            pass
+    per_cpu = os.environ.get("SLURM_MEM_PER_CPU")
+    if per_cpu:
+        try:
+            limits.append(int(per_cpu) * 1024**2 * cpu_allocation())
+        except ValueError:
+            pass
+
+    cgroup = _cgroup_memory_limit()
+    if cgroup is not None:
+        limits.append(cgroup)
+
     try:
         import psutil
 
-        return int(psutil.virtual_memory().available)
+        limits.append(int(psutil.virtual_memory().available))
     except Exception:
+        pass
+
+    if not limits:
         return 8 * 1024**3
+    return max(1, min(limits))
 
 
 def safe_worker_count(
@@ -124,7 +204,7 @@ def safe_worker_count(
     int
         Worker-thread count (always >= 1).
     """
-    cpu_cap = max(1, (os.cpu_count() or 1) - 1)
+    cpu_cap = max(1, cpu_allocation() - 1)
     if use_gpu:
         return 1
     avail = _get_available_memory()
@@ -204,7 +284,7 @@ def auto_tile_shape(
     >>> tile
     (128, 512, 512)
     """
-    n_workers = n_workers or os.cpu_count() or 1
+    n_workers = n_workers or cpu_allocation()
     itemsize = np.dtype(dtype).itemsize
     n_spatial = min(3, len(shape))
 
@@ -308,7 +388,7 @@ def auto_tile_shape_cellpose(
     >>> tile
     (1, 2048, 2048)
     """
-    n_workers = n_workers or os.cpu_count() or 1
+    n_workers = n_workers or cpu_allocation()
     itemsize = np.dtype(dtype).itemsize
 
     if use_gpu:

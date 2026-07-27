@@ -29,7 +29,13 @@ With Cellpose:
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 
-from ._chunks import auto_overlap, auto_tile_shape, auto_tile_shape_cellpose
+from ._chunks import (
+    auto_overlap,
+    auto_tile_shape,
+    auto_tile_shape_cellpose,
+    cpu_allocation,
+    safe_worker_count,
+)
 from ._cluster import make_local_cluster
 from ._core import tile_process
 from ._distributed import (
@@ -56,6 +62,8 @@ __all__ = [
     "auto_overlap",
     "auto_tile_shape",
     "auto_tile_shape_cellpose",
+    "cpu_allocation",
+    "safe_worker_count",
     "load_ome_zarr",
     "estimate_empty_tiles",
     "auto_empty_threshold",

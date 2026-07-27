@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import logging
-import os
+
+from ._chunks import cpu_allocation
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +96,7 @@ def make_local_cluster(
     from dask.distributed import Client, LocalCluster
 
     if n_workers is None:
-        n_workers = 1 if use_gpu else min(8, os.cpu_count() or 1)
+        n_workers = 1 if use_gpu else min(8, cpu_allocation())
 
     cluster = LocalCluster(
         processes=True,
