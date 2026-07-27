@@ -29,9 +29,15 @@ calibrated, multi-scale `labels/` group.
    image), create the empty `stage.zarr`, and group the tiles into batches.
 3. **segment {batch}** — one GPU job per `tiles_per_job` tiles, processed
    sequentially so they share a single CUDA init and model load: read tile +
-   halo, run Cellpose, trim, write to the stage. Scattered across the cluster.
-4. **merge** — zarr-native boundary stitch + renumber, written straight into
-   `image.zarr/labels/<name>/0`, then pyramided.
+   halo, run Cellpose, trim, write into `image.zarr/labels/<name>/0` (or a
+   scratch store for oversized tiles). Scattered across the cluster.
+4. **merge** — zarr-native boundary stitch + renumber, applied **in place**
+   to that array, then pyramided. Chunks holding no labels are skipped
+   entirely, so background costs neither I/O nor disk.
+
+The label group is only registered in `labels/.zattrs` once the merge
+finishes, so a run that dies midway leaves a group NGFF readers won't list;
+re-running recreates it.
 
 ## Install
 

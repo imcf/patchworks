@@ -242,8 +242,8 @@ result. Keep `mtime` and reruns happen only when an output is missing or stale.
 
 ## Running two segmentations (e.g. nuclei + cytoplasm)
 
-Every path the workflow writes — `tiles.json`, `stage.zarr`, per-tile `seg/`,
-the cached model, `labels.done` — lives under `work_dir/<label_name>/`, so
+Every path the workflow writes — `tiles.json`, per-batch `seg/` markers, the
+cached model, `labels.done` — lives under `work_dir/<label_name>/`, so
 running the workflow **twice with two configs against the same `work_dir`**
 never collides: each run gets its own private subdirectory, and both reuse
 the *same* already-converted `image.zarr` (conversion never re-runs).
@@ -489,7 +489,14 @@ merged = merge_tile_labels("stage.zarr", input_component="staged",
 write_labels("image.zarr", merged, name="cells")
 ```
 
-The workflow goes one step further and points the merge straight at
-`image.zarr/labels/cells/0` (via `write_to=` + `output_component="0"`), then
-calls `register_labels` to add the pyramid — skipping the scratch store and
-the full-volume copy that `write_labels` would otherwise do.
+The workflow goes two steps further. It stages **into**
+`image.zarr/labels/cells/0` in the first place, then has the merge rewrite
+that array **in place** (`write_to=` and `input_component=`/
+`output_component=` all pointing at it) and calls `register_labels` to add
+the pyramid. That removes both the scratch store and the full-volume copy
+`write_labels` would otherwise do — three passes over the label volume become
+two.
+
+It falls back to the separate store above when the tile is larger than the
+label chunk cap, because in place the chunking cannot be changed and level 0
+has to stay pageable for a viewer.

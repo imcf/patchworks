@@ -28,15 +28,22 @@ This is the same approach used by
 
 ### Step 1: stage
 
-Each tile's labels are written to a temporary zarr once. This is critical:
-without staging, any downstream operation that reads the label array re-runs
-your segmentation function. The merge internally reads labels multiple times.
+Each tile's labels are written to zarr once. This is critical: without
+staging, any downstream operation that reads the label array re-runs your
+segmentation function. The merge internally reads labels multiple times.
 
 ```text
 tile_process calls fn once per tile → staged zarr
                                          │
                          merge reads from staged zarr (no fn calls)
 ```
+
+The Snakemake workflow goes further and stages **directly into**
+`image.zarr/labels/<name>/0`, then has the merge rewrite that array in place
+— saving a whole extra write of the volume plus the scratch store's disk. It
+falls back to a separate store when the tile is larger than the label chunk
+cap, since in place the chunking cannot be changed and level 0 has to stay
+pageable for a viewer.
 
 ### Step 2: make the ids globally unique
 
@@ -56,7 +63,10 @@ Only the two voxels on either side of each tile boundary are read. For any
 pair of touching non-zero labels `(a, b)`, they must be the same object. The
 per-tile offsets are applied here, on the fly.
 
-I/O cost: `O(n_boundaries × face_area)`, not `O(full_volume)`.
+I/O cost: `O(n_boundaries × face_area)`, not `O(full_volume)`. The columns
+are read in parallel, and a boundary next to a chunk that holds no labels is
+skipped outright — a pair needs a non-zero label on *both* sides, so it could
+never produce one.
 
 ### Step 4: connected components
 
@@ -76,6 +86,17 @@ of the object count, with no scan of the volume.
 The LUT is applied to every tile in parallel via `multiprocessing.Pool`. The
 LUT is shared via process initializer to avoid re-pickling it for every chunk
 (LUTs can be hundreds of MB for dense label volumes).
+
+Chunks whose tile wrote no labels are skipped entirely — not read, and not
+written. Zarr never materialises an unwritten chunk and reads it back as the
+fill value, so background regions cost neither I/O nor disk. On a sparse
+image that is most of the volume.
+
+When the merge's output *is* its input, this pass rewrites the array in
+place. That is safe because the boundary scan (step 3) has already finished,
+so nothing still needs the original ids. The trade-off is restartability: a
+job killed part-way through leaves a half-relabelled array, where a separate
+output store would have left the input intact to redo from.
 
 ## Using the merge step standalone
 

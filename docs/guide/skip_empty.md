@@ -63,13 +63,22 @@ that beside `image.zarr` (about 1/16384 of the image at the default 128 px
 block). `tile_occupancy` then reduces the map over each tile's full footprint.
 
 ```python
-from patchworks import auto_empty_threshold, build_occupancy_map, tile_occupancy
+from patchworks import (
+    auto_empty_threshold, block_for_tile, build_occupancy_map, tile_occupancy
+)
 
-build_occupancy_map("image.zarr")             # once per image, all channels
+# Size the block from the tile, or every tile over-covers the same block and
+# tests occupied — correct, but useless as a skip list.
+build_occupancy_map("image.zarr", block=block_for_tile(TILE))
 info = tile_occupancy(
     "image.zarr", TILE, channel=0, threshold=auto_empty_threshold(img, 0, 0)
 )
 ```
+
+The map is stored **beside** the image (`image.occupancy.zarr`), not inside
+it: it is not an NGFF array, and a zarr hierarchy containing one cannot be
+walked. It is rebuilt automatically if an existing map was built at a
+different block.
 
 This is **exact, not approximate**: `block_max > threshold` is true exactly
 when some voxel in that block exceeds the threshold, so comparing pooled
@@ -80,6 +89,10 @@ The map is built once and shared by every segmentation reading that image, so
 a three-config run pays for one pooling pass instead of three sampling passes.
 This is what the Snakemake workflow uses, and it builds the map on first use
 for stores converted before the map existed.
+
+Skipping a tile pays off twice over: it is never segmented, **and** the merge
+skips its chunk too — neither reading it nor writing zeros over it, so the
+background never reaches disk at all.
 
 ## Threshold selection
 
