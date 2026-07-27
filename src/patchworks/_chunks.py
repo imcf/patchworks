@@ -213,23 +213,40 @@ def safe_worker_count(
     return max(1, min(cpu_cap, mem_cap))
 
 
+# Leave room for a co-tenant: info.free is a point-in-time reading of a device
+# we usually do not own outright, and sizing a tile to fill all of it is what
+# turns another job's growth into our OOM.
+_GPU_HEADROOM = 0.8
+
+
 def _get_gpu_memory() -> int:
-    """Return free GPU VRAM in bytes.
+    """Return usable GPU VRAM in bytes for the device we were granted.
+
+    NVML enumerates every GPU on the node regardless of ``--gres=gpu:1``, so
+    asking for index 0 unconditionally reads the *wrong* device's free memory
+    whenever SLURM granted anything but the first one -- and tile sizing was
+    built on that number. Resolve the device from ``CUDA_VISIBLE_DEVICES``,
+    then keep a headroom fraction rather than claiming every free byte.
 
     Returns
     -------
     int
-        Free VRAM of GPU 0 via ``nvidia-ml-py``, or an 8 GiB fallback if the
-        query fails.
+        Usable VRAM, or an 8 GiB fallback if the query fails.
     """
     try:
         import pynvml
 
+        from ._gpu import visible_device_index, visible_device_uuid
+
         pynvml.nvmlInit()
-        handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+        uuid = visible_device_uuid()
+        if uuid is not None:
+            handle = pynvml.nvmlDeviceGetHandleByUUID(uuid.encode())
+        else:
+            handle = pynvml.nvmlDeviceGetHandleByIndex(visible_device_index())
         info = pynvml.nvmlDeviceGetMemoryInfo(handle)
         pynvml.nvmlShutdown()
-        return int(info.free)
+        return int(int(info.free) * _GPU_HEADROOM)
     except Exception:
         logger.warning(
             "GPU memory query failed (nvidia-ml-py not installed?); "

@@ -21,16 +21,36 @@ from typing import Any, Callable
 
 import numpy as np
 
+from .._gpu import retry_on_oom
+
 logger = logging.getLogger(__name__)
+
+
+def _parse_version(raw: str) -> tuple[int, ...]:
+    """Leading numeric components of a version string.
+
+    ``int(x)`` over the raw segments blows up on any suffixed release
+    (``"4.0rc1"``, ``"4.0.1.dev0"``) — and at *import* time, where only
+    ImportError was being caught, so the package became unimportable rather
+    than degrading.
+    """
+    parts = []
+    for segment in raw.split(".")[:2]:
+        digits = "".join(c for c in segment if c.isdigit())
+        if not digits:
+            break
+        parts.append(int(digits))
+    return tuple(parts) or (0,)
+
 
 try:
     from cellpose import models as _cellpose_models
 
-    _CELLPOSE_VERSION: tuple[int, ...] = tuple(
-        int(x) for x in importlib.metadata.version("cellpose").split(".")[:2]
+    _CELLPOSE_VERSION: tuple[int, ...] = _parse_version(
+        importlib.metadata.version("cellpose")
     )
     _CELLPOSE_V4 = _CELLPOSE_VERSION[0] >= 4
-except ImportError as _e:
+except ImportError:
     _cellpose_models = None  # type: ignore[assignment]
     _CELLPOSE_VERSION = (0, 0)
     _CELLPOSE_V4 = False
@@ -196,28 +216,23 @@ def _get_model(cellpose_dict: dict[str, Any]) -> Any:
     return _model_cache[key]
 
 
-def _is_cuda_oom(exc: Exception) -> bool:
-    """Return whether *exc* looks like a CUDA out-of-memory error.
+def _drop_cached_models() -> None:
+    """Evict the per-process model cache so its VRAM can be reclaimed.
 
-    Parameters
-    ----------
-    exc : Exception
-        Exception raised by ``model.eval``.
-
-    Returns
-    -------
-    bool
-        True if the exception is a CUDA OOM.
+    Waiting out an OOM while still holding a loaded model pinned on the device
+    is self-defeating: that memory is exactly what the contending job needs.
+    The model is reloaded from the (already downloaded) weights on the next
+    call, which costs seconds against a backoff measured in minutes.
     """
-    return "out of memory" in str(exc).lower()
-
-
-_OOM_RETRIES = 4
-_OOM_BACKOFF_SECONDS = 30
+    if _model_cache:
+        logger.info(
+            "releasing %d cached Cellpose model(s) before backing off",
+            len(_model_cache),
+        )
+        _model_cache.clear()
 
 
 def _eval_with_oom_fallback(
-    model: Any,
     img: np.ndarray,
     kwargs: dict[str, Any],
     cellpose_dict: dict[str, Any],
@@ -227,14 +242,13 @@ def _eval_with_oom_fallback(
     Cluster GPUs are often shared: another job's memory footprint can grow
     mid-run and push an otherwise-fine tile size over the edge. Staying on
     GPU matters — this tile can take well over an hour, so falling back to
-    CPU would be far worse than waiting. Instead this clears the allocator
-    cache (fixes fragmentation) and retries with a backoff, giving the
-    cotenant job time to free memory, before finally giving up.
+    CPU would be far worse than waiting. See :func:`patchworks._gpu.retry_on_oom`.
+
+    The model is fetched inside the retry, so an eviction during backoff is
+    followed by a reload rather than a use-after-free of the cached handle.
 
     Parameters
     ----------
-    model : Any
-        Cellpose model instance.
     img : np.ndarray
         Image to segment.
     kwargs : dict
@@ -247,32 +261,11 @@ def _eval_with_oom_fallback(
     np.ndarray
         Label array from ``model.eval``.
     """
-    import time
-
-    for attempt in range(_OOM_RETRIES + 1):
-        try:
-            return model.eval(img, **kwargs)[0]
-        except RuntimeError as exc:
-            if not cellpose_dict.get("gpu", False) or not _is_cuda_oom(exc):
-                raise
-            import torch
-
-            torch.cuda.empty_cache()
-            if attempt == _OOM_RETRIES:
-                logger.error(
-                    "CUDA OOM persisted after %d retries; giving up on tile.",
-                    _OOM_RETRIES,
-                )
-                raise
-            wait = _OOM_BACKOFF_SECONDS * (attempt + 1)
-            logger.warning(
-                "CUDA OOM on tile (likely GPU contention); cleared cache, "
-                "retrying in %ds (attempt %d/%d).",
-                wait,
-                attempt + 1,
-                _OOM_RETRIES,
-            )
-            time.sleep(wait)
+    return retry_on_oom(
+        lambda: _get_model(cellpose_dict).eval(img, **kwargs)[0],
+        enabled=bool(cellpose_dict.get("gpu", False)),
+        on_release=_drop_cached_models,
+    )
 
 
 def _run(block: np.ndarray, cellpose_dict: dict[str, Any]) -> np.ndarray:
@@ -290,7 +283,6 @@ def _run(block: np.ndarray, cellpose_dict: dict[str, Any]) -> np.ndarray:
     np.ndarray
         Integer (``int32``) label array of the same spatial shape.
     """
-    model = _get_model(cellpose_dict)
     do_3D = cellpose_dict["do_3D"]
 
     if _CELLPOSE_V4:
@@ -310,13 +302,20 @@ def _run(block: np.ndarray, cellpose_dict: dict[str, Any]) -> np.ndarray:
 
     if do_3D:
         kwargs["z_axis"] = 0
-        masks = _eval_with_oom_fallback(model, block, kwargs, cellpose_dict)
+        masks = _eval_with_oom_fallback(block, kwargs, cellpose_dict)
         return masks.astype("int32")
     else:
         # Squeeze singleton z so Cellpose gets a clean 2-D image
         squeeze = block.ndim == 3 and block.shape[0] == 1
+        if block.ndim == 3 and not squeeze:
+            raise ValueError(
+                f"do_3D is False but this tile has {block.shape[0]} z-planes. "
+                "Cellpose would receive the stack with no z_axis and treat "
+                "the leading axis as channels. Set do_3D: true, or tile with "
+                "z=1 to segment plane by plane."
+            )
         img = block[0] if squeeze else block
-        masks = _eval_with_oom_fallback(model, img, kwargs, cellpose_dict)
+        masks = _eval_with_oom_fallback(img, kwargs, cellpose_dict)
         masks = masks.astype("int32")
         return masks[np.newaxis] if squeeze else masks
 

@@ -125,6 +125,131 @@ def load_tiles_json(path):
     return json.loads(Path(path).read_text())
 
 
+def _unknown_kwargs(fn, provided, *, skip=()) -> list[str]:
+    """Keys in *provided* that *fn* would reject, ignoring *skip*.
+
+    Returns an empty list when the signature can't be introspected (C
+    extensions, ``**kwargs``-only wrappers) rather than guessing.
+    """
+    import inspect
+
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return []
+    if any(p.kind is p.VAR_KEYWORD for p in params.values()):
+        return []
+    return sorted(set(provided) - set(params) - set(skip))
+
+
+def validate_config(cfg) -> None:
+    """Reject config mistakes before any expensive step runs.
+
+    Everything here used to surface much later and much more expensively: a
+    misspelled ``cellpose:`` key was swept into ``extra`` and forwarded blind
+    to ``model.eval()``, so it failed in the first GPU job -- after convert
+    and prepare had already run. ``gpu_memory_gb: "auto"`` was truthy, so
+    ``"auto" * 1024**3`` tried to build a ~4 GB string.
+
+    Raises
+    ------
+    ValueError
+        With every problem found, not just the first.
+    """
+    problems = []
+
+    gpu_gb = cfg.get("gpu_memory_gb")
+    if gpu_gb is not None and (
+        isinstance(gpu_gb, bool)
+        or not isinstance(gpu_gb, (int, float))
+        or gpu_gb <= 0
+    ):
+        problems.append(
+            f"gpu_memory_gb must be null or a positive number of GB (e.g. 24 "
+            f'for an RTX 4090); got {gpu_gb!r}. Only tile_shape accepts "auto".'
+        )
+
+    ts = cfg.get("tile_shape", "auto")
+    if isinstance(ts, str):
+        if ts != "auto":
+            problems.append(
+                f'tile_shape must be "auto" or a list like [16, 1024, 1024]; '
+                f"got {ts!r} (a bare string would be read character by "
+                "character)"
+            )
+    elif ts is not None and not all(isinstance(v, int) and v > 0 for v in ts):
+        problems.append(f"tile_shape must be positive integers; got {ts!r}")
+
+    method = cfg.get("method", "cellpose")
+    if method not in ("cellpose", "threshold", "custom"):
+        problems.append(
+            f'method must be "cellpose", "threshold" or "custom"; got '
+            f"{method!r}"
+        )
+
+    if method == "cellpose":
+        cp = cfg.get("cellpose")
+        if not isinstance(cp, dict):
+            problems.append('method: "cellpose" needs a cellpose: block')
+        else:
+            problems.extend(_cellpose_problems(cp))
+    elif method == "custom":
+        problems.extend(_custom_problems(cfg.get("custom")))
+
+    if problems:
+        raise ValueError("invalid config:\n  - " + "\n  - ".join(problems))
+
+
+def _cellpose_problems(cp: dict) -> list[str]:
+    """Unknown keys in the ``cellpose:`` block, checked against model.eval."""
+    known = ("model", "diameter", "do_3D", "gpu")
+    extra = {k: v for k, v in cp.items() if k not in known}
+    if not extra:
+        return []
+    try:
+        from patchworks.plugins.cellpose import _get_model
+    except ImportError:
+        return []
+    try:
+        model = _get_model({"model": cp.get("model", "cyto3"), "gpu": False})
+    except Exception:
+        # Weights unavailable here (fetch_model runs separately); skip rather
+        # than fail a config that may be perfectly fine.
+        return []
+    unknown = _unknown_kwargs(
+        model.eval, extra, skip=("channels", "channel_axis")
+    )
+    if unknown:
+        return [
+            f"unknown cellpose: key(s) {unknown} -- these are forwarded to "
+            "model.eval(), which does not accept them"
+        ]
+    return []
+
+
+def _custom_problems(spec) -> list[str]:
+    """Check a ``custom:`` spec resolves and its kwargs match the target."""
+    if not isinstance(spec, dict) or "module" not in spec:
+        return ['method: "custom" needs a custom: block with a module']
+    import importlib
+
+    try:
+        module = importlib.import_module(spec["module"])
+    except ImportError as exc:
+        return [f"custom.module {spec['module']!r} is not importable: {exc}"]
+    name = spec.get("function", "segment")
+    fn = getattr(module, name, None)
+    if fn is None:
+        return [f"{spec['module']}.{name} does not exist"]
+    # A `**kwargs` passthrough accepts anything, so check the function it
+    # actually forwards to when the plugin names one.
+    target = getattr(fn, "patchworks_kwargs_target", fn)
+    unknown = _unknown_kwargs(target, spec.get("kwargs") or {})
+    if unknown:
+        return [f"unknown custom.kwargs {unknown} for {spec['module']}.{name}"]
+    return []
+
+
 def build_fn(cfg):
     """Build the per-tile segmentation function from the config.
 

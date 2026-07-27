@@ -39,6 +39,8 @@ from typing import Any, Callable
 
 import numpy as np
 
+from .._gpu import free_gpu_caches, retry_on_oom
+
 
 def _require_cupy():
     """Raise an actionable ImportError if cupy is not installed.
@@ -140,6 +142,22 @@ def _run(block: np.ndarray, dog_dict: dict[str, Any]) -> np.ndarray:
     np.ndarray
         Integer (``int32``) label array of the same shape.
     """
+    use_gpu = dog_dict["use_gpu"]
+    # Deconvolution is CUDA regardless of use_gpu, so both paths can hit a
+    # device OOM. Retrying is worth it on a shared GPU: the tile is fine, a
+    # co-tenant just grew. cupy's OutOfMemoryError is not a RuntimeError, so
+    # it went entirely uncaught before.
+    gpu_involved = bool(use_gpu or dog_dict["decon_kwargs"] is not None)
+    return retry_on_oom(
+        lambda: _segment_once(block, dog_dict, use_gpu),
+        enabled=gpu_involved,
+    )
+
+
+def _segment_once(
+    block: np.ndarray, dog_dict: dict[str, Any], use_gpu: bool
+) -> np.ndarray:
+    """One decon + DoG + label pass; see :func:`_run` for the retry wrapper."""
     img = block.astype("float32")
 
     decon_kwargs = dog_dict["decon_kwargs"]
@@ -153,7 +171,6 @@ def _run(block: np.ndarray, dog_dict: dict[str, Any]) -> np.ndarray:
 
         img = decon(images=img, **decon_kwargs)
 
-    use_gpu = dog_dict["use_gpu"]
     if use_gpu:
         import cupy as cp
         from cupyx.scipy.ndimage import gaussian_filter, label
@@ -162,14 +179,27 @@ def _run(block: np.ndarray, dog_dict: dict[str, Any]) -> np.ndarray:
     else:
         from scipy.ndimage import gaussian_filter, label
 
-    low_blur = gaussian_filter(img, sigma=dog_dict["low_sigma"])
-    high_blur = gaussian_filter(img, sigma=dog_dict["high_sigma"])
-    dog_image = low_blur - high_blur
-    mask = dog_image > dog_dict["threshold"]
-    labels, _ = label(mask)
-    labels = labels.astype("int32")
-
-    return cp.asnumpy(labels) if use_gpu else labels
+    low_blur = high_blur = dog_image = mask = labels = None
+    try:
+        low_blur = gaussian_filter(img, sigma=dog_dict["low_sigma"])
+        high_blur = gaussian_filter(img, sigma=dog_dict["high_sigma"])
+        dog_image = low_blur - high_blur
+        low_blur = high_blur = None  # peak is here; drop what's already used
+        mask = dog_image > dog_dict["threshold"]
+        dog_image = None
+        labels, _ = label(mask)
+        mask = None
+        labels = labels.astype("int32")
+        out = cp.asnumpy(labels) if use_gpu else labels
+    finally:
+        if use_gpu:
+            # Several tile-sized buffers are live at the peak above, and
+            # cupy's pool never returns a block to the driver on its own — so
+            # without this a long-lived worker's footprint only ever grows.
+            # Drop our references first, or freeing the pool frees nothing.
+            del low_blur, high_blur, dog_image, mask, labels, img
+            free_gpu_caches()
+    return out
 
 
 def segment(tile: np.ndarray, **kwargs: Any) -> np.ndarray:
@@ -196,6 +226,12 @@ def segment(tile: np.ndarray, **kwargs: Any) -> np.ndarray:
         Integer (``int32``) label array of the same shape.
     """
     return dog_label_fn(**kwargs)(tile)
+
+
+# ``segment`` takes **kwargs, so its own signature accepts anything. Point at
+# the function that really validates them so the workflow can reject a typo'd
+# key in `prepare` instead of on a GPU node hours later.
+segment.patchworks_kwargs_target = dog_label_fn
 
 
 # Keep the lower-level name available for advanced users

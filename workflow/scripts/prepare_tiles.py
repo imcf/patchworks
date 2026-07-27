@@ -8,6 +8,7 @@ import numpy as np
 
 from patchworks import (
     auto_empty_threshold,
+    auto_tile_shape,
     auto_tile_shape_cellpose,
     build_occupancy_map,
     create_stage,
@@ -16,7 +17,7 @@ from patchworks import (
     tile_occupancy,
 )
 
-from _pw import open_image, stage_path, start_log
+from _pw import open_image, stage_path, start_log, validate_config
 
 start_log(snakemake.log[0])  # noqa: F821
 cfg = snakemake.config  # noqa: F821
@@ -25,22 +26,36 @@ label_name = cfg.get("label_name", "labels")
 Path(work_dir, label_name).mkdir(parents=True, exist_ok=True)
 image = open_image(work_dir, cfg["channel"], cfg["level"])
 
+# Fail here, on a cheap CPU job, rather than in the first GPU job hours after
+# convert and prepare have already run.
+validate_config(cfg)
+
+method = cfg.get("method", "cellpose")
 ts = cfg.get("tile_shape", "auto")
 if ts == "auto":
-    cp = cfg["cellpose"]
     # prepare runs on a CPU node, so the segment GPU's VRAM can't be queried
     # here; pass gpu_memory_gb from the config to size tiles for it (avoids the
     # "GPU memory query failed" fallback). None => the built-in 8 GiB default.
     gpu_gb = cfg.get("gpu_memory_gb")
-    tile_shape = tuple(
-        partial(
+    gpu_bytes = int(gpu_gb * 1024**3) if gpu_gb else None
+    if method == "cellpose":
+        cp = cfg["cellpose"]
+        sizer = partial(
             auto_tile_shape_cellpose,
             do_3D=cp.get("do_3D", False),
             use_gpu=cp.get("gpu", True),
             diameter=cp.get("diameter"),
-            gpu_memory=int(gpu_gb * 1024**3) if gpu_gb else None,
-        )(image.shape, image.dtype)
-    )
+            gpu_memory=gpu_bytes,
+        )
+    else:
+        # cfg["cellpose"] used to be read unconditionally here, so a DoG or
+        # threshold config with tile_shape: "auto" died with KeyError:
+        # 'cellpose'. The Cellpose estimator's memory model wouldn't apply to
+        # them anyway.
+        sizer = partial(
+            auto_tile_shape, use_gpu=gpu_bytes is not None, gpu_memory=gpu_bytes
+        )
+    tile_shape = tuple(sizer(image.shape, image.dtype))
 else:
     tile_shape = tuple(ts)
 
