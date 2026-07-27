@@ -2,7 +2,7 @@
 
 rule merge:
     input:
-        occupied_done,
+        batch_done,
     output:
         touch(f"{RUN}/labels.done"),
     log:

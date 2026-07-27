@@ -102,6 +102,16 @@ if cfg.get("skip_empty", True):
     occ = info["occupancy"].ravel()  # row-major, matches spatial_tiles
     occupied = [i for i in range(len(tiles)) if occ[i]]
 
+# One SLURM job per tile means every tile pays CUDA init + a model load before
+# its first voxel. Batching amortizes that over `tiles_per_job` tiles, which
+# run sequentially in one process so they share the cached model and never
+# contend for the GPU. 1 = the old one-job-per-tile behaviour.
+tiles_per_job = max(1, int(cfg.get("tiles_per_job", 1)))
+batches = [
+    occupied[i : i + tiles_per_job]
+    for i in range(0, len(occupied), tiles_per_job)
+]
+
 create_stage(stage_path(work_dir, label_name), image.shape, tile_shape)
 
 Path(work_dir, label_name, "tiles.json").write_text(
@@ -111,8 +121,13 @@ Path(work_dir, label_name, "tiles.json").write_text(
             "overlap": list(overlap),
             "n_tiles": len(tiles),
             "occupied": occupied,
+            "tiles_per_job": tiles_per_job,
+            "batches": batches,
         },
         indent=2,
     )
 )
-print(f"[patchworks] {len(occupied)}/{len(tiles)} tiles to segment")
+print(
+    f"[patchworks] {len(occupied)}/{len(tiles)} tiles to segment "
+    f"in {len(batches)} job(s) of up to {tiles_per_job}"
+)

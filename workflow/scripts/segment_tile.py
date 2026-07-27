@@ -1,8 +1,13 @@
-"""Snakemake script: segment ONE tile and write it to the shared stage.
+"""Snakemake script: segment one BATCH of tiles into the shared stage.
 
-Scattered over tile indices, so each tile is its own SLURM job and many GPUs
-run in parallel. Each job writes a disjoint chunk of the stage store.
+Scattered over batches, so several batches run as separate SLURM jobs and many
+GPUs work in parallel. Within a batch the tiles run sequentially in this one
+process: CUDA is initialised once and the Cellpose model is loaded once (see
+``patchworks.plugins.cellpose._model_cache``), instead of once per tile. Each
+batch writes disjoint chunks of the stage store, so batches never collide.
 """
+
+import json
 
 from patchworks import stage_tile
 
@@ -10,22 +15,31 @@ from _pw import build_fn, load_tiles_json, open_image, stage_path, start_log
 
 start_log(snakemake.log[0])  # noqa: F821
 cfg = snakemake.config  # noqa: F821
-index = int(snakemake.wildcards.index)  # noqa: F821
+batch = int(snakemake.wildcards.batch)  # noqa: F821
 work_dir = cfg["work_dir"]
 label_name = cfg.get("label_name", "labels")
 
 manifest = load_tiles_json(snakemake.input.tiles)  # noqa: F821
 image = open_image(work_dir, cfg["channel"], cfg["level"])
+indices = manifest["batches"][batch]
 
-stage_tile(
-    image,
-    build_fn(cfg),
-    stage_path(work_dir, label_name),
-    index,
-    tile_shape=tuple(manifest["tile_shape"]),
-    # Scalar (older manifests) or per-axis list; stage_tile normalizes both.
-    overlap=manifest["overlap"],
-)
+# Built once for the whole batch: this is what makes the model load amortize.
+fn = build_fn(cfg)
+stage = stage_path(work_dir, label_name)
+tile_shape = tuple(manifest["tile_shape"])
 
-open(snakemake.output[0], "w").close()  # noqa: F821
-print(f"[patchworks] segmented tile {index}")
+for index in indices:
+    stage_tile(
+        image,
+        fn,
+        stage,
+        index,
+        tile_shape=tile_shape,
+        # Scalar (older manifests) or per-axis list; stage_tile normalizes both.
+        overlap=manifest["overlap"],
+    )
+    print(f"[patchworks] segmented tile {index}")
+
+with open(snakemake.output[0], "w") as fh:  # noqa: F821
+    json.dump({"batch": batch, "tiles": indices}, fh)
+print(f"[patchworks] batch {batch}: {len(indices)} tile(s) done")

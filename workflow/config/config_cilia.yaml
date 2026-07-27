@@ -28,6 +28,9 @@ gpu_memory_gb: null
 # than pushing the halo up against the tile depth.
 overlap: [8, 30, 30]
 skip_empty: true
+# Tiles per SLURM job; they run sequentially and share one decon/GPU context.
+# Raise once you know a tile's runtime -- job wall time is ~N x per-tile time.
+tiles_per_job: 1
 empty_threshold: null
 
 method: "custom"
