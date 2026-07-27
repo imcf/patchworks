@@ -25,6 +25,10 @@ resolution, matching anisotropic microscopy stacks.
 
 ::: patchworks.plugins.ome_zarr.register_labels
 
+## read_pixel_size
+
+::: patchworks.plugins.ome_zarr.read_pixel_size
+
 ## NGFF metadata layout
 
 NGFF 0.4 is defined over zarr v2 and puts its keys at the top level; 0.5 is

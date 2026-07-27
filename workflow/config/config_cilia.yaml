@@ -47,10 +47,14 @@ custom:
     # use_gpu: true          # optional: also run the blur/label step on GPU
     decon_kwargs:
       psf: "/path/to/psf.tif"
-      dxpsf: 0.1
-      dxdata: 0.1
-      dzpsf: 0.2
-      dzdata: 0.2
+      # dxdata/dzdata (and dxpsf/dzpsf) are filled from image.zarr's own
+      # calibration -- the lateral size from X/Y, the axial one from Z -- so
+      # they cannot drift away from the image they describe. A wrong voxel
+      # size does not fail loudly; it just deconvolves incorrectly.
+      # Set any of them here only to override, e.g. when the PSF was sampled
+      # differently from the data:
+      #   dxpsf: 0.05
+      #   dzpsf: 0.1
       wavelength: 525
       na: 1.4
       nimm: 1.515

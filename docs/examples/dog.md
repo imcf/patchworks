@@ -65,17 +65,35 @@ Requires `cupy` (matching your CUDA version, e.g. `pip install cupy-cuda12x`)
 
 ## With deconvolution first
 
+Let the voxel sizes come from the image rather than retyping them — the
+lateral ones from X/Y, the axial ones from Z:
+
 ```python
+from patchworks.plugins.ome_zarr import read_pixel_size
+
 fn = dog_label_fn(
     low_sigma=1.0, high_sigma=3.0, threshold=0.02,
-    decon_kwargs=dict(
-        psf=psf, dxpsf=xy_scale, dxdata=xy_scale,
-        dzpsf=z_scale, dzdata=z_scale,
-        wavelength=525, na=1.4, nimm=1.515,
-    ),
+    decon_kwargs=dict(psf=psf, wavelength=525, na=1.4, nimm=1.515),
+    voxel_size=read_pixel_size(IMAGE),   # -> dxdata/dzdata/dxpsf/dzpsf
 )
 result = tile_process(IMAGE, fn, tile_shape=(1, 1024, 1024), overlap=32)
 ```
+
+Anything you set in `decon_kwargs` yourself wins, so a PSF sampled
+differently from the data keeps its own sizes:
+
+```python
+decon_kwargs=dict(psf=psf, dxpsf=0.05, dzpsf=0.1, wavelength=525, ...)
+```
+
+!!! warning "A wrong voxel size does not fail loudly"
+    Deconvolution given the wrong sampling still runs and still returns an
+    image — just a subtly wrong one. That is the reason to derive these from
+    the store's own calibration instead of keeping a second copy in a config
+    that can drift.
+
+    `read_pixel_size` returns `{}` for an uncalibrated store; then nothing is
+    filled in and you must supply the sizes yourself.
 
 !!! note "Deconvolution always needs a GPU"
     `pycudadecon` is CUDA-only, independent of `dog_label_fn`'s own `use_gpu`
@@ -146,14 +164,26 @@ custom:
     threshold: 0.02
     decon_kwargs:
       psf: "/path/to/psf.tif"
-      dxpsf: 0.1
-      dxdata: 0.1
-      dzpsf: 0.2
-      dzdata: 0.2
       wavelength: 525
       na: 1.4
       nimm: 1.515
 ```
+
+No voxel sizes: the workflow reads `image.zarr`'s own calibration and fills
+in `dxdata`/`dxpsf` from X/Y and `dzdata`/`dzpsf` from Z. Set any of them in
+`decon_kwargs` to override — for instance a PSF sampled finer than the data:
+
+```yaml
+      dxpsf: 0.05
+      dzpsf: 0.1
+```
+
+!!! tip "This works for your own methods too"
+    The injection is not DoG-specific. Any `custom` function that declares a
+    `voxel_size` parameter receives `{"z": .., "y": .., "x": ..}` from the
+    store, so a method needing physical units never has to keep a second copy
+    of the calibration in its config. If the store is uncalibrated the
+    workflow says so and passes nothing.
 
 Run it exactly like a Cellpose config:
 

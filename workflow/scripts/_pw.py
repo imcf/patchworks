@@ -131,6 +131,46 @@ def load_tiles_json(path):
     return json.loads(Path(path).read_text())
 
 
+def _with_voxel_size(fn, kwargs, cfg):
+    """Pass the image's calibration to a function that asks for it.
+
+    A method that needs physical units -- a deconvolution's voxel sizes, a
+    diameter in micrometers -- should not have them retyped into the config
+    where they can drift away from the image. Any custom function that
+    declares a ``voxel_size`` parameter gets ``{"z": .., "y": .., "x": ..}``
+    from the store's own NGFF calibration, unless the config sets it.
+
+    Returns *kwargs* unchanged when the function does not take it, the config
+    already supplied it, or the store carries no calibration.
+    """
+    import inspect
+
+    if "voxel_size" in kwargs:
+        return kwargs
+    # A **kwargs passthrough names its real target (see dog.segment).
+    target = getattr(fn, "patchworks_kwargs_target", fn)
+    try:
+        params = inspect.signature(target).parameters
+    except (TypeError, ValueError):
+        return kwargs
+    if "voxel_size" not in params:
+        return kwargs
+
+    from patchworks.plugins.ome_zarr import read_pixel_size
+
+    store = str(Path(cfg["work_dir"]) / "image.zarr")
+    calibration = read_pixel_size(store)
+    if not calibration:
+        logging.getLogger(__name__).warning(
+            "%s takes voxel_size but %s carries no calibration; set the "
+            "physical sizes in the config instead.",
+            getattr(target, "__name__", target),
+            store,
+        )
+        return kwargs
+    return {**kwargs, "voxel_size": calibration}
+
+
 def _unknown_kwargs(fn, provided, *, skip=()) -> list[str]:
     """Keys in *provided* that *fn* would reject, ignoring *skip*.
 
@@ -314,7 +354,8 @@ def _build_method_fn(cfg):
             importlib.import_module(spec["module"]),
             spec.get("function", "segment"),
         )
-        kwargs = spec.get("kwargs") or {}
+        kwargs = dict(spec.get("kwargs") or {})
+        kwargs = _with_voxel_size(fn, kwargs, cfg)
         return partial(fn, **kwargs) if kwargs else fn
 
     if method == "threshold":
