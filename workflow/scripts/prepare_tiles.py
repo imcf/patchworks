@@ -85,7 +85,9 @@ if len(tile_shape) >= 3:
 # A halo wider than the tile itself is not boundary context -- it means every
 # tile re-reads and re-segments its neighbours. Catch it here rather than
 # paying 5x the GPU time for results that get trimmed away.
-overlap = normalize_overlap(cfg.get("overlap", 0), len(tile_shape))
+overlap = normalize_overlap(
+    cfg.get("overlap", 0), len(tile_shape), tile_shape=tile_shape
+)
 for axis, (ov, extent) in enumerate(zip(overlap, tile_shape)):
     if ov >= extent:
         raise ValueError(
@@ -93,9 +95,13 @@ for axis, (ov, extent) in enumerate(zip(overlap, tile_shape)):
             f"would read past its neighbours. Use a per-axis overlap, e.g. "
             f"overlap: {list(max(1, t // 4) for t in tile_shape)}"
         )
-amplification = np.prod(
-    [(t + 2 * o) for t, o in zip(tile_shape, overlap)]
-) / np.prod(tile_shape)
+# Clip the halo to the image the way stage_tile does, or a tile that already
+# spans an axis reports a halo it will never actually read -- a tile covering
+# the whole image would claim 5x while reading exactly 1x.
+read = np.prod(
+    [min(t + 2 * o, s) for t, o, s in zip(tile_shape, overlap, image.shape)]
+)
+amplification = read / np.prod(tile_shape)
 print(f"[patchworks] halo read amplification: {amplification:.2f}x")
 
 tiles = spatial_tiles(image.shape, tile_shape)

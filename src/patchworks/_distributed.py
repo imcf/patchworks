@@ -12,6 +12,7 @@ it into that store. Stitch the result with
 from __future__ import annotations
 
 import itertools
+import logging
 from pathlib import Path
 from typing import Callable, Sequence, Union
 
@@ -21,10 +22,16 @@ import zarr
 from ._io import zarr_compressor_kwargs
 from ._relabel import relabel_sequential_array
 
+logger = logging.getLogger(__name__)
+
 Overlap = Union[int, Sequence[int]]
 
 
-def normalize_overlap(overlap: Overlap, ndim: int) -> tuple[int, ...]:
+def normalize_overlap(
+    overlap: Overlap,
+    ndim: int,
+    tile_shape: "Sequence[int] | None" = None,
+) -> tuple[int, ...]:
     """Expand an overlap spec to one halo width per axis.
 
     A scalar applies the same halo to every axis (the historical behaviour).
@@ -33,12 +40,21 @@ def normalize_overlap(overlap: Overlap, ndim: int) -> tuple[int, ...]:
     ``76 x 1084 x 1084`` to keep ``16 x 1024 x 1024`` -- 5.3x more voxels than
     it uses, nearly all of it in z.
 
+    With *tile_shape*, an axis only one voxel thick gets **no** halo. There is
+    no context to gather along an axis the tile does not span, and a 2-D
+    method handed the extra planes would read them as channels. This is the
+    ``tile_shape: "auto"`` + ``do_3D: false`` case, where tiles come out one
+    plane thick: a z-overlap of 4 would otherwise read 9 planes per tile to
+    keep 1.
+
     Parameters
     ----------
     overlap : int or sequence of int
         Halo width, shared or per-axis.
     ndim : int
         Number of axes the halo is applied to.
+    tile_shape : sequence of int, optional
+        Tile extent per axis. Used to drop halos an axis has no room for.
 
     Returns
     -------
@@ -55,6 +71,21 @@ def normalize_overlap(overlap: Overlap, ndim: int) -> tuple[int, ...]:
             )
     if any(o < 0 for o in values):
         raise ValueError(f"overlap must be non-negative, got {values}")
+
+    if tile_shape is not None:
+        clipped = tuple(
+            0 if int(t) <= 1 else o for o, t in zip(values, tile_shape)
+        )
+        if clipped != values:
+            dropped = [
+                i for i, (a, b) in enumerate(zip(values, clipped)) if a != b
+            ]
+            logger.info(
+                "dropping the halo on axis %s: the tile is 1 voxel thick "
+                "there, so there is no context to read.",
+                dropped,
+            )
+        values = clipped
     return values
 
 
@@ -173,7 +204,7 @@ def stage_tile(
     """
     shape = image.shape
     sl = spatial_tiles(shape, tile_shape)[index]
-    halo = normalize_overlap(overlap, len(sl))
+    halo = normalize_overlap(overlap, len(sl), tile_shape=tile_shape)
     expanded, trims = [], []
     for s, dim, ov in zip(sl, shape, halo):
         lo = max(0, s.start - ov)

@@ -41,6 +41,53 @@ def test_normalize_overlap_scalar_and_per_axis():
         normalize_overlap([-1, 0, 0], 3)
 
 
+def test_no_halo_on_a_one_voxel_thick_axis():
+    """A 1-plane tile must get no halo on that axis.
+
+    `tile_shape: "auto"` with `do_3D: false` produces z=1 tiles, so a z-overlap
+    of 4 would read 9 planes to keep 1 (9x) -- and hand a 2-D method a stack it
+    would read as channels.
+    """
+    assert normalize_overlap([4, 30, 30], 3, tile_shape=(1, 8000, 8000)) == (
+        0,
+        30,
+        30,
+    )
+    # A tile with room keeps its halo.
+    assert normalize_overlap([4, 30, 30], 3, tile_shape=(16, 1024, 1024)) == (
+        4,
+        30,
+        30,
+    )
+    # Without a tile_shape nothing is clipped (the historical behaviour).
+    assert normalize_overlap([4, 30, 30], 3) == (4, 30, 30)
+
+
+def test_single_plane_tiles_segment_without_a_z_halo(tmp_path):
+    """End to end: z=1 tiles must not pull neighbouring planes into the tile."""
+    img = np.zeros((4, 32), "uint16")
+    img[1, 4:10] = 500  # only plane 1 has signal
+    tile = (1, 16)
+
+    stage = str(tmp_path / "stage.zarr")
+    create_stage(stage, img.shape, tile)
+    seen = []
+
+    def _recording(block):
+        seen.append(block.shape)
+        return _fn(block)
+
+    for i in range(len(spatial_tiles(img.shape, tile))):
+        stage_tile(img, _recording, stage, i, tile_shape=tile, overlap=[3, 2])
+
+    assert all(s[0] == 1 for s in seen), (
+        f"a z=1 tile was handed multiple planes: {seen}"
+    )
+    written = np.asarray(zarr.open_group(stage, mode="r")["staged"])
+    assert (written[0] == 0).all(), "plane 0 has no signal and must stay empty"
+    assert (written[1, 4:10] > 0).all()
+
+
 def test_auto_overlap_anisotropy_shrinks_z():
     """A 20x coarser z step needs 20x fewer planes for the same distance."""
     assert auto_overlap(30) == 30  # unchanged without voxel_size
