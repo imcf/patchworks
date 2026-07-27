@@ -290,6 +290,36 @@ def test_relabel_sequential_array():
     assert np.all(uniq == np.arange(1, len(uniq) + 1))
 
 
+def test_relabel_sequential_zarr(tmp_path):
+    """The standalone zarr relabeller stays correct on its own.
+
+    The merge folds this into its LUT now, so nothing internal exercises it —
+    but it is public API for label stores written by other pipelines.
+    """
+    import zarr
+
+    from patchworks import relabel_sequential_zarr
+
+    store = str(tmp_path / "labels.zarr")
+    root = zarr.open_group(store, mode="w")
+    root.create_array(name="labels", shape=(4, 8), chunks=(4, 4), dtype="i4")
+    data = np.zeros((4, 8), dtype="int32")
+    data[0, :3] = 500  # gappy ids spanning both chunks
+    data[1, 5:] = 7
+    data[3, 2] = 100000
+    root["labels"][:] = data
+
+    n = relabel_sequential_zarr(store, "labels")
+    out = np.asarray(zarr.open_group(store, mode="r")["labels"])
+
+    assert n == 3, f"three distinct objects, got {n}"
+    assert set(np.unique(out).tolist()) == {0, 1, 2, 3}, "must be contiguous"
+    # Same voxels keep the same id; background stays background.
+    assert len(set(out[0, :3].tolist())) == 1
+    assert len(set(out[1, 5:].tolist())) == 1
+    assert out[2, 0] == 0
+
+
 def test_estimate_empty_tiles():
     import dask.array as da
 

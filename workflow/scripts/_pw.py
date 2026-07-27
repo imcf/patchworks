@@ -15,6 +15,12 @@ from pathlib import Path
 
 from patchworks import load_ome_zarr
 
+# Segmentation methods `_build_method_fn` can dispatch. Adding one means
+# teaching that function to build it and adding the name here; the validator
+# reads this list so the two cannot drift apart. Most new methods need
+# neither: `method: "custom"` already imports any `(tile) -> labels` callable.
+KNOWN_METHODS = ("cellpose", "threshold", "custom")
+
 
 class _Tee:
     """Write to several streams at once (e.g. the SLURM log and a file)."""
@@ -181,11 +187,9 @@ def validate_config(cfg) -> None:
         problems.append(f"tile_shape must be positive integers; got {ts!r}")
 
     method = cfg.get("method", "cellpose")
-    if method not in ("cellpose", "threshold", "custom"):
-        problems.append(
-            f'method must be "cellpose", "threshold" or "custom"; got '
-            f"{method!r}"
-        )
+    if method not in KNOWN_METHODS:
+        listed = ", ".join(f'"{m}"' for m in KNOWN_METHODS)
+        problems.append(f"method must be one of {listed}; got {method!r}")
 
     if method == "cellpose":
         cp = cfg.get("cellpose")
@@ -297,7 +301,7 @@ def _build_method_fn(cfg):
     callable
         ``(ndarray) -> ndarray`` returning integer labels.
     """
-    method = cfg.get("method", "cellpose")
+    method = cfg.get("method", "cellpose")  # see KNOWN_METHODS
     if method == "custom":
         # Import a user-provided function, e.g.
         #   custom: {module: my_seg, function: segment, kwargs: {...}}
