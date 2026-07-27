@@ -1,5 +1,7 @@
 """Tests for the per-tile distributed building blocks."""
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 import zarr
@@ -149,6 +151,45 @@ def test_offsets_match_the_renumber_pass(tmp_path):
     ), "offset path disagrees with the renumber pass"
     ids = np.unique(merged["counts"][merged["counts"] > 0])
     assert set(ids.tolist()) == {1, 2, 3}, f"expected 3 objects, got {ids}"
+
+
+def test_empty_chunks_are_skipped_not_just_short_circuited(tmp_path):
+    """Chunks with no labels must cost neither I/O nor disk.
+
+    A count of 0 already tells the merge the chunk is background, so it need
+    not be read at all -- and leaving the output chunk unwritten means zarr
+    never materialises it.
+    """
+    img = np.zeros((8, 64), "uint16")
+    img[1:4, 1:7] = 500  # wholly inside tile 0; the other seven are empty
+    tile = (8, 8)
+
+    stage = str(tmp_path / "stage.zarr")
+    create_stage(stage, img.shape, tile)
+    counts = {
+        i: stage_tile(img, _fn, stage, i, tile_shape=tile, overlap=0)
+        for i in range(len(spatial_tiles(img.shape, tile)))
+    }
+    assert sum(1 for n in counts.values() if n == 0) == 7, "7 empty tiles"
+
+    out = str(tmp_path / "out.zarr")
+    merged = merge_tile_labels(
+        stage,
+        write_to=out,
+        input_component="staged",
+        sequential_labels=True,
+        label_counts=counts,
+    ).compute()
+
+    # Correctness first: the one real object survives, everything else is 0.
+    assert set(np.unique(merged).tolist()) == {0, 1}
+    assert merged[1:4, 1:7].min() == 1
+
+    # And the empty chunks were never written: zarr stores only the chunks it
+    # was given, so the skipped ones leave no file behind.
+    chunk_dir = Path(out) / "labels" / "c" / "0"
+    written = sorted(p.name for p in chunk_dir.iterdir())
+    assert written == ["0"], f"only the occupied chunk should exist: {written}"
 
 
 def test_stage_tile_returns_dense_label_count(tmp_path):

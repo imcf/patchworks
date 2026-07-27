@@ -157,6 +157,7 @@ def _scan_touching_pairs(
     chunk_shape: tuple[int, ...],
     label_offsets: "np.ndarray | None" = None,
     n_workers: int = 1,
+    has_labels: "np.ndarray | None" = None,
 ) -> np.ndarray:
     """Scan chunk-boundary slabs; return (N, 2) int64 array of touching pairs.
 
@@ -183,6 +184,11 @@ def _scan_touching_pairs(
     n_workers : int
         Threads to scan with. Each task reads its own slab, so this is
         embarrassingly parallel and was needlessly serial.
+    has_labels : np.ndarray, optional
+        Per-chunk boolean: does this chunk hold any label? A boundary next to
+        an empty chunk can never produce a touching pair, so those columns are
+        not read at all. On a sparse image (``skip_empty``) that is most of
+        them.
 
     Returns
     -------
@@ -197,15 +203,36 @@ def _scan_touching_pairs(
 
     # One task per chunk-column of one boundary face. Each reads its own slab
     # and produces its own pairs, so they are independent.
-    tasks: list[tuple[int, int, tuple[int, ...]]] = []
+    tasks: list[tuple[int, int, tuple[int, ...], int, int]] = []
+    skipped = 0
     for ax, pos in _boundary_face_specs(shape, chunk_shape):
         face_axes = [a for a in range(arr.ndim) if a != ax]
         face_ranges = [range(0, shape[a], chunk_shape[a]) for a in face_axes]
         for offsets in _iproduct(*face_ranges):
-            tasks.append((ax, pos, offsets))
+            grid = [0] * arr.ndim
+            for a, off in zip(face_axes, offsets):
+                grid[a] = off // chunk_shape[a]
+            grid[ax] = pos // chunk_shape[ax]
+            b_idx = int(np.ravel_multi_index(tuple(grid), n_per_dim))
+            grid[ax] -= 1  # the chunk on the near side of the boundary
+            a_idx = int(np.ravel_multi_index(tuple(grid), n_per_dim))
+            # A pair needs a non-zero label on *both* sides, so a boundary
+            # touching an empty chunk cannot produce one -- don't read it.
+            if has_labels is not None and not (
+                has_labels[a_idx] and has_labels[b_idx]
+            ):
+                skipped += 1
+                continue
+            tasks.append((ax, pos, offsets, a_idx, b_idx))
+    if skipped:
+        logger.info(
+            "boundary scan: skipping %d/%d columns that border an empty chunk",
+            skipped,
+            skipped + len(tasks),
+        )
 
-    def _one(task: tuple[int, int, tuple[int, ...]]) -> "np.ndarray | None":
-        ax, pos, offsets = task
+    def _one(task: tuple) -> "np.ndarray | None":
+        ax, pos, offsets, a_idx, b_idx = task
         face_axes = [a for a in range(arr.ndim) if a != ax]
         sl: list = [slice(None)] * arr.ndim
         sl[ax] = slice(pos - 1, pos + 1)
@@ -215,13 +242,6 @@ def _scan_touching_pairs(
         a_vals = slab[0].ravel().astype(np.int64)
         b_vals = slab[1].ravel().astype(np.int64)
         if label_offsets is not None:
-            grid = [0] * arr.ndim
-            for a, off in zip(face_axes, offsets):
-                grid[a] = off // chunk_shape[a]
-            grid[ax] = pos // chunk_shape[ax]
-            b_idx = int(np.ravel_multi_index(tuple(grid), n_per_dim))
-            grid[ax] -= 1  # the chunk on the near side of the boundary
-            a_idx = int(np.ravel_multi_index(tuple(grid), n_per_dim))
             a_vals[a_vals > 0] += label_offsets[a_idx]
             b_vals[b_vals > 0] += label_offsets[b_idx]
         mask = (a_vals > 0) & (b_vals > 0) & (a_vals != b_vals)
@@ -514,6 +534,11 @@ def zarr_native_merge(
         with ``offset`` an exclusive cumulative sum -- O(n_chunks) arithmetic
         instead of reading and rewriting the entire store to renumber it.
         ``None`` falls back to the streaming renumber pass.
+
+        A count of 0 also means that chunk holds no labels, so the merge can
+        skip it outright -- neither reading it nor writing zeros over it. Zarr
+        leaves an unwritten chunk unmaterialised and reads it back as the
+        fill value, so on a sparse image this saves both I/O and disk.
     sequential : bool
         Renumber the merged labels to a contiguous ``1..N``. Free here: the id
         domain is dense by construction, so the compaction is a ``np.unique``
@@ -554,7 +579,9 @@ def zarr_native_merge(
         max_label = int(offsets[-1] + counts_arr[-1]) if n_chunks else 0
     else:
         offsets = None
+        counts_arr = None
         max_label = _make_globally_unique(arr, shape, chunk_shape)
+    has_labels = None if counts_arr is None else counts_arr > 0
     logger.info(
         "zarr_native_merge: shape=%s chunks=%s max_label=%d (%s)",
         shape,
@@ -571,6 +598,7 @@ def zarr_native_merge(
         chunk_shape,
         label_offsets=offsets,
         n_workers=n_workers,
+        has_labels=has_labels,
     )
     logger.info(
         "zarr_native_merge: %d touching pairs → building LUT", len(pairs)
@@ -623,11 +651,22 @@ def zarr_native_merge(
         )
         for idx in _iproduct(*[range(n) for n in n_per_dim])
     ]
+    # A chunk that wrote no labels is all background. Skipping it leaves the
+    # output chunk unwritten, which zarr reads back as the fill value (0) and
+    # never stores -- so an empty region costs neither I/O nor disk.
     tasks = [
         (sl, int(offsets[i]) if offsets is not None else 0)
         for i, sl in enumerate(chunk_slices)
+        if has_labels is None or has_labels[i]
     ]
-    n_w = max(1, min(n_workers, n_chunks))
+    if has_labels is not None and len(tasks) < n_chunks:
+        logger.info(
+            "zarr_native_merge: relabeling %d of %d chunks (%d hold no labels)",
+            len(tasks),
+            n_chunks,
+            n_chunks - len(tasks),
+        )
+    n_w = max(1, min(n_workers, max(1, len(tasks))))
     logger.info(
         "zarr_native_merge: relabeling %d chunks with %d worker(s)…",
         n_chunks,

@@ -30,7 +30,7 @@ import shutil
 from concurrent.futures import ThreadPoolExecutor
 from itertools import product as _iproduct
 from pathlib import Path
-from typing import Any, Union
+from typing import Any, Sequence, Union
 
 import numpy as np
 import zarr
@@ -40,6 +40,47 @@ from ._chunks import cpu_allocation
 logger = logging.getLogger(__name__)
 
 DEFAULT_BLOCK = (1, 128, 128)
+# Blocks per tile edge. A block is the finest thing the map can resolve, so it
+# has to be well under the tile or every tile over-covers the same block and
+# comes back "occupied" -- correct, but useless as a skip list.
+_BLOCKS_PER_TILE = 4
+
+
+def block_for_tile(
+    tile_shape: Sequence[int], cap: Sequence[int] = DEFAULT_BLOCK
+) -> tuple[int, ...]:
+    """Occupancy block sized so a tile spans several blocks.
+
+    The map can only resolve whole blocks, so a block as large as the tile
+    makes every tile hit the same block and test occupied. Sizing it to a
+    fraction of the tile keeps the answer discriminating, while the *cap*
+    keeps the map small on big tiles.
+
+    Parameters
+    ----------
+    tile_shape : sequence of int
+        The tile shape the map will be queried with.
+    cap : sequence of int, optional
+        Largest block per axis.
+
+    Returns
+    -------
+    tuple of int
+        Block shape, at least 1 per axis.
+
+    Examples
+    --------
+    >>> block_for_tile((16, 1024, 1024))
+    (1, 128, 128)
+    >>> block_for_tile((8, 32, 32))
+    (1, 8, 8)
+    """
+    return tuple(
+        max(1, min(int(c), int(t) // _BLOCKS_PER_TILE or 1))
+        for t, c in zip(tile_shape, cap)
+    )
+
+
 # Bytes to pull per read while pooling; keeps peak memory flat regardless of
 # how large the image is.
 _READ_TARGET_BYTES = 128 * 1024**2
@@ -153,8 +194,25 @@ def build_occupancy_map(
     store = str(image_store)
     out_path = occupancy_path(store, level)
     if not overwrite and Path(out_path).exists():
-        logger.info("occupancy map already present at %s", out_path)
-        return out_path
+        # Reuse only if it was built at the block we want. A map left over
+        # from a run with a different tile_shape is coarser (or finer) than
+        # this run needs, and silently reusing it would degrade every
+        # occupancy answer that follows.
+        try:
+            existing = tuple(zarr.open_array(out_path, mode="r").attrs["block"])
+        except Exception:
+            existing = None
+        if existing == tuple(block):
+            logger.info("occupancy map already present at %s", out_path)
+            return out_path
+        logger.info(
+            "rebuilding occupancy map at %s: it was built with block %s, "
+            "this run needs %s",
+            out_path,
+            existing,
+            tuple(block),
+        )
+        overwrite = True
 
     root = zarr.open_group(store, mode="r")
     src = _level_array(root, level, store)
@@ -229,9 +287,13 @@ def build_occupancy_map(
         raise
 
     if Path(out_path).exists():
-        # Another run finished first; theirs is as good as ours.
-        shutil.rmtree(tmp_path, ignore_errors=True)
-        return out_path
+        if not overwrite:
+            # A concurrent run finished first; theirs is as good as ours.
+            shutil.rmtree(tmp_path, ignore_errors=True)
+            return out_path
+        # Explicit rebuild: clear the old one, or os.replace would fail on a
+        # non-empty directory and we would keep serving the stale map.
+        shutil.rmtree(out_path, ignore_errors=True)
     try:
         os.replace(tmp_path, out_path)
     except OSError:
@@ -293,6 +355,16 @@ def tile_occupancy(
         raise ValueError(
             f"tile_shape is {len(tile_shape)}-D but the occupancy map is "
             f"{len(block)}-D"
+        )
+    coarse = [
+        (ax, b, t) for ax, (b, t) in enumerate(zip(block, tile_shape)) if b >= t
+    ]
+    if coarse:
+        logger.warning(
+            "occupancy blocks are as large as the tile on axes %s; every tile "
+            "will over-cover the same block and test occupied. Rebuild the "
+            "map with block=block_for_tile(tile_shape).",
+            [ax for ax, _, _ in coarse],
         )
 
     tile_grid = tuple(-(-s // t) for s, t in zip(sp_shape, tile_shape))

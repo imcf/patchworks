@@ -197,15 +197,25 @@ def main() -> None:
     # means all of them stream the whole image, and all but one throw the
     # result away. It covers every channel, so one build serves them all.
     if not args.dry_run:
-        from patchworks import build_occupancy_map
+        from patchworks import block_for_tile, build_occupancy_map
 
+        # tile_shape is validated identical across configs, so one block suits
+        # them all. Sizing it from the tile keeps the map discriminating: a
+        # block as coarse as the tile makes every tile test occupied.
+        tile_shape = seg_cfgs[0].get("tile_shape")
+        block = (
+            block_for_tile(tile_shape)
+            if isinstance(tile_shape, (list, tuple))
+            else None
+        )
         levels = {int(cfg.get("level", 0)) for cfg in seg_cfgs}
         for level in sorted(levels):
             print(
                 f"[run_multi] building occupancy map for level {level} …",
                 flush=True,
             )
-            build_occupancy_map(image_store, level=level)
+            kwargs = {"block": block} if block else {}
+            build_occupancy_map(image_store, level=level, **kwargs)
 
     # Phase B: the segmentations touch disjoint files under
     # work_dir/<label_name>/, so run them together and let the GPU partition

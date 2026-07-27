@@ -5,6 +5,7 @@ import pytest
 import zarr
 
 from patchworks import (
+    block_for_tile,
     build_occupancy_map,
     estimate_empty_tiles,
     occupancy_path,
@@ -123,6 +124,16 @@ def test_build_is_idempotent_and_covers_ragged_edges(tmp_path):
 
     assert build_occupancy_map(store, block=(1, 8, 8)) == path
 
+    # ...but a *different* block must rebuild rather than serve a stale map,
+    # or changing tile_shape would silently keep the old resolution forever.
+    build_occupancy_map(store, block=(1, 4, 4))
+    assert tuple(zarr.open_array(path, mode="r").attrs["block"]) == (1, 4, 4)
+
+    # And an explicit overwrite must actually take effect: the guard against
+    # a concurrent build used to discard the freshly built map.
+    build_occupancy_map(store, block=(1, 8, 8), overwrite=True)
+    assert tuple(zarr.open_array(path, mode="r").attrs["block"]) == (1, 8, 8)
+
 
 def test_map_lives_outside_the_image_store(tmp_path):
     """The map must not make the image store an invalid zarr hierarchy.
@@ -186,6 +197,33 @@ def test_all_channels_built_in_one_traversal(tmp_path):
         f"expected one read per channel, got {reads['n']} -- the image is "
         "being traversed more than once"
     )
+
+
+def test_block_must_be_finer_than_the_tile(tmp_path):
+    """A block as coarse as the tile makes every tile test occupied.
+
+    The map can only resolve whole blocks, so one block spanning the tile is
+    over-covered by every tile -- correct, but useless as a skip list. This is
+    what silently disabled skip_empty on smaller images.
+    """
+    assert block_for_tile((16, 1024, 1024)) == (1, 128, 128)
+    assert block_for_tile((8, 32, 32)) == (1, 8, 8)
+    assert block_for_tile((1, 4, 4)) == (1, 1, 1)  # never below 1
+
+    # A tile-sized block marks everything occupied...
+    data = np.zeros((1, 8, 128, 128), "uint16")
+    data[0, 2:5, 4:20, 4:20] = 900  # one blob in one corner
+    store = _write_store(tmp_path, data)
+    tile = (8, 32, 32)
+
+    build_occupancy_map(store, block=(1, 128, 128))
+    coarse = tile_occupancy(store, tile, channel=0, threshold=100)
+    assert coarse["n_occupied"] == coarse["n_tiles"], "coarse blocks over-cover"
+
+    # ...while a tile-derived block finds only the tile that has signal.
+    build_occupancy_map(store, block=block_for_tile(tile), overwrite=True)
+    fine = tile_occupancy(store, tile, channel=0, threshold=100)
+    assert fine["n_occupied"] == 1, f"expected 1 occupied, got {fine}"
 
 
 def test_tile_shape_dimensionality_is_checked(tmp_path):

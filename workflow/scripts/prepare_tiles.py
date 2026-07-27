@@ -10,6 +10,7 @@ from patchworks import (
     auto_empty_threshold,
     auto_tile_shape,
     auto_tile_shape_cellpose,
+    block_for_tile,
     build_occupancy_map,
     create_stage,
     normalize_overlap,
@@ -100,7 +101,13 @@ if cfg.get("skip_empty", True):
     # map is built once per image.zarr and shared by every config using it;
     # convert does not produce it, so already-converted stores build it here
     # on first use.
-    build_occupancy_map(str(Path(work_dir) / "image.zarr"), level=cfg["level"])
+    build_occupancy_map(
+        str(Path(work_dir) / "image.zarr"),
+        level=cfg["level"],
+        # Sized from the tile: a block as coarse as the tile would make every
+        # tile over-cover the same block and test occupied.
+        block=block_for_tile(tile_shape),
+    )
     threshold = cfg.get("empty_threshold")
     if threshold is None:
         # Derive the cutoff from raw voxels, not from the pooled maxima: a
