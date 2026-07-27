@@ -9,14 +9,132 @@ import zarr
 from patchworks import load_ome_zarr
 from patchworks.plugins.ome_zarr import (
     add_pyramid,
+    read_ngff_attr,
     to_ome_zarr,
     write_labels,
 )
 
 
+def test_streaming_pyramid_matches_dask(tmp_path):
+    """The streaming levels must be byte-identical to the dask-built ones.
+
+    The streaming path exists to bound memory (one source chunk per task); it
+    must not change a single voxel of the result.
+    """
+    rng = np.random.default_rng(0)
+    data = rng.integers(0, 500, size=(9, 100, 100), dtype="uint16")
+
+    streamed = tmp_path / "streamed.zarr"
+    to_ome_zarr(data, streamed, axes="zyx", n_levels=4, progress=False)
+    # chunks= forces the dask route through the same public entry point.
+    dasked = tmp_path / "dasked.zarr"
+    to_ome_zarr(
+        data,
+        dasked,
+        axes="zyx",
+        n_levels=4,
+        chunks=(16, 1024, 1024),
+        progress=False,
+    )
+
+    a_root = zarr.open_group(str(streamed), mode="r")
+    b_root = zarr.open_group(str(dasked), mode="r")
+    a_levels = [
+        d["path"]
+        for d in read_ngff_attr(a_root.attrs, "multiscales")[0]["datasets"]
+    ]
+    b_levels = [
+        d["path"]
+        for d in read_ngff_attr(b_root.attrs, "multiscales")[0]["datasets"]
+    ]
+    assert a_levels == b_levels, "both routes must produce the same levels"
+    for lvl in a_levels:
+        assert np.array_equal(
+            np.asarray(a_root[lvl]), np.asarray(b_root[lvl])
+        ), f"level {lvl} differs between the streaming and dask routes"
+
+
+def test_streaming_level_reads_one_source_chunk_per_task(tmp_path):
+    """Each output chunk must map onto exactly one source chunk.
+
+    That alignment is what makes peak memory ``n_workers x one chunk`` and so
+    is the property the OOM fix rests on -- not an incidental detail.
+    """
+    from patchworks.plugins.ome_zarr import _level_chunks
+
+    # A (16, 1024, 1024) source at stride (1, 2, 2) -> (16, 512, 512).
+    out = _level_chunks((16, 1024, 1024), (1, 2, 2), "zyx", (16, 4096, 4096))
+    assert out == (16, 512, 512)
+    # Deep levels get floored rather than fragmenting into tiny chunks.
+    floored = _level_chunks((16, 128, 128), (1, 2, 2), "zyx", (16, 256, 256))
+    assert floored == (16, 128, 128)
+    # Never larger than the level itself.
+    clamped = _level_chunks((16, 1024, 1024), (1, 2, 2), "zyx", (4, 100, 100))
+    assert clamped == (4, 100, 100)
+
+
+def test_ngff_layout_matches_the_zarr_version(tmp_path):
+    """A zarr v3 store must carry 0.5-style nested metadata, not 0.4's.
+
+    NGFF 0.4 is defined over zarr v2 with the keys at the top level; 0.5 is
+    the v3 revision and nests them under "ome". Writing v3 data with 0.4's
+    layout matches neither, and a strict 0.5 reader finds nothing.
+    """
+    import json
+
+    from patchworks.plugins.ome_zarr import _ZARR_V3
+
+    out = tmp_path / "layout.zarr"
+    to_ome_zarr(np.zeros((4, 8, 8), "uint16"), out, axes="zyx", n_levels=2)
+    write_labels(out, np.ones((4, 8, 8), "int32"), name="cells", n_objects=1)
+
+    root = json.load(open(out / "zarr.json"))["attributes"]
+    if _ZARR_V3:
+        assert "ome" in root, "v3 must nest NGFF keys under 'ome'"
+        assert root["ome"]["version"] == "0.5"
+        assert "multiscales" in root["ome"]
+        assert "multiscales" not in root, "0.4 layout must not linger"
+    else:
+        assert root["multiscales"][0]["version"] == "0.4"
+
+    # Both label keys land in the same place, written at different times.
+    lg = zarr.open_group(f"{out}/labels/cells", mode="r")
+    assert read_ngff_attr(lg.attrs, "multiscales") is not None
+    assert read_ngff_attr(lg.attrs, "image-label") is not None
+    # patchworks' own hints stay top-level so consumers need not know NGFF.
+    assert lg.attrs["n_objects"] == 1
+
+    # And everything still round-trips through our own readers.
+    assert load_ome_zarr(out, channel=None, level=1).shape == (4, 4, 4)
+
+
+def test_reader_accepts_the_legacy_04_layout(tmp_path):
+    """Stores written by older patchworks (0.4 top-level) must still load."""
+    store = tmp_path / "legacy.zarr"
+    root = zarr.open_group(str(store), mode="w")
+    root.create_array(name="0", shape=(2, 4, 4), chunks=(2, 4, 4), dtype="u2")
+    root.attrs["multiscales"] = [
+        {
+            "version": "0.4",
+            "name": "legacy",
+            "axes": [{"name": a, "type": "space"} for a in "zyx"],
+            "datasets": [
+                {
+                    "path": "0",
+                    "coordinateTransformations": [
+                        {"type": "scale", "scale": [1.0, 1.0, 1.0]}
+                    ],
+                }
+            ],
+        }
+    ]
+    assert load_ome_zarr(store, channel=None, level=0).shape == (2, 4, 4)
+    assert read_ngff_attr(root.attrs, "multiscales")[0]["name"] == "legacy"
+
+
 def _level_scale(store, level):
     root = zarr.open_group(str(store), mode="r")
-    ds = root.attrs["multiscales"][0]["datasets"][level]
+    ds = read_ngff_attr(root.attrs, "multiscales")[0]["datasets"][level]
     return ds["coordinateTransformations"][0]["scale"]
 
 
@@ -34,7 +152,10 @@ def test_pixel_size_written_and_scaled(tmp_path):
     assert _level_scale(out, 0) == [2.0, 0.5, 0.5]
     assert _level_scale(out, 1) == [2.0, 1.0, 1.0]
     root = zarr.open_group(str(out), mode="r")
-    units = [a.get("unit") for a in root.attrs["multiscales"][0]["axes"]]
+    units = [
+        a.get("unit")
+        for a in read_ngff_attr(root.attrs, "multiscales")[0]["axes"]
+    ]
     assert units == ["micrometer", "micrometer", "micrometer"]
 
 
@@ -194,12 +315,12 @@ def test_write_labels_into_store(tmp_path):
 
     # registered in the parent labels group
     labels_grp = zarr.open_group(f"{store}/labels", mode="r")
-    assert "cells" in labels_grp.attrs["labels"]
+    assert "cells" in read_ngff_attr(labels_grp.attrs, "labels")
     # readable as a multi-scale label image with image-label metadata
     assert load_ome_zarr(group, channel=None, level=0).shape == (8, 8, 8)
     assert load_ome_zarr(group, channel=None, level=1).shape == (8, 4, 4)
     lg = zarr.open_group(group, mode="r")
-    assert lg.attrs["image-label"]["version"]
+    assert read_ngff_attr(lg.attrs, "image-label")["version"]
 
 
 def test_write_labels_n_objects_persisted(tmp_path):

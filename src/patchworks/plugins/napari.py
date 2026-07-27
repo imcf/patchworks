@@ -32,6 +32,7 @@ import dask.array as da
 import zarr
 
 from .._io import load_ome_zarr
+from .ome_zarr import read_ngff_attr
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +85,7 @@ def _has_multiscales(path: Union[str, Path]) -> bool:
         True if the group has a ``multiscales`` attribute.
     """
     root = zarr.open_group(str(path), mode="r")
-    return "multiscales" in root.attrs
+    return read_ngff_attr(root.attrs, "multiscales") is not None
 
 
 def _multiscale_levels(
@@ -105,7 +106,7 @@ def _multiscale_levels(
         One lazy array per resolution level.
     """
     root = zarr.open_group(str(path), mode="r")
-    datasets = root.attrs["multiscales"][0]["datasets"]
+    datasets = read_ngff_attr(root.attrs, "multiscales")[0]["datasets"]
     return [
         load_ome_zarr(path, channel=channel, level=i)
         for i in range(len(datasets))
@@ -231,7 +232,7 @@ def _inner_label_names(store: Union[str, Path]) -> list[str]:
         grp = zarr.open_group(f"{store}/labels", mode="r")
     except Exception:
         return []
-    return list(grp.attrs.get("labels", []))
+    return list(read_ngff_attr(grp.attrs, "labels", []) or [])
 
 
 def _resolve_labels(

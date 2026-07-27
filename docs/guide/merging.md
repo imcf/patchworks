@@ -28,9 +28,9 @@ This is the same approach used by
 
 ### Step 1: stage
 
-Each tile's labels are written to a temporary zarr once. This is critical:
-without staging, any downstream operation that reads the label array re-runs
-your segmentation function. The merge internally reads labels multiple times.
+Each tile's labels are written to zarr once. This is critical: without
+staging, any downstream operation that reads the label array re-runs your
+segmentation function. The merge internally reads labels multiple times.
 
 ```text
 tile_process calls fn once per tile → staged zarr
@@ -38,14 +38,37 @@ tile_process calls fn once per tile → staged zarr
                          merge reads from staged zarr (no fn calls)
 ```
 
-### Step 2: boundary scan
+The Snakemake workflow goes further and stages **directly into**
+`image.zarr/labels/<name>/0`, then has the merge rewrite that array in place
+— saving a whole extra write of the volume plus the scratch store's disk. It
+falls back to a separate store when the tile is larger than the label chunk
+cap, since in place the chunking cannot be changed and level 0 has to stay
+pageable for a viewer.
+
+### Step 2: make the ids globally unique
+
+Tiles write local `1..n`, which collide, so the boundary scan could not
+otherwise tell two different objects apart. If each tile's label **count** is
+known, this is just an exclusive cumulative sum — global id is
+`offset[tile] + local`, computed in `O(n_tiles)` with no read of the volume
+at all. `stage_tile` returns that count for exactly this purpose; pass the
+counts as `label_counts=`.
+
+Without counts, the merge falls back to streaming every chunk and renumbering
+it in place — correct, but a full read **and write** of the volume.
+
+### Step 3: boundary scan
 
 Only the two voxels on either side of each tile boundary are read. For any
-pair of touching non-zero labels `(a, b)`, they must be the same object.
+pair of touching non-zero labels `(a, b)`, they must be the same object. The
+per-tile offsets are applied here, on the fly.
 
-I/O cost: `O(n_boundaries × face_area)`, not `O(full_volume)`.
+I/O cost: `O(n_boundaries × face_area)`, not `O(full_volume)`. The columns
+are read in parallel, and a boundary next to a chunk that holds no labels is
+skipped outright — a pair needs a non-zero label on *both* sides, so it could
+never produce one.
 
-### Step 3: connected components
+### Step 4: connected components
 
 scipy sparse connected components on the touching pairs produces a relabeling
 lookup table. All labels that transitively touch each other are mapped to the
@@ -53,11 +76,37 @@ same canonical label.
 
 Cost: `O(n_touching_pairs)`.
 
-### Step 4: parallel relabel
+With `sequential_labels=True` the contiguous renumbering is folded into this
+same LUT. Because the id domain is dense by construction, the surviving ids
+are exactly the distinct LUT values — a `np.unique` over an array the length
+of the object count, with no scan of the volume.
+
+### Step 5: parallel relabel
 
 The LUT is applied to every tile in parallel via `multiprocessing.Pool`. The
 LUT is shared via process initializer to avoid re-pickling it for every chunk
 (LUTs can be hundreds of MB for dense label volumes).
+
+Chunks whose tile wrote no labels are skipped entirely — not read, and not
+written. Zarr never materialises an unwritten chunk and reads it back as the
+fill value, so background regions cost neither I/O nor disk. On a sparse
+image that is most of the volume.
+
+When the merge's output *is* its input, this pass rewrites the array in
+place. That is safe because the boundary scan (step 3) has already finished,
+so nothing still needs the original ids.
+
+Because an in-place merge destroys its own input, it records how far it got
+on the array itself, and refuses to guess on a re-run:
+
+| State found | What happens |
+| --- | --- |
+| nothing recorded | fresh tile-local ids — merge normally |
+| `running` | a previous attempt died mid-relabel, so the array is part local and part global. **Refuses**: re-segment to rebuild it. |
+| `done` | already merged — a no-op, so a failure *after* the relabel (the pyramid, say) can simply be retried |
+
+Without that, a second pass would add each tile's offset to ids that are
+already global, which can land two unrelated objects on the same id.
 
 ## Using the merge step standalone
 
@@ -86,9 +135,10 @@ merged = merge_tile_labels(
 
 ## Sequential label numbering
 
-By default, merged labels are globally unique but may be **gappy**
-(block-encoded IDs like 1, 2, 500001, 500002, …). This is fine for
-counting, `regionprops`, and measurement — the IDs just aren't consecutive.
+By default, merged labels are globally unique but may be **gappy** — boundary
+merging fuses ids, leaving holes where the absorbed ones were. This is fine
+for counting, `regionprops`, and measurement — the IDs just aren't
+consecutive.
 
 For contiguous 1..N numbering, use `sequential_labels=True`:
 
@@ -96,7 +146,9 @@ For contiguous 1..N numbering, use `sequential_labels=True`:
 tile_process("image.zarr", fn, write_to="labels.zarr", sequential_labels=True)
 ```
 
-This runs a cheap linear post-pass: `np.unique` + lookup-table remap, O(voxels).
+This is free: it composes into the relabel LUT the merge already applies, so
+it costs a `np.unique` over the object count rather than another pass over
+the volume.
 
 !!! warning "Do not use dask's built-in sequential relabel"
     `dask_image.ndmeasure.merge_labels_across_chunk_boundaries` has a

@@ -57,9 +57,10 @@ channel: 0                     # channel to segment (null = keep all)
 level: 0                       # pyramid level (0 = full resolution)
 tile_shape: "auto"             # "auto", or e.g. [16, 1024, 1024] (zyx)
 gpu_memory_gb: null            # for "auto" on SLURM: your segment GPU's VRAM
-overlap: 30                    # halo ≈ one object diameter
+overlap: [4, 30, 30]           # halo ≈ one object diameter; scalar or [z,y,x]
 skip_empty: true               # skip background tiles
 empty_threshold: null          # null → Otsu
+tiles_per_job: 4               # tiles per SLURM job (sequential, shared model)
 
 # segmentation
 method: "cellpose"             # "cellpose" (GPU), "threshold" (no GPU), "custom"
@@ -102,6 +103,29 @@ sequential_labels: true        # renumber labels to a contiguous 1..N
     8 GiB. Harmless, but to size for the real GPU set `gpu_memory_gb:` to its
     VRAM (e.g. `24`, `40`, `80`) — or just set `tile_shape` explicitly.
 
+    With `do_3D: true`, `"auto"` pins z to the **full** extent: no z tiling,
+    no z-boundary stitching, and Cellpose sees each object's whole depth. An
+    explicit z (like `[16, 1024, 1024]`) tiles in z instead. `prepare` logs
+    which regime it picked.
+
+!!! tip "Use a per-axis `overlap`"
+    A scalar halo is applied to every axis. On a `[16, 1024, 1024]` tile,
+    `overlap: 30` reads `76 × 1084 × 1084` to keep `16 × 1024 × 1024` — 5.3×
+    the voxels it uses, nearly all of it wasted z. `[4, 30, 30]` brings that
+    to ~1.7×, i.e. roughly **3× less GPU time for identical results**.
+    `prepare` logs the amplification and refuses a halo wider than the tile.
+
+!!! tip "Batch tiles per job with `tiles_per_job`"
+    Each job pays CUDA init plus a Cellpose weight load — tens of seconds —
+    before its first voxel. `tiles_per_job: N` segments N tiles sequentially
+    in one process, sharing one loaded model, which is most of the win on
+    fast tiles.
+
+    Tiles in a batch run **sequentially**, so job wall time is roughly
+    `N × per-tile time` and must stay inside the profile's `runtime`/QOS
+    ceiling. A retry re-runs the whole batch. Measure one tile with
+    `seff <jobid>` and size N from that; `1` restores one job per tile.
+
 ## 4. Dry-run (always do this first)
 
 Check the plan without running anything:
@@ -126,7 +150,7 @@ image or a smoke test. `--rerun-triggers mtime` re-runs only steps whose output
 is missing/stale — so upgrading patchworks won't redo the conversion (the SLURM
 profile sets this for you).
 
-## 5b. Run on SLURM (one GPU job per tile)
+## 5b. Run on SLURM (one GPU job per batch of tiles)
 
 Edit `profile/slurm/config.yaml` for **your** cluster — partitions, account,
 and the GPU request:
@@ -140,14 +164,15 @@ default-resources:
   mem_mb: 16000
   cpus_per_task: 4
   runtime: 60
+retries: 2                     # resubmit a failed job, asking for more memory
 set-resources:
   segment:                     # the GPU step
     slurm_partition: "gpu"     # your GPU partition
     slurm_extra: "'--gres=gpu:1'"
-    mem_mb: 32000
+    mem_mb: "attempt * 32000"  # grows on each retry
     runtime: 120
   merge:
-    mem_mb: 128000
+    mem_mb: "attempt * 64000"
     runtime: 240
 ```
 
@@ -159,8 +184,14 @@ python -m snakemake --workflow-profile profile/slurm \
 ```
 
 Snakemake submits `convert`, then `prepare`, then **one `segment` job per
-non-empty tile** (up to `jobs:` at once → that many GPUs in parallel), then
-`merge`. Raise `jobs:` to use more GPUs.
+batch of `tiles_per_job` non-empty tiles** (up to `jobs:` at once → that many
+GPUs in parallel), then `merge`. Raise `jobs:` to use more GPUs.
+
+!!! tip "Sizing memory"
+    Every step now sizes its own worker counts from what SLURM actually
+    granted (`SLURM_CPUS_PER_TASK`, `SLURM_MEM_PER_*`, the cgroup limit)
+    rather than the node's totals, and `merge` logs the budget it detected.
+    Compare that line against `seff <jobid>` when tuning `mem_mb`.
 
 !!! note "GPU request flag"
     Clusters differ. `--gres=gpu:1` is common; some need `--gpus=1` or a
@@ -211,8 +242,8 @@ result. Keep `mtime` and reruns happen only when an output is missing or stale.
 
 ## Running two segmentations (e.g. nuclei + cytoplasm)
 
-Every path the workflow writes — `tiles.json`, `stage.zarr`, per-tile `seg/`,
-the cached model, `labels.done` — lives under `work_dir/<label_name>/`, so
+Every path the workflow writes — `tiles.json`, per-batch `seg/` markers, the
+cached model, `labels.done` — lives under `work_dir/<label_name>/`, so
 running the workflow **twice with two configs against the same `work_dir`**
 never collides: each run gets its own private subdirectory, and both reuse
 the *same* already-converted `image.zarr` (conversion never re-runs).
@@ -243,18 +274,22 @@ cellpose:
   do_3D: true
 ```
 
-Run them one after another (or as two independent SLURM submissions, even
-concurrently — they touch disjoint files):
+Run them as two independent SLURM submissions — they touch disjoint files, so
+they can run concurrently. Give each its own `--directory`, because
+Snakemake's lock lives in the working directory, not in the config:
 
 ```bash
-snakemake --workflow-profile profile/slurm --configfile config/config_nuclei.yaml
-snakemake --workflow-profile profile/slurm --configfile config/config_cyto.yaml
+snakemake --workflow-profile profile/slurm --configfile config/config_nuclei.yaml \
+          --directory /scratch/results/nuclei_labels/.snakemake
+snakemake --workflow-profile profile/slurm --configfile config/config_cyto.yaml \
+          --directory /scratch/results/cyto_labels/.snakemake
 ```
 
 !!! tip "One command for several segmentations + relations"
     `config/multi.yaml` lists any number of segmentation configs plus which
-    pairs to relate afterward; `pixi run multi` (or `multi-slurm`) runs them
-    in order and writes a CSV per pair — see *One command: multiple
+    pairs to relate afterward; `pixi run multi` (or `multi-slurm`) converts
+    once, then runs every config **concurrently** with its own state
+    directory, and writes a workbook per pair — see *One command: multiple
     segmentations + relations* below for the config format.
 
 Both land side by side in the same store:
@@ -276,10 +311,10 @@ workflow's own automation is below.
 
 ### One command: multiple segmentations + relations
 
-`scripts/run_multi.py` (wired up as `pixi run multi`) sequences the above
-manually: run every segmentation config listed, then compute + save every
-configured relation — one command instead of juggling several `snakemake`
-calls and a separate Python step.
+`scripts/run_multi.py` (wired up as `pixi run multi`) drives the above: it
+converts once, runs every segmentation config **concurrently**, then computes
+and saves every configured relation — one command instead of juggling several
+`snakemake` calls and a separate Python step.
 
 ```yaml
 # config/multi.yaml
@@ -299,10 +334,22 @@ pixi run multi        # run locally
 pixi run multi-slurm  # submit every segmentation to SLURM
 ```
 
-Every listed segmentation config must share the same `work_dir` (so
-`label_relations` has one `image.zarr` to read both label groups from) — the
-script checks this and errors out otherwise. `relations` is optional; omit it
-to just chain segmentations without a relation step.
+Before anything is submitted, the script checks that every listed config
+shares one `work_dir` (so `label_relations` has a single `image.zarr` to read
+both label groups from), that `tile_shape` and `level` are identical (so the
+label arrays share a chunk layout), and that `label_name` is unique — two
+configs sharing one would silently overwrite each other's outputs. `relations`
+is optional; omit it to just run segmentations without a relation step.
+
+The configs then run at the same time, each with its own state directory, so
+the GPU partition stays busy instead of idling through every config's
+`prepare` and multi-hour `merge` in turn. A config that fails does **not**
+abort the others; you get a per-config status and a non-zero exit.
+
+!!! warning "`jobs:` is per config"
+    The profile's `jobs:` caps one Snakemake process. Running three configs
+    concurrently can therefore have 3× that many jobs in flight — lower it if
+    that would exceed your cluster quota.
 
 Each `output:` is an Excel workbook (`openpyxl`, part of the `workflow`
 extra) with two sheets:
@@ -422,13 +469,34 @@ from patchworks import (
 )
 from patchworks.plugins.ome_zarr import write_labels
 
+TILE = (16, 1024, 1024)
 img = load_ome_zarr("image.zarr", channel=0)
-tiles = spatial_tiles(img.shape, tile_shape=(16, 1024, 1024))
-create_stage("stage.zarr", img.shape, (16, 1024, 1024))
-# (distribute these across jobs:)
+tiles = spatial_tiles(img.shape, tile_shape=TILE)
+create_stage("stage.zarr", img.shape, TILE)
+
+# (distribute these across jobs:) each returns how many labels it wrote
+counts = {}
 for i in range(len(tiles)):
-    stage_tile(img, my_fn, "stage.zarr", i, tile_shape=(16, 1024, 1024), overlap=30)
+    counts[i] = stage_tile(
+        img, my_fn, "stage.zarr", i, tile_shape=TILE, overlap=[4, 30, 30]
+    )
+
+# Handing those counts to the merge lets it derive each tile's global id range
+# by a cumulative sum, instead of streaming the whole store to renumber it.
 merged = merge_tile_labels("stage.zarr", input_component="staged",
-                           write_to="merged.zarr", sequential_labels=True)
+                           write_to="merged.zarr", sequential_labels=True,
+                           label_counts=counts)
 write_labels("image.zarr", merged, name="cells")
 ```
+
+The workflow goes two steps further. It stages **into**
+`image.zarr/labels/cells/0` in the first place, then has the merge rewrite
+that array **in place** (`write_to=` and `input_component=`/
+`output_component=` all pointing at it) and calls `register_labels` to add
+the pyramid. That removes both the scratch store and the full-volume copy
+`write_labels` would otherwise do — three passes over the label volume become
+two.
+
+It falls back to the separate store above when the tile is larger than the
+label chunk cap, because in place the chunking cannot be changed and level 0
+has to stay pageable for a viewer.

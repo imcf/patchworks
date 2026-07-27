@@ -28,15 +28,21 @@ checkpoint prepare:
 
 
 rule segment:
-    """Segment one tile on a GPU and write it into the stage store."""
+    """Segment one batch of tiles on a GPU and write them into the stage store.
+
+    A batch is `tiles_per_job` tiles (see config), processed sequentially in
+    one process so they share a single CUDA init and a single Cellpose model
+    load. Batches write disjoint chunks, so any number of them run in
+    parallel across GPUs.
+    """
     input:
         tiles=TILES,
         stage=STAGE_OK,
         image=IMAGE_OK,
         model=MODEL_OK,
     output:
-        f"{RUN}/seg/{{index}}.done",
+        f"{RUN}/seg/{{batch}}.done",
     log:
-        f"{LOGS}/segment/{{index}}.log",
+        f"{LOGS}/segment/{{batch}}.log",
     script:
         "../scripts/segment_tile.py"

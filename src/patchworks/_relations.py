@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import logging
-import os
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Union
 
 import dask.array as da
 import numpy as np
+
+from ._chunks import cpu_allocation
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +95,7 @@ def label_relations(
 
     n_blocks = a.numblocks
     total = int(np.prod(n_blocks))
-    nw = n_workers if n_workers is not None else min(4, os.cpu_count() or 1)
+    nw = n_workers if n_workers is not None else min(4, cpu_allocation())
 
     def _one(flat_idx: int) -> np.ndarray:
         idx = np.unravel_index(flat_idx, n_blocks)

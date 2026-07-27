@@ -15,8 +15,14 @@ channel: 1 # nuclear stain channel
 level: 0
 tile_shape: [16, 1024, 1024] # keep identical to config_cyto.yaml
 gpu_memory_gb: null
-overlap: 30
+# Per-axis halo [z, y, x]. A scalar 30 would expand a [16, 1024, 1024] tile to
+# 76 x 1084 x 1084 = 5.3x the voxels it keeps, nearly all of it wasted z. The
+# z-halo only needs to cover one nucleus in z, not one nucleus in x/y.
+overlap: [4, 30, 30]
 skip_empty: true
+# Tiles per SLURM job; they run sequentially and share one model load. Raise
+# once you know a tile's runtime -- job wall time is ~N x per-tile time.
+tiles_per_job: 4
 empty_threshold: null
 
 method: "cellpose"

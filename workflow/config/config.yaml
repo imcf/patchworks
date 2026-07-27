@@ -1,8 +1,8 @@
 # patchworks Snakemake workflow — configuration.
 # Copy and edit, then run:  snakemake --workflow-profile profile/slurm
 #
-# The expensive Cellpose step is split into one SLURM job per tile, so many
-# GPUs run in parallel; the merge is a single CPU job.
+# The expensive Cellpose step is split into SLURM jobs of `tiles_per_job`
+# tiles, so many GPUs run in parallel; the merge is a single CPU job.
 
 # ---- input / output ---------------------------------------------------------
 input: "/path/to/scan.ims" # .ims, .czi, .lif, .nd2, ome-tiff, .zarr, or a
@@ -30,8 +30,19 @@ level: 0 # pyramid level to segment (0 = full res)
 tile_shape: "auto" # "auto", or e.g. [16, 1024, 1024] (zyx)
 gpu_memory_gb: null # for "auto" on a CPU prepare node: your segment GPU's VRAM
 #                     (e.g. 24, 40, 80). null → 8 GiB guess + a harmless warning
-overlap: 30 # halo (≈ one object diameter)
+overlap: 30 # halo (≈ one object diameter); scalar, or per-axis [z, y, x]
+#             Prefer per-axis on anisotropic tiles: a scalar 30 on a
+#             [16, 1024, 1024] tile reads 5.3x the voxels it keeps, almost
+#             all of it wasted z. patchworks.auto_overlap(d, voxel_size=...)
+#             computes the per-axis values for you.
 skip_empty: true # skip background tiles
+# Tiles per SLURM job. Each job pays CUDA init + a Cellpose weight load (tens
+# of seconds) once, then reuses the cached model for the rest of its batch, so
+# at 1 that startup can dominate a fast tile. Tiles in a batch run
+# SEQUENTIALLY, so the job's wall time is roughly N x per-tile time: size N
+# from a measured tile (`seff <jobid>`) and keep it inside the profile's
+# runtime/QOS ceiling. A failed job retries the whole batch.
+tiles_per_job: 4
 empty_threshold: null # null → Otsu; or a number
 
 # ---- segmentation -----------------------------------------------------------
@@ -65,5 +76,7 @@ pyramid_downscale: 2
 sequential_labels: true # renumber merged labels to a contiguous 1..N range
 
 # ---- merge performance --------------------------------------------------
-# null -> use the "merge" rule's actual cpus_per_task (profile/slurm/config.yaml).
+# null -> size the pool from the job's real budget: the SLURM/cgroup memory
+# limit and cpus_per_task, not the node's totals. The merge logs what it
+# detected, so you can compare that line against `seff <jobid>`.
 merge_workers: null

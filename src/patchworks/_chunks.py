@@ -4,14 +4,19 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any
+from pathlib import Path
+from typing import Any, Sequence, Union
 
 import numpy as np
 
 logger = logging.getLogger(__name__)
 
 
-def auto_overlap(diameter: float, safety: float = 1.0) -> int:
+def auto_overlap(
+    diameter: float,
+    safety: float = 1.0,
+    voxel_size: Union[Sequence[float], None] = None,
+) -> Union[int, tuple[int, ...]]:
     """Recommended overlap (halo) for a given cell diameter.
 
     Rule: overlap >= diameter so the segmentation function always sees at
@@ -19,18 +24,29 @@ def auto_overlap(diameter: float, safety: float = 1.0) -> int:
     tile boundaries are then segmented correctly and only genuinely split
     cells produce touching labels at the boundary → correct merge.
 
+    With *voxel_size* the halo is returned per axis instead of as one number.
+    That matters on anisotropic stacks: a halo big enough laterally is far
+    more than one cell deep in z, and the extra planes are read and
+    segmented only to be trimmed away again.
+
     Parameters
     ----------
     diameter:
-        Expected cell diameter in pixels (same unit as your image).
+        Expected cell diameter in **lateral** pixels (same unit as your
+        image's x/y).
     safety:
         Multiplier on top of diameter. Default 1.0 (= one cell width).
         Use 1.5–2.0 for elongated or irregularly-shaped cells.
+    voxel_size:
+        Physical size per axis, in any single unit (e.g. ``(2.0, 0.1, 0.1)``
+        for a 2 µm z-step and 100 nm pixels). ``None`` → one isotropic
+        number, as before.
 
     Returns
     -------
-    int
-        Overlap depth to pass to ``tile_process(..., overlap=...)``.
+    int or tuple of int
+        Overlap depth to pass to ``tile_process(..., overlap=...)``. A tuple
+        (one entry per axis) when *voxel_size* is given.
 
     Examples
     --------
@@ -41,28 +57,115 @@ def auto_overlap(diameter: float, safety: float = 1.0) -> int:
     >>> result = tile_process("image.zarr", fn,
     ...                       tile_shape=(1, 2048, 2048),
     ...                       overlap=auto_overlap(30))
+    >>> auto_overlap(15, voxel_size=(2.0, 0.1, 0.1))
+    (1, 15, 15)
     """
-    return max(1, int(np.ceil(diameter * safety)))
+    lateral = max(1, int(np.ceil(diameter * safety)))
+    if voxel_size is None:
+        return lateral
+    # Convert the lateral halo to a physical distance, then back into pixels
+    # along each axis using that axis' own voxel size.
+    physical = diameter * safety * float(voxel_size[-1])
+    return tuple(max(1, int(np.ceil(physical / float(v)))) for v in voxel_size)
 
 
 _GPU_MEMORY_FALLBACK = 8 * 1024**3
 
 
-def _get_available_memory() -> int:
-    """Return available system RAM in bytes.
+def cpu_allocation() -> int:
+    """Return the number of CPUs this process may actually use.
+
+    ``os.cpu_count()`` reports the machine's cores, which on a shared cluster
+    node is wildly more than a job was granted -- a 4-core allocation on a
+    128-core node would size itself for 128. Prefer what the scheduler says,
+    then the process' CPU affinity mask, and only then the machine.
 
     Returns
     -------
     int
-        Available memory via ``psutil``, or an 8 GiB fallback if it is not
-        installed.
+        Usable CPU count (always >= 1).
     """
+    for var in ("SLURM_CPUS_PER_TASK", "SLURM_CPUS_ON_NODE"):
+        try:
+            value = int(os.environ[var])
+        except (KeyError, ValueError):
+            continue
+        if value > 0:
+            return value
+    try:
+        return max(1, len(os.sched_getaffinity(0)))
+    except AttributeError:  # not POSIX
+        return max(1, os.cpu_count() or 1)
+
+
+def _cgroup_memory_limit() -> "int | None":
+    """Memory ceiling from the process' cgroup, if one applies.
+
+    SLURM confines jobs with cgroups, so this is the limit that actually gets
+    the process OOM-killed -- unlike the node-wide figure ``psutil`` reports.
+    """
+    for path in (
+        "/sys/fs/cgroup/memory.max",  # cgroup v2
+        "/sys/fs/cgroup/memory/memory.limit_in_bytes",  # cgroup v1
+    ):
+        try:
+            raw = Path(path).read_text().strip()
+        except OSError:
+            continue
+        if raw == "max":
+            continue
+        try:
+            value = int(raw)
+        except ValueError:
+            continue
+        # v1 reports a sentinel near 2**63 when unlimited.
+        if 0 < value < 2**62:
+            return value
+    return None
+
+
+def _get_available_memory() -> int:
+    """Return the memory this process may actually use, in bytes.
+
+    Takes the **smallest** of everything that can constrain it: the SLURM
+    allocation, the cgroup limit, and the node's free RAM. A node with 512 GB
+    free must never convince a 128 GB job that it has room -- that mismatch is
+    exactly how a job sizes itself into an OOM kill.
+
+    Returns
+    -------
+    int
+        Usable memory in bytes, or an 8 GiB fallback if nothing is knowable.
+    """
+    limits = []
+
+    per_node = os.environ.get("SLURM_MEM_PER_NODE")
+    if per_node:
+        try:
+            limits.append(int(per_node) * 1024**2)  # SLURM reports MB
+        except ValueError:
+            pass
+    per_cpu = os.environ.get("SLURM_MEM_PER_CPU")
+    if per_cpu:
+        try:
+            limits.append(int(per_cpu) * 1024**2 * cpu_allocation())
+        except ValueError:
+            pass
+
+    cgroup = _cgroup_memory_limit()
+    if cgroup is not None:
+        limits.append(cgroup)
+
     try:
         import psutil
 
-        return int(psutil.virtual_memory().available)
+        limits.append(int(psutil.virtual_memory().available))
     except Exception:
+        pass
+
+    if not limits:
         return 8 * 1024**3
+    return max(1, min(limits))
 
 
 def safe_worker_count(
@@ -101,7 +204,7 @@ def safe_worker_count(
     int
         Worker-thread count (always >= 1).
     """
-    cpu_cap = max(1, (os.cpu_count() or 1) - 1)
+    cpu_cap = max(1, cpu_allocation() - 1)
     if use_gpu:
         return 1
     avail = _get_available_memory()
@@ -110,23 +213,40 @@ def safe_worker_count(
     return max(1, min(cpu_cap, mem_cap))
 
 
+# Leave room for a co-tenant: info.free is a point-in-time reading of a device
+# we usually do not own outright, and sizing a tile to fill all of it is what
+# turns another job's growth into our OOM.
+_GPU_HEADROOM = 0.8
+
+
 def _get_gpu_memory() -> int:
-    """Return free GPU VRAM in bytes.
+    """Return usable GPU VRAM in bytes for the device we were granted.
+
+    NVML enumerates every GPU on the node regardless of ``--gres=gpu:1``, so
+    asking for index 0 unconditionally reads the *wrong* device's free memory
+    whenever SLURM granted anything but the first one -- and tile sizing was
+    built on that number. Resolve the device from ``CUDA_VISIBLE_DEVICES``,
+    then keep a headroom fraction rather than claiming every free byte.
 
     Returns
     -------
     int
-        Free VRAM of GPU 0 via ``nvidia-ml-py``, or an 8 GiB fallback if the
-        query fails.
+        Usable VRAM, or an 8 GiB fallback if the query fails.
     """
     try:
         import pynvml
 
+        from ._gpu import visible_device_index, visible_device_uuid
+
         pynvml.nvmlInit()
-        handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+        uuid = visible_device_uuid()
+        if uuid is not None:
+            handle = pynvml.nvmlDeviceGetHandleByUUID(uuid.encode())
+        else:
+            handle = pynvml.nvmlDeviceGetHandleByIndex(visible_device_index())
         info = pynvml.nvmlDeviceGetMemoryInfo(handle)
         pynvml.nvmlShutdown()
-        return int(info.free)
+        return int(int(info.free) * _GPU_HEADROOM)
     except Exception:
         logger.warning(
             "GPU memory query failed (nvidia-ml-py not installed?); "
@@ -181,7 +301,7 @@ def auto_tile_shape(
     >>> tile
     (128, 512, 512)
     """
-    n_workers = n_workers or os.cpu_count() or 1
+    n_workers = n_workers or cpu_allocation()
     itemsize = np.dtype(dtype).itemsize
     n_spatial = min(3, len(shape))
 
@@ -285,7 +405,7 @@ def auto_tile_shape_cellpose(
     >>> tile
     (1, 2048, 2048)
     """
-    n_workers = n_workers or os.cpu_count() or 1
+    n_workers = n_workers or cpu_allocation()
     itemsize = np.dtype(dtype).itemsize
 
     if use_gpu:

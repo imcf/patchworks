@@ -15,6 +15,35 @@ logger = logging.getLogger(__name__)
 _ZARR_V3 = int(zarr.__version__.split(".")[0]) >= 3
 
 
+_ZARR_V3 = int(zarr.__version__.split(".")[0]) >= 3
+
+
+def zarr_compressor_kwargs() -> dict:
+    """Keyword arguments pinning the compression codec for a new array.
+
+    zstd is already zarr v3's default, but relying on a library default means
+    the stores patchworks writes change silently if that default ever moves.
+    Labels in particular are highly compressible, so this is worth stating.
+
+    Returns
+    -------
+    dict
+        ``compressors=``/``compressor=`` as the installed zarr expects, or
+        empty if the codec cannot be built (then the default applies).
+    """
+    try:
+        if _ZARR_V3:
+            from zarr.codecs import ZstdCodec
+
+            return {"compressors": (ZstdCodec(level=1),)}
+        import numcodecs
+
+        return {"compressor": numcodecs.Zstd(level=1)}
+    except Exception:  # pragma: no cover - depends on the installed zarr
+        logger.debug("could not pin a compressor; using zarr's default")
+        return {}
+
+
 def load_ome_zarr(
     store_path: Union[str, Path],
     channel: int | None = 0,
@@ -96,7 +125,7 @@ def _otsu_threshold(sample: np.ndarray) -> float:
         return 0.0
 
 
-def _auto_empty_threshold(
+def auto_empty_threshold(
     image: da.Array, channel: int | None, level: int
 ) -> float:
     """Pick an empty-tile threshold from a cheap bounded sample (Otsu).
@@ -221,8 +250,13 @@ def estimate_empty_tiles(
     for idx in np.ndindex(*grid):
         sl: list[slice] = []
         for i, t, w, s in zip(idx, tile_shape, win, sp_shape):
-            start = min(i * t + (t - w) // 2, s - w)
-            sl.append(slice(start, start + w))
+            # Centre the window in this tile, then clamp it to the tile's own
+            # extent -- NOT to the array's. Clamping to ``s - w`` used to drag
+            # the last (partial) tile's window backwards into its neighbour,
+            # so an edge tile's verdict came partly from the tile before it.
+            lo, hi = i * t, min((i + 1) * t, s)
+            start = max(lo, min(lo + (hi - lo - w) // 2, hi - w))
+            sl.append(slice(start, min(start + w, hi)))
 
         if z_src is not None:
             block = np.asarray(z_src[_ch_prefix + tuple(sl)])

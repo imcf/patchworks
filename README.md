@@ -286,9 +286,12 @@ tiles where the dask-image approach stalls.
 | ------------------------------ | ----------------------------------------- | ------------------------------------------------------------- |
 | In-process Dask client         | `FutureCancelledError: lost dependencies` | Detected at startup, raises immediately with fix instructions |
 | 3-4× fn recompute during merge | Cellpose runs 3× per tile                 | Staging writes labels once, merge reads from disk             |
-| O(n²) sequential relabelling   | Graph construction hangs at 1000+ tiles   | Linear post-pass O(voxels) via `np.unique` + LUT              |
+| O(n²) sequential relabelling   | Graph construction hangs at 1000+ tiles   | Folded into the merge's own LUT — no extra pass over the volume |
 | Wrong overlap boundary         | Output shape mismatch                     | Always uses `boundary="none"`                                 |
 | Persisting large arrays        | Worker OOM                                | Never persists; keeps dask graph lazy and streams             |
+| Sizing work to the whole node  | Job OOM-killed on a shared cluster node   | Reads the SLURM/cgroup allocation, not `os.cpu_count()`       |
+| Rechunking a pyramid level     | Threaded scheduler stockpiles intermediates | Levels stream one source chunk per task, bounded by construction |
+| Isotropic halo on flat tiles   | 5× the voxels read and segmented, then trimmed | `overlap` takes one width per axis                       |
 
 ---
 

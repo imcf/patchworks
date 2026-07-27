@@ -2,7 +2,8 @@
 
 rule merge:
     input:
-        occupied_done,
+        markers=batch_done,
+        tiles=TILES,
     output:
         touch(f"{RUN}/labels.done"),
     log:

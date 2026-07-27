@@ -36,8 +36,13 @@ STEPLOG = f"{LOGS}/steps.log"
 MODEL_OK = f"{RUN}/model.ready"
 
 
-def occupied_done(wildcards):
-    """Per-tile markers for the occupied tiles (resolved after the checkpoint)."""
+def batch_done(wildcards):
+    """Per-batch markers for the segment jobs (resolved after the checkpoint).
+
+    prepare groups the occupied tiles into batches of ``tiles_per_job``; one
+    marker is produced per batch, not per tile, so the fan-in shrinks with the
+    batch size.
+    """
     tiles = checkpoints.prepare.get().output.tiles
-    occupied = json.loads(Path(tiles).read_text())["occupied"]
-    return [f"{RUN}/seg/{i}.done" for i in occupied]
+    manifest = json.loads(Path(tiles).read_text())
+    return [f"{RUN}/seg/{i}.done" for i in range(len(manifest["batches"]))]

@@ -22,9 +22,23 @@ natively. Pass `write_to="other.zarr"` to instead write a separate
 single-resolution label store, or `output_component="cells"` to name the label
 image.
 
-The label pyramid is built lazily (`da.to_zarr`, streamed chunk by chunk), so
-it stays OOM-safe even for terabyte volumes. Control it with `pyramid_levels`
-and `pyramid_downscale`.
+The label pyramid is streamed chunk by chunk, so it stays OOM-safe even for
+terabyte volumes. Control it with `pyramid_levels` and `pyramid_downscale`.
+
+!!! note "NGFF version"
+    The metadata layout follows the zarr format being written: **NGFF 0.5**
+    (keys nested under an `ome` attribute) on zarr v3, **0.4** (keys at the
+    top level) on v2. Writing v3 data with 0.4's top-level layout — which
+    earlier versions did — matches neither revision, and a strict 0.5 reader
+    finds nothing there.
+
+    Reading accepts **both** layouts, so stores written by any patchworks
+    version still load. Use `read_ngff_attr()` if you need to inspect the
+    metadata yourself rather than indexing `attrs["multiscales"]` directly.
+
+    patchworks' own hints (`n_objects`, `sequential_labels`) are not NGFF
+    keys, so they stay at the top level where a consumer finds them without
+    knowing the layout.
 
 ## Why a pyramid?
 
@@ -106,6 +120,21 @@ input — see [Cluster usage](snakemake.md).
     ```python
     to_ome_zarr("scan.ims", "scan.zarr", reuse_pyramid=True)
     ```
+
+### Axis names
+
+For a file, axes come from the reader's own dimension metadata (bioio's
+`dims.order`, Imaris, or the `sequence_pattern` groups) — not guessed. Only
+non-spatial singleton axes are dropped, so a genuine `z=1` survives.
+
+For a **bare array** there is nothing to read, so axes are inferred from the
+number of dimensions (`yx`, `zyx`, `czyx`, `tczyx`). That is unambiguous up to
+3-D; from 4-D the leading axis could be channel or time, and patchworks logs a
+warning saying what it guessed. Pass `axes=` to settle it:
+
+```python
+to_ome_zarr(arr, "out.zarr", axes="tzyx")   # not the czyx it would assume
+```
 
 ### Pixel calibration
 

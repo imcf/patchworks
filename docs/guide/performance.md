@@ -3,10 +3,10 @@
 `tile_process` is built so a run **adapts to whatever machine it lands on** and
 can't run out of RAM/VRAM or freeze the box — without you tuning anything.
 
-## Automatic, machine-aware concurrency
+## Automatic, allocation-aware concurrency
 
 The staging step (running your `fn` once per tile to a temp store) and the
-merge step are sized to the host automatically:
+merge step are sized automatically:
 
 - **GPU** (`use_gpu=True`) → **one tile at a time**, so concurrent evaluations
   can never exhaust VRAM.
@@ -14,8 +14,16 @@ merge step are sized to the host automatically:
   from the tile size), and always **leaving one core free** so the machine
   stays responsive — it never pins every core.
 
-The RAM figure is read live via `psutil`; without it, a conservative default is
-used instead of guessing high.
+"Available" means available **to this process**, not to the machine. On a
+shared cluster node those differ wildly — a 32-core, 128 GB job on a 128-core,
+512 GB node would otherwise size itself for the whole box and get OOM-killed
+while its own accounting said it had room. patchworks takes the smallest of
+`SLURM_MEM_PER_NODE`, `SLURM_MEM_PER_CPU × cpus`, the cgroup limit (the one
+that actually triggers the kill) and `psutil`'s free RAM, and reads the core
+count from `SLURM_CPUS_PER_TASK` or the process' CPU affinity mask.
+
+Without any of those signals, a conservative default is used instead of
+guessing high.
 
 ## Live progress dashboard (GPU runs)
 

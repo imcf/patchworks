@@ -118,6 +118,18 @@ def segment(tile: np.ndarray, prob_thresh: float = 0.5) -> np.ndarray:
 
 Using a GPU? Just let your framework see it — nothing extra needed.
 
+!!! tip "You do not need to modify patchworks"
+    `method: "custom"` imports any `(tile) -> labels` callable, so a new
+    method is a module of your own and a config block — nothing in the
+    package changes. It then inherits everything the pipeline does: empty
+    tiles are skipped, tiles are batched per job, labels are stitched across
+    boundaries and renumbered, and the result is written as a calibrated
+    pyramid.
+
+    (The `KNOWN_METHODS` list in `workflow/scripts/_pw.py` is only for
+    *built-in* shortcuts like `"cellpose"`. Adding to it is for methods that
+    ship with patchworks, not for your own.)
+
 ## Test it before you submit
 
 Run your function on one real tile first — it catches shape/dtype bugs in
@@ -148,6 +160,9 @@ custom:
   module: "my_seg"        # import name
   function: "segment"     # default is "segment"
   kwargs:                 # optional — forwarded as segment(tile, **kwargs)
+  #                         checked against your function's signature during
+  #                         `prepare`, so a typo fails on a cheap CPU job
+  #                         rather than in the first GPU job hours later
     sigma: 1.5
 ```
 
