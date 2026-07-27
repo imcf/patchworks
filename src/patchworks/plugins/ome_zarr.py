@@ -25,8 +25,13 @@ supply it for bare arrays.
 Downsampling uses strided (nearest-neighbour) subsampling — the correct,
 label-preserving choice — and only on **X and Y**; ``z`` (and channel/time)
 stay at full resolution. Every level is built by reading the *previous level
-back from disk* and streaming the downsampled result out through dask with
-bounded chunks, so the pyramid never materialises a whole volume in RAM.
+back from disk*, so the pyramid never materialises a whole volume in RAM.
+Because decimation needs no halo, levels are written zarr-natively: each
+level's chunks are chosen as ``ceil(src_chunk / stride)`` so one task reads
+exactly one source chunk and writes exactly one output chunk, making peak
+memory ``n_workers × one chunk`` by construction. Explicit ``chunks=`` or
+sharding fall back to dask, which must rechunk and therefore reads several
+source chunks per output chunk.
 
 This module also exposes :func:`add_pyramid` (add levels to an existing store)
 and :func:`write_labels` (store a label image under the NGFF ``labels/`` group).
@@ -42,6 +47,8 @@ from __future__ import annotations
 
 import logging
 import math
+from concurrent.futures import ThreadPoolExecutor
+from itertools import product as _iproduct
 from pathlib import Path
 from typing import Union
 
@@ -273,6 +280,97 @@ def _shard_for(
     return _effective_shard(tuple(shard), chunks, shape)
 
 
+# Don't let deep pyramid levels fragment into thousands of tiny chunks.
+_CHUNK_FLOOR = {"y": 128, "x": 128}
+
+
+def _level_chunks(
+    src_chunks: tuple[int, ...],
+    strides: tuple[int, ...],
+    axes: str,
+    level_shape: tuple[int, ...],
+) -> tuple[int, ...]:
+    """Chunking for a strided level that keeps one source chunk per task.
+
+    Choosing ``ceil(src_chunk / stride)`` makes each output chunk the exact
+    image of one source chunk, so a task reads one chunk and writes one chunk
+    with nothing shared between tasks. Capped by :data:`_CHUNK_CAP` and floored
+    so deep levels don't fragment.
+    """
+    out = []
+    for c, st, a, s in zip(src_chunks, strides, axes, level_shape):
+        v = -(-c // st)
+        v = min(v, _CHUNK_CAP.get(a, v))
+        v = max(v, _CHUNK_FLOOR.get(a, 1))
+        out.append(max(1, min(v, s)))
+    return tuple(out)
+
+
+def _create_level_array(
+    group: "zarr.Group",
+    name: str,
+    shape: tuple[int, ...],
+    chunks: tuple[int, ...],
+    dtype,
+) -> "zarr.Array":
+    """Create (replacing any existing) a pyramid level array in *group*."""
+    if name in group:
+        del group[name]
+    if _ZARR_V3:
+        return group.create_array(name, shape=shape, chunks=chunks, dtype=dtype)
+    return group.zeros(
+        name, shape=shape, chunks=chunks, dtype=dtype, overwrite=True
+    )
+
+
+def _stream_strided_level(
+    src: "zarr.Array",
+    dst: "zarr.Array",
+    strides: tuple[int, ...],
+    n_workers: int = 4,
+) -> None:
+    """Write *dst* as the strided subsample of *src*, one chunk at a time.
+
+    Labels are downsampled by plain decimation, which needs no halo, so each
+    output chunk depends only on the source region that maps onto it. Peak
+    memory is therefore ``n_workers x (one source region + its subsample)``
+    however large the image is -- unlike a dask ``rechunk``, whose threaded
+    scheduler holds intermediates with no backpressure.
+
+    Parameters
+    ----------
+    src, dst : zarr.Array
+        Source level and the (already created) destination level.
+    strides : tuple of int
+        Per-axis decimation step.
+    n_workers : int
+        Threads used for the copy. zarr's codecs release the GIL, so threads
+        are enough and avoid pickling a worker payload.
+    """
+    grid = [-(-s // c) for s, c in zip(dst.shape, dst.chunks)]
+    take = tuple(slice(None, None, st) for st in strides)
+
+    def _one(idx: tuple[int, ...]) -> None:
+        out_sl = tuple(
+            slice(i * c, min((i + 1) * c, s))
+            for i, c, s in zip(idx, dst.chunks, dst.shape)
+        )
+        src_sl = tuple(
+            slice(o.start * st, min(o.stop * st, s))
+            for o, st, s in zip(out_sl, strides, src.shape)
+        )
+        dst[out_sl] = np.asarray(src[src_sl])[take]
+
+    indices = list(_iproduct(*[range(g) for g in grid]))
+    if n_workers <= 1:
+        for idx in indices:
+            _one(idx)
+        return
+    with ThreadPoolExecutor(max_workers=n_workers) as pool:
+        for _ in pool.map(_one, indices):
+            pass
+
+
 def _progress_ctx(progress: bool, label: str):
     """Return a progress-bar context manager.
 
@@ -484,19 +582,51 @@ def _write_pyramid(
     prev_name = base_name
     prev_shape = arr.shape
     for i in range(1, n_levels):
-        next_shape = tuple(s // st for s, st in zip(prev_shape, strides))
+        next_shape = tuple(-(-s // st) for s, st in zip(prev_shape, strides))
         if min(next_shape) < 1:
             logger.info("stopping pyramid at level %d (next too small)", i)
             break
-        src = da.from_zarr(group_path, component=prev_name)
-        nxt = src[tuple(slice(None, None, st) for st in strides)]
-        nxt = nxt.rechunk(chunks or _default_chunks(nxt.shape, axes))
-        _to_zarr_level(nxt, group_path, str(i), shard, progress)
+        if shard or chunks:
+            # Sharding needs whole shards written atomically, and an explicit
+            # chunking may not line up with the source chunks -- both want the
+            # dask path.
+            src = da.from_zarr(group_path, component=prev_name)
+            nxt = src[tuple(slice(None, None, st) for st in strides)]
+            nxt = nxt.rechunk(chunks or _default_chunks(nxt.shape, axes))
+            _to_zarr_level(nxt, group_path, str(i), shard, progress)
+            next_shape = nxt.shape
+        else:
+            # Stream it: decimation needs no halo, so with chunks chosen as
+            # ceil(src_chunk / stride) each task reads exactly one source chunk
+            # and writes exactly one output chunk. Bounded by construction --
+            # the dask route rechunks *upward* here (e.g. (16,512,512) back to
+            # (16,1024,1024)), pulling four source chunks per output chunk and
+            # letting the threaded scheduler stockpile the intermediates.
+            grp = zarr.open_group(group_path, mode="a")
+            src_arr = grp[prev_name]
+            out_chunks = _level_chunks(
+                tuple(src_arr.chunks), strides, axes, next_shape
+            )
+            dst_arr = _create_level_array(
+                grp, str(i), next_shape, out_chunks, src_arr.dtype
+            )
+            if progress:
+                logger.info(
+                    "writing %s/%s (streaming %d chunks)",
+                    Path(group_path).name,
+                    i,
+                    int(
+                        np.prod(
+                            [-(-s // c) for s, c in zip(next_shape, out_chunks)]
+                        )
+                    ),
+                )
+            _stream_strided_level(src_arr, dst_arr, strides)
         scale = [base_scale[k] * (strides[k] ** i) for k in range(len(axes))]
         datasets.append(_dataset(str(i), scale))
-        logger.info("pyramid level %d: shape=%s", i, nxt.shape)
+        logger.info("pyramid level %d: shape=%s", i, next_shape)
         prev_name = str(i)
-        prev_shape = nxt.shape
+        prev_shape = next_shape
     return datasets
 
 

@@ -343,6 +343,46 @@ def _make_globally_unique(arr, shape: tuple, chunk_shape: tuple) -> int:
     return base
 
 
+def capped_output_chunks(
+    chunk_shape: Sequence[int], caps: Sequence[int]
+) -> tuple[int, ...]:
+    """Shrink each chunk to at most *cap*, staying an exact divisor.
+
+    The merge's workers write one staged chunk at a time. As long as the output
+    chunking divides the staged chunking, each write still covers whole output
+    chunks, so concurrent workers never read-modify-write a chunk they share.
+    A non-divisor cap would break that, so the largest divisor at or below the
+    cap is used instead.
+
+    Parameters
+    ----------
+    chunk_shape : sequence of int
+        Staged chunk (= tile) shape.
+    caps : sequence of int
+        Maximum chunk size per axis.
+
+    Returns
+    -------
+    tuple of int
+        Chunking for the merged output.
+
+    Examples
+    --------
+    >>> capped_output_chunks((16, 2048, 2048), (16, 1024, 1024))
+    (16, 1024, 1024)
+    >>> capped_output_chunks((16, 1024, 1024), (16, 1024, 1024))
+    (16, 1024, 1024)
+    """
+    out = []
+    for c, cap in zip(chunk_shape, caps):
+        c, cap = int(c), int(cap)
+        if c <= cap:
+            out.append(c)
+            continue
+        out.append(next(d for d in range(cap, 0, -1) if c % d == 0))
+    return tuple(out)
+
+
 def _offsets_from_counts(
     counts: Mapping[int, int] | Sequence[int], n_chunks: int
 ) -> np.ndarray:
@@ -397,6 +437,7 @@ def zarr_native_merge(
     show_progress: bool = False,
     label_counts: "Mapping[int, int] | Sequence[int] | None" = None,
     sequential: bool = False,
+    output_chunks: "Sequence[int] | None" = None,
 ) -> "int | None":
     """Zarr-native label merge: boundary scan → scipy CC → parallel relabel.
 
@@ -429,6 +470,10 @@ def zarr_native_merge(
         domain is dense by construction, so the compaction is a ``np.unique``
         over the LUT (length = object count) and folds into the same lookup,
         costing no extra pass over the volume.
+    output_chunks : sequence of int, optional
+        Chunking for the merged store. Must divide the staged chunk shape, so
+        each worker's write still covers whole chunks. ``None`` mirrors the
+        staged chunking. Use :func:`capped_output_chunks` to derive it.
 
     Returns
     -------
@@ -497,10 +542,23 @@ def zarr_native_merge(
         )
 
     out_root = zarr.open_group(out_path, mode="a")
+    out_chunks = tuple(chunk_shape)
+    if output_chunks is not None:
+        out_chunks = tuple(int(c) for c in output_chunks)
+        bad = [
+            (i, c, o)
+            for i, (c, o) in enumerate(zip(chunk_shape, out_chunks))
+            if o <= 0 or c % o
+        ]
+        if bad:
+            raise ValueError(
+                "output_chunks must divide the staged chunk shape so workers "
+                f"write whole chunks; axis/staged/output mismatches: {bad}"
+            )
     # Match the staged dtype: ids are already compact (dense by construction,
     # and compacted again above when sequential), so nothing needs a wider one.
     _create_zarr_label_array(
-        out_root, out_component, shape, chunk_shape, dtype=arr.dtype
+        out_root, out_component, shape, out_chunks, dtype=arr.dtype
     )
 
     # Row-major, matching spatial_tiles' order -- so chunk i is tile i and the
@@ -585,6 +643,7 @@ def merge_tile_labels(
     progress: bool = False,
     return_count: bool = False,
     label_counts: "Mapping[int, int] | Sequence[int] | None" = None,
+    output_chunks: "Sequence[int] | None" = None,
 ) -> Union["da.Array", tuple["da.Array", Union[int, None]]]:
     """Merge per-tile labels into a globally consistent label array.
 
@@ -627,6 +686,11 @@ def merge_tile_labels(
         merge derive every tile's global id range arithmetically instead of
         streaming the whole store to renumber it. ``None`` keeps the
         renumber pass.
+    output_chunks:
+        Chunking for the merged store; must divide the staged chunk shape.
+        Lets the merge write straight into a store you will keep (e.g. an
+        OME-ZARR label group's level 0) instead of a scratch store that then
+        has to be copied. See :func:`capped_output_chunks`.
     n_workers:
         Parallel workers for the relabel step. Default ``min(4, cpu_count)``.
     stage_dir:
@@ -741,6 +805,7 @@ def merge_tile_labels(
         show_progress=progress,
         label_counts=label_counts,
         sequential=sequential_labels,
+        output_chunks=output_chunks,
     )
 
     # -- Cleanup temp stage (only when we created it) --

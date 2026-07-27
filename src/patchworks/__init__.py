@@ -39,7 +39,7 @@ from ._distributed import (
     stage_tile,
 )
 from ._io import auto_empty_threshold, estimate_empty_tiles, load_ome_zarr
-from ._merge import merge_tile_labels
+from ._merge import capped_output_chunks, merge_tile_labels
 from ._occupancy import build_occupancy_map, occupancy_path, tile_occupancy
 from ._postprocess import dilate_labels
 from ._relabel import relabel_sequential_array, relabel_sequential_zarr
@@ -52,6 +52,7 @@ except PackageNotFoundError:  # not installed (e.g. running from a checkout)
 __all__ = [
     "tile_process",
     "merge_tile_labels",
+    "capped_output_chunks",
     "auto_overlap",
     "auto_tile_shape",
     "auto_tile_shape_cellpose",

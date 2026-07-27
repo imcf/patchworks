@@ -14,6 +14,58 @@ from patchworks.plugins.ome_zarr import (
 )
 
 
+def test_streaming_pyramid_matches_dask(tmp_path):
+    """The streaming levels must be byte-identical to the dask-built ones.
+
+    The streaming path exists to bound memory (one source chunk per task); it
+    must not change a single voxel of the result.
+    """
+    rng = np.random.default_rng(0)
+    data = rng.integers(0, 500, size=(9, 100, 100), dtype="uint16")
+
+    streamed = tmp_path / "streamed.zarr"
+    to_ome_zarr(data, streamed, axes="zyx", n_levels=4, progress=False)
+    # chunks= forces the dask route through the same public entry point.
+    dasked = tmp_path / "dasked.zarr"
+    to_ome_zarr(
+        data,
+        dasked,
+        axes="zyx",
+        n_levels=4,
+        chunks=(16, 1024, 1024),
+        progress=False,
+    )
+
+    a_root = zarr.open_group(str(streamed), mode="r")
+    b_root = zarr.open_group(str(dasked), mode="r")
+    a_levels = [d["path"] for d in a_root.attrs["multiscales"][0]["datasets"]]
+    b_levels = [d["path"] for d in b_root.attrs["multiscales"][0]["datasets"]]
+    assert a_levels == b_levels, "both routes must produce the same levels"
+    for lvl in a_levels:
+        assert np.array_equal(
+            np.asarray(a_root[lvl]), np.asarray(b_root[lvl])
+        ), f"level {lvl} differs between the streaming and dask routes"
+
+
+def test_streaming_level_reads_one_source_chunk_per_task(tmp_path):
+    """Each output chunk must map onto exactly one source chunk.
+
+    That alignment is what makes peak memory ``n_workers x one chunk`` and so
+    is the property the OOM fix rests on -- not an incidental detail.
+    """
+    from patchworks.plugins.ome_zarr import _level_chunks
+
+    # A (16, 1024, 1024) source at stride (1, 2, 2) -> (16, 512, 512).
+    out = _level_chunks((16, 1024, 1024), (1, 2, 2), "zyx", (16, 4096, 4096))
+    assert out == (16, 512, 512)
+    # Deep levels get floored rather than fragmenting into tiny chunks.
+    floored = _level_chunks((16, 128, 128), (1, 2, 2), "zyx", (16, 256, 256))
+    assert floored == (16, 128, 128)
+    # Never larger than the level itself.
+    clamped = _level_chunks((16, 1024, 1024), (1, 2, 2), "zyx", (4, 100, 100))
+    assert clamped == (4, 100, 100)
+
+
 def _level_scale(store, level):
     root = zarr.open_group(str(store), mode="r")
     ds = root.attrs["multiscales"][0]["datasets"][level]
