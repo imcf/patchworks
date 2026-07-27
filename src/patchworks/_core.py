@@ -15,7 +15,6 @@ from ._chunks import auto_tile_shape, cpu_allocation, safe_worker_count
 from ._cluster import _client_is_in_process, _distributed_client
 from ._io import auto_empty_threshold, load_ome_zarr
 from ._merge import zarr_native_merge
-from ._relabel import relabel_sequential_zarr
 
 logger = logging.getLogger(__name__)
 
@@ -606,6 +605,10 @@ def tile_process(
             tempfile.mkdtemp(prefix="bb_merge_"), "merged.zarr"
         )
 
+    # sequential=True folds the contiguous renumbering into the merge's own
+    # LUT, so it costs a np.unique over the object count rather than the extra
+    # full read+write (plus a Python set of every id) that a separate
+    # relabel_sequential_zarr pass would.
     zarr_native_merge(
         stage_path,
         "staged",
@@ -613,10 +616,8 @@ def tile_process(
         output_component,
         n_workers=_nw,
         show_progress=progress,
+        sequential=sequential_labels,
     )
-    if sequential_labels:
-        logger.info("Relabelling to contiguous ids…")
-        relabel_sequential_zarr(_merge_out, output_component)
     _cleanup_stage()
 
     merged = da.from_zarr(_merge_out, component=output_component)

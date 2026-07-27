@@ -22,6 +22,7 @@ from __future__ import annotations
 import logging
 import os
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext as _nullcontext
 from itertools import product as _iproduct
 from multiprocessing import Pool as _Pool
@@ -155,6 +156,7 @@ def _scan_touching_pairs(
     component: str,
     chunk_shape: tuple[int, ...],
     label_offsets: "np.ndarray | None" = None,
+    n_workers: int = 1,
 ) -> np.ndarray:
     """Scan chunk-boundary slabs; return (N, 2) int64 array of touching pairs.
 
@@ -178,6 +180,9 @@ def _scan_touching_pairs(
         come out global without the store ever being rewritten. Each read is
         confined to one chunk column, so both sides are a single chunk and the
         offsets are plain scalars.
+    n_workers : int
+        Threads to scan with. Each task reads its own slab, so this is
+        embarrassingly parallel and was needlessly serial.
 
     Returns
     -------
@@ -189,36 +194,52 @@ def _scan_touching_pairs(
     arr = root[component]
     shape = arr.shape
     n_per_dim = [(s + c - 1) // c for s, c in zip(shape, chunk_shape)]
-    specs = _boundary_face_specs(shape, chunk_shape)
-    all_pairs: list[np.ndarray] = []
-    for ax, pos in specs:
-        # tile the face dimensions using chunk_shape columns
+
+    # One task per chunk-column of one boundary face. Each reads its own slab
+    # and produces its own pairs, so they are independent.
+    tasks: list[tuple[int, int, tuple[int, ...]]] = []
+    for ax, pos in _boundary_face_specs(shape, chunk_shape):
         face_axes = [a for a in range(arr.ndim) if a != ax]
         face_ranges = [range(0, shape[a], chunk_shape[a]) for a in face_axes]
         for offsets in _iproduct(*face_ranges):
-            sl: list = [slice(None)] * arr.ndim
-            sl[ax] = slice(pos - 1, pos + 1)
+            tasks.append((ax, pos, offsets))
+
+    def _one(task: tuple[int, int, tuple[int, ...]]) -> "np.ndarray | None":
+        ax, pos, offsets = task
+        face_axes = [a for a in range(arr.ndim) if a != ax]
+        sl: list = [slice(None)] * arr.ndim
+        sl[ax] = slice(pos - 1, pos + 1)
+        for a, off in zip(face_axes, offsets):
+            sl[a] = slice(off, min(off + chunk_shape[a], shape[a]))
+        slab = np.moveaxis(np.asarray(arr[tuple(sl)]), ax, 0)
+        a_vals = slab[0].ravel().astype(np.int64)
+        b_vals = slab[1].ravel().astype(np.int64)
+        if label_offsets is not None:
+            grid = [0] * arr.ndim
             for a, off in zip(face_axes, offsets):
-                sl[a] = slice(off, min(off + chunk_shape[a], shape[a]))
-            slab = np.moveaxis(np.asarray(arr[tuple(sl)]), ax, 0)
-            a_vals = slab[0].ravel().astype(np.int64)
-            b_vals = slab[1].ravel().astype(np.int64)
-            if label_offsets is not None:
-                grid = [0] * arr.ndim
-                for a, off in zip(face_axes, offsets):
-                    grid[a] = off // chunk_shape[a]
-                grid[ax] = pos // chunk_shape[ax]
-                b_idx = int(np.ravel_multi_index(tuple(grid), n_per_dim))
-                grid[ax] -= 1  # the chunk on the near side of the boundary
-                a_idx = int(np.ravel_multi_index(tuple(grid), n_per_dim))
-                a_vals[a_vals > 0] += label_offsets[a_idx]
-                b_vals[b_vals > 0] += label_offsets[b_idx]
-            mask = (a_vals > 0) & (b_vals > 0) & (a_vals != b_vals)
-            if mask.any():
-                pairs = np.sort(
-                    np.stack([a_vals[mask], b_vals[mask]], axis=1), axis=1
-                )
-                all_pairs.append(np.unique(pairs, axis=0))
+                grid[a] = off // chunk_shape[a]
+            grid[ax] = pos // chunk_shape[ax]
+            b_idx = int(np.ravel_multi_index(tuple(grid), n_per_dim))
+            grid[ax] -= 1  # the chunk on the near side of the boundary
+            a_idx = int(np.ravel_multi_index(tuple(grid), n_per_dim))
+            a_vals[a_vals > 0] += label_offsets[a_idx]
+            b_vals[b_vals > 0] += label_offsets[b_idx]
+        mask = (a_vals > 0) & (b_vals > 0) & (a_vals != b_vals)
+        if not mask.any():
+            return None
+        pairs = np.sort(np.stack([a_vals[mask], b_vals[mask]], axis=1), axis=1)
+        return np.unique(pairs, axis=0)
+
+    nw = max(1, min(n_workers, len(tasks)))
+    if nw <= 1:
+        results = [_one(t) for t in tasks]
+    else:
+        # Reads and decompression release the GIL, so threads scale here and
+        # nothing has to be pickled across processes.
+        with ThreadPoolExecutor(max_workers=nw) as pool:
+            results = list(pool.map(_one, tasks))
+
+    all_pairs = [r for r in results if r is not None]
     if not all_pairs:
         return np.empty((0, 2), dtype=np.int64)
     return np.unique(np.vstack(all_pairs), axis=0)
@@ -545,7 +566,11 @@ def zarr_native_merge(
     n_faces = len(_boundary_face_specs(shape, chunk_shape))
     logger.info("zarr_native_merge: scanning %d boundary faces…", n_faces)
     pairs = _scan_touching_pairs(
-        staged_path, staged_component, chunk_shape, label_offsets=offsets
+        staged_path,
+        staged_component,
+        chunk_shape,
+        label_offsets=offsets,
+        n_workers=n_workers,
     )
     logger.info(
         "zarr_native_merge: %d touching pairs → building LUT", len(pairs)

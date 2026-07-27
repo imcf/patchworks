@@ -56,6 +56,7 @@ import dask.array as da
 import numpy as np
 import zarr
 
+from .._chunks import cpu_allocation
 from .._io import load_ome_zarr
 
 logger = logging.getLogger(__name__)
@@ -290,12 +291,16 @@ def _level_chunks(
     axes: str,
     level_shape: tuple[int, ...],
 ) -> tuple[int, ...]:
-    """Chunking for a strided level that keeps one source chunk per task.
+    """Chunking for a strided level that keeps the per-task read bounded.
 
     Choosing ``ceil(src_chunk / stride)`` makes each output chunk the exact
     image of one source chunk, so a task reads one chunk and writes one chunk
-    with nothing shared between tasks. Capped by :data:`_CHUNK_CAP` and floored
-    so deep levels don't fragment.
+    with nothing shared between tasks.
+
+    The floor can override that at deep levels, where ``ceil(src / stride)``
+    falls below it — an output chunk then covers a few source chunks instead
+    of one. Still bounded by a small constant, which is the property that
+    matters; those levels are a fraction of the volume anyway.
     """
     out = []
     for c, st, a, s in zip(src_chunks, strides, axes, level_shape):
@@ -621,7 +626,9 @@ def _write_pyramid(
                         )
                     ),
                 )
-            _stream_strided_level(src_arr, dst_arr, strides)
+            _stream_strided_level(
+                src_arr, dst_arr, strides, n_workers=cpu_allocation()
+            )
         scale = [base_scale[k] * (strides[k] ** i) for k in range(len(axes))]
         datasets.append(_dataset(str(i), scale))
         logger.info("pyramid level %d: shape=%s", i, next_shape)
