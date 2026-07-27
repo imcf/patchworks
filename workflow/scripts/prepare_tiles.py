@@ -7,11 +7,13 @@ from pathlib import Path
 import numpy as np
 
 from patchworks import (
+    auto_empty_threshold,
     auto_tile_shape_cellpose,
+    build_occupancy_map,
     create_stage,
-    estimate_empty_tiles,
     normalize_overlap,
     spatial_tiles,
+    tile_occupancy,
 )
 
 from _pw import open_image, stage_path, start_log
@@ -78,8 +80,24 @@ print(f"[patchworks] halo read amplification: {amplification:.2f}x")
 tiles = spatial_tiles(image.shape, tile_shape)
 occupied = list(range(len(tiles)))
 if cfg.get("skip_empty", True):
-    info = estimate_empty_tiles(
-        image, tile_shape, threshold=cfg.get("empty_threshold")
+    # The occupancy map reduces every voxel of the image to per-brick maxima,
+    # so testing a tile covers the whole tile instead of a centred sample. The
+    # map is built once per image.zarr and shared by every config using it;
+    # convert does not produce it, so already-converted stores build it here
+    # on first use.
+    build_occupancy_map(str(Path(work_dir) / "image.zarr"), level=cfg["level"])
+    threshold = cfg.get("empty_threshold")
+    if threshold is None:
+        # Derive the cutoff from raw voxels, not from the pooled maxima: a
+        # brick maximum exceeds the threshold exactly when some voxel in that
+        # brick does, so the comparison stays equivalent to a full scan.
+        threshold = auto_empty_threshold(image, cfg["channel"], cfg["level"])
+    info = tile_occupancy(
+        str(Path(work_dir) / "image.zarr"),
+        tile_shape,
+        channel=cfg["channel"],
+        threshold=threshold,
+        level=cfg["level"],
     )
     occ = info["occupancy"].ravel()  # row-major, matches spatial_tiles
     occupied = [i for i in range(len(tiles)) if occ[i]]

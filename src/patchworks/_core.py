@@ -13,7 +13,7 @@ import numpy as np
 
 from ._chunks import auto_tile_shape, safe_worker_count
 from ._cluster import _client_is_in_process, _distributed_client
-from ._io import _auto_empty_threshold, load_ome_zarr
+from ._io import auto_empty_threshold, load_ome_zarr
 from ._merge import zarr_native_merge
 from ._relabel import relabel_sequential_zarr
 
@@ -416,7 +416,7 @@ def tile_process(
     # Wrap fn with optional empty-tile skipping
     _skip_thr = empty_threshold
     if skip_empty and _skip_thr is None:
-        _skip_thr = _auto_empty_threshold(image_for_threshold, channel, level)
+        _skip_thr = auto_empty_threshold(image_for_threshold, channel, level)
 
     # Up-front heads-up for a big 3-D GPU job (z-stack tiles, many of them):
     # an accurate ETA is logged after the first few tiles, but warn early that

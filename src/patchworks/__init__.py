@@ -38,8 +38,9 @@ from ._distributed import (
     spatial_tiles,
     stage_tile,
 )
-from ._io import estimate_empty_tiles, load_ome_zarr
+from ._io import auto_empty_threshold, estimate_empty_tiles, load_ome_zarr
 from ._merge import merge_tile_labels
+from ._occupancy import build_occupancy_map, occupancy_path, tile_occupancy
 from ._postprocess import dilate_labels
 from ._relabel import relabel_sequential_array, relabel_sequential_zarr
 from ._relations import label_relations
@@ -56,6 +57,10 @@ __all__ = [
     "auto_tile_shape_cellpose",
     "load_ome_zarr",
     "estimate_empty_tiles",
+    "auto_empty_threshold",
+    "build_occupancy_map",
+    "occupancy_path",
+    "tile_occupancy",
     "make_local_cluster",
     "relabel_sequential_array",
     "relabel_sequential_zarr",
