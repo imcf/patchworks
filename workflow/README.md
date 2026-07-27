@@ -24,12 +24,14 @@ calibrated, multi-scale `labels/` group.
 
 1. **convert** — input (`.ims`, `.czi`, `.lif`, `.nd2`, OME-TIFF, `.zarr`) → a
    pyramidal OME-ZARR (`image.zarr`).
-2. **prepare** (checkpoint) — plan tiles, skip background tiles, create the
-   empty `stage.zarr`, and list the tiles to segment.
-3. **segment {tile}** — one GPU job per tile: read tile + halo, run Cellpose,
-   trim, write to the stage. Scattered across the cluster.
-4. **merge** — zarr-native boundary stitch + renumber, written into
-   `image.zarr/labels/<name>/`.
+2. **prepare** (checkpoint) — validate the config, plan tiles, decide which
+   are background (from an exact max-pooled occupancy map, built once per
+   image), create the empty `stage.zarr`, and group the tiles into batches.
+3. **segment {batch}** — one GPU job per `tiles_per_job` tiles, processed
+   sequentially so they share a single CUDA init and model load: read tile +
+   halo, run Cellpose, trim, write to the stage. Scattered across the cluster.
+4. **merge** — zarr-native boundary stitch + renumber, written straight into
+   `image.zarr/labels/<name>/0`, then pyramided.
 
 ## Install
 
@@ -66,7 +68,7 @@ account, GPU request).
 # locally (single machine) — mtime triggers => upgrades don't redo conversion
 snakemake --cores 8 --configfile config/config.yaml --rerun-triggers mtime
 
-# on SLURM — one GPU job per tile, up to `jobs:` in parallel
+# on SLURM — one GPU job per batch of tiles, up to `jobs:` in parallel
 # (the profile already sets --rerun-triggers mtime)
 snakemake --workflow-profile profile/slurm --configfile config/config.yaml
 ```
@@ -94,6 +96,13 @@ pixi run multi-dry    # dry-run every segmentation config
 pixi run multi        # run locally
 pixi run multi-slurm  # submit every segmentation to SLURM
 ```
+
+It converts once, then runs the configs **concurrently** (each with its own
+Snakemake state directory), so the GPU partition stays busy instead of idling
+through every config's `prepare` and `merge` in turn. Cross-config mistakes —
+mismatched `tile_shape`/`level`, a duplicated `label_name` — are rejected
+before anything is submitted, and one config failing does not abort the rest.
+Note that the profile's `jobs:` applies per config.
 
 ## Output
 

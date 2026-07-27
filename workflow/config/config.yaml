@@ -1,8 +1,8 @@
 # patchworks Snakemake workflow — configuration.
 # Copy and edit, then run:  snakemake --workflow-profile profile/slurm
 #
-# The expensive Cellpose step is split into one SLURM job per tile, so many
-# GPUs run in parallel; the merge is a single CPU job.
+# The expensive Cellpose step is split into SLURM jobs of `tiles_per_job`
+# tiles, so many GPUs run in parallel; the merge is a single CPU job.
 
 # ---- input / output ---------------------------------------------------------
 input: "/path/to/scan.ims" # .ims, .czi, .lif, .nd2, ome-tiff, .zarr, or a
@@ -42,7 +42,7 @@ skip_empty: true # skip background tiles
 # SEQUENTIALLY, so the job's wall time is roughly N x per-tile time: size N
 # from a measured tile (`seff <jobid>`) and keep it inside the profile's
 # runtime/QOS ceiling. A failed job retries the whole batch.
-tiles_per_job: 1
+tiles_per_job: 4
 empty_threshold: null # null → Otsu; or a number
 
 # ---- segmentation -----------------------------------------------------------
@@ -76,5 +76,7 @@ pyramid_downscale: 2
 sequential_labels: true # renumber merged labels to a contiguous 1..N range
 
 # ---- merge performance --------------------------------------------------
-# null -> use the "merge" rule's actual cpus_per_task (profile/slurm/config.yaml).
+# null -> size the pool from the job's real budget: the SLURM/cgroup memory
+# limit and cpus_per_task, not the node's totals. The merge logs what it
+# detected, so you can compare that line against `seff <jobid>`.
 merge_workers: null

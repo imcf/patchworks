@@ -22,7 +22,7 @@ overlap: [4, 30, 30]
 skip_empty: true
 # Tiles per SLURM job; they run sequentially and share one model load. Raise
 # once you know a tile's runtime -- job wall time is ~N x per-tile time.
-tiles_per_job: 1
+tiles_per_job: 4
 empty_threshold: null
 
 method: "cellpose"
