@@ -11,6 +11,10 @@ executor: slurm
 # real GPU quota (MaxTRESPU) and backfills the rest, so it's safe to raise.
 # Check your actual per-user GPU cap with:
 #   sacctmgr show assoc user=$USER format=account,partition,maxjobs,GrpTRES
+#
+# NOTE: this is per Snakemake process. run_multi.py runs the segmentation
+# configs concurrently, so a 3-config multi run can have up to 3 x this many
+# jobs in flight.
 jobs: 128
 latency-wait: 60
 rerun-incomplete: true
