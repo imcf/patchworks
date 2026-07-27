@@ -346,7 +346,10 @@ def _make_globally_unique(arr, shape: tuple, chunk_shape: tuple) -> int:
 
 
 def capped_output_chunks(
-    chunk_shape: Sequence[int], caps: Sequence[int]
+    chunk_shape: Sequence[int],
+    caps: Sequence[int],
+    *,
+    min_fraction: float = 0.25,
 ) -> tuple[int, ...]:
     """Shrink each chunk to at most *cap*, staying an exact divisor.
 
@@ -356,12 +359,21 @@ def capped_output_chunks(
     A non-divisor cap would break that, so the largest divisor at or below the
     cap is used instead.
 
+    A tile axis with no useful divisor keeps its own size rather than being
+    shredded: ``auto`` tile sizing produces arbitrary integers (it takes a
+    square root), and a prime axis above the cap has no divisor except 1 --
+    which would mean one chunk per voxel along that axis.
+
     Parameters
     ----------
     chunk_shape : sequence of int
         Staged chunk (= tile) shape.
     caps : sequence of int
         Maximum chunk size per axis.
+    min_fraction : float, optional
+        Reject a divisor smaller than this fraction of the cap and keep the
+        uncapped size instead. A slightly oversized chunk is a far smaller
+        problem than a pathologically tiny one.
 
     Returns
     -------
@@ -374,6 +386,8 @@ def capped_output_chunks(
     (16, 1024, 1024)
     >>> capped_output_chunks((16, 1024, 1024), (16, 1024, 1024))
     (16, 1024, 1024)
+    >>> capped_output_chunks((1031,), (1024,))  # prime: no usable divisor
+    (1031,)
     """
     out = []
     for c, cap in zip(chunk_shape, caps):
@@ -381,7 +395,19 @@ def capped_output_chunks(
         if c <= cap:
             out.append(c)
             continue
-        out.append(next(d for d in range(cap, 0, -1) if c % d == 0))
+        divisor = next(d for d in range(cap, 0, -1) if c % d == 0)
+        if divisor < max(1, int(cap * min_fraction)):
+            logger.warning(
+                "chunk axis %d has no divisor above %d under the cap %d; "
+                "keeping %d rather than splitting it into %d-wide chunks.",
+                c,
+                int(cap * min_fraction),
+                cap,
+                c,
+                divisor,
+            )
+            divisor = c
+        out.append(divisor)
     return tuple(out)
 
 

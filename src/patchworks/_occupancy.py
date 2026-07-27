@@ -27,12 +27,15 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+from concurrent.futures import ThreadPoolExecutor
 from itertools import product as _iproduct
 from pathlib import Path
 from typing import Any, Union
 
 import numpy as np
 import zarr
+
+from ._chunks import cpu_allocation
 
 logger = logging.getLogger(__name__)
 
@@ -93,8 +96,17 @@ def _level_array(root: zarr.Group, level: int, store_path: str) -> Any:
 
 
 def occupancy_path(image_store: Union[str, Path], level: int = 0) -> str:
-    """Path of the occupancy map for one pyramid level of *image_store*."""
-    return f"{image_store}/occupancy/{level}"
+    """Path of the occupancy map for one pyramid level of *image_store*.
+
+    Deliberately a **sibling** of the image store, not a node inside it. The
+    map is not an NGFF array, and zarr refuses to walk a hierarchy containing
+    one ("Object at ... is not recognized as a component of a Zarr
+    hierarchy"), which would make every ``members()``/``arrays()`` call on the
+    user's image warn.
+    """
+    store = str(image_store).rstrip("/")
+    base = store[:-5] if store.endswith(".zarr") else store
+    return f"{base}.occupancy.zarr/{level}"
 
 
 def build_occupancy_map(
@@ -179,21 +191,36 @@ def build_occupancy_map(
         dtype=src.dtype,
     )
 
-    try:
+    ranges = [range(0, g, s) for g, s in zip(grid, steps)]
+    regions = list(_iproduct(*ranges))
+
+    def _one(starts: tuple[int, ...]) -> None:
+        out_sl = tuple(
+            slice(o, min(o + s, g)) for o, s, g in zip(starts, steps, grid)
+        )
+        src_sl = tuple(
+            slice(o.start * b, min(o.stop * b, s))
+            for o, b, s in zip(out_sl, block, sp_shape)
+        )
+        # Read every channel of this region in ONE go. Looping channels on the
+        # outside would traverse the whole image once per channel -- three
+        # full reads for a three-channel stack, where one does.
         for channel in range(n_channels):
             prefix = _leading_index(src.ndim, n_spatial, channel)
-            ranges = [range(0, g, s) for g, s in zip(grid, steps)]
-            for starts in _iproduct(*ranges):
-                out_sl = tuple(
-                    slice(o, min(o + s, g))
-                    for o, s, g in zip(starts, steps, grid)
-                )
-                src_sl = tuple(
-                    slice(o.start * b, min(o.stop * b, s))
-                    for o, b, s in zip(out_sl, block, sp_shape)
-                )
-                region = np.asarray(src[prefix + src_sl])
-                dst[(channel, *out_sl)] = _block_max(region, block)
+            region = np.asarray(src[prefix + src_sl])
+            dst[(channel, *out_sl)] = _block_max(region, block)
+
+    try:
+        n_workers = max(1, min(cpu_allocation(), len(regions)))
+        if n_workers <= 1:
+            for starts in regions:
+                _one(starts)
+        else:
+            # Reads and decompression release the GIL, so threads are enough
+            # and there is no worker payload to pickle.
+            with ThreadPoolExecutor(max_workers=n_workers) as pool:
+                for _ in pool.map(_one, regions):
+                    pass
         dst.attrs["block"] = list(block)
         dst.attrs["level"] = int(level)
         dst.attrs["source_shape"] = list(sp_shape)

@@ -192,6 +192,21 @@ def main() -> None:
         print("[run_multi] ERROR: conversion failed", file=sys.stderr)
         sys.exit(rc)
 
+    # Still phase A: build the occupancy map here too. Every config's `prepare`
+    # needs it, and they are about to run concurrently -- so leaving it to them
+    # means all of them stream the whole image, and all but one throw the
+    # result away. It covers every channel, so one build serves them all.
+    if not args.dry_run:
+        from patchworks import build_occupancy_map
+
+        levels = {int(cfg.get("level", 0)) for cfg in seg_cfgs}
+        for level in sorted(levels):
+            print(
+                f"[run_multi] building occupancy map for level {level} …",
+                flush=True,
+            )
+            build_occupancy_map(image_store, level=level)
+
     # Phase B: the segmentations touch disjoint files under
     # work_dir/<label_name>/, so run them together and let the GPU partition
     # stay busy instead of idling through each config's prepare and merge.

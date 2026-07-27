@@ -124,6 +124,70 @@ def test_build_is_idempotent_and_covers_ragged_edges(tmp_path):
     assert build_occupancy_map(store, block=(1, 8, 8)) == path
 
 
+def test_map_lives_outside_the_image_store(tmp_path):
+    """The map must not make the image store an invalid zarr hierarchy.
+
+    It is not an NGFF array, so zarr refuses to walk a hierarchy containing
+    it -- putting it inside image.zarr made every members()/arrays() call on
+    the user's own image raise a ZarrUserWarning.
+    """
+    import warnings
+
+    data = np.zeros((1, 2, 16, 16), "uint16")
+    store = _write_store(tmp_path, data)
+    path = build_occupancy_map(store, block=(1, 8, 8))
+
+    assert not path.startswith(store + "/"), "map must be a sibling, not a node"
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        members = sorted(
+            k for k, _ in zarr.open_group(store, mode="r").members()
+        )
+    assert members == ["0"], (
+        f"image store should hold only its levels: {members}"
+    )
+
+
+def test_all_channels_built_in_one_traversal(tmp_path):
+    """Every channel is filled, and the source is read once, not once each.
+
+    Looping channels on the outside traversed the whole image per channel --
+    three full reads for a three-channel stack.
+    """
+    data = np.zeros((3, 2, 16, 16), "uint16")
+    for c in range(3):
+        data[c, 0, 0, 0] = 100 * (c + 1)  # a distinct value per channel
+    store = _write_store(tmp_path, data)
+
+    reads = {"n": 0}
+    real_getitem = zarr.Array.__getitem__
+
+    def _counting(self, key):
+        if self.basename == "0":  # the image level, not the map being written
+            reads["n"] += 1
+        return real_getitem(self, key)
+
+    zarr.Array.__getitem__ = _counting
+    try:
+        build_occupancy_map(store, block=(1, 8, 8))
+    finally:
+        zarr.Array.__getitem__ = real_getitem
+
+    pooled = np.asarray(zarr.open_array(occupancy_path(store, 0), mode="r"))
+    assert pooled.shape[0] == 3
+    for c in range(3):
+        assert pooled[c].max() == 100 * (c + 1), f"channel {c} not built"
+
+    # 2x2 blocks per plane x 2 planes = 4 output regions... but the region
+    # step is sized to ~128 MB, so this tiny image is a single region: one
+    # read per channel, and no more.
+    assert reads["n"] == 3, (
+        f"expected one read per channel, got {reads['n']} -- the image is "
+        "being traversed more than once"
+    )
+
+
 def test_tile_shape_dimensionality_is_checked(tmp_path):
     data = np.zeros((1, 2, 16, 16), "uint16")
     store = _write_store(tmp_path, data)

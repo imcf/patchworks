@@ -6,6 +6,7 @@ import zarr
 
 from patchworks import (
     auto_overlap,
+    capped_output_chunks,
     create_stage,
     merge_tile_labels,
     normalize_overlap,
@@ -73,6 +74,34 @@ def test_per_axis_overlap_reads_less_but_still_stitches(tmp_path):
         ids = np.unique(merged[merged > 0])
         assert ids.size == 1, f"{name}: object split into {ids.size} labels"
     assert np.array_equal(results["scalar"], results["per_axis"])
+
+
+def test_capped_output_chunks_never_shreds_an_axis():
+    """A tile axis with no usable divisor keeps its size, not chunk-size 1.
+
+    `auto` tile sizing takes a square root, so an axis can be any integer. A
+    prime one above the cap has no divisor but 1 -- which would mean one chunk
+    per voxel along that axis.
+    """
+    assert capped_output_chunks((16, 2048, 2048), (16, 1024, 1024)) == (
+        16,
+        1024,
+        1024,
+    )
+    assert capped_output_chunks((16, 1024, 1024), (16, 1024, 1024)) == (
+        16,
+        1024,
+        1024,
+    )
+    assert capped_output_chunks((1500,), (1024,)) == (750,)  # a real divisor
+    for prime in (1031, 1093):
+        assert capped_output_chunks((prime,), (1024,)) == (prime,)
+
+    # Whatever it returns must still divide the tile, or concurrent workers
+    # would read-modify-write a chunk they share.
+    for tile in (1024, 2048, 1500, 1031, 697, 3000):
+        (chunk,) = capped_output_chunks((tile,), (1024,))
+        assert tile % chunk == 0, f"{chunk} does not divide {tile}"
 
 
 def _relabel_canonical(arr):
