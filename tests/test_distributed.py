@@ -2,6 +2,7 @@
 
 import numpy as np
 import pytest
+import zarr
 
 from patchworks import (
     auto_overlap,
@@ -72,6 +73,68 @@ def test_per_axis_overlap_reads_less_but_still_stitches(tmp_path):
         ids = np.unique(merged[merged > 0])
         assert ids.size == 1, f"{name}: object split into {ids.size} labels"
     assert np.array_equal(results["scalar"], results["per_axis"])
+
+
+def _relabel_canonical(arr):
+    """Canonical form so two labellings can be compared up to renumbering."""
+    out = np.zeros_like(arr, dtype=np.int64)
+    for new, old in enumerate(
+        sorted(np.unique(arr[arr > 0]).tolist()), start=1
+    ):
+        out[arr == old] = new
+    return out
+
+
+def test_offsets_match_the_renumber_pass(tmp_path):
+    """Per-tile counts must produce the same labelling as the scan pass.
+
+    The counts path replaces _make_globally_unique -- a full read+write of the
+    store -- with a cumulative sum. This is the guard that deleting that pass
+    changed nothing observable.
+    """
+    img = np.zeros((8, 48), "uint16")
+    img[1:4, 4:12] = 500  # inside tile 0
+    img[2:6, 14:26] = 500  # straddles the x=16 boundary
+    img[5:7, 30:44] = 500  # straddles the x=32 boundary
+    tile = (8, 16)
+
+    merged = {}
+    for name, use_counts in (("scan", False), ("counts", True)):
+        stage = str(tmp_path / f"stage_{name}.zarr")
+        create_stage(stage, img.shape, tile)
+        counts = {}
+        for i in range(len(spatial_tiles(img.shape, tile))):
+            counts[i] = stage_tile(
+                img, _fn, stage, i, tile_shape=tile, overlap=2
+            )
+        merged[name] = merge_tile_labels(
+            stage,
+            write_to=str(tmp_path / f"out_{name}.zarr"),
+            input_component="staged",
+            sequential_labels=True,
+            label_counts=counts if use_counts else None,
+        ).compute()
+
+    assert np.array_equal(
+        _relabel_canonical(merged["scan"]), _relabel_canonical(merged["counts"])
+    ), "offset path disagrees with the renumber pass"
+    ids = np.unique(merged["counts"][merged["counts"] > 0])
+    assert set(ids.tolist()) == {1, 2, 3}, f"expected 3 objects, got {ids}"
+
+
+def test_stage_tile_returns_dense_label_count(tmp_path):
+    """stage_tile reports how many labels it wrote, and writes exactly 1..n."""
+    img = np.zeros((8, 16), "uint16")
+    img[1:3, 1:3] = 500
+    img[5:7, 10:13] = 500
+    stage = str(tmp_path / "stage.zarr")
+    create_stage(stage, img.shape, (8, 16))
+
+    n = stage_tile(img, _fn, stage, 0, tile_shape=(8, 16), overlap=0)
+    assert n == 2
+
+    written = np.asarray(zarr.open_group(stage, mode="r")["staged"])
+    assert set(np.unique(written).tolist()) == {0, 1, 2}, "ids must be dense"
 
 
 def test_stage_then_merge_stitches_boundary(tmp_path):

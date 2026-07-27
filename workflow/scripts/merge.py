@@ -5,6 +5,7 @@ boundaries, optionally renumbers them) and writes the result back into the
 image store under ``labels/<name>/`` as a calibrated, multi-scale pyramid.
 """
 
+import json
 import os
 import shutil
 from pathlib import Path
@@ -28,6 +29,14 @@ merged_store = str(Path(work_dir) / label_name / "_merged.zarr")
 default_workers = int(
     os.environ.get("SLURM_CPUS_PER_TASK", os.cpu_count() or 4)
 )
+# Each segment job recorded how many labels every tile wrote. Feeding those
+# counts in lets the merge compute global id ranges by a cumulative sum,
+# replacing a full read+write of the store that existed only to renumber it.
+label_counts = {}
+for marker in snakemake.input:  # noqa: F821
+    for index, n in json.loads(Path(marker).read_text())["counts"].items():
+        label_counts[int(index)] = int(n)
+
 merged, n_objects = merge_tile_labels(
     stage_path(work_dir, label_name),
     write_to=merged_store,
@@ -36,6 +45,7 @@ merged, n_objects = merge_tile_labels(
     n_workers=cfg.get("merge_workers", default_workers),
     progress=False,
     return_count=True,
+    label_counts=label_counts,
 )
 group = write_labels(
     image_store,

@@ -18,6 +18,8 @@ from typing import Callable, Sequence, Union
 import numpy as np
 import zarr
 
+from ._relabel import relabel_sequential_array
+
 Overlap = Union[int, Sequence[int]]
 
 
@@ -158,7 +160,11 @@ def stage_tile(
     Returns
     -------
     int
-        The processed tile *index*.
+        Number of labels this tile wrote, i.e. its ids are exactly ``1..n``.
+        Record it (the workflow puts it in the tile's ``.done`` marker): with
+        one count per tile the merge can derive every tile's global id range
+        by a cumulative sum, instead of rewriting the whole store to make the
+        ids unique.
     """
     shape = image.shape
     sl = spatial_tiles(shape, tile_shape)[index]
@@ -175,8 +181,13 @@ def stage_tile(
         slice(left, out.shape[i] - right)
         for i, (left, right) in enumerate(trims)
     )
-    # Local labels (1..N) are fine here — they collide across tiles, but the
-    # merge's first pass makes them globally unique before stitching.
+    trimmed = out[sel]
+    # Local labels collide across tiles; the merge resolves that. Renumber to a
+    # dense 1..n first: trimming the halo can drop objects entirely, and the
+    # merge's offset arithmetic needs each tile's ids to be exactly 1..n with
+    # no gaps so that `offset[tile] + local` is globally unique AND compact.
+    trimmed = relabel_sequential_array(trimmed)
+    n_labels = int(trimmed.max())
     dst = zarr.open_group(str(stage_path), mode="r+")[component]
-    dst[sl] = out[sel].astype(dst.dtype)
-    return index
+    dst[sl] = trimmed.astype(dst.dtype)
+    return n_labels

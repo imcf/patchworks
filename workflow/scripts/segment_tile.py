@@ -28,8 +28,9 @@ fn = build_fn(cfg)
 stage = stage_path(work_dir, label_name)
 tile_shape = tuple(manifest["tile_shape"])
 
+counts = {}
 for index in indices:
-    stage_tile(
+    counts[index] = stage_tile(
         image,
         fn,
         stage,
@@ -38,8 +39,12 @@ for index in indices:
         # Scalar (older manifests) or per-axis list; stage_tile normalizes both.
         overlap=manifest["overlap"],
     )
-    print(f"[patchworks] segmented tile {index}")
+    print(f"[patchworks] segmented tile {index}: {counts[index]} label(s)")
 
+# The marker carries each tile's label count. That is what lets merge derive
+# every tile's global id range with a cumulative sum instead of streaming the
+# whole store to renumber it -- the counts are free here, we just write them
+# down instead of throwing them away.
 with open(snakemake.output[0], "w") as fh:  # noqa: F821
-    json.dump({"batch": batch, "tiles": indices}, fh)
+    json.dump({"batch": batch, "counts": counts}, fh)
 print(f"[patchworks] batch {batch}: {len(indices)} tile(s) done")
