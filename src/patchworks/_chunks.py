@@ -4,14 +4,18 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any
+from typing import Any, Sequence, Union
 
 import numpy as np
 
 logger = logging.getLogger(__name__)
 
 
-def auto_overlap(diameter: float, safety: float = 1.0) -> int:
+def auto_overlap(
+    diameter: float,
+    safety: float = 1.0,
+    voxel_size: Union[Sequence[float], None] = None,
+) -> Union[int, tuple[int, ...]]:
     """Recommended overlap (halo) for a given cell diameter.
 
     Rule: overlap >= diameter so the segmentation function always sees at
@@ -19,18 +23,29 @@ def auto_overlap(diameter: float, safety: float = 1.0) -> int:
     tile boundaries are then segmented correctly and only genuinely split
     cells produce touching labels at the boundary → correct merge.
 
+    With *voxel_size* the halo is returned per axis instead of as one number.
+    That matters on anisotropic stacks: a halo big enough laterally is far
+    more than one cell deep in z, and the extra planes are read and
+    segmented only to be trimmed away again.
+
     Parameters
     ----------
     diameter:
-        Expected cell diameter in pixels (same unit as your image).
+        Expected cell diameter in **lateral** pixels (same unit as your
+        image's x/y).
     safety:
         Multiplier on top of diameter. Default 1.0 (= one cell width).
         Use 1.5–2.0 for elongated or irregularly-shaped cells.
+    voxel_size:
+        Physical size per axis, in any single unit (e.g. ``(2.0, 0.1, 0.1)``
+        for a 2 µm z-step and 100 nm pixels). ``None`` → one isotropic
+        number, as before.
 
     Returns
     -------
-    int
-        Overlap depth to pass to ``tile_process(..., overlap=...)``.
+    int or tuple of int
+        Overlap depth to pass to ``tile_process(..., overlap=...)``. A tuple
+        (one entry per axis) when *voxel_size* is given.
 
     Examples
     --------
@@ -41,8 +56,18 @@ def auto_overlap(diameter: float, safety: float = 1.0) -> int:
     >>> result = tile_process("image.zarr", fn,
     ...                       tile_shape=(1, 2048, 2048),
     ...                       overlap=auto_overlap(30))
+    >>> auto_overlap(15, voxel_size=(2.0, 0.1, 0.1))
+    (1, 15, 15)
     """
-    return max(1, int(np.ceil(diameter * safety)))
+    lateral = max(1, int(np.ceil(diameter * safety)))
+    if voxel_size is None:
+        return lateral
+    # Convert the lateral halo to a physical distance, then back into pixels
+    # along each axis using that axis' own voxel size.
+    physical = diameter * safety * float(voxel_size[-1])
+    return tuple(
+        max(1, int(np.ceil(physical / float(v)))) for v in voxel_size
+    )
 
 
 _GPU_MEMORY_FALLBACK = 8 * 1024**3

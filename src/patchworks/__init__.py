@@ -32,7 +32,12 @@ from importlib.metadata import version as _pkg_version
 from ._chunks import auto_overlap, auto_tile_shape, auto_tile_shape_cellpose
 from ._cluster import make_local_cluster
 from ._core import tile_process
-from ._distributed import create_stage, spatial_tiles, stage_tile
+from ._distributed import (
+    create_stage,
+    normalize_overlap,
+    spatial_tiles,
+    stage_tile,
+)
 from ._io import estimate_empty_tiles, load_ome_zarr
 from ._merge import merge_tile_labels
 from ._postprocess import dilate_labels
@@ -55,6 +60,7 @@ __all__ = [
     "relabel_sequential_array",
     "relabel_sequential_zarr",
     "label_relations",
+    "normalize_overlap",
     "spatial_tiles",
     "create_stage",
     "stage_tile",
