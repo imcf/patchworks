@@ -46,6 +46,7 @@ def _snakemake_cmd(
     dry_run: bool,
     state_dir: Path | None = None,
     targets: list[str] | None = None,
+    extra: list[str] | None = None,
 ) -> list[str]:
     """Build one snakemake invocation.
 
@@ -69,6 +70,8 @@ def _snakemake_cmd(
         cmd += ["--cores", str(cores), "--rerun-triggers", "mtime"]
     if dry_run:
         cmd += ["-n", "-p"]
+    if extra:
+        cmd += extra
     if targets:
         # "--" ends option parsing: --rerun-triggers takes a variable number
         # of values and would otherwise swallow the target path.
@@ -172,6 +175,15 @@ def main() -> None:
         action="store_true",
         help="pass -n -p to every Snakemake run; skips relations",
     )
+    parser.add_argument(
+        "--unlock",
+        action="store_true",
+        help=(
+            "release stale Snakemake locks in every state directory this "
+            "script manages, then exit. Needed after a run was killed or "
+            "died: the lock is only released on a clean exit."
+        ),
+    )
     args = parser.parse_args()
 
     workflow_dir = Path(__file__).resolve().parent.parent
@@ -184,6 +196,32 @@ def main() -> None:
     seg_cfgs = [_load_yaml(p) for p in seg_config_paths]
     work_dir = _validate_configs(seg_config_paths, seg_cfgs)
     image_store = f"{work_dir}/image.zarr"
+
+    # Each phase gets its own Snakemake state directory (the lock lives in the
+    # working directory, not the config), so unlocking has to cover all of
+    # them -- and nobody should have to reconstruct these paths by hand.
+    state_dirs = [Path(work_dir) / ".snakemake_convert"] + [
+        Path(cfg["work_dir"]) / cfg["label_name"] / ".snakemake"
+        for cfg in seg_cfgs
+    ]
+    if args.unlock:
+        for state_dir in state_dirs:
+            if not state_dir.exists():
+                continue
+            _run(
+                _snakemake_cmd(
+                    seg_config_paths[0],
+                    workflow_dir=workflow_dir,
+                    profile=args.profile,
+                    cores=args.cores,
+                    dry_run=False,
+                    state_dir=state_dir,
+                    extra=["--unlock"],
+                ),
+                workflow_dir,
+            )
+        print("[run_multi] unlocked; re-run without --unlock", flush=True)
+        return
 
     # Phase A: convert exactly once. The three runs are about to go concurrent
     # and `convert` writes with overwrite=True, so letting them race on it
@@ -201,7 +239,13 @@ def main() -> None:
         workflow_dir,
     )
     if rc != 0:
-        print("[run_multi] ERROR: conversion failed", file=sys.stderr)
+        print(
+            "[run_multi] ERROR: conversion failed.\n"
+            "  If the log says the directory cannot be locked, a previous run "
+            "was killed rather than exiting cleanly; release it with:\n"
+            f"      {Path(sys.argv[0]).name} --config {args.config} --unlock",
+            file=sys.stderr,
+        )
         sys.exit(rc)
 
     # Still phase A: build the occupancy map here too. Every config's `prepare`

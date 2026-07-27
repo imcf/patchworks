@@ -346,6 +346,19 @@ the GPU partition stays busy instead of idling through every config's
 `prepare` and multi-hour `merge` in turn. A config that fails does **not**
 abort the others; you get a per-config status and a non-zero exit.
 
+!!! tip "After a killed run"
+    Snakemake only releases its lock on a clean exit, so a run that was killed
+    (Ctrl-C, an SSH drop, an OOM) leaves the directory locked. Each phase has
+    its own state directory, so releasing them by hand means reconstructing
+    several paths — use the flag instead:
+
+    ```bash
+    pixi run multi -- --unlock     # then re-run normally
+    ```
+
+    Running the orchestrator under `tmux` avoids most of these in the first
+    place: it survives a dropped connection.
+
 !!! warning "`jobs:` is per config"
     The profile's `jobs:` caps one Snakemake process. Running three configs
     concurrently can therefore have 3× that many jobs in flight — lower it if
@@ -450,6 +463,8 @@ prologue. The simplest path is a single shared env that the compute nodes see.
 | Symptom | Fix |
 |---------|-----|
 | `snakemake: command not found` | use `python -m snakemake` |
+| `Directory cannot be locked` | a previous run was killed instead of exiting cleanly. For a multi-run: `pixi run multi -- --unlock` (it covers every state directory, including the conversion one). For a single config: add `--unlock --directory <the same one you ran with>` |
+| `BioImage does not support the image: '.../*tif'` | a glob input needs `sequence_pattern` — see [A folder of single-plane TIFFs](ome_zarr_napari.md#a-folder-of-single-plane-tiffs) |
 | Segment jobs pend forever | wrong `slurm_partition`/GPU request; on scicore use `gres: "gpu:1"` |
 | Segment dies, `Network is unreachable` | offline GPU nodes — the `fetch_model` localrule caches the model on the submit host first; if it still fails, your submit host has no network either (pre-download manually) |
 | `cellpose is not installed` in a job | the job's env lacks `patchworks[cellpose]` |
