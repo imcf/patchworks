@@ -65,9 +65,7 @@ def auto_overlap(
     # Convert the lateral halo to a physical distance, then back into pixels
     # along each axis using that axis' own voxel size.
     physical = diameter * safety * float(voxel_size[-1])
-    return tuple(
-        max(1, int(np.ceil(physical / float(v)))) for v in voxel_size
-    )
+    return tuple(max(1, int(np.ceil(physical / float(v)))) for v in voxel_size)
 
 
 _GPU_MEMORY_FALLBACK = 8 * 1024**3

@@ -42,15 +42,32 @@ if ts == "auto":
 else:
     tile_shape = tuple(ts)
 
+# Which z regime are we in? auto_tile_shape_cellpose pins z to the full extent
+# when do_3D is set, so "auto" gives whole-z tiles: no z tiling, no z-boundary
+# stitching, and Cellpose sees each object's full depth. An explicit z smaller
+# than the image tiles in z instead, which is faster but leaves the merge to
+# stitch objects back together across z boundaries.
+# tile_shape is zipped against image.shape (see spatial_tiles), so axis 0 of
+# both is z for a 3-D stack.
+if len(tile_shape) >= 3:
+    n_z = image.shape[0]
+    if tile_shape[0] >= n_z:
+        print("[patchworks] z regime: whole-z tiles (no z-boundary stitching)")
+    else:
+        print(
+            f"[patchworks] z regime: tiled in z ({tile_shape[0]} of {n_z} "
+            "planes); objects spanning z boundaries are stitched by the merge"
+        )
+
 # A halo wider than the tile itself is not boundary context -- it means every
 # tile re-reads and re-segments its neighbours. Catch it here rather than
 # paying 5x the GPU time for results that get trimmed away.
 overlap = normalize_overlap(cfg.get("overlap", 0), len(tile_shape))
-for axis, (ov, ts) in enumerate(zip(overlap, tile_shape)):
-    if ov >= ts:
+for axis, (ov, extent) in enumerate(zip(overlap, tile_shape)):
+    if ov >= extent:
         raise ValueError(
-            f"overlap[{axis}]={ov} >= tile_shape[{axis}]={ts}: each tile would "
-            f"read past its neighbours. Use a per-axis overlap, e.g. "
+            f"overlap[{axis}]={ov} >= tile_shape[{axis}]={extent}: each tile "
+            f"would read past its neighbours. Use a per-axis overlap, e.g. "
             f"overlap: {list(max(1, t // 4) for t in tile_shape)}"
         )
 amplification = np.prod(
