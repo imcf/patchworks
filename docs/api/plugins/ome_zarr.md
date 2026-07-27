@@ -24,3 +24,15 @@ resolution, matching anisotropic microscopy stacks.
 ## register_labels
 
 ::: patchworks.plugins.ome_zarr.register_labels
+
+## NGFF metadata layout
+
+NGFF 0.4 is defined over zarr v2 and puts its keys at the top level; 0.5 is
+the zarr-v3 revision and nests them under `ome`. patchworks writes whichever
+matches the store, and reads both.
+
+::: patchworks.plugins.ome_zarr.ngff_version
+
+::: patchworks.plugins.ome_zarr.read_ngff_attr
+
+::: patchworks.plugins.ome_zarr.write_ngff_attrs

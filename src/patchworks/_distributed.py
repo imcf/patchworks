@@ -18,6 +18,7 @@ from typing import Callable, Sequence, Union
 import numpy as np
 import zarr
 
+from ._io import zarr_compressor_kwargs
 from ._relabel import relabel_sequential_array
 
 Overlap = Union[int, Sequence[int]]
@@ -116,7 +117,11 @@ def create_stage(
     """
     root = zarr.open_group(str(stage_path), mode="w")
     root.create_array(
-        name=component, shape=shape, chunks=tile_shape, dtype=dtype
+        name=component,
+        shape=shape,
+        chunks=tile_shape,
+        dtype=dtype,
+        **zarr_compressor_kwargs(),
     )
     return str(stage_path)
 

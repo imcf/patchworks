@@ -57,7 +57,7 @@ import numpy as np
 import zarr
 
 from .._chunks import cpu_allocation
-from .._io import load_ome_zarr
+from .._io import load_ome_zarr, zarr_compressor_kwargs
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +94,20 @@ def _default_axes(ndim: int) -> str:
         raise ValueError(
             f"cannot infer axes for a {ndim}-D array; pass axes= explicitly"
         )
-    return _DEFAULT_ORDER[len(_DEFAULT_ORDER) - ndim :]
+    guess = _DEFAULT_ORDER[len(_DEFAULT_ORDER) - ndim :]
+    if ndim >= 4:
+        # 2-D and 3-D are unambiguous (yx, zyx), but from 4-D on the leading
+        # axis could be channel or time and the array alone cannot say. A
+        # (t, z, y, x) stack is silently labelled "czyx" here. Readers that
+        # carry dimension metadata (bioio, Imaris) never reach this path.
+        logger.warning(
+            "no axes= given for a %d-D array; guessing %r from the number of "
+            "dimensions. Pass axes= explicitly if the leading axis is not %r.",
+            ndim,
+            guess,
+            guess[0],
+        )
+    return guess
 
 
 def _axis_type(name: str) -> str:
@@ -178,6 +191,59 @@ def _default_chunks(shape: tuple[int, ...], axes: str) -> tuple[int, ...]:
 ShardSpec = Union[bool, tuple[int, ...]]
 _SHARD_TARGET_BYTES = 512 * 1024**2  # aim for ~512 MB shards
 _ZARR_V3 = int(zarr.__version__.split(".")[0]) >= 3
+# NGFF 0.4 is defined over zarr v2 and puts its keys at the top level of
+# .zattrs; 0.5 is the zarr-v3 revision and nests them under an "ome" key with
+# the version there. Writing v3 data with 0.4's layout matches neither, so the
+# layout follows the zarr version actually being written.
+_NGFF_VERSION_V3 = "0.5"
+
+
+def ngff_version() -> str:
+    """NGFF version matching the zarr format this build writes."""
+    return _NGFF_VERSION_V3 if _ZARR_V3 else _NGFF_VERSION
+
+
+def read_ngff_attr(attrs, key: str, default=None):
+    """Read an NGFF key from either layout.
+
+    Accepts both the 0.4 top-level placement and the 0.5 ``ome`` nesting, so
+    stores written by any patchworks version (or another tool) still load.
+
+    Parameters
+    ----------
+    attrs : Mapping
+        A zarr group's attributes.
+    key : str
+        NGFF key, e.g. ``"multiscales"``, ``"labels"``, ``"image-label"``.
+    default : Any, optional
+        Returned when the key is absent from both layouts.
+    """
+    attrs = dict(attrs)
+    if key in attrs:
+        return attrs[key]
+    nested = attrs.get("ome")
+    if isinstance(nested, dict) and key in nested:
+        return nested[key]
+    return default
+
+
+def write_ngff_attrs(group, **entries) -> None:
+    """Write NGFF keys in the layout matching the store's zarr version.
+
+    On zarr v3 the keys are merged into the ``ome`` attribute (0.5); on v2
+    they go to the top level (0.4). Merging matters because several keys are
+    written at different times onto the same group -- ``multiscales`` by the
+    pyramid, then ``image-label`` when the labels are registered.
+    """
+    if not _ZARR_V3:
+        for key, value in entries.items():
+            group.attrs[key] = value
+        return
+    existing = dict(group.attrs).get("ome")
+    merged = dict(existing) if isinstance(existing, dict) else {}
+    merged["version"] = _NGFF_VERSION_V3
+    merged.update(entries)
+    group.attrs["ome"] = merged
 
 
 def _effective_shard(
@@ -321,10 +387,13 @@ def _create_level_array(
     """Create (replacing any existing) a pyramid level array in *group*."""
     if name in group:
         del group[name]
+    kwargs = zarr_compressor_kwargs()
     if _ZARR_V3:
-        return group.create_array(name, shape=shape, chunks=chunks, dtype=dtype)
+        return group.create_array(
+            name, shape=shape, chunks=chunks, dtype=dtype, **kwargs
+        )
     return group.zeros(
-        name, shape=shape, chunks=chunks, dtype=dtype, overwrite=True
+        name, shape=shape, chunks=chunks, dtype=dtype, overwrite=True, **kwargs
     )
 
 
@@ -664,15 +733,14 @@ def _write_multiscales(
     -------
     None
     """
-    group = zarr.open_group(group_path, mode="a")
-    group.attrs["multiscales"] = [
-        {
-            "version": _NGFF_VERSION,
-            "name": name,
-            "axes": _axes_meta(axes, calibrated),
-            "datasets": datasets,
-        }
-    ]
+    entry = {
+        "name": name,
+        "axes": _axes_meta(axes, calibrated),
+        "datasets": datasets,
+    }
+    if not _ZARR_V3:
+        entry["version"] = _NGFF_VERSION  # 0.5 carries it on the ome group
+    write_ngff_attrs(zarr.open_group(group_path, mode="a"), multiscales=[entry])
 
 
 def _read_zarr_calibration(store: Union[str, Path], axes: str) -> PixelSize:
@@ -693,7 +761,7 @@ def _read_zarr_calibration(store: Union[str, Path], axes: str) -> PixelSize:
     """
     try:
         root = zarr.open_group(str(store), mode="r")
-        ms = root.attrs["multiscales"][0]
+        ms = read_ngff_attr(root.attrs, "multiscales")[0]
         ax = [a["name"] for a in ms["axes"]]
         scale = ms["datasets"][0]["coordinateTransformations"][0]["scale"]
     except (KeyError, IndexError, TypeError):
@@ -1325,7 +1393,7 @@ def add_pyramid(
 
     gp = str(group_path)
     root = zarr.open_group(gp, mode="r")
-    multiscales = root.attrs.get("multiscales")
+    multiscales = read_ngff_attr(root.attrs, "multiscales")
     if multiscales:
         base = multiscales[0]["datasets"][0]["path"]
         if axes is None:
@@ -1445,16 +1513,18 @@ def register_labels(
         progress=progress,
     )
     grp = zarr.open_group(group, mode="a")
-    grp.attrs["image-label"] = {"version": _NGFF_VERSION}
+    write_ngff_attrs(grp, **{"image-label": {"version": ngff_version()}})
     if n_objects is not None:
+        # patchworks' own hints, not NGFF keys, so they stay at the top level
+        # where a consumer can find them without knowing the layout.
         grp.attrs["n_objects"] = int(n_objects)
         grp.attrs["sequential_labels"] = True
 
     labels_grp = zarr.open_group(f"{store}/labels", mode="a")
-    registered = list(labels_grp.attrs.get("labels", []))
+    registered = list(read_ngff_attr(labels_grp.attrs, "labels", []) or [])
     if name not in registered:
         registered.append(name)
-    labels_grp.attrs["labels"] = registered
+    write_ngff_attrs(labels_grp, labels=registered)
     return group
 
 

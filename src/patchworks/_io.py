@@ -15,6 +15,35 @@ logger = logging.getLogger(__name__)
 _ZARR_V3 = int(zarr.__version__.split(".")[0]) >= 3
 
 
+_ZARR_V3 = int(zarr.__version__.split(".")[0]) >= 3
+
+
+def zarr_compressor_kwargs() -> dict:
+    """Keyword arguments pinning the compression codec for a new array.
+
+    zstd is already zarr v3's default, but relying on a library default means
+    the stores patchworks writes change silently if that default ever moves.
+    Labels in particular are highly compressible, so this is worth stating.
+
+    Returns
+    -------
+    dict
+        ``compressors=``/``compressor=`` as the installed zarr expects, or
+        empty if the codec cannot be built (then the default applies).
+    """
+    try:
+        if _ZARR_V3:
+            from zarr.codecs import ZstdCodec
+
+            return {"compressors": (ZstdCodec(level=1),)}
+        import numcodecs
+
+        return {"compressor": numcodecs.Zstd(level=1)}
+    except Exception:  # pragma: no cover - depends on the installed zarr
+        logger.debug("could not pin a compressor; using zarr's default")
+        return {}
+
+
 def load_ome_zarr(
     store_path: Union[str, Path],
     channel: int | None = 0,

@@ -94,9 +94,19 @@ image that is most of the volume.
 
 When the merge's output *is* its input, this pass rewrites the array in
 place. That is safe because the boundary scan (step 3) has already finished,
-so nothing still needs the original ids. The trade-off is restartability: a
-job killed part-way through leaves a half-relabelled array, where a separate
-output store would have left the input intact to redo from.
+so nothing still needs the original ids.
+
+Because an in-place merge destroys its own input, it records how far it got
+on the array itself, and refuses to guess on a re-run:
+
+| State found | What happens |
+| --- | --- |
+| nothing recorded | fresh tile-local ids — merge normally |
+| `running` | a previous attempt died mid-relabel, so the array is part local and part global. **Refuses**: re-segment to rebuild it. |
+| `done` | already merged — a no-op, so a failure *after* the relabel (the pyramid, say) can simply be retried |
+
+Without that, a second pass would add each tile's offset to ids that are
+already global, which can land two unrelated objects on the same id.
 
 ## Using the merge step standalone
 

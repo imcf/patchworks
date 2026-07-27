@@ -34,6 +34,7 @@ import numpy as np
 import zarr
 
 from ._chunks import cpu_allocation
+from ._io import zarr_compressor_kwargs
 
 try:
     from tqdm.auto import tqdm as _tqdm
@@ -44,6 +45,12 @@ logger = logging.getLogger(__name__)
 
 _ZARR_V3 = int(zarr.__version__.split(".")[0]) >= 3
 _LUT_WARN_THRESHOLD = 100_000_000  # warn when max_label > 100 M (LUT > 800 MB)
+
+# Attributes recording how far an in-place merge got. Needed because an
+# in-place merge destroys its own input: a second pass over already-global ids
+# would add the per-tile offsets again and can collide unrelated objects.
+_MERGE_STATE = "patchworks_merge_state"
+_MERGE_COUNT = "patchworks_n_objects"
 
 # Per-worker globals set by _init_worker.
 # LUT is memory-mapped from disk so it is shared read-only across all workers
@@ -335,10 +342,13 @@ def _create_zarr_label_array(
     """
     if name in group:
         del group[name]
+    kwargs = zarr_compressor_kwargs()
     if _ZARR_V3:
-        return group.create_array(name, shape=shape, chunks=chunks, dtype=dtype)
+        return group.create_array(
+            name, shape=shape, chunks=chunks, dtype=dtype, **kwargs
+        )
     return group.zeros(
-        name, shape=shape, chunks=chunks, dtype=dtype, overwrite=True
+        name, shape=shape, chunks=chunks, dtype=dtype, overwrite=True, **kwargs
     )
 
 
@@ -635,6 +645,29 @@ def zarr_native_merge(
                 "output_chunks cannot differ from the source chunking when "
                 "merging in place (the array is rewritten, not recreated)"
             )
+        # Running this twice over the same array would add the per-tile
+        # offsets to ids that are already global, which can land two unrelated
+        # objects on the same id. The source is destroyed as we go, so the
+        # state has to be recorded rather than inferred.
+        state = arr.attrs.get(_MERGE_STATE)
+        if state == "running":
+            raise RuntimeError(
+                f"{out_path}/{out_component} was left half-merged by an "
+                "earlier attempt, so its labels are part local and part "
+                "global and cannot be merged again. Re-run the segmentation "
+                "for this label (delete the label group and its tiles.json) "
+                "to rebuild it from scratch."
+            )
+        if state == "done":
+            n = arr.attrs.get(_MERGE_COUNT)
+            logger.info(
+                "zarr_native_merge: %s/%s is already merged (%s objects); "
+                "nothing to do",
+                out_path,
+                out_component,
+                n,
+            )
+            return n
         logger.info("zarr_native_merge: relabeling in place, no second store")
 
     out_root = zarr.open_group(out_path, mode="a")
@@ -699,6 +732,12 @@ def zarr_native_merge(
     np.save(lut_path, lut)
     del lut  # parent no longer needs it; workers load via mmap
 
+    if in_place:
+        # From here the source is being overwritten. Record that, so a crash
+        # leaves evidence the array is half-converted rather than looking like
+        # untouched input to the next attempt.
+        arr.attrs[_MERGE_STATE] = "running"
+
     try:
         if n_w <= 1:
             _init_worker(
@@ -730,6 +769,13 @@ def zarr_native_merge(
         import shutil
 
         shutil.rmtree(_lut_dir, ignore_errors=True)
+
+    if in_place:
+        # Every chunk is now global. Recording the count as well makes a retry
+        # after a *later* failure (the pyramid, say) a cheap no-op instead of
+        # forcing a full re-segmentation.
+        arr.attrs[_MERGE_COUNT] = n_objects
+        arr.attrs[_MERGE_STATE] = "done"
 
     return n_objects
 

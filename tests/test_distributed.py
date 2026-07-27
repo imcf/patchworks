@@ -245,6 +245,49 @@ def test_in_place_merge_matches_the_two_store_merge(tmp_path):
         )
 
 
+def test_in_place_merge_is_not_applied_twice(tmp_path):
+    """A second in-place merge must not re-offset already-global ids.
+
+    Re-running would add each tile's offset to ids that are already global,
+    which can land two unrelated objects on the same id. The completed case
+    is a no-op so a failure *after* the relabel can still be retried; a
+    half-finished one refuses, because that data cannot be recovered.
+    """
+    img = np.zeros((8, 48), "uint16")
+    img[1:4, 4:12] = 500
+    img[2:6, 14:26] = 500
+    tile = (8, 16)
+
+    stage = str(tmp_path / "stage.zarr")
+    create_stage(stage, img.shape, tile)
+    counts = {
+        i: stage_tile(img, _fn, stage, i, tile_shape=tile, overlap=2)
+        for i in range(len(spatial_tiles(img.shape, tile)))
+    }
+    kwargs = dict(
+        write_to=stage,
+        input_component="staged",
+        output_component="staged",
+        sequential_labels=True,
+        label_counts=counts,
+        return_count=True,
+    )
+    first, n_first = merge_tile_labels(stage, **kwargs)
+    first = first.compute()
+
+    # Re-running is a no-op: same labels, same count, nothing re-offset.
+    second, n_second = merge_tile_labels(stage, **kwargs)
+    assert np.array_equal(first, second.compute()), "labels were merged twice"
+    assert n_second == n_first
+
+    # A merge interrupted part-way leaves data that cannot be trusted.
+    zarr.open_group(stage, mode="r+")["staged"].attrs[
+        "patchworks_merge_state"
+    ] = "running"
+    with pytest.raises(RuntimeError, match="half-merged"):
+        merge_tile_labels(stage, **kwargs)
+
+
 def test_stage_tile_returns_dense_label_count(tmp_path):
     """stage_tile reports how many labels it wrote, and writes exactly 1..n."""
     img = np.zeros((8, 16), "uint16")
