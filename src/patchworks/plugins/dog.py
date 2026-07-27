@@ -34,12 +34,15 @@ docs/guide/custom_segmentation.md), use the
 
 from __future__ import annotations
 
+import logging
 from functools import partial
 from typing import Any, Callable
 
 import numpy as np
 
 from .._gpu import free_gpu_caches, retry_on_oom
+
+logger = logging.getLogger(__name__)
 
 
 def _require_cupy():
@@ -77,6 +80,64 @@ def _require_pycudadecon():
         ) from exc
 
 
+def decon_voxel_kwargs(
+    voxel_size: dict[str, float], psf_voxel_size: dict[str, float] | None = None
+) -> dict[str, float]:
+    """pycudadecon's voxel-size arguments, derived from a calibration.
+
+    ``dxdata``/``dzdata`` describe the **image**, so they come straight from
+    its calibration. ``dxpsf``/``dzpsf`` describe the **PSF file**, which is
+    only the same when the PSF was acquired on the same system at the same
+    sampling -- pass *psf_voxel_size* when it was not.
+
+    Getting these wrong does not fail loudly: deconvolution just returns a
+    subtly wrong result, which is why deriving them beats retyping them.
+
+    Parameters
+    ----------
+    voxel_size : dict
+        Image calibration, e.g. from
+        :func:`patchworks.plugins.ome_zarr.read_pixel_size`. Needs ``x`` (or
+        ``y``) for the lateral size and ``z`` for the axial one.
+    psf_voxel_size : dict, optional
+        The PSF's own calibration. Defaults to *voxel_size*.
+
+    Returns
+    -------
+    dict
+        ``dxdata``/``dzdata``/``dxpsf``/``dzpsf``, omitting any the
+        calibration cannot supply.
+
+    Examples
+    --------
+    >>> decon_voxel_kwargs({"z": 0.2, "y": 0.1, "x": 0.1})
+    {'dxdata': 0.1, 'dzdata': 0.2, 'dxpsf': 0.1, 'dzpsf': 0.2}
+    """
+
+    def _lateral(cal):
+        x, y = cal.get("x"), cal.get("y")
+        if x and y and abs(x - y) > 1e-9 * max(x, y):
+            logger.warning(
+                "anisotropic lateral calibration (x=%s, y=%s); pycudadecon "
+                "takes a single lateral size, using x.",
+                x,
+                y,
+            )
+        return x or y
+
+    psf_cal = psf_voxel_size if psf_voxel_size is not None else voxel_size
+    out: dict[str, float] = {}
+    for key, value in (
+        ("dxdata", _lateral(voxel_size)),
+        ("dzdata", voxel_size.get("z")),
+        ("dxpsf", _lateral(psf_cal)),
+        ("dzpsf", psf_cal.get("z")),
+    ):
+        if value:
+            out[key] = float(value)
+    return out
+
+
 def dog_label_fn(
     low_sigma: float | tuple[float, ...],
     high_sigma: float | tuple[float, ...],
@@ -84,6 +145,7 @@ def dog_label_fn(
     *,
     use_gpu: bool = False,
     decon_kwargs: dict[str, Any] | None = None,
+    voxel_size: dict[str, float] | None = None,
 ) -> Callable[[np.ndarray], np.ndarray]:
     """Return a ready-to-use DoG labeler for ``tile_process``.
 
@@ -108,6 +170,15 @@ def dog_label_fn(
         PSF support when deconvolving, so edge tiles don't get truncated
         context.
 
+        ``dxdata``/``dzdata``/``dxpsf``/``dzpsf`` are filled in from
+        *voxel_size* when you leave them out, so the voxel sizes cannot drift
+        away from the image they describe. Anything you set explicitly wins.
+    voxel_size:
+        Physical voxel size as ``{"z": .., "y": .., "x": ..}``. The Snakemake
+        workflow passes the image's own calibration automatically; from the
+        API, :func:`patchworks.plugins.ome_zarr.read_pixel_size` reads it from
+        a store.
+
     Returns
     -------
     Callable[[ndarray], ndarray]
@@ -117,6 +188,19 @@ def dog_label_fn(
         _require_cupy()
     if decon_kwargs is not None:
         _require_pycudadecon()
+        if voxel_size:
+            # Derived values fill gaps only -- an explicit dxpsf for a PSF
+            # sampled differently from the data must not be overwritten.
+            derived = decon_voxel_kwargs(voxel_size)
+            missing = {
+                k: v for k, v in derived.items() if k not in decon_kwargs
+            }
+            if missing:
+                logger.info(
+                    "decon voxel sizes taken from the image calibration: %s",
+                    missing,
+                )
+                decon_kwargs = {**decon_kwargs, **missing}
     cfg = {
         "low_sigma": low_sigma,
         "high_sigma": high_sigma,

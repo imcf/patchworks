@@ -47,3 +47,63 @@ def test_dog_label_fn_with_tile_process():
 
     assert result.shape == (1, 64, 64)
     assert result.max() >= 1
+
+
+def test_decon_voxel_kwargs_from_calibration():
+    """Voxel sizes come from the image, not from retyped config values.
+
+    A deconvolution told the wrong voxel size does not fail -- it returns a
+    subtly wrong result -- so deriving them is the point.
+    """
+    from patchworks.plugins.dog import decon_voxel_kwargs
+
+    assert decon_voxel_kwargs({"z": 0.2, "y": 0.1, "x": 0.1}) == {
+        "dxdata": 0.1,
+        "dzdata": 0.2,
+        "dxpsf": 0.1,
+        "dzpsf": 0.2,
+    }
+    # A PSF sampled differently from the data keeps its own sizes.
+    assert decon_voxel_kwargs(
+        {"z": 0.2, "y": 0.1, "x": 0.1}, {"z": 0.1, "y": 0.05, "x": 0.05}
+    ) == {"dxdata": 0.1, "dzdata": 0.2, "dxpsf": 0.05, "dzpsf": 0.1}
+    # An uncalibrated axis is simply omitted rather than guessed.
+    assert decon_voxel_kwargs({"y": 0.1, "x": 0.1}) == {
+        "dxdata": 0.1,
+        "dxpsf": 0.1,
+    }
+    assert decon_voxel_kwargs({}) == {}
+
+
+def test_explicit_decon_kwargs_win_over_the_calibration(monkeypatch):
+    """Anything set by hand must survive; only gaps are filled."""
+    import sys
+    import types
+
+    from patchworks.plugins import dog
+
+    captured = {}
+
+    def _decon(images, **kwargs):
+        captured.update(kwargs)
+        return images
+
+    monkeypatch.setitem(
+        sys.modules, "pycudadecon", types.SimpleNamespace(decon=_decon)
+    )
+    monkeypatch.setattr(dog, "_require_pycudadecon", lambda: None)
+
+    fn = dog.dog_label_fn(
+        low_sigma=1.0,
+        high_sigma=3.0,
+        threshold=0.5,
+        # dxpsf set by hand: the PSF was sampled finer than the data
+        decon_kwargs={"psf": "psf.tif", "dxpsf": 0.05},
+        voxel_size={"z": 0.2, "y": 0.1, "x": 0.1},
+    )
+    fn(np.zeros((4, 8, 8), "uint16"))
+
+    assert captured["dxpsf"] == 0.05, "an explicit value must not be replaced"
+    assert captured["dxdata"] == 0.1  # filled from the calibration
+    assert captured["dzdata"] == 0.2
+    assert captured["dzpsf"] == 0.2

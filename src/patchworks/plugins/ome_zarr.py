@@ -743,6 +743,35 @@ def _write_multiscales(
     write_ngff_attrs(zarr.open_group(group_path, mode="a"), multiscales=[entry])
 
 
+def read_pixel_size(store: Union[str, Path]) -> PixelSize:
+    """Physical voxel size recorded in an OME-ZARR's level-0 metadata.
+
+    The calibration the conversion carried over from the source file, as
+    ``{"z": .., "y": .., "x": ..}`` in micrometers. Axes left at scale 1.0
+    (uncalibrated) are omitted, so an empty dict means the store carries no
+    usable calibration.
+
+    Use this instead of retyping voxel sizes into a config: a deconvolution
+    told the wrong voxel size produces a plausible-looking but wrong result.
+
+    Parameters
+    ----------
+    store : str or Path
+        Path of the OME-ZARR group.
+
+    Returns
+    -------
+    dict
+        ``{axis: size}`` for calibrated spatial axes.
+
+    Examples
+    --------
+    >>> read_pixel_size("scan.zarr")  # doctest: +SKIP
+    {'z': 0.2, 'y': 0.1, 'x': 0.1}
+    """
+    return _read_zarr_calibration(store, "")
+
+
 def _read_zarr_calibration(store: Union[str, Path], axes: str) -> PixelSize:
     """Read level-0 spatial scale from an existing OME-ZARR, if any.
 

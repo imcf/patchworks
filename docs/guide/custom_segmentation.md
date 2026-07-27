@@ -118,6 +118,22 @@ def segment(tile: np.ndarray, prob_thresh: float = 0.5) -> np.ndarray:
 
 Using a GPU? Just let your framework see it — nothing extra needed.
 
+!!! tip "Ask for the voxel size instead of configuring it"
+    Declare a `voxel_size` parameter and the workflow passes the image's own
+    NGFF calibration, `{"z": .., "y": .., "x": ..}` in micrometers:
+
+    ```python
+    def segment(tile, *, voxel_size=None, min_diameter_um=5.0):
+        min_px = min_diameter_um / voxel_size["x"]   # µm -> pixels
+        ...
+    ```
+
+    That keeps physical parameters tied to the image rather than duplicated
+    in a config that can drift away from it. Setting `voxel_size` in
+    `custom.kwargs` overrides it; an uncalibrated store passes nothing and
+    logs a warning. This is how the DoG plugin gets its deconvolution voxel
+    sizes.
+
 !!! tip "You do not need to modify patchworks"
     `method: "custom"` imports any `(tile) -> labels` callable, so a new
     method is a module of your own and a config block — nothing in the
