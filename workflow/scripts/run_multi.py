@@ -114,6 +114,18 @@ def _validate_configs(paths: list[Path], cfgs: list[dict]) -> str:
                 f"share a chunk layout; got {_spread(key)}"
             )
 
+    for path, cfg in zip(paths, cfgs):
+        source = str(cfg.get("input", ""))
+        if any(ch in source for ch in "*?[") and not cfg.get(
+            "sequence_pattern"
+        ):
+            problems.append(
+                f"{path.name}: input {source!r} is a glob over several files "
+                "but sequence_pattern is unset, so nothing says which part of "
+                "each filename is Z/C/T. Set e.g. "
+                r"sequence_pattern: '_Z(?P<Z>\d+)_C(?P<C>\d+)_V\d+'"
+            )
+
     names = [cfg.get("label_name") for cfg in cfgs]
     duplicates = {n for n in names if names.count(n) > 1}
     if duplicates:

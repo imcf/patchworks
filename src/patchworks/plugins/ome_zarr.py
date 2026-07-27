@@ -45,6 +45,7 @@ Usage
 
 from __future__ import annotations
 
+import glob
 import logging
 import math
 from concurrent.futures import ThreadPoolExecutor
@@ -1201,6 +1202,21 @@ def _to_dask(
     if sequence_pattern is not None:
         arr, detected, ps = _open_tiff_sequence(path, sequence_pattern)
         return arr, axes or detected, ps
+    if any(ch in path for ch in "*?[") or (
+        not Path(path).exists() and glob.glob(path)
+    ):
+        # Without sequence_pattern this would be handed to bioio, which reads
+        # single files and reports only that it cannot handle the "format" --
+        # pointing at the glob rather than the missing setting.
+        raise ValueError(
+            f"{path!r} looks like a glob over several files, but "
+            "sequence_pattern is not set, so there is no way to tell which "
+            "part of each filename is Z, C or T.\n"
+            "Set it to a regex with named groups, e.g.\n"
+            "    sequence_pattern: '_Z(?P<Z>\\d+)_C(?P<C>\\d+)_V\\d+'\n"
+            "for files like sample_Z001_C0_V0.tif. Pass a single file "
+            "instead if you did not mean a sequence."
+        )
     if path.endswith(".zarr"):
         arr = load_ome_zarr(source, channel=None)
         ax = axes or _default_axes(arr.ndim)

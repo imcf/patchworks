@@ -399,3 +399,19 @@ def test_sharding(tmp_path):
     assert (
         getattr(_zarr.open_array(f"{out3}/0", mode="r"), "shards", None) is None
     )
+
+
+def test_glob_without_sequence_pattern_says_so(tmp_path):
+    """A glob input must name the missing setting, not blame the format.
+
+    Without sequence_pattern the glob fell through to bioio, which reads one
+    file and could only report "does not support the image" -- pointing at the
+    path instead of at the config key that was missing.
+    """
+    with pytest.raises(ValueError, match="sequence_pattern is not set"):
+        to_ome_zarr(str(tmp_path / "*.tif"), tmp_path / "out.zarr")
+
+    # A real single file must still reach the normal readers.
+    with pytest.raises(Exception) as exc:
+        to_ome_zarr(str(tmp_path / "scan.ims"), tmp_path / "o2.zarr")
+    assert "sequence_pattern" not in str(exc.value)
