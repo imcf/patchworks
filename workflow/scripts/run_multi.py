@@ -26,6 +26,7 @@ overlap, including b-objects with zero matches).
 from __future__ import annotations
 
 import argparse
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -47,6 +48,7 @@ def _snakemake_cmd(
     state_dir: Path | None = None,
     targets: list[str] | None = None,
     extra: list[str] | None = None,
+    jobname_prefix: str | None = None,
 ) -> list[str]:
     """Build one snakemake invocation.
 
@@ -66,6 +68,9 @@ def _snakemake_cmd(
         cmd += ["--directory", str(state_dir.resolve())]
     if profile:
         cmd += ["--workflow-profile", str((workflow_dir / profile).resolve())]
+        if jobname_prefix:
+            # A SLURM-executor setting, so only valid alongside the profile.
+            cmd += ["--slurm-jobname-prefix", jobname_prefix]
     else:
         cmd += ["--cores", str(cores), "--rerun-triggers", "mtime"]
     if dry_run:
@@ -77,6 +82,29 @@ def _snakemake_cmd(
         # of values and would otherwise swallow the target path.
         cmd += ["--", *targets]
     return cmd
+
+
+def slurm_jobname_prefix(label: str) -> str:
+    """Sanitise *label* into a SLURM job-name prefix the executor accepts.
+
+    The SLURM executor names every job after its run UUID and refuses a
+    ``--job-name`` in ``slurm_extra``, so a prefix is the only way to get
+    something recognisable into ``squeue``. It becomes ``<prefix>_<uuid>``,
+    which puts the readable part first -- the part that survives truncation
+    in a queue listing.
+
+    The executor requires alphanumerics, underscores and hyphens only, at
+    most 50 characters, and rejects the whole run otherwise.
+
+    Examples
+    --------
+    >>> slurm_jobname_prefix("nuclei_labels")
+    'pw-nuclei_labels'
+    >>> slurm_jobname_prefix("cilia/v2 (test)")
+    'pw-cilia-v2--test-'
+    """
+    safe = re.sub(r"[^A-Za-z0-9_-]", "-", label)
+    return f"pw-{safe}"[:50]
 
 
 def _run(cmd: list[str], workflow_dir: Path) -> int:
@@ -235,6 +263,7 @@ def main() -> None:
             dry_run=args.dry_run,
             state_dir=Path(work_dir) / ".snakemake_convert",
             targets=[f"{image_store}/zarr.json"],
+            jobname_prefix=slurm_jobname_prefix("convert"),
         ),
         workflow_dir,
     )
@@ -287,6 +316,8 @@ def main() -> None:
             cores=args.cores,
             dry_run=args.dry_run,
             state_dir=Path(cfg["work_dir"]) / cfg["label_name"] / ".snakemake",
+            # Names the config in squeue, so concurrent runs are tellable apart.
+            jobname_prefix=slurm_jobname_prefix(cfg["label_name"]),
         )
         print(f"[run_multi] $ {' '.join(cmd)}", flush=True)
         procs.append((cfg_path.name, subprocess.Popen(cmd, cwd=workflow_dir)))

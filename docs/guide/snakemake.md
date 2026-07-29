@@ -187,6 +187,27 @@ Snakemake submits `convert`, then `prepare`, then **one `segment` job per
 batch of `tiles_per_job` non-empty tiles** (up to `jobs:` at once → that many
 GPUs in parallel), then `merge`. Raise `jobs:` to use more GPUs.
 
+!!! tip "Recognisable job names in `squeue`"
+    The SLURM executor names every job after its run UUID and **rejects** a
+    `--job-name` in `slurm_extra`, so by default `squeue` shows nothing you
+    can identify. A prefix is the supported lever, and it goes first in the
+    name (`<prefix>_<uuid>`) — the part a queue listing truncates to:
+
+    ```yaml
+    slurm-jobname-prefix: patchworks    # already in the shipped profile
+    ```
+
+    `run_multi` overrides it per config, so a three-way run shows
+    `pw-convert`, then `pw-nuclei_labels` / `pw-cyto_labels` /
+    `pw-cilia_labels` — telling the concurrent runs apart at a glance:
+
+    ```bash
+    squeue -u $USER -o '%.18i %.24j %.8T %.10M'
+    ```
+
+    Alphanumerics, underscores and hyphens only, 50 characters max; an
+    invalid prefix fails the run, so `label_name` is sanitised before use.
+
 !!! tip "Sizing memory"
     Every step now sizes its own worker counts from what SLURM actually
     granted (`SLURM_CPUS_PER_TASK`, `SLURM_MEM_PER_*`, the cgroup limit)

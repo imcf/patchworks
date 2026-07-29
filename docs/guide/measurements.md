@@ -10,7 +10,7 @@ is built for this — its "Measure" dock widget computes area/centroid/intensity
 stats directly off a Labels layer's dask/zarr-backed array, out-of-core, and
 scales with chunk count rather than object count. It's the best fit for
 measuring *every* object in a store this size, not just a cropped region —
-see [View image + labels in napari](ome_zarr_napari.md#view-image--labels-in-napari).
+see [View image + labels in napari](ome_zarr_napari.md#view-image-labels-in-napari).
 Bundled in `patchworks[napari]`.
 
 For interactively inspecting individual cells by clicking in the viewer (not
