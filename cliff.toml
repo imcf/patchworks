@@ -31,6 +31,8 @@ commit_preprocessors = [
   { pattern = "(\\w+(?:\\([^)]*\\))?!?:\\s+)[^\\w\\s]+\\s*", replace = "$1" },
 ]
 commit_parsers = [
+  # Merge commits are noise in a changelog — the merged commits are already listed.
+  { message = "^Merge ", skip = true },
   { message = "^feat", group = "✨ Features" },
   { message = "^fix", group = "🐛 Bug Fixes" },
   { message = "^perf", group = "⚡ Performance" },
