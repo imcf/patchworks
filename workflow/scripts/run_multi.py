@@ -272,6 +272,10 @@ def main() -> None:
     seg_cfgs = [{**common_cfg, **_load_yaml(p)} for p in seg_config_paths]
     work_dir = _validate_configs(seg_config_paths, seg_cfgs)
     image_store = f"{work_dir}/image.zarr"
+    # Shared by every config, hence keyed on the image and level, not on a
+    # label_name. Levels are validated identical across configs below.
+    _level = int(seg_cfgs[0].get("level", 0))
+    occupancy_store = f"{work_dir}/image.occupancy.zarr/{_level}"
 
     # Each phase gets its own Snakemake state directory (the lock lives in the
     # working directory, not the config), so unlocking has to cover all of
@@ -311,7 +315,15 @@ def main() -> None:
             cores=args.cores,
             dry_run=args.dry_run,
             state_dir=Path(work_dir) / ".snakemake_convert",
-            targets=[f"{image_store}/zarr.json"],
+            # Both in one phase-A call so they run as SLURM jobs. The
+            # occupancy map streams the whole image; building it here in the
+            # driver ran it on the login node, where the read is killed
+            # without a traceback. It is shared by every config, so it must
+            # not be left to the concurrent `prepare` steps either.
+            targets=[
+                f"{image_store}/zarr.json",
+                f"{occupancy_store}/zarr.json",
+            ],
             jobname_prefix=slurm_jobname_prefix("convert"),
             common=common_path,
         ),
@@ -326,31 +338,6 @@ def main() -> None:
             file=sys.stderr,
         )
         sys.exit(rc)
-
-    # Still phase A: build the occupancy map here too. Every config's `prepare`
-    # needs it, and they are about to run concurrently -- so leaving it to them
-    # means all of them stream the whole image, and all but one throw the
-    # result away. It covers every channel, so one build serves them all.
-    if not args.dry_run:
-        from patchworks import block_for_tile, build_occupancy_map
-
-        # tile_shape is validated identical across configs, so one block suits
-        # them all. Sizing it from the tile keeps the map discriminating: a
-        # block as coarse as the tile makes every tile test occupied.
-        tile_shape = seg_cfgs[0].get("tile_shape")
-        block = (
-            block_for_tile(tile_shape)
-            if isinstance(tile_shape, (list, tuple))
-            else None
-        )
-        levels = {int(cfg.get("level", 0)) for cfg in seg_cfgs}
-        for level in sorted(levels):
-            print(
-                f"[run_multi] building occupancy map for level {level} …",
-                flush=True,
-            )
-            kwargs = {"block": block} if block else {}
-            build_occupancy_map(image_store, level=level, **kwargs)
 
     # Phase B: the segmentations touch disjoint files under
     # work_dir/<label_name>/, so run them together and let the GPU partition

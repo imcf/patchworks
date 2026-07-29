@@ -36,6 +36,7 @@ import numpy as np
 import zarr
 
 from ._chunks import cpu_allocation
+from ._progress import track
 
 logger = logging.getLogger(__name__)
 
@@ -271,13 +272,19 @@ def build_occupancy_map(
     try:
         n_workers = max(1, min(cpu_allocation(), len(regions)))
         if n_workers <= 1:
-            for starts in regions:
-                _one(starts)
+            for _ in track(
+                (_one(starts) for starts in regions),
+                "occupancy map",
+                len(regions),
+            ):
+                pass
         else:
             # Reads and decompression release the GIL, so threads are enough
             # and there is no worker payload to pickle.
             with ThreadPoolExecutor(max_workers=n_workers) as pool:
-                for _ in pool.map(_one, regions):
+                for _ in track(
+                    pool.map(_one, regions), "occupancy map", len(regions)
+                ):
                     pass
         dst.attrs["block"] = list(block)
         dst.attrs["level"] = int(level)

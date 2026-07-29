@@ -8,6 +8,7 @@ batch writes disjoint chunks of the stage store, so batches never collide.
 """
 
 import json
+import time
 
 from patchworks import stage_tile
 
@@ -33,7 +34,9 @@ component = manifest.get("target_component", "staged")
 tile_shape = tuple(manifest["tile_shape"])
 
 counts = {}
-for index in indices:
+batch_started = time.monotonic()
+for n, index in enumerate(indices, 1):
+    started = time.monotonic()
     counts[index] = stage_tile(
         image,
         fn,
@@ -44,7 +47,15 @@ for index in indices:
         overlap=manifest["overlap"],
         component=component,
     )
-    print(f"[patchworks] segmented tile {index}: {counts[index]} label(s)")
+    # The per-tile time is what `tiles_per_job` has to be sized from: a job's
+    # wall time is roughly N x this, and it must stay inside the QOS ceiling.
+    # The first tile in a batch also carries the model load, so it runs long.
+    took = time.monotonic() - started
+    print(
+        f"[patchworks] tile {index} ({n}/{len(indices)}): "
+        f"{counts[index]} label(s) in {took:.0f}s",
+        flush=True,
+    )
 
 # The marker carries each tile's label count. That is what lets merge derive
 # every tile's global id range with a cumulative sum instead of streaming the
@@ -52,4 +63,8 @@ for index in indices:
 # down instead of throwing them away.
 with open(snakemake.output[0], "w") as fh:  # noqa: F821
     json.dump({"batch": batch, "counts": counts}, fh)
-print(f"[patchworks] batch {batch}: {len(indices)} tile(s) done")
+print(
+    f"[patchworks] batch {batch}: {len(indices)} tile(s) done in "
+    f"{(time.monotonic() - batch_started) / 60:.1f}m",
+    flush=True,
+)

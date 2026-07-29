@@ -18,11 +18,15 @@ rule fetch_model:
 checkpoint prepare:
     input:
         IMAGE_OK,
+        # Depend on the map rather than building it inline: it streams the
+        # whole image, and several configs' prepare steps run concurrently, so
+        # inline each would stream the volume and all but one discard it.
+        OCCUPANCY_OK,
     output:
         tiles=TILES,
         stage=touch(STAGE_OK),
     log:
-        STEPLOG,
+        PREPARELOG,
     script:
         "../scripts/prepare_tiles.py"
 

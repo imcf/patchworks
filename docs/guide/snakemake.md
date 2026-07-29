@@ -520,7 +520,8 @@ prologue. The simplest path is a single shared env that the compute nodes see.
 | `cellpose is not installed` in a job | the job's env lacks `patchworks[cellpose]` |
 | Reading the input fails | install the matching reader (`patchworks[imaris]`/`[bioio]` + a `bioio-*`) |
 | Out of GPU memory | smaller `tile_shape`, or `do_3D: false` |
-| A job fails with an empty SLURM log | read `logs/segment/<index>.log` (per tile) or `logs/steps.log` — the real traceback is there |
+| A job fails with an empty SLURM log | read the step's own log — `logs/convert.log`, `logs/prepare.log`, `logs/segment/<batch>.log`, `logs/merge.log` — the real traceback is there |
+| A long step looks hung | every step logs progress (`… 4,200/8,064 (52%) after 31m, ~28m left`) roughly once a minute; `tail -f` the step's log above |
 | Very slow | confirm GPU is used (`nvidia-smi`); try 2-D or a lower `level` |
 
 ## How it works (for the curious)

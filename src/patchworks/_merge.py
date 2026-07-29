@@ -23,7 +23,6 @@ import logging
 import os
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import nullcontext as _nullcontext
 from itertools import product as _iproduct
 from multiprocessing import Pool as _Pool
 from pathlib import Path
@@ -35,11 +34,7 @@ import zarr
 
 from ._chunks import cpu_allocation
 from ._io import zarr_compressor_kwargs
-
-try:
-    from tqdm.auto import tqdm as _tqdm
-except ImportError:
-    _tqdm = None
+from ._progress import track
 
 logger = logging.getLogger(__name__)
 
@@ -165,6 +160,7 @@ def _scan_touching_pairs(
     label_offsets: "np.ndarray | None" = None,
     n_workers: int = 1,
     has_labels: "np.ndarray | None" = None,
+    progress: bool = False,
 ) -> np.ndarray:
     """Scan chunk-boundary slabs; return (N, 2) int64 array of touching pairs.
 
@@ -259,12 +255,26 @@ def _scan_touching_pairs(
 
     nw = max(1, min(n_workers, len(tasks)))
     if nw <= 1:
-        results = [_one(t) for t in tasks]
+        results = list(
+            track(
+                (_one(t) for t in tasks),
+                "scan boundaries",
+                len(tasks),
+                enabled=progress,
+            )
+        )
     else:
         # Reads and decompression release the GIL, so threads scale here and
         # nothing has to be pickled across processes.
         with ThreadPoolExecutor(max_workers=nw) as pool:
-            results = list(pool.map(_one, tasks))
+            results = list(
+                track(
+                    pool.map(_one, tasks),
+                    "scan boundaries",
+                    len(tasks),
+                    enabled=progress,
+                )
+            )
 
     all_pairs = [r for r in results if r is not None]
     if not all_pairs:
@@ -609,6 +619,7 @@ def zarr_native_merge(
         label_offsets=offsets,
         n_workers=n_workers,
         has_labels=has_labels,
+        progress=show_progress,
     )
     logger.info(
         "zarr_native_merge: %d touching pairs → building LUT", len(pairs)
@@ -743,9 +754,9 @@ def zarr_native_merge(
             _init_worker(
                 lut_path, staged_path, staged_component, out_path, out_component
             )
-            it: Any = tasks
-            if show_progress and _tqdm is not None:
-                it = _tqdm(it, total=n_chunks, desc="relabel chunks")
+            it: Any = track(
+                tasks, "relabel chunks", n_chunks, enabled=show_progress
+            )
             for task in it:
                 _relabel_chunk_worker(task)
         else:
@@ -760,9 +771,12 @@ def zarr_native_merge(
                     out_component,
                 ),
             ) as pool:
-                it = pool.imap_unordered(_relabel_chunk_worker, tasks)
-                if show_progress and _tqdm is not None:
-                    it = _tqdm(it, total=n_chunks, desc="relabel chunks")
+                it = track(
+                    pool.imap_unordered(_relabel_chunk_worker, tasks),
+                    "relabel chunks",
+                    n_chunks,
+                    enabled=show_progress,
+                )
                 for _ in it:
                     pass
     finally:
@@ -926,9 +940,10 @@ def merge_tile_labels(
         stage_path = os.path.join(_base, "_pws_stage.zarr")
 
         import dask
-        from dask.diagnostics import ProgressBar
 
-        ctx = ProgressBar() if progress else _nullcontext()
+        from ._progress import dask_progress
+
+        ctx = dask_progress("stage tiles", progress)
         logger.info("Staging per-tile labels to %s …", stage_path)
         with ctx:
             dask.compute(

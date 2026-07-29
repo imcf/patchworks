@@ -7,6 +7,6 @@ rule merge:
     output:
         touch(f"{RUN}/labels.done"),
     log:
-        STEPLOG,
+        MERGELOG,
     script:
         "../scripts/merge.py"

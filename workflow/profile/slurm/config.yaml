@@ -56,10 +56,17 @@ set-resources:
     mem_mb: "attempt * 64000"
     cpus_per_task: 32
     runtime: 360
+  occupancy:
+    # One streaming pass over the whole image, max-pooling each brick. Reads a
+    # lot but holds little: memory is bounded by the worker count times one
+    # region, not by the image. Runtime tracks the read, so give it room --
+    # this is a multi-terabyte scan on a real dataset.
+    mem_mb: "attempt * 32000"
+    cpus_per_task: 16
+    runtime: 360
   prepare:
-    # Also builds the max-pooled occupancy map on first use for an image.zarr
-    # that predates it (one bounded streaming pass, then shared by every
-    # config against that store).
+    # Cheap now: it reduces the already-built occupancy map over each tile's
+    # footprint instead of touching the image.
     mem_mb: "attempt * 32000"
     runtime: 120
   segment:

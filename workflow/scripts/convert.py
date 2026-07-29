@@ -30,6 +30,9 @@ to_ome_zarr(
     chunks=tuple(chunks) if chunks else None,
     shard=bool(cfg.get("shard", False)),
     reuse_pyramid=bool(cfg.get("reuse_pyramid", False)),
-    progress=False,
+    # Progress goes to the log as periodic lines, not a redrawing bar:
+    # this runs for hours in a batch job where silence is indistinguishable
+    # from a hang.
+    progress=True,
     overwrite=True,
 )
