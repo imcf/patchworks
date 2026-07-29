@@ -27,3 +27,38 @@ localrules:
 rule all:
     input:
         f"{RUN}/labels.done",
+
+
+# Workflow-level notifications, covering what SLURM's per-job mail cannot:
+# a local run with no scheduler, and a failure where the useful content is
+# the step's traceback rather than the job's exit code.
+onerror:
+    from patchworks._notify import log_tail, send
+
+    _failed = [p for p in (CONVERTLOG, OCCUPANCYLOG, PREPARELOG, MERGELOG)
+               if Path(p).exists()]
+    _newest = max(_failed, key=lambda p: Path(p).stat().st_mtime, default=None)
+    send(
+        NOTIFY_EMAIL,
+        f"[patchworks] FAILED: {LABEL_NAME} in {WORK}",
+        "The patchworks workflow failed.\n\n"
+        f"  work_dir : {WORK}\n"
+        f"  config   : {LABEL_NAME}\n"
+        f"  log      : {_newest}\n\n"
+        + (f"Last lines of {_newest}:\n\n{log_tail(_newest)}\n"
+           if _newest else "No step log was written.\n"),
+    )
+
+
+onsuccess:
+    if "finish" in NOTIFY_EVENTS:
+        from patchworks._notify import send
+
+        send(
+            NOTIFY_EMAIL,
+            f"[patchworks] done: {LABEL_NAME} in {WORK}",
+            f"The patchworks workflow finished successfully.\n\n"
+            f"  work_dir : {WORK}\n"
+            f"  config   : {LABEL_NAME}\n"
+            f"  labels   : {IMAGE}/labels/{LABEL_NAME}\n",
+        )

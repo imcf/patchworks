@@ -4,6 +4,8 @@ rule convert:
     output:
         # marker file inside the store; existence => skip re-conversion.
         IMAGE_OK,
+    resources:
+        slurm_extra=notify_extra,
     log:
         CONVERTLOG,
     script:
@@ -18,6 +20,8 @@ rule occupancy:
         IMAGE_OK,
     output:
         OCCUPANCY_OK,
+    resources:
+        slurm_extra=notify_extra,
     log:
         OCCUPANCYLOG,
     script:

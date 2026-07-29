@@ -40,3 +40,12 @@ tiles_per_job: 4
 # --- merge ---
 sequential_labels: true
 merge_workers: null
+
+# --- notifications (optional) ---
+# Leave empty for no email. Per-job mail is sent by SLURM itself for the long
+# single-job steps (convert, occupancy, merge), so it still arrives when a job
+# is OOM-killed. `segment` is deliberately excluded: one job per tile batch
+# would mean hundreds of messages.
+notify_email: ""
+# Any of: start, finish, error  (SLURM BEGIN, END, FAIL)
+notify_events: ["finish", "error"]
