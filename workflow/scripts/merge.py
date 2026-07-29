@@ -91,7 +91,8 @@ _, n_objects = merge_tile_labels(
     output_chunks=out_chunks,
     sequential_labels=cfg.get("sequential_labels", True),
     n_workers=cfg.get("merge_workers") or default_workers,
-    progress=False,
+    # Periodic log lines rather than a bar (see convert.py).
+    progress=True,
     return_count=True,
     label_counts=label_counts,
 )
@@ -100,7 +101,7 @@ group = register_labels(
     label_name,
     n_levels=int(cfg.get("pyramid_levels", 5)),
     downscale=int(cfg.get("pyramid_downscale", 2)),
-    progress=False,
+    progress=True,
     n_objects=n_objects,
 )
 

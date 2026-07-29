@@ -121,3 +121,40 @@ def test_shipped_multi_configs_are_consistent():
     for path in paths:
         own = yaml.safe_load(path.read_text())
         assert not set(own) & set(_CONVERT_KEYS), path.name
+
+
+def _workflow_dir() -> Path:
+    return Path(__file__).resolve().parents[1] / "workflow"
+
+
+def test_occupancy_is_a_submitted_rule_not_a_localrule():
+    """The occupancy build must never run on the submit host.
+
+    It streams the entire image. Doing that in the run_multi driver ran it on
+    a login node, where a multi-terabyte read is killed with no traceback --
+    the run just returned to the prompt. Only fetch_model may be local (it
+    needs network); everything else has to get a real allocation.
+    """
+    wf = _workflow_dir()
+    snakefile = (wf / "Snakefile").read_text()
+    local_block = snakefile.split("localrules:")[1].split("rule ")[0]
+    local = {
+        line.strip().rstrip(",")
+        for line in local_block.splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    }
+    assert local == {"fetch_model"}, local
+
+    rules = (wf / "rules" / "convert.smk").read_text()
+    assert "rule occupancy:" in rules
+
+
+def test_occupancy_is_not_rebuilt_by_the_driver():
+    """run_multi must ask Snakemake for the map, not build it in-process.
+
+    An in-process build bypasses the scheduler entirely, which is how it ended
+    up on the login node.
+    """
+    src = (_workflow_dir() / "scripts" / "run_multi.py").read_text()
+    assert "build_occupancy_map(" not in src
+    assert "occupancy.zarr" in src

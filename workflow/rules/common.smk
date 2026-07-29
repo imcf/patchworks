@@ -8,6 +8,13 @@ IMAGE = f"{WORK}/image.zarr"
 # avoids wiping the whole store on a re-run (same trick as imcf/sopa).
 IMAGE_OK = f"{IMAGE}/zarr.json"
 
+# Max-pooled occupancy summary, a sibling of the image (not a node inside it,
+# which zarr would refuse to walk). Shared by every config against this image,
+# so it is keyed on the image and the level rather than on label_name.
+OCCUPANCY = f"{WORK}/image.occupancy.zarr/{int(config.get('level', 0))}"
+OCCUPANCY_OK = f"{OCCUPANCY}/zarr.json"
+OCCUPANCYLOG = f"{WORK}/logs/occupancy.log"
+
 # Everything below is per-segmentation, namespaced under WORK/<label_name>/, so
 # running the workflow twice with two configs (different label_name, e.g.
 # "nuclei_labels" and "cell_labels") against the *same* work_dir never
@@ -24,10 +31,14 @@ STAGE = f"{RUN}/stage.zarr"
 STAGE_OK = f"{STAGE}.done"
 
 
-# Logs: one shared file for the sequential CPU steps (convert/prepare/merge),
-# one file per tile for the GPU segment jobs.
+# Logs: one file per step. They used to share a single steps.log, but
+# Snakemake clears a rule's declared log before the job runs, so each step
+# wiped the previous one's output -- by the time a run finished, only the last
+# step's log survived and a failure earlier on left nothing to read.
 LOGS = f"{RUN}/logs"
-STEPLOG = f"{LOGS}/steps.log"
+CONVERTLOG = f"{LOGS}/convert.log"
+PREPARELOG = f"{LOGS}/prepare.log"
+MERGELOG = f"{LOGS}/merge.log"
 
 # Marker that the segmentation model is cached locally. Produced by a local
 # rule (runs on the networked submit host) so offline GPU nodes never download.

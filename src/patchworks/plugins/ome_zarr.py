@@ -48,6 +48,7 @@ from __future__ import annotations
 import glob
 import logging
 import math
+import time as _time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext as _nullcontext
 from itertools import product as _iproduct
@@ -59,6 +60,10 @@ import numpy as np
 import zarr
 
 from .._chunks import cpu_allocation
+from .._progress import (
+    PROGRESS_INTERVAL_S as _PROGRESS_INTERVAL_S,
+)
+from .._progress import dask_progress, log_progress
 from .._io import load_ome_zarr, zarr_compressor_kwargs
 
 logger = logging.getLogger(__name__)
@@ -423,6 +428,8 @@ def _stream_strided_level(
     dst: "zarr.Array",
     strides: tuple[int, ...],
     n_workers: int = 4,
+    label: str = "level",
+    progress: bool = True,
 ) -> None:
     """Write *dst* as the strided subsample of *src*, one chunk at a time.
 
@@ -457,13 +464,27 @@ def _stream_strided_level(
         dst[out_sl] = np.asarray(src[src_sl])[take]
 
     indices = list(_iproduct(*[range(g) for g in grid]))
+    total = len(indices)
+    started = _time.monotonic()
+    last = started
+
+    def _tick(done: int) -> None:
+        nonlocal last
+        now = _time.monotonic()
+        if progress and now - last >= _PROGRESS_INTERVAL_S:
+            last = now
+            log_progress(label, done, total, started)
+
     if n_workers <= 1:
-        for idx in indices:
+        for done, idx in enumerate(indices, 1):
             _one(idx)
-        return
-    with ThreadPoolExecutor(max_workers=n_workers) as pool:
-        for _ in pool.map(_one, indices):
-            pass
+            _tick(done)
+    else:
+        with ThreadPoolExecutor(max_workers=n_workers) as pool:
+            for done, _ in enumerate(pool.map(_one, indices), 1):
+                _tick(done)
+    if progress:
+        log_progress(label, total, total, started)
 
 
 # One chunk is one file without sharding. A shared cluster filesystem starts
@@ -531,29 +552,8 @@ def _bounded_scheduler(arr: da.Array):
 
 
 def _progress_ctx(progress: bool, label: str):
-    """Return a progress-bar context manager.
-
-    Parameters
-    ----------
-    progress : bool
-        Whether to show a dask progress bar.
-    label : str
-        Name logged just before the bar.
-
-    Returns
-    -------
-    contextmanager
-        A ``ProgressBar`` when *progress* is set, else a no-op
-        context manager.
-    """
-    if not progress:
-        from contextlib import nullcontext
-
-        return nullcontext()
-    from dask.diagnostics import ProgressBar
-
-    logger.info("writing %s …", label)
-    return ProgressBar()
+    """Progress context for a long dask write; see patchworks._progress."""
+    return dask_progress(label, progress)
 
 
 def _to_zarr_level(
@@ -786,7 +786,12 @@ def _write_pyramid(
                     ),
                 )
             _stream_strided_level(
-                src_arr, dst_arr, strides, n_workers=cpu_allocation()
+                src_arr,
+                dst_arr,
+                strides,
+                n_workers=cpu_allocation(),
+                label=f"{Path(group_path).name}/{i}",
+                progress=progress,
             )
         scale = [base_scale[k] * (strides[k] ** i) for k in range(len(axes))]
         datasets.append(_dataset(str(i), scale))

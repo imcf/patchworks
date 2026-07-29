@@ -147,11 +147,13 @@ example above — and the segment job deconvolves each tile with
 `pycudadecon` before running the DoG detector:
 
 ```yaml
-# config/config_cilia.yaml (excerpt)
+# config/config_cilia.yaml (excerpt) — only what differs from common.yaml,
+# which supplies the input, work_dir, tile_shape and skip_empty
 channel: 2
-tile_shape: [16, 1024, 1024]
-overlap: 30 # cover the PSF support (decon) + the DoG's high_sigma
-skip_empty: true
+# Per-axis halo [z, y, x], covering the PSF support (decon) + the DoG's
+# high_sigma. A scalar 30 would expand a [16, 1024, 1024] tile to 5.3x the
+# voxels it keeps, nearly all of it wasted z.
+overlap: [8, 30, 30]
 
 method: "custom"
 label_name: "cilia_labels"
@@ -185,11 +187,11 @@ in `dxdata`/`dxpsf` from X/Y and `dzdata`/`dzpsf` from Z. Set any of them in
     of the calibration in its config. If the store is uncalibrated the
     workflow says so and passes nothing.
 
-Run it exactly like a Cellpose config:
+Run it exactly like a Cellpose config — the shared settings come from
+`config/common.yaml`, merged in ahead of this one:
 
 ```bash
-python -m snakemake --workflow-profile profile/slurm \
-                    --configfile config/config_cilia.yaml
+python -m snakemake --workflow-profile profile/slurm --configfile config/common.yaml config/config_cilia.yaml
 ```
 
 Checklist specific to this config:
@@ -206,10 +208,13 @@ Checklist specific to this config:
   a thin intensity/threshold halo isn't enough once deconvolution is in the
   loop.
 - **`skip_empty`:** the `prepare` rule (`workflow/scripts/prepare_tiles.py`)
-  calls `estimate_empty_tiles()` before submitting any `segment` jobs,
-  regardless of `method`, so cilia/DoG runs skip background tiles exactly
-  like Cellpose runs — no extra config needed beyond `skip_empty: true`
-  (the default).
+  builds a max-pooled occupancy map and reduces it over each tile's **full**
+  footprint (`build_occupancy_map` + `tile_occupancy`) before submitting any
+  `segment` jobs, regardless of `method`. Cilia are small and often sit near
+  a tile's edge, which is precisely where the older centred-window preview
+  could miss them — this decides every tile exactly. No extra config needed
+  beyond `skip_empty: true` (the default), and the map is built once and
+  shared by every config against that store.
 - Run alongside `config_cyto.yaml`/`config_nuclei.yaml` via `config/multi.yaml`
   to also get the cilia→cell/nucleus relation — see *Relating cilia to their
   cell*, below.
