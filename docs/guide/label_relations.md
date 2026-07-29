@@ -24,7 +24,7 @@ table[2]
 `table` only contains matched `a` labels (nuclei with at least one
 overlapping voxel in `cells`) — unmatched labels and full per-`b` coverage
 need a bit more bookkeeping (the [cluster workflow's `run_multi.py`
-script](snakemake.md#one-command-multiple-segmentations--relations) does
+script](snakemake.md#one-command-multiple-segmentations-relations) does
 this for you and writes it as a two-sheet workbook).
 
 Save it as a table yourself:
@@ -41,4 +41,4 @@ with open("nuclei_to_cell.csv", "w", newline="") as f:
 
 On the cluster, producing the two label stores in the first place is a
 matter of running the workflow twice against the same `work_dir` — see
-[Running two segmentations](snakemake.md#running-two-segmentations-eg-nuclei--cytoplasm).
+[Running two segmentations](snakemake.md#running-two-segmentations-eg-nuclei-cytoplasm).
