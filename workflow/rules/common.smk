@@ -36,7 +36,9 @@ STAGE_OK = f"{STAGE}.done"
 # wiped the previous one's output -- by the time a run finished, only the last
 # step's log survived and a failure earlier on left nothing to read.
 LOGS = f"{RUN}/logs"
-CONVERTLOG = f"{LOGS}/convert.log"
+# convert and occupancy are shared by every config, so their logs belong
+# beside the image, not under whichever config happened to run phase A.
+CONVERTLOG = f"{WORK}/logs/convert.log"
 PREPARELOG = f"{LOGS}/prepare.log"
 MERGELOG = f"{LOGS}/merge.log"
 
@@ -57,3 +59,22 @@ def batch_done(wildcards):
     tiles = checkpoints.prepare.get().output.tiles
     manifest = json.loads(Path(tiles).read_text())
     return [f"{RUN}/seg/{i}.done" for i in range(len(manifest["batches"]))]
+
+
+# --- notifications -----------------------------------------------------
+# Per-job mail is SLURM's own --mail-type: the controller sends it, so it
+# still arrives when a job is OOM-killed or cancelled by the scheduler --
+# the cases most worth hearing about, and the ones a notification sent from
+# inside the job would miss. Empty when no address is configured.
+#
+# Deliberately NOT applied to `segment`: there is one job per tile batch, so
+# a thousand-tile run would mean hundreds of emails.
+NOTIFY_EMAIL = config.get("notify_email") or ""
+NOTIFY_EVENTS = config.get("notify_events") or ["finish", "error"]
+
+
+def notify_extra(*_args, **_kwargs):
+    """slurm_extra fragment requesting mail for this job."""
+    from patchworks._notify import slurm_mail_extra
+
+    return slurm_mail_extra(NOTIFY_EMAIL, NOTIFY_EVENTS)

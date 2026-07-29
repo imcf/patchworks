@@ -6,6 +6,8 @@ rule merge:
         tiles=TILES,
     output:
         touch(f"{RUN}/labels.done"),
+    resources:
+        slurm_extra=notify_extra,
     log:
         MERGELOG,
     script:

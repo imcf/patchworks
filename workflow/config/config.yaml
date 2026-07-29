@@ -80,3 +80,8 @@ sequential_labels: true # renumber merged labels to a contiguous 1..N range
 # limit and cpus_per_task, not the node's totals. The merge logs what it
 # detected, so you can compare that line against `seff <jobid>`.
 merge_workers: null
+
+# --- notifications (optional) ---
+# Email on step completion/failure. Empty = off. See docs/guide/snakemake.md.
+notify_email: ""
+notify_events: ["finish", "error"]

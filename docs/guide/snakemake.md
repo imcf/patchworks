@@ -442,6 +442,46 @@ cyto_labels` and `cilia_labels -> nuclei_labels`) so you can use whichever
 fits a given dataset. See `config/config_cilia.yaml`. Its deconvolution step
 needs `pip install "patchworks[dog]"` in the segment jobs' environment.
 
+## Email notifications
+
+Set an address and the workflow mails you when the long steps finish or fail:
+
+```yaml
+# config/common.yaml (or config/config.yaml for a single-config run)
+notify_email: "you@unibas.ch"
+notify_events: ["finish", "error"] # any of: start, finish, error
+```
+
+Leave `notify_email` empty (the default) and nothing is sent.
+
+Per-job mail is **SLURM's own** `--mail-type`, not a message sent from inside
+the job. That matters: the controller sends it, so it still arrives when a job
+is OOM-killed or cancelled by the scheduler — exactly the failures worth
+hearing about, and exactly the ones a notification sent from within the job
+would miss.
+
+It is applied to the long single-job steps only — `convert`, `occupancy` and
+`merge`. `segment` is deliberately excluded: there is one job per tile batch,
+so a thousand-tile run would mean hundreds of messages.
+
+On top of that, the workflow itself sends:
+
+| When | Mail |
+| --- | --- |
+| The run fails | subject `[patchworks] FAILED: <label_name>`, with the last 40 lines of the failing step's log — usually the traceback itself |
+| The run succeeds | subject `[patchworks] done: <label_name>`, with the output label path |
+
+These cover what SLURM cannot: a local run with no scheduler at all, and
+failures where the useful content is the Python traceback rather than an exit
+code.
+
+!!! note "Delivery is best-effort, by design"
+    A notification can never fail a run. If no local `sendmail` exists and no
+    SMTP server answers on localhost, the failure is logged as a warning and
+    the pipeline carries on — a six-hour segmentation that worked must not be
+    reported as failed because a mail host was down. If you get the warning
+    but no mail, ask your cluster admins which relay host to use.
+
 ## Measurements
 
 See [Measurements](measurements.md) for computing area/centroid/intensity
