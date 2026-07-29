@@ -5,6 +5,14 @@
 # Edit the partitions / account / GPU request for your cluster.
 
 executor: slurm
+# The SLURM executor names every job after its run UUID and rejects a
+# --job-name in slurm_extra, so `squeue` shows nothing recognisable without
+# this. The prefix goes first in the name (<prefix>_<uuid>), which is the part
+# that survives truncation in a queue listing.
+# Alphanumerics, underscores and hyphens only; 50 characters max.
+# run_multi overrides this per config, so a three-way run shows pw-convert,
+# then pw-nuclei_labels / pw-cyto_labels / pw-cilia_labels.
+slurm-jobname-prefix: patchworks
 # Max concurrent SLURM jobs Snakemake will have in flight at once. This is a
 # submission-side cap, not a cluster limit — raising it just lets more
 # "segment" tiles queue/run together; scicore's scheduler still enforces your
