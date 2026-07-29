@@ -269,13 +269,26 @@ running the workflow **twice with two configs against the same `work_dir`**
 never collides: each run gets its own private subdirectory, and both reuse
 the *same* already-converted `image.zarr` (conversion never re-runs).
 
+Most of what those configs contain is identical — the input, the `work_dir`,
+the tiling, everything `convert` reads. Put it in **one** shared file and let
+each config carry only what actually differs. Snakemake merges several
+`--configfile` values in order, with the later one winning:
+
 ```yaml
-# config/config_nuclei.yaml
+# config/common.yaml — shared by every segmentation
 input: "/data/scan.ims"
 work_dir: "/scratch/results"
+tile_shape: [16, 1024, 1024]
+shard: false                   # true → far fewer files, same chunks
+tiles_per_job: 4
+```
+
+```yaml
+# config/config_nuclei.yaml — only the differences
 label_name: "nuclei_labels"
 channel: 1                # nuclear stain channel
-tile_shape: [16, 1024, 1024]
+overlap: [4, 30, 30]
+method: "cellpose"
 cellpose:
   model: "nuclei"
   diameter: 15
@@ -283,12 +296,11 @@ cellpose:
 ```
 
 ```yaml
-# config/config_cyto.yaml
-input: "/data/scan.ims"
-work_dir: "/scratch/results"   # same work_dir — image.zarr is reused
+# config/config_cyto.yaml — only the differences
 label_name: "cyto_labels"
 channel: 0                # cytoplasm/membrane channel
-tile_shape: [16, 1024, 1024]   # keep this identical across configs — see below
+overlap: [4, 30, 30]
+method: "cellpose"
 cellpose:
   model: "cyto3"
   diameter: 30
@@ -300,11 +312,22 @@ they can run concurrently. Give each its own `--directory`, because
 Snakemake's lock lives in the working directory, not in the config:
 
 ```bash
-snakemake --workflow-profile profile/slurm --configfile config/config_nuclei.yaml \
-          --directory /scratch/results/nuclei_labels/.snakemake
-snakemake --workflow-profile profile/slurm --configfile config/config_cyto.yaml \
-          --directory /scratch/results/cyto_labels/.snakemake
+snakemake --workflow-profile profile/slurm --configfile config/common.yaml config/config_nuclei.yaml --directory /scratch/results/nuclei_labels/.snakemake
 ```
+
+```bash
+snakemake --workflow-profile profile/slurm --configfile config/common.yaml config/config_cyto.yaml --directory /scratch/results/cyto_labels/.snakemake
+```
+
+!!! warning "Conversion settings belong in the shared file"
+    `convert` runs **once**, from the first config only. A `shard`, `input` or
+    `pyramid_levels` set on the second config is therefore never read, and
+    nothing logs that it was dropped. `run_multi` refuses to start when those
+    keys disagree across configs and tells you which one — but if you drive
+    the configs by hand, keep them in `common.yaml`.
+
+    Splitting the configs is optional: a self-contained config still works,
+    and `common:` can simply be left out of `multi.yaml`.
 
 !!! tip "One command for several segmentations + relations"
     `config/multi.yaml` lists any number of segmentation configs plus which
@@ -339,6 +362,8 @@ and saves every configured relation — one command instead of juggling several
 
 ```yaml
 # config/multi.yaml
+common: config/common.yaml # shared settings, merged under each config below
+
 segmentations:
   - config/config_nuclei.yaml
   - config/config_cyto.yaml
@@ -348,6 +373,10 @@ relations:
     b: cyto_labels
     output: nuclei_to_cyto.xlsx # written into work_dir
 ```
+
+`common:` is optional — leave it out and each config must be self-contained,
+as before. With it, changing the input path or turning on `shard` is a
+one-line edit in one file instead of the same edit repeated per config.
 
 ```bash
 pixi run multi-dry    # dry-run every segmentation config (skips relations)

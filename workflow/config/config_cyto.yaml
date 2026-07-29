@@ -1,29 +1,17 @@
 # Example segmentation config: cytoplasm/membrane channel.
-# Paired with config_nuclei.yaml via config/multi.yaml — see
-# docs/guide/snakemake.md "Running two segmentations". Same work_dir as
-# config_nuclei.yaml, and the same tile_shape so patchworks.label_relations()
-# can compare the two label arrays chunk-for-chunk.
-
-input: "/path/to/scan.ims"
-work_dir: "/path/to/results"
-
-reuse_pyramid: false
-convert_chunks: null
-shard: false
+#
+# Only what differs from config/common.yaml — the input, work_dir, tiling and
+# conversion settings all live there and are merged in ahead of this file.
+# Run it via config/multi.yaml, or on its own with both files:
+#
+#   snakemake -s Snakefile --configfile config/common.yaml config/config_cyto.yaml
 
 channel: 0 # cytoplasm/membrane channel
-level: 0
-tile_shape: [16, 1024, 1024] # keep identical to config_nuclei.yaml
-gpu_memory_gb: null
+
 # Per-axis halo [z, y, x]. A scalar 30 would expand a [16, 1024, 1024] tile to
 # 76 x 1084 x 1084 = 5.3x the voxels it keeps, nearly all of it wasted z. The
 # z-halo only needs to cover one cell in z, not one cell in x/y.
 overlap: [4, 30, 30]
-skip_empty: true
-# Tiles per SLURM job; they run sequentially and share one model load. Raise
-# once you know a tile's runtime -- job wall time is ~N x per-tile time.
-tiles_per_job: 4
-empty_threshold: null
 
 method: "cellpose"
 label_name: "cyto_labels"
@@ -32,8 +20,3 @@ cellpose:
   diameter: 30
   do_3D: true
   gpu: true
-
-pyramid_levels: 5
-pyramid_downscale: 2
-sequential_labels: true
-merge_workers: null

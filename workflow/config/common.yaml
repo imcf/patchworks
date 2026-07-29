@@ -1,0 +1,42 @@
+# Settings shared by every segmentation in config/multi.yaml.
+#
+# `common:` in multi.yaml points here, and run_multi passes it as the first of
+# two --configfile values. Snakemake merges them in order with the later
+# winning, so a per-config file only carries what actually differs from this
+# one — the channel it reads, the method it uses, its label_name.
+#
+# Everything `convert` reads MUST live here rather than in a per-config file:
+# the conversion runs once, up front, from the first config only, so a `shard`
+# or `input` set on the second config would be silently ignored. run_multi
+# refuses to start if those keys disagree across configs.
+
+input: "/path/to/scan.ims"
+work_dir: "/path/to/results"
+
+# --- conversion (read once, in phase A, from the first config only) ---
+reuse_pyramid: false
+convert_chunks: null
+# true → pack chunks into shards: same chunking and same memory, far fewer
+# files. Worth turning on for anything large; convert warns when a store is
+# heading past ~200,000 chunks, which a shared filesystem will not enjoy.
+shard: false
+
+# --- label pyramid (read by merge, i.e. once per config) ---
+# Shared here for convenience, but a per-config file may override these: each
+# segmentation builds its own label pyramid.
+pyramid_levels: 5
+pyramid_downscale: 2
+
+# --- tiling (must match across configs so label arrays stay comparable) ---
+level: 0
+tile_shape: [16, 1024, 1024]
+gpu_memory_gb: null
+skip_empty: true
+empty_threshold: null
+# Tiles per SLURM job; they run sequentially and share one model load. Raise
+# once you know a tile's runtime -- job wall time is ~N x per-tile time.
+tiles_per_job: 4
+
+# --- merge ---
+sequential_labels: true
+merge_workers: null
