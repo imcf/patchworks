@@ -36,7 +36,9 @@ STAGE_OK = f"{STAGE}.done"
 # wiped the previous one's output -- by the time a run finished, only the last
 # step's log survived and a failure earlier on left nothing to read.
 LOGS = f"{RUN}/logs"
-CONVERTLOG = f"{LOGS}/convert.log"
+# convert and occupancy are shared by every config, so their logs belong
+# beside the image, not under whichever config happened to run phase A.
+CONVERTLOG = f"{WORK}/logs/convert.log"
 PREPARELOG = f"{LOGS}/prepare.log"
 MERGELOG = f"{LOGS}/merge.log"
 
