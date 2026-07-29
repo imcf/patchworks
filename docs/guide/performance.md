@@ -74,6 +74,9 @@ extra read-back of the staged data.
 
 - `tile_shape="auto"` sizes tiles to free RAM (or VRAM with `use_gpu=True`).
 - `skip_empty=True` with `estimate_empty_tiles()` skips background tiles.
+  That preview samples a centred window, so use `build_occupancy_map()` +
+  `tile_occupancy()` when the result becomes an authoritative skip list —
+  they are exact, and it is what the Snakemake workflow uses.
 - A Dask **distributed** cluster (`make_local_cluster`) parallelises across
   workers/GPUs; patchworks then defers concurrency to the cluster.
 
