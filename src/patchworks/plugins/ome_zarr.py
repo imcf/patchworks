@@ -49,6 +49,7 @@ import glob
 import logging
 import math
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext as _nullcontext
 from itertools import product as _iproduct
 from pathlib import Path
 from typing import Union
@@ -171,8 +172,22 @@ def _strides(axes: str, downscale: int) -> tuple[int, ...]:
     return tuple(downscale if a in _DOWNSAMPLE_AXES else 1 for a in axes)
 
 
-def _default_chunks(shape: tuple[int, ...], axes: str) -> tuple[int, ...]:
+def _default_chunks(
+    shape: tuple[int, ...],
+    axes: str,
+    source_chunks: Union[tuple[int, ...], None] = None,
+) -> tuple[int, ...]:
     """Bounded chunk shape so writing a level never blows up RAM.
+
+    With *source_chunks*, the result never spans more than one source chunk on
+    any axis. That matters when the source's own granularity is coarse: a
+    folder of stitched TIFFs gives one chunk per **file**, so a plane can be
+    gigabytes. Grouping 16 of those into one output chunk (the ``z`` cap) means
+    holding 16 whole planes to write a 32 MB chunk -- tens of GB for the
+    smallest unit of work, which is how conversion gets OOM-killed.
+
+    Splitting a source chunk is fine (that is a slice of something already
+    read); combining several is not.
 
     Parameters
     ----------
@@ -180,13 +195,18 @@ def _default_chunks(shape: tuple[int, ...], axes: str) -> tuple[int, ...]:
         Array shape.
     axes : str
         One letter per axis (selects the per-axis cap).
+    source_chunks : tuple of int, optional
+        The input array's own chunking.
 
     Returns
     -------
     tuple of int
-        Per-axis chunk size, capped by ``_CHUNK_CAP``.
+        Per-axis chunk size, capped by ``_CHUNK_CAP`` and by *source_chunks*.
     """
-    return tuple(min(s, _CHUNK_CAP.get(a, s)) for s, a in zip(shape, axes))
+    caps = [min(s, _CHUNK_CAP.get(a, s)) for s, a in zip(shape, axes)]
+    if source_chunks is not None:
+        caps = [min(c, max(1, int(sc))) for c, sc in zip(caps, source_chunks)]
+    return tuple(caps)
 
 
 ShardSpec = Union[bool, tuple[int, ...]]
@@ -446,6 +466,39 @@ def _stream_strided_level(
             pass
 
 
+def _bounded_scheduler(arr: da.Array):
+    """Cap dask's threads by the memory one **source** chunk costs.
+
+    Dask keeps a source chunk alive while every task that reads it runs, so
+    peak memory tracks the *input* granularity, not the output's. A folder of
+    stitched TIFFs gives one chunk per file -- gigabytes each -- and the
+    default worker count is the machine's core count, so 32 threads x a 3.6 GB
+    plane is over 100 GB before anything is written.
+
+    Sizing from the source chunk against the job's real budget keeps that
+    bounded. Returns a context manager; a no-op when a distributed client is
+    driving, since it schedules with its own memory awareness.
+    """
+    import dask
+
+    from .._chunks import cpu_allocation, safe_worker_count
+    from .._cluster import _distributed_client
+
+    if _distributed_client() is not None:
+        return _nullcontext()
+    chunk_nbytes = int(np.prod(arr.chunksize)) * arr.dtype.itemsize
+    # Two live copies per worker: the source chunk plus the slice being written.
+    workers = min(
+        cpu_allocation(), safe_worker_count(chunk_nbytes, fn_overhead=2)
+    )
+    logger.info(
+        "writing with %d dask worker(s): source chunks are %.2f GB each",
+        workers,
+        chunk_nbytes / 1024**3,
+    )
+    return dask.config.set(scheduler="threads", num_workers=workers)
+
+
 def _progress_ctx(progress: bool, label: str):
     """Return a progress-bar context manager.
 
@@ -648,7 +701,11 @@ def _write_pyramid(
     strides = _strides(axes, downscale)
 
     if write_base:
-        base_chunks = chunks or _default_chunks(arr.shape, axes)
+        # Cap by the source's own chunking: combining several source chunks
+        # into one output chunk can mean holding gigabytes to write megabytes.
+        base_chunks = chunks or _default_chunks(
+            arr.shape, axes, source_chunks=arr.chunksize
+        )
         _to_zarr_level(
             arr.rechunk(base_chunks), group_path, base_name, shard, progress
         )
@@ -1361,17 +1418,18 @@ def to_ome_zarr(
 
     out = str(out_path)
     zarr.open_group(out, mode="w" if overwrite else "w-")
-    datasets = _write_pyramid(
-        arr,
-        axes,
-        out,
-        n_levels=n_levels,
-        downscale=downscale,
-        chunks=chunks,
-        base_scale=base_scale,
-        shard=shard,
-        progress=progress,
-    )
+    with _bounded_scheduler(arr):
+        datasets = _write_pyramid(
+            arr,
+            axes,
+            out,
+            n_levels=n_levels,
+            downscale=downscale,
+            chunks=chunks,
+            base_scale=base_scale,
+            shard=shard,
+            progress=progress,
+        )
     _write_multiscales(out, axes, datasets, Path(out).stem, calibrated=bool(ps))
     return out
 

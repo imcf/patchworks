@@ -415,3 +415,67 @@ def test_glob_without_sequence_pattern_says_so(tmp_path):
     with pytest.raises(Exception) as exc:
         to_ome_zarr(str(tmp_path / "scan.ims"), tmp_path / "o2.zarr")
     assert "sequence_pattern" not in str(exc.value)
+
+
+def test_base_chunks_never_group_source_chunks(tmp_path):
+    """One output chunk must not require several source chunks.
+
+    A folder of stitched TIFFs gives one dask chunk per file, so a plane can
+    be gigabytes. The z cap of 16 would group sixteen of them into one output
+    chunk -- ~58 GB held to write 32 MB, against a 64 GB job. Splitting a
+    source chunk is fine; combining several is not.
+    """
+    from patchworks.plugins.ome_zarr import _default_chunks
+
+    shape = (4, 126, 45961, 42072)
+    # one chunk per file: (c=1, z=1, whole plane)
+    assert _default_chunks(
+        shape, "czyx", source_chunks=(1, 1, 45961, 42072)
+    ) == (
+        1,
+        1,
+        1024,
+        1024,
+    )
+    # a normally-chunked source is unaffected by the cap
+    assert _default_chunks(shape, "czyx", source_chunks=shape) == (
+        1,
+        16,
+        1024,
+        1024,
+    )
+    # and omitting it keeps the previous behaviour
+    assert _default_chunks(shape, "czyx") == (1, 16, 1024, 1024)
+
+
+def test_tiff_sequence_keeps_one_plane_per_chunk(tmp_path):
+    """End to end: a per-file source must not be z-grouped on write."""
+    tifffile = pytest.importorskip("tifffile")
+    n_z, n_c, size = 4, 2, 8
+    for z in range(n_z):
+        for c in range(n_c):
+            tifffile.imwrite(
+                tmp_path / f"s_Z{z:03d}_C{c}_V0.tif",
+                np.full((size, size), z * 10 + c, "uint16"),
+            )
+
+    out = tmp_path / "seq.zarr"
+    to_ome_zarr(
+        str(tmp_path / "*.tif"),
+        out,
+        sequence_pattern=r"_Z(?P<Z>\d+)_C(?P<C>\d+)_V\d+",
+        n_levels=1,
+        progress=False,
+    )
+    level0 = zarr.open_array(str(out) + "/0", mode="r")
+    assert level0.chunks[1] == 1, (
+        f"z was grouped into {level0.chunks[1]} planes per chunk; each source "
+        "chunk is a whole file, so that multiplies the read"
+    )
+    # and the data still round-trips
+    result = np.asarray(load_ome_zarr(out, channel=None))
+    assert result.shape == (n_c, n_z, size, size)
+    assert (
+        result[:, :, 0, 0]
+        == [[z * 10 + c for z in range(n_z)] for c in range(n_c)]
+    ).all()
