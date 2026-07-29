@@ -929,16 +929,75 @@ _UNIT_TO_UM = {
 _RESUNIT_TO_UM = {2: 25400.0, 3: 10000.0}
 
 
+def _ome_xml_pixel_size(xml: str) -> PixelSize:
+    """Voxel size from an OME-XML ``Pixels`` element.
+
+    Stitching and acquisition software commonly writes OME-XML into
+    ``ImageDescription`` and nothing else -- no ImageJ block, and resolution
+    tags left at their defaults. Readers that only look at the TIFF tags then
+    report an uncalibrated image even though the size is right there.
+
+    Parameters
+    ----------
+    xml : str
+        The OME-XML document.
+
+    Returns
+    -------
+    dict
+        ``{axis: micrometers}`` for whichever axes carry a size.
+    """
+    from xml.etree import ElementTree
+
+    try:
+        root = ElementTree.fromstring(xml)
+    except ElementTree.ParseError:
+        return {}
+    # The OME namespace is versioned, so match on the local tag name.
+    pixels = next(
+        (el for el in root.iter() if el.tag.rsplit("}", 1)[-1] == "Pixels"),
+        None,
+    )
+    if pixels is None:
+        return {}
+    out: PixelSize = {}
+    for axis in "zyx":
+        value = pixels.get(f"PhysicalSize{axis.upper()}")
+        if not value:
+            continue
+        unit = pixels.get(f"PhysicalSize{axis.upper()}Unit", "µm")
+        factor = _UNIT_TO_UM.get(str(unit).lower())
+        if factor is None:
+            logger.warning(
+                "OME-XML PhysicalSize%s has unit %r, which is not recognised; "
+                "ignoring it.",
+                axis.upper(),
+                unit,
+            )
+            continue
+        try:
+            out[axis] = float(value) * factor
+        except ValueError:
+            continue
+    return out
+
+
 def _tiff_pixel_size(path: str) -> PixelSize:
     """Read physical voxel size from a TIFF file's own metadata.
 
-    Z comes from ImageJ metadata (``spacing`` + ``unit``), if present. X/Y
-    come from the page's ``XResolution``/``YResolution`` tags (pixels per
-    unit); the unit itself is taken from the ``ResolutionUnit`` tag when set
-    (plain TIFFs), or falls back to ImageJ metadata's ``unit`` — ImageJ
-    itself writes ``ResolutionUnit=NONE`` and keeps the unit as a string in
-    its metadata instead. Unrecognized units are ignored (treated as
-    uncalibrated).
+    Checks every place the size is commonly written, most explicit first:
+
+    1. **OME-XML** ``PhysicalSizeX/Y/Z`` (+ their units) in
+       ``ImageDescription`` — what stitched and OME-TIFF output usually
+       carries, and the only one of the three that can give ``z`` for a
+       sequence of single planes.
+    2. **ImageJ metadata** — ``spacing`` (+ ``unit``) for ``z``.
+    3. **Resolution tags** — ``XResolution``/``YResolution`` in pixels per
+       unit, the unit from ``ResolutionUnit`` (plain TIFFs) or from ImageJ's
+       ``unit`` string (ImageJ writes ``ResolutionUnit=NONE``).
+
+    Earlier sources win per axis, so a file carrying both keeps the explicit
+    OME value. Unrecognized units are ignored rather than guessed at.
 
     Parameters
     ----------
@@ -955,9 +1014,18 @@ def _tiff_pixel_size(path: str) -> PixelSize:
 
     pixel_size: PixelSize = {}
     with tifffile.TiffFile(path) as tif:
+        description = tif.pages[0].tags.get("ImageDescription")
+        xml = tif.ome_metadata or (
+            description.value
+            if description and "<OME" in str(description.value)
+            else None
+        )
+        if xml:
+            pixel_size.update(_ome_xml_pixel_size(str(xml)))
+
         ij = tif.imagej_metadata or {}
         spacing = ij.get("spacing")
-        if spacing:
+        if spacing and "z" not in pixel_size:
             factor = _UNIT_TO_UM.get(str(ij.get("unit", "micron")).lower(), 1.0)
             pixel_size["z"] = float(spacing) * factor
 
@@ -968,6 +1036,8 @@ def _tiff_pixel_size(path: str) -> PixelSize:
         ) or _UNIT_TO_UM.get(str(ij.get("unit", "")).lower())
         if um_per_unit is not None:
             for axis, tag_name in (("y", "YResolution"), ("x", "XResolution")):
+                if axis in pixel_size:
+                    continue
                 tag = page.tags.get(tag_name)
                 if tag and tag.value[0]:
                     num, den = tag.value
@@ -1071,6 +1141,18 @@ def _open_tiff_sequence(
         arr.shape,
         pixel_size,
     )
+    missing = [a for a in axes if a in _SPATIAL_AXES and a not in pixel_size]
+    if missing:
+        logger.warning(
+            "no voxel size for %s in %s -- checked OME-XML PhysicalSize*, "
+            "ImageJ spacing/unit, and the resolution tags. The store will be "
+            "uncalibrated on %s, which also leaves anything deriving physical "
+            "units from it (e.g. deconvolution voxel sizes) with nothing to "
+            "read. Pass pixel_size= to supply it.",
+            "/".join(missing),
+            Path(ts[0]).name,
+            "/".join(missing),
+        )
     return arr, axes, pixel_size
 
 

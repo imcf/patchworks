@@ -479,3 +479,74 @@ def test_tiff_sequence_keeps_one_plane_per_chunk(tmp_path):
         result[:, :, 0, 0]
         == [[z * 10 + c for z in range(n_z)] for c in range(n_c)]
     ).all()
+
+
+def _ome_xml(x, y, z, unit="um"):
+    return (
+        '<?xml version="1.0"?>'
+        '<OME xmlns="http://www.openmicroscopy.org/Schemas/OME/2016-06">'
+        f'<Image><Pixels PhysicalSizeX="{x}" PhysicalSizeXUnit="{unit}"'
+        f' PhysicalSizeY="{y}" PhysicalSizeYUnit="{unit}"'
+        f' PhysicalSizeZ="{z}" PhysicalSizeZUnit="{unit}"/></Image></OME>'
+    )
+
+
+def test_pixel_size_from_ome_xml(tmp_path):
+    """OME-XML PhysicalSize* must be read, not just the resolution tags.
+
+    Stitched output commonly writes OME-XML into ImageDescription and leaves
+    the TIFF tags at their defaults, so a tag-only reader calls a perfectly
+    calibrated image uncalibrated -- and it is the only source that can give
+    z for a sequence of single planes.
+    """
+    tifffile = pytest.importorskip("tifffile")
+    from patchworks.plugins.ome_zarr import _tiff_pixel_size
+
+    path = tmp_path / "ome.tif"
+    tifffile.imwrite(
+        path,
+        np.zeros((8, 8), "uint16"),
+        description=_ome_xml(0.325, 0.325, 1.5),
+    )
+    assert _tiff_pixel_size(str(path)) == pytest.approx(
+        {"z": 1.5, "y": 0.325, "x": 0.325}
+    )
+
+    # mm is converted, not taken at face value
+    mm = tmp_path / "mm.tif"
+    tifffile.imwrite(
+        mm,
+        np.zeros((8, 8), "uint16"),
+        description=_ome_xml(0.001, 0.001, 0.002, "mm"),
+    )
+    assert _tiff_pixel_size(str(mm)) == pytest.approx(
+        {"z": 2.0, "y": 1.0, "x": 1.0}
+    )
+
+
+def test_ome_xml_wins_over_the_resolution_tags(tmp_path):
+    """The explicit source wins per axis when a file carries both."""
+    tifffile = pytest.importorskip("tifffile")
+    from patchworks.plugins.ome_zarr import _tiff_pixel_size
+
+    path = tmp_path / "both.tif"
+    tifffile.imwrite(
+        path,
+        np.zeros((8, 8), "uint16"),
+        description=_ome_xml(0.325, 0.325, 1.5),
+        resolution=(20000.0, 20000.0),  # would say 0.5 µm
+        resolutionunit="CENTIMETER",
+    )
+    got = _tiff_pixel_size(str(path))
+    assert got["x"] == pytest.approx(0.325), "OME-XML must win over the tag"
+    assert got["z"] == pytest.approx(1.5)
+
+
+def test_uncalibrated_tiff_reports_nothing(tmp_path):
+    """No metadata gives an empty dict rather than an invented default."""
+    tifffile = pytest.importorskip("tifffile")
+    from patchworks.plugins.ome_zarr import _tiff_pixel_size
+
+    path = tmp_path / "bare.tif"
+    tifffile.imwrite(path, np.zeros((8, 8), "uint16"))
+    assert _tiff_pixel_size(str(path)) == {}
