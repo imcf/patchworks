@@ -8,7 +8,15 @@ sys.path.insert(
     0, str(Path(__file__).resolve().parents[1] / "workflow" / "scripts")
 )
 
-from run_multi import slurm_jobname_prefix  # noqa: E402
+import pytest  # noqa: E402
+import yaml  # noqa: E402
+
+from run_multi import (  # noqa: E402
+    _CONVERT_KEYS,
+    _snakemake_cmd,
+    _validate_configs,
+    slurm_jobname_prefix,
+)
 
 # The SLURM executor's own rule (snakemake_executor_plugin_slurm): it raises a
 # WorkflowError and aborts the whole run if the prefix does not match.
@@ -36,3 +44,80 @@ def test_jobname_prefix_keeps_the_label_readable():
     """The label must lead, since that is what a queue listing truncates to."""
     assert slurm_jobname_prefix("nuclei_labels") == "pw-nuclei_labels"
     assert slurm_jobname_prefix("convert") == "pw-convert"
+
+
+def test_common_configfile_is_merged_under_the_per_config_one():
+    """Snakemake merges --configfile values in order, later winning.
+
+    That ordering is the whole mechanism: shared settings come from common.yaml
+    and the per-config file overrides only what differs. Swap the two and every
+    config would silently get the shared defaults instead of its own channel.
+    """
+    cmd = _snakemake_cmd(
+        Path("config/config_nuclei.yaml"),
+        workflow_dir=Path("workflow"),
+        profile=None,
+        cores=8,
+        dry_run=False,
+        common=Path("config/common.yaml"),
+    )
+    i = cmd.index("--configfile")
+    assert cmd[i + 1].endswith("common.yaml")
+    assert cmd[i + 2].endswith("config_nuclei.yaml")
+
+    # Without a common file the invocation is unchanged: one configfile, so
+    # a self-contained config keeps working exactly as before.
+    plain = _snakemake_cmd(
+        Path("config/config_nuclei.yaml"),
+        workflow_dir=Path("workflow"),
+        profile=None,
+        cores=8,
+        dry_run=False,
+    )
+    j = plain.index("--configfile")
+    assert plain[j + 1].endswith("config_nuclei.yaml")
+    assert not plain[j + 2].endswith(".yaml")
+
+
+def test_convert_keys_must_agree_across_configs():
+    """`convert` runs once from the first config, so a later one is ignored.
+
+    Setting shard on the second config and watching a million files appear
+    anyway is invisible without this check -- there is no log line saying the
+    value was dropped, because nothing ever read it.
+    """
+    paths = [Path("a.yaml"), Path("b.yaml")]
+    base = {"work_dir": "/w", "tile_shape": [16, 512, 512], "level": 0}
+    good = [
+        {**base, "label_name": "a", "shard": True},
+        {**base, "label_name": "b", "shard": True},
+    ]
+    assert _validate_configs(paths, good) == "/w"
+
+    bad = [
+        {**base, "label_name": "a", "shard": True},
+        {**base, "label_name": "b", "shard": False},
+    ]
+    # It reports every problem and exits, rather than raising, so that a
+    # mistake costs one readable message instead of a traceback.
+    with pytest.raises(SystemExit):
+        _validate_configs(paths, bad)
+
+
+def test_shipped_multi_configs_are_consistent():
+    """The shipped example must satisfy its own validator.
+
+    It is the thing users copy, so a config set that run_multi would refuse to
+    start is worse than no example at all.
+    """
+    cfg_dir = Path(__file__).resolve().parents[1] / "workflow" / "config"
+    multi = yaml.safe_load((cfg_dir / "multi.yaml").read_text())
+    common = yaml.safe_load((cfg_dir.parent / multi["common"]).read_text())
+    paths = [cfg_dir.parent / p for p in multi["segmentations"]]
+    cfgs = [{**common, **yaml.safe_load(p.read_text())} for p in paths]
+
+    assert _validate_configs(paths, cfgs) == common["work_dir"]
+    # Every key convert reads comes from the shared file, not a per-config one.
+    for path in paths:
+        own = yaml.safe_load(path.read_text())
+        assert not set(own) & set(_CONVERT_KEYS), path.name

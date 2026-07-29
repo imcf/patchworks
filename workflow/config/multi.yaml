@@ -13,6 +13,12 @@
 # `relations` (there's no automatic "chain"; list every pair explicitly, e.g.
 # nuclei->cyto, nuclei->membrane, cyto->membrane).
 
+# Settings every segmentation shares — the input, the work_dir, the tiling,
+# everything `convert` reads. Merged in ahead of each config below, so a
+# per-config file carries only what differs. Optional: drop this line and each
+# config can be self-contained again.
+common: config/common.yaml
+
 segmentations:
 - config/config_nuclei.yaml
 - config/config_cyto.yaml

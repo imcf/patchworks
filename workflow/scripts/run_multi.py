@@ -49,19 +49,29 @@ def _snakemake_cmd(
     targets: list[str] | None = None,
     extra: list[str] | None = None,
     jobname_prefix: str | None = None,
+    common: Path | None = None,
 ) -> list[str]:
     """Build one snakemake invocation.
 
     Every path is absolutised because ``--directory`` moves the working
     directory: each config needs its own ``.snakemake`` state directory, or
     concurrent runs would contend for the same ``.snakemake/locks/``.
+
+    *common*, when given, is passed as the first of two ``--configfile``
+    values. Snakemake merges them in order with the later winning, so the
+    settings every config shares -- the input, the work_dir, everything
+    ``convert`` reads -- live in one file and the per-config file carries only
+    what actually differs.
     """
+    configfiles = [str(configfile.resolve())]
+    if common is not None:
+        configfiles.insert(0, str(common.resolve()))
     cmd = [
         "snakemake",
         "-s",
         str(workflow_dir / "Snakefile"),
         "--configfile",
-        str(configfile.resolve()),
+        *configfiles,
     ]
     if state_dir is not None:
         state_dir.mkdir(parents=True, exist_ok=True)
@@ -112,6 +122,22 @@ def _run(cmd: list[str], workflow_dir: Path) -> int:
     return subprocess.run(cmd, cwd=workflow_dir).returncode
 
 
+# Exactly the config keys scripts/convert.py reads -- keep the two in step.
+# Conversion runs once, in phase A, from the first config, so these have to
+# agree across all of them or the disagreement is invisible.
+#
+# Deliberately NOT here: pyramid_levels / pyramid_downscale. Those are read by
+# merge.py, which runs once per config and builds that config's own label
+# pyramid, so they may legitimately differ.
+_CONVERT_KEYS = (
+    "input",
+    "sequence_pattern",
+    "convert_chunks",
+    "shard",
+    "reuse_pyramid",
+)
+
+
 def _validate_configs(paths: list[Path], cfgs: list[dict]) -> str:
     """Check the cross-config invariants before anything is submitted.
 
@@ -143,6 +169,20 @@ def _validate_configs(paths: list[Path], cfgs: list[dict]) -> str:
             problems.append(
                 f"{key} must be identical across configs so the label arrays "
                 f"share a chunk layout; got {_spread(key)}"
+            )
+
+    # Phase A converts once, from the first config. Anything `convert` reads
+    # out of a later config is therefore silently ignored -- someone setting
+    # `shard: true` on the second config and watching a million files appear
+    # anyway has no way to see why. Refuse instead, and point at common.yaml.
+    for key in _CONVERT_KEYS:
+        values = {repr(cfg.get(key)) for cfg in cfgs}
+        if len(values) != 1:
+            problems.append(
+                f"{key} affects `convert`, which runs once from the first "
+                f"config, so the other values would be silently ignored; got "
+                f"{_spread(key)}. Put the settings every config shares in one "
+                f"file and point `common:` in multi.yaml at it."
             )
 
     for path, cfg in zip(paths, cfgs):
@@ -221,7 +261,15 @@ def main() -> None:
     seg_config_paths = [
         _resolve(workflow_dir, c) for c in multi_cfg["segmentations"]
     ]
-    seg_cfgs = [_load_yaml(p) for p in seg_config_paths]
+    # Optional shared config: Snakemake merges --configfile values in order,
+    # so `common` holds what every segmentation agrees on and each per-config
+    # file overrides only what differs. Validation has to see the same merged
+    # view Snakemake will, or it would report a missing work_dir that is
+    # simply defined one file over.
+    common_path = multi_cfg.get("common")
+    common_path = _resolve(workflow_dir, common_path) if common_path else None
+    common_cfg = _load_yaml(common_path) if common_path else {}
+    seg_cfgs = [{**common_cfg, **_load_yaml(p)} for p in seg_config_paths]
     work_dir = _validate_configs(seg_config_paths, seg_cfgs)
     image_store = f"{work_dir}/image.zarr"
 
@@ -245,6 +293,7 @@ def main() -> None:
                     dry_run=False,
                     state_dir=state_dir,
                     extra=["--unlock"],
+                    common=common_path,
                 ),
                 workflow_dir,
             )
@@ -264,6 +313,7 @@ def main() -> None:
             state_dir=Path(work_dir) / ".snakemake_convert",
             targets=[f"{image_store}/zarr.json"],
             jobname_prefix=slurm_jobname_prefix("convert"),
+            common=common_path,
         ),
         workflow_dir,
     )
@@ -318,6 +368,7 @@ def main() -> None:
             state_dir=Path(cfg["work_dir"]) / cfg["label_name"] / ".snakemake",
             # Names the config in squeue, so concurrent runs are tellable apart.
             jobname_prefix=slurm_jobname_prefix(cfg["label_name"]),
+            common=common_path,
         )
         print(f"[run_multi] $ {' '.join(cmd)}", flush=True)
         procs.append((cfg_path.name, subprocess.Popen(cmd, cwd=workflow_dir)))
