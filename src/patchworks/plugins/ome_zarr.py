@@ -466,6 +466,37 @@ def _stream_strided_level(
             pass
 
 
+# One chunk is one file without sharding. A shared cluster filesystem starts
+# to hurt well before a million of them, and the cost lands on every later
+# read too, not just the write.
+_CHUNK_COUNT_WARN = 200_000
+
+
+def _warn_if_many_chunks(
+    shape: tuple[int, ...], chunks: tuple[int, ...], shard: ShardSpec
+) -> None:
+    """Warn when a level will be written as a very large number of files.
+
+    A coarse source forces fine output chunks (see :func:`_default_chunks`),
+    and fine chunks mean many files. Sharding packs them into far fewer
+    without changing the chunking, so the fix is cheap -- but only if someone
+    notices before the store is written.
+    """
+    if shard:
+        return
+    count = int(np.prod([math.ceil(s / c) for s, c in zip(shape, chunks)]))
+    if count < _CHUNK_COUNT_WARN:
+        return
+    logger.warning(
+        "level 0 will be %s chunks, i.e. that many files: the source's own "
+        "granularity forced chunks of %s. Set shard=True (config: "
+        "shard: true) to pack them into far fewer files -- same chunking, "
+        "same memory, and kinder to a shared filesystem.",
+        f"{count:,}",
+        chunks,
+    )
+
+
 def _bounded_scheduler(arr: da.Array):
     """Cap dask's threads by the memory one **source** chunk costs.
 
@@ -706,6 +737,7 @@ def _write_pyramid(
         base_chunks = chunks or _default_chunks(
             arr.shape, axes, source_chunks=arr.chunksize
         )
+        _warn_if_many_chunks(arr.shape, base_chunks, shard)
         _to_zarr_level(
             arr.rechunk(base_chunks), group_path, base_name, shard, progress
         )

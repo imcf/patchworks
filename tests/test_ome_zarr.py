@@ -550,3 +550,29 @@ def test_uncalibrated_tiff_reports_nothing(tmp_path):
     path = tmp_path / "bare.tif"
     tifffile.imwrite(path, np.zeros((8, 8), "uint16"))
     assert _tiff_pixel_size(str(path)) == {}
+
+
+def test_many_chunks_suggests_sharding(caplog):
+    """A coarse source forces fine chunks; fine chunks mean many files.
+
+    That trade-off is invisible until a shared filesystem is carrying a
+    million of them, so it has to be said at write time -- with the remedy.
+    """
+    import logging
+
+    from patchworks.plugins.ome_zarr import _warn_if_many_chunks
+
+    real = (4, 126, 45961, 42072)  # ~950k chunks at (1, 1, 1024, 1024)
+    with caplog.at_level(logging.WARNING, logger="patchworks.plugins.ome_zarr"):
+        _warn_if_many_chunks(real, (1, 1, 1024, 1024), shard=False)
+    assert "shard: true" in caplog.text
+    assert "952,560" in caplog.text
+
+    # Sharding already asked for, or a modest chunk count: nothing to say.
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="patchworks.plugins.ome_zarr"):
+        _warn_if_many_chunks(real, (1, 1, 1024, 1024), shard=True)
+        _warn_if_many_chunks(
+            (4, 126, 1024, 1024), (1, 16, 1024, 1024), shard=False
+        )
+    assert caplog.text == ""
