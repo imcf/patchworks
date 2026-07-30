@@ -107,3 +107,56 @@ def test_explicit_decon_kwargs_win_over_the_calibration(monkeypatch):
     assert captured["dxdata"] == 0.1  # filled from the calibration
     assert captured["dzdata"] == 0.2
     assert captured["dzpsf"] == 0.2
+
+
+def test_restore_shape_recentres_a_cropped_decon():
+    """cudaDecon can hand back a smaller volume than it was given.
+
+    Observed on a real edge tile: (14, 1024, 1024) in, (13, 1020, 1020) out.
+    patchworks needs one label per input voxel, so the field of view has to be
+    restored before the DoG step.
+    """
+    from patchworks.plugins.dog import _restore_shape
+
+    arr = np.arange(13 * 1020 * 1020, dtype="float32").reshape(13, 1020, 1020)
+    out = _restore_shape(arr, (14, 1024, 1024))
+    assert out.shape == (14, 1024, 1024)
+    # The original content is preserved, centred, not resampled.
+    assert np.array_equal(out[0:13, 2:1022, 2:1022], arr)
+
+
+def test_restore_shape_handles_growth_and_exact_fit():
+    """It must be a no-op when shapes already match, and crop when larger."""
+    from patchworks.plugins.dog import _restore_shape
+
+    same = np.ones((4, 8, 8), dtype="float32")
+    assert _restore_shape(same, (4, 8, 8)).shape == (4, 8, 8)
+    bigger = np.ones((6, 12, 12), dtype="float32")
+    assert _restore_shape(bigger, (4, 8, 8)).shape == (4, 8, 8)
+    # And a mix: one axis short, one long.
+    mixed = np.ones((2, 12), dtype="float32")
+    assert _restore_shape(mixed, (4, 8)).shape == (4, 8)
+
+
+def test_stage_tile_rejects_a_shape_changing_function(tmp_path):
+    """A wrong-shaped return must name the culprit, not blow up inside zarr.
+
+    This used to surface as "could not broadcast input array from shape
+    (13,1020,1020) into shape (14,1024,1024)" six frames deep in zarr's codec
+    pipeline, which says nothing about which function misbehaved.
+    """
+    import dask.array as da
+    import pytest
+
+    from patchworks import create_stage, stage_tile
+
+    image = da.zeros((8, 32, 32), chunks=(4, 16, 16), dtype="uint16")
+    stage = str(tmp_path / "stage.zarr")
+    create_stage(stage, image.shape, (4, 16, 16))
+
+    def crops(block):
+        """Stand-in for a deconvolution backend that trims its output."""
+        return np.zeros(tuple(s - 1 for s in block.shape), dtype="int32")
+
+    with pytest.raises(ValueError, match="one label per input voxel"):
+        stage_tile(image, crops, stage, 0, tile_shape=(4, 16, 16), overlap=2)
