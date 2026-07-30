@@ -475,6 +475,24 @@ These cover what SLURM cannot: a local run with no scheduler at all, and
 failures where the useful content is the Python traceback rather than an exit
 code.
 
+Check it works without waiting for a multi-hour step:
+
+```bash
+python scripts/run_multi.py --config config/multi.yaml --test-email
+```
+
+It prints the address it actually resolved from the merged config, the exact
+`sbatch` flags the jobs will carry, and whether a test message was accepted —
+which separates "the address never reached the config" from "it did and the
+mail was dropped downstream". Those look identical otherwise: no email either
+way.
+
+!!! warning "No mail from `segment`"
+    `segment` is excluded on purpose, so a run that is only segmenting tiles
+    sends nothing. Mail comes from `convert`, `occupancy` and `merge`, plus
+    the workflow-level success/failure message — if those already completed
+    before you set the address, there is nothing left in the run to mail you.
+
 !!! note "Delivery is best-effort, by design"
     A notification can never fail a run. If no local `sendmail` exists and no
     SMTP server answers on localhost, the failure is logged as a warning and

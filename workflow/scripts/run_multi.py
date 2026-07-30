@@ -117,6 +117,63 @@ def slurm_jobname_prefix(label: str) -> str:
     return f"pw-{safe}"[:50]
 
 
+def _test_email(cfg: dict) -> int:
+    """Send one test notification and report the outcome. Returns an exit code.
+
+    "No email arrived" has two very different causes that look identical from
+    the outside: the address never made it into the merged config, or it did
+    and the message was dropped somewhere downstream. This distinguishes them
+    without waiting for a multi-hour step to finish.
+    """
+    from patchworks._notify import send, slurm_mail_extra
+
+    email = cfg.get("notify_email") or ""
+    events = cfg.get("notify_events") or ["finish", "error"]
+    if not email:
+        print(
+            "[run_multi] notify_email is empty in the merged config, so no "
+            "mail is sent by design.\n"
+            "  Set it in the file `common:` points at (the per-config files "
+            "no longer carry it), then re-run this check.",
+            file=sys.stderr,
+        )
+        return 1
+
+    print(f"[run_multi] notify_email  : {email}")
+    print(f"[run_multi] notify_events : {events}")
+    print(
+        f"[run_multi] SLURM per-job : sbatch {slurm_mail_extra(email, events)}"
+    )
+    print(
+        "[run_multi] NOTE: convert, occupancy and merge send per-job mail; "
+        "segment does not (one job per tile batch would mean hundreds)."
+    )
+    ok = send(
+        email,
+        "[patchworks] test notification",
+        "This is a patchworks test message.\n\n"
+        "If you received it, the workflow's own success/failure mail will "
+        "reach you too.\n\n"
+        "Per-job start/finish mail is sent by SLURM itself, not by this "
+        "path, so it can still be blocked separately -- verify with:\n"
+        "    scontrol show job <jobid> | grep -i mail\n",
+    )
+    if ok:
+        print(
+            "[run_multi] handed to a local mail transport. If nothing "
+            "arrives, the message was accepted and then dropped further "
+            "along -- ask the cluster admins about outbound mail."
+        )
+        return 0
+    print(
+        "[run_multi] no local mail transport accepted the message (see the "
+        "warning above). SLURM's own per-job mail may still work, since the "
+        "controller sends that, not this host.",
+        file=sys.stderr,
+    )
+    return 1
+
+
 def _run(cmd: list[str], workflow_dir: Path) -> int:
     print(f"[run_multi] $ {' '.join(cmd)}", flush=True)
     return subprocess.run(cmd, cwd=workflow_dir).returncode
@@ -252,6 +309,16 @@ def main() -> None:
             "died: the lock is only released on a clean exit."
         ),
     )
+    parser.add_argument(
+        "--test-email",
+        action="store_true",
+        help=(
+            "send one test message to the configured notify_email and report "
+            "what happened, then exit. Separates 'the address never reached "
+            "the config' from 'the mail was rejected downstream', which "
+            "otherwise look identical: no email either way."
+        ),
+    )
     args = parser.parse_args()
 
     workflow_dir = Path(__file__).resolve().parent.parent
@@ -270,6 +337,9 @@ def main() -> None:
     common_path = _resolve(workflow_dir, common_path) if common_path else None
     common_cfg = _load_yaml(common_path) if common_path else {}
     seg_cfgs = [{**common_cfg, **_load_yaml(p)} for p in seg_config_paths]
+    if args.test_email:
+        sys.exit(_test_email(seg_cfgs[0]))
+
     work_dir = _validate_configs(seg_config_paths, seg_cfgs)
     image_store = f"{work_dir}/image.zarr"
     # Shared by every config, hence keyed on the image and level, not on a
