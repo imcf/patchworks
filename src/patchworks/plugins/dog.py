@@ -238,6 +238,61 @@ def _run(block: np.ndarray, dog_dict: dict[str, Any]) -> np.ndarray:
     )
 
 
+def _restore_shape(arr: np.ndarray, shape: tuple[int, ...]) -> np.ndarray:
+    """Centre *arr* back into an array of *shape*, cropping or edge-padding.
+
+    Deconvolution must not change the field of view: patchworks writes the
+    result into a destination slice derived from the tile's geometry, so one
+    label per input voxel is required.
+
+    Centring is the right correction for a symmetric crop, which is what
+    apodisation produces. The discrepancies observed are small (a voxel in z,
+    a few in x/y) and land inside the halo, which is discarded anyway -- so
+    the labels that survive the trim are unaffected. It is logged at WARNING
+    with the exact shapes so a larger, non-symmetric crop cannot pass
+    silently.
+
+    Parameters
+    ----------
+    arr : np.ndarray
+        The deconvolved volume.
+    shape : tuple of int
+        The shape it must be returned at (the input tile's).
+
+    Returns
+    -------
+    np.ndarray
+        An array of exactly *shape*.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> _restore_shape(np.ones((13, 1020)), (14, 1024)).shape
+    (14, 1024)
+    """
+    logger.warning(
+        "deconvolution returned %s for a %s input; re-centring to the input "
+        "shape. patchworks needs one label per input voxel. A large or "
+        "asymmetric difference here would shift labels -- check the PSF and "
+        "voxel sizes if this is more than a few voxels.",
+        arr.shape,
+        shape,
+    )
+    # Crop first, so an axis that grew is handled before padding the rest.
+    crop = tuple(
+        slice((a - s) // 2, (a - s) // 2 + s) if a > s else slice(None)
+        for a, s in zip(arr.shape, shape)
+    )
+    arr = arr[crop]
+    pad = tuple(
+        ((s - a) // 2, s - a - (s - a) // 2) if a < s else (0, 0)
+        for a, s in zip(arr.shape, shape)
+    )
+    if any(lo or hi for lo, hi in pad):
+        arr = np.pad(arr, pad, mode="edge")
+    return arr
+
+
 def _segment_once(
     block: np.ndarray, dog_dict: dict[str, Any], use_gpu: bool
 ) -> np.ndarray:
@@ -253,7 +308,16 @@ def _segment_once(
         # in the per-tile timing that tile_process logs.
         from pycudadecon import decon
 
+        before = img.shape
         img = decon(images=img, **decon_kwargs)
+        if img.shape != before:
+            # cudaDecon returns a slightly smaller volume for some input
+            # sizes (e.g. (14,1024,1024) -> (13,1020,1020) on an edge tile).
+            # patchworks needs one label per input voxel: the halo trim and
+            # the destination slice are both derived from the tile geometry,
+            # so a shrunken result has nowhere to go and used to surface as
+            # an unreadable broadcast error from inside zarr.
+            img = _restore_shape(img, before)
 
     if use_gpu:
         import cupy as cp
