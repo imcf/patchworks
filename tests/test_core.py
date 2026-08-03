@@ -357,3 +357,35 @@ def test_tile_process_max_workers():
     arr = da.from_array(_make_image((2, 32, 32)), chunks=(1, 32, 32))
     result = tile_process(arr, _label_fn, max_workers=1).compute()
     assert result.shape == (2, 32, 32)
+
+
+def test_channel_selection_respects_the_stores_axes(tmp_path):
+    """`channel: 0` on a store with no channel axis must not slice away z.
+
+    arr[channel] was applied unconditionally, so a single-channel image
+    written as plain zyx silently lost its z axis. The array stayed valid,
+    just one dimension short, and only surfaced later as a tile count that
+    disagreed with the occupancy grid.
+    """
+    import dask.array as da
+    import pytest
+
+    from patchworks import load_ome_zarr
+    from patchworks.plugins.ome_zarr import to_ome_zarr
+
+    vol = da.zeros((8, 64, 64), chunks=(4, 32, 32), dtype="uint16")
+    store = str(tmp_path / "zyx.zarr")
+    to_ome_zarr(vol, store, axes="zyx", n_levels=1, progress=False)
+
+    # channel 0 on a zyx store: keep the whole volume, do not index axis 0.
+    assert load_ome_zarr(store, channel=0, level=0).shape == (8, 64, 64)
+    assert load_ome_zarr(store, channel=None, level=0).shape == (8, 64, 64)
+    # A non-zero channel really is a mistake here, and is named as one.
+    with pytest.raises(ValueError, match="no channel axis"):
+        load_ome_zarr(store, channel=2, level=0)
+
+    # A czyx store still selects the channel as before.
+    vol4 = da.zeros((3, 8, 64, 64), chunks=(1, 4, 32, 32), dtype="uint16")
+    store4 = str(tmp_path / "czyx.zarr")
+    to_ome_zarr(vol4, store4, axes="czyx", n_levels=1, progress=False)
+    assert load_ome_zarr(store4, channel=1, level=0).shape == (8, 64, 64)

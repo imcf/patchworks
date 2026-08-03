@@ -73,3 +73,38 @@ def test_log_tail_quotes_the_end_and_survives_a_missing_file(tmp_path):
     assert "could not read" in log_tail(tmp_path / "nope.log")
     (tmp_path / "empty.log").write_text("")
     assert "empty" in log_tail(tmp_path / "empty.log")
+
+
+def test_failing_step_reads_the_rule_from_snakemakes_log(tmp_path):
+    """The failing rule must come from Snakemake, not from log timestamps.
+
+    Guessing by mtime named the wrong step in the most common case: a
+    `segment` failure leaves prepare.log the newest of the sequential steps,
+    so the failure mail quoted a log that had *succeeded*.
+    """
+    from patchworks._notify import failing_step
+
+    log = tmp_path / "sm.log"
+    log.write_text(
+        "Building DAG of jobs...\n"
+        "[Wed Jul 30 11:17:20 2026]\n"
+        "Error in rule segment:\n"
+        "    jobid: 812\n"
+        "    output: seg/203.done\n"
+        "    log: /w/nuclei_labels/logs/segment/203.log (check log file(s))\n"
+    )
+    assert failing_step(log) == (
+        "segment",
+        "/w/nuclei_labels/logs/segment/203.log",
+    )
+
+
+def test_failing_step_degrades_quietly(tmp_path):
+    """It runs inside an error handler, so it must never raise itself."""
+    from patchworks._notify import failing_step
+
+    assert failing_step(None) == (None, None)
+    assert failing_step(tmp_path / "missing.log") == (None, None)
+    clean = tmp_path / "ok.log"
+    clean.write_text("Building DAG of jobs...\n3 of 3 steps (100%) done\n")
+    assert failing_step(clean) == (None, None)
