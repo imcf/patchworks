@@ -14,6 +14,7 @@ turn a real error into a confusing one about email.
 from __future__ import annotations
 
 import logging
+import re
 import shutil
 import socket
 import subprocess
@@ -155,3 +156,44 @@ def slurm_mail_extra(
     # Keep SLURM's own order, not the config's, so the string is stable.
     types = [mapping[k] for k in ("start", "finish", "error") if k in chosen]
     return f"--mail-type={','.join(types)} --mail-user={email}"
+
+
+def failing_step(
+    snakemake_log: Union[str, Path, None],
+) -> "tuple[Union[str, None], Union[str, None]]":
+    """Find which rule failed, and its log, from Snakemake's own log file.
+
+    Guessing from step-log timestamps does not work: a `segment` failure
+    leaves `prepare.log` as the most recently written of the sequential
+    steps, so a mail built that way quotes a log that *succeeded* and names
+    the wrong step. Snakemake records the failing rule and the exact log path
+    it used, so read that instead.
+
+    Parameters
+    ----------
+    snakemake_log : str or Path or None
+        Path to Snakemake's own log (the ``log`` variable inside an
+        ``onerror`` handler).
+
+    Returns
+    -------
+    tuple
+        ``(rule_name, log_path)``, either of which may be None when the log
+        is unreadable or records no rule error.
+    """
+    try:
+        text = Path(snakemake_log).read_text(errors="replace")
+    except (OSError, TypeError, ValueError):
+        return None, None
+
+    blocks = text.split("Error in rule ")
+    if len(blocks) < 2:
+        return None, None
+    last = blocks[-1]
+    rule = re.match(r"(\S+?):", last)
+    # The log: line inside that error block points at the step's own log.
+    path = re.search(r"^\s*log:\s*(\S+?)(?:,|\s|$)", last, re.M)
+    return (
+        rule.group(1) if rule else None,
+        path.group(1) if path else None,
+    )

@@ -95,7 +95,61 @@ def load_ome_zarr(
 
     arr = da.from_zarr(str(store_path), component=path, chunks=zarr_chunks)
     if channel is not None:
-        arr = arr[channel]
+        arr = _select_channel(arr, channel, _ms[0], store_path)
+    return arr
+
+
+def _select_channel(arr, channel: int, multiscale: dict, store_path):
+    """Index *arr*'s channel axis, or leave it alone when there isn't one.
+
+    ``arr[channel]`` used to be applied unconditionally, so on a
+    single-channel store written as plain ``zyx`` the default ``channel: 0``
+    silently sliced away **z** instead. The result stayed a valid array, just
+    one dimension short, and surfaced much later as a tile-count mismatch
+    against the occupancy grid rather than as anything about channels.
+
+    Parameters
+    ----------
+    arr : da.Array
+        The full array as stored.
+    channel : int
+        Requested channel index.
+    multiscale : dict
+        The store's multiscales entry, read for its ``axes``.
+    store_path : str or Path
+        Only used in messages.
+
+    Returns
+    -------
+    da.Array
+        *arr* with the channel axis indexed away, or unchanged when the store
+        has no channel axis and channel 0 was requested.
+    """
+    axes = [
+        (a.get("name") if isinstance(a, dict) else a) or ""
+        for a in (multiscale.get("axes") or [])
+    ]
+    if "c" in axes:
+        idx = axes.index("c")
+        return arr[(slice(None),) * idx + (channel,)]
+
+    # No axes metadata: fall back to shape. A 4-D array is c,z,y,x by the
+    # convention this package writes; a 3-D one is z,y,x.
+    if not axes and arr.ndim >= 4:
+        return arr[channel]
+
+    if channel:
+        raise ValueError(
+            f"channel={channel} was requested but {store_path!r} has no "
+            f"channel axis (axes={axes or 'unknown'}, shape={arr.shape}). "
+            "Set channel: null in the config for a single-channel image."
+        )
+    logger.info(
+        "%s has no channel axis; ignoring channel=0 and using the whole "
+        "array (shape %s).",
+        store_path,
+        arr.shape,
+    )
     return arr
 
 

@@ -33,20 +33,30 @@ rule all:
 # a local run with no scheduler, and a failure where the useful content is
 # the step's traceback rather than the job's exit code.
 onerror:
-    from patchworks._notify import log_tail, send
+    from patchworks._notify import failing_step, log_tail, send
 
-    _failed = [p for p in (CONVERTLOG, OCCUPANCYLOG, PREPARELOG, MERGELOG)
-               if Path(p).exists()]
-    _newest = max(_failed, key=lambda p: Path(p).stat().st_mtime, default=None)
+    # Snakemake's own log names the failing rule and the log it used. Picking
+    # the most recently written step log instead gets this wrong in the most
+    # common case: a `segment` failure leaves prepare.log newest among the
+    # sequential steps, so the mail quoted a log that had succeeded.
+    _rule, _log = failing_step(log)
+    if _log is None:
+        _cands = [p for p in (CONVERTLOG, OCCUPANCYLOG, PREPARELOG, MERGELOG)
+                  if Path(p).exists()]
+        _cands += [str(p) for p in Path(LOGS).glob("segment/*.log")]
+        _log = max(_cands, key=lambda p: Path(p).stat().st_mtime, default=None)
+    _what = f"rule {_rule}" if _rule else "the workflow"
     send(
         NOTIFY_EMAIL,
-        f"[patchworks] FAILED: {LABEL_NAME} in {WORK}",
-        "The patchworks workflow failed.\n\n"
-        f"  work_dir : {WORK}\n"
-        f"  config   : {LABEL_NAME}\n"
-        f"  log      : {_newest}\n\n"
-        + (f"Last lines of {_newest}:\n\n{log_tail(_newest)}\n"
-           if _newest else "No step log was written.\n"),
+        f"[patchworks] FAILED: {_rule or 'workflow'} - {LABEL_NAME}",
+        f"The patchworks workflow failed in {_what}.\n\n"
+        f"  work_dir      : {WORK}\n"
+        f"  config        : {LABEL_NAME}\n"
+        f"  failing step  : {_rule or 'unknown'}\n"
+        f"  step log      : {_log}\n"
+        f"  snakemake log : {log}\n\n"
+        + (f"Last lines of {_log}:\n\n{log_tail(_log)}\n"
+           if _log else "No step log was written.\n"),
     )
 
 
