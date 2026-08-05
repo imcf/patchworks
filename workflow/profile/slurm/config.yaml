@@ -74,7 +74,7 @@ set-resources:
     # equal to segment's mem_mb below: lower and tiles come out needlessly
     # small; higher and the sizer budgets against more host RAM than segment
     # will actually get, undoing the point of the host-RAM check.
-    mem_mb: "attempt * 32000"
+    mem_mb: "attempt * 128000"
     runtime: 120
   segment:
     # one GPU per job — this is what spreads Cellpose across GPUs.
@@ -89,7 +89,17 @@ set-resources:
     # The old "a tile used ~1G" note predates tile_shape: "auto", which sizes
     # tiles against the real GPU and makes them far bigger. If you raise
     # this, raise prepare's mem_mb above to match (see its comment).
-    mem_mb: "attempt * 32000"
+    #
+    # 128 GB base (256/384 GB on retry) is a wide safety margin, not a tight
+    # estimate: a do_3D tile that `auto_tile_shape_cellpose`'s 20x
+    # cellpose_memory_factor judged safe within a 24 GiB GPU budget still hit
+    # a real 32 GB host OOM, so that heuristic underestimates do_3D's actual
+    # host-RAM use by more than expected. rtx4090 nodes have ~1 TB RAM
+    # (~800 GB usable) and the QOS caps at 4 TB account-wide, so this has
+    # plenty of room -- it buys time until do_3D gets a properly measured
+    # memory factor (e.g. from `seff` on a job that completes) instead of a
+    # guess. ``ponytail:`` tighten this once real peak-RSS numbers exist.
+    mem_mb: "attempt * 128000"
     cpus_per_task: 4
     runtime: 360 # 6 hours — must match the QOS, NOT 120 (=2h → killed early)
   merge:
