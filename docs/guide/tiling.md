@@ -57,6 +57,23 @@ tile_process("image.zarr", fn, tile_shape=tile_fn)
 The callable is called with `(shape, dtype)` at runtime, after the image is
 loaded — useful when you don't know the image shape in advance.
 
+### Multi-channel tiles
+
+Both sizers take `n_channels` (default 1) and charge it per voxel. Use it when
+a tile carries more than one channel while its *geometry* stays spatial — the
+case the Snakemake workflow's
+[`nuclei_channel`](snakemake.md#giving-cellpose-a-nuclei-channel) creates, where
+Cellpose is handed a cyto+nuclei pair but still returns one label per voxel:
+
+```python
+# Same VRAM budget, so each spatial side shrinks by ~1/√2
+auto_tile_shape_cellpose(shape, dtype, diameter=30, use_gpu=True, n_channels=2)
+```
+
+Leaving it at 1 for a 2-channel tile budgets for half the bytes the tile
+actually holds, which surfaces as an out-of-memory error in the first tile
+rather than as anything about channels.
+
 ## Overlap
 
 Methods that need spatial context (Cellpose, StarDist, U-Net) produce wrong

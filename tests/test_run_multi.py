@@ -158,3 +158,30 @@ def test_occupancy_is_not_rebuilt_by_the_driver():
     src = (_workflow_dir() / "scripts" / "run_multi.py").read_text()
     assert "build_occupancy_map(" not in src
     assert "occupancy.zarr" in src
+
+
+def test_auto_tile_shape_with_a_lone_nuclei_channel_is_refused():
+    """Matching `tile_shape` *values* are not enough when one config is 2-ch.
+
+    "auto" == "auto" passes the plain equality check, but the sizer charges
+    per channel, so the nuclei_channel config gets a smaller tile. The label
+    groups then disagree on chunk layout and label_relations raises -- after
+    every segmentation has already run, which is the expensive way to find out.
+    """
+    paths = [Path("a.yaml"), Path("b.yaml")]
+    base = {"work_dir": "/w", "tile_shape": "auto", "level": 0}
+
+    bad = [
+        {**base, "label_name": "a", "channel": 0, "nuclei_channel": 1},
+        {**base, "label_name": "b", "channel": 2},
+    ]
+    with pytest.raises(SystemExit):
+        _validate_configs(paths, bad)
+
+    # Same pair with one explicit shape is fine: both get that tile.
+    pinned = [{**c, "tile_shape": [16, 512, 512]} for c in bad]
+    assert _validate_configs(paths, pinned) == "/w"
+
+    # And "auto" is fine when every config carries the same channel count.
+    both = [{**bad[0]}, {**bad[1], "nuclei_channel": 3}]
+    assert _validate_configs(paths, both) == "/w"
