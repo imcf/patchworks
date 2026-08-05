@@ -406,21 +406,57 @@ def view_in_napari(
         # unwrapped to a single array) even for one level, so napari always
         # treats it as multiscale — required for 3D resolution switching, see
         # https://napari.org/stable/gallery/add_multiscale_volume.html
-        for name in _inner_label_names(image):
-            store = f"{image}/labels/{name}"
-            levels = _multiscale_levels(store, None)
-            lab = [lvl.astype("int32") for lvl in levels]
-            lab_scale, lab_units = _pyramid_calibration(store, lab[0].ndim)
-            viewer.add_labels(
-                lab,
-                name=name,
-                multiscale=True,
-                scale=lab_scale,
-                units=lab_units,
-                metadata=_label_hint(store),
-                **label_kwargs,
+        names = _inner_label_names(image)
+        if not names:
+            logger.warning(
+                "%s has no label images under labels/, so nothing was "
+                "overlaid. Pass labels=<path> explicitly if they live "
+                "somewhere else.",
+                image,
             )
+        else:
+            logger.info(
+                "auto-loading %d label image(s) from %s/labels: %s",
+                len(names),
+                image,
+                ", ".join(names),
+            )
+        loaded = 0
+        for name in names:
+            store = f"{image}/labels/{name}"
+            # Guarded per label: without this, one bad label group raised
+            # *after* the image had been added, so the viewer opened showing
+            # the image alone and every remaining label was skipped -- which
+            # looks exactly like "there were no labels".
+            try:
+                levels = _multiscale_levels(store, None)
+                lab = [lvl.astype("int32") for lvl in levels]
+                lab_scale, lab_units = _pyramid_calibration(store, lab[0].ndim)
+                viewer.add_labels(
+                    lab,
+                    name=name,
+                    multiscale=True,
+                    scale=lab_scale,
+                    units=lab_units,
+                    metadata=_label_hint(store),
+                    **label_kwargs,
+                )
+            except Exception:
+                logger.exception(
+                    "could not add labels/%s as a layer; skipping it and "
+                    "continuing with the rest.",
+                    name,
+                )
+                continue
+            loaded += 1
             logger.info("auto-loaded labels/%s from %s", name, image)
+        if names and not loaded:
+            logger.error(
+                "found %d label image(s) in %s/labels but none could be "
+                "added -- see the errors above.",
+                len(names),
+                image,
+            )
 
     if show:
         napari.run()
