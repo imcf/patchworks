@@ -67,6 +67,13 @@ set-resources:
   prepare:
     # Cheap now: it reduces the already-built occupancy map over each tile's
     # footprint instead of touching the image.
+    #
+    # tile_shape: "auto" now also sizes against a host-RAM budget, and it
+    # reads *this job's* grant as a stand-in for segment's -- prepare runs on
+    # a CPU node and can't query segment's GPU-node grant directly. Keep this
+    # equal to segment's mem_mb below: lower and tiles come out needlessly
+    # small; higher and the sizer budgets against more host RAM than segment
+    # will actually get, undoing the point of the host-RAM check.
     mem_mb: "attempt * 32000"
     runtime: 120
   segment:
@@ -80,7 +87,8 @@ set-resources:
     # A job now processes `tiles_per_job` tiles sequentially, so both memory
     # and runtime scale with that setting — raise it there and re-check here.
     # The old "a tile used ~1G" note predates tile_shape: "auto", which sizes
-    # tiles against the real GPU and makes them far bigger.
+    # tiles against the real GPU and makes them far bigger. If you raise
+    # this, raise prepare's mem_mb above to match (see its comment).
     mem_mb: "attempt * 32000"
     cpus_per_task: 4
     runtime: 360 # 6 hours — must match the QOS, NOT 120 (=2h → killed early)

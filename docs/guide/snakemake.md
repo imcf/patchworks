@@ -109,6 +109,15 @@ sequential_labels: true        # renumber labels to a contiguous 1..N
     explicit z (like `[16, 1024, 1024]`) tiles in z instead. `prepare` logs
     which regime it picked.
 
+    `"auto"` also caps the tile to the **host** RAM available to the job, not
+    just VRAM — a `do_3D` tile that comfortably fits a big GPU can still be
+    too large for the SLURM/cgroup memory the job was actually granted, and
+    that shows up as a plain `SIGKILL`, not a catchable CUDA-OOM error.
+    Because `prepare` runs on a CPU node, it checks *its own* grant as a
+    stand-in for `segment`'s — keep `prepare`'s and `segment`'s `mem_mb` in
+    `profile/slurm/config.yaml` equal, or the estimate is sized against the
+    wrong job's budget.
+
 !!! tip "Use a per-axis `overlap`"
     A scalar halo is applied to every axis. On a `[16, 1024, 1024]` tile,
     `overlap: 30` reads `76 × 1084 × 1084` to keep `16 × 1024 × 1024` — 5.3×
@@ -323,8 +332,9 @@ follow from that:
 
 - A tile holds twice the bytes. `tile_shape: "auto"` accounts for this — it is
   told the tile carries two channels and shrinks each spatial side by ~1/√2,
-  so the tile still fits the same VRAM budget. A **hand-set** `tile_shape`
-  sized to fill a GPU has no such protection and needs halving yourself.
+  so the tile still fits the same VRAM *and* host-RAM budget (see the "Tile
+  size vs runtime" tip above). A **hand-set** `tile_shape` sized to fill a
+  GPU has no such protection and needs halving yourself.
 - The translation is version-specific. Cellpose 3 gets `channels: [1, 2]`
   (1-based into the channel axis, `0` = grayscale); Cellpose 4 (cpsam) dropped
   `channels` entirely and simply reads both. Either is overridable by setting

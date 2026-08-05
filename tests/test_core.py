@@ -410,7 +410,15 @@ def test_auto_tile_shape_charges_for_extra_channels():
     assert np.prod(two) * 2 <= np.prod(one)
     assert np.prod(two) * 2 >= np.prod(one) * 0.9
 
-    kw = dict(diameter=30, do_3D=True, use_gpu=True, gpu_memory=24 * 1024**3)
+    kw = dict(
+        diameter=30,
+        do_3D=True,
+        use_gpu=True,
+        gpu_memory=24 * 1024**3,
+        # Generous on purpose: this test is about GPU-vs-channel scaling,
+        # not the host-RAM ceiling, so host RAM must stay non-binding here.
+        available_memory=64 * 1024**3,
+    )
     cp_one = auto_tile_shape_cellpose(shape, dtype, **kw)
     cp_two = auto_tile_shape_cellpose(shape, dtype, n_channels=2, **kw)
     assert np.prod(cp_two) * 2 <= np.prod(cp_one)
