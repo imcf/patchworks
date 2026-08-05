@@ -389,3 +389,32 @@ def test_channel_selection_respects_the_stores_axes(tmp_path):
     store4 = str(tmp_path / "czyx.zarr")
     to_ome_zarr(vol4, store4, axes="czyx", n_levels=1, progress=False)
     assert load_ome_zarr(store4, channel=1, level=0).shape == (8, 64, 64)
+
+
+def test_auto_tile_shape_charges_for_extra_channels():
+    """A 2-channel tile must fit the same byte budget, not twice it.
+
+    `nuclei_channel` doubles what a tile holds while the tile geometry stays
+    single-channel, so a sizer blind to it hands the GPU a tile needing twice
+    the VRAM it budgeted for.
+    """
+    import pytest
+
+    from patchworks import auto_tile_shape, auto_tile_shape_cellpose
+
+    shape, dtype = (128, 2048, 2048), "uint16"
+
+    one = auto_tile_shape(shape, dtype)
+    two = auto_tile_shape(shape, dtype, n_channels=2)
+    # Same bytes overall: 2 channels of roughly half the area each.
+    assert np.prod(two) * 2 <= np.prod(one)
+    assert np.prod(two) * 2 >= np.prod(one) * 0.9
+
+    kw = dict(diameter=30, do_3D=True, use_gpu=True, gpu_memory=24 * 1024**3)
+    cp_one = auto_tile_shape_cellpose(shape, dtype, **kw)
+    cp_two = auto_tile_shape_cellpose(shape, dtype, n_channels=2, **kw)
+    assert np.prod(cp_two) * 2 <= np.prod(cp_one)
+    assert cp_two[0] == cp_one[0]  # do_3D still pins z to the full extent
+
+    with pytest.raises(ValueError, match="n_channels"):
+        auto_tile_shape(shape, dtype, n_channels=0)

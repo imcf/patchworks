@@ -44,6 +44,10 @@ if ts == "auto":
     # "GPU memory query failed" fallback). None => the built-in 8 GiB default.
     gpu_gb = cfg.get("gpu_memory_gb")
     gpu_bytes = int(gpu_gb * 1024**3) if gpu_gb else None
+    # `image` is single-channel here (the geometry is spatial), but segment
+    # reads nuclei_channel alongside it, so a tile costs twice the bytes.
+    # Without this the sizer would hand the GPU a tile it cannot hold.
+    n_channels = 2 if cfg.get("nuclei_channel") is not None else 1
     if method == "cellpose":
         cp = cfg["cellpose"]
         sizer = partial(
@@ -52,6 +56,7 @@ if ts == "auto":
             use_gpu=cp.get("gpu", True),
             diameter=cp.get("diameter"),
             gpu_memory=gpu_bytes,
+            n_channels=n_channels,
         )
     else:
         # cfg["cellpose"] used to be read unconditionally here, so a DoG or
@@ -59,7 +64,10 @@ if ts == "auto":
         # 'cellpose'. The Cellpose estimator's memory model wouldn't apply to
         # them anyway.
         sizer = partial(
-            auto_tile_shape, use_gpu=gpu_bytes is not None, gpu_memory=gpu_bytes
+            auto_tile_shape,
+            use_gpu=gpu_bytes is not None,
+            gpu_memory=gpu_bytes,
+            n_channels=n_channels,
         )
     tile_shape = tuple(sizer(image.shape, image.dtype))
 else:

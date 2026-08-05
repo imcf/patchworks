@@ -264,6 +264,7 @@ def auto_tile_shape(
     gpu_memory: int | None = None,
     available_memory: int | None = None,
     n_workers: int | None = None,
+    n_channels: int = 1,
     verbose: bool = False,
 ) -> tuple[int, ...]:
     """Balanced tile shape for general-purpose 3-D processing.
@@ -287,6 +288,10 @@ def auto_tile_shape(
         Available host RAM in bytes; auto-queried when None.
     n_workers:
         Number of parallel workers (divides the RAM budget).
+    n_channels:
+        Channels each tile carries (default 1). Above 1 the per-voxel cost
+        scales with it, so the tile shrinks accordingly -- e.g. the workflow's
+        ``nuclei_channel`` hands Cellpose a cyto+nuclei pair.
     verbose:
         Log the chosen shape and estimated tile size.
 
@@ -302,7 +307,12 @@ def auto_tile_shape(
     (128, 512, 512)
     """
     n_workers = n_workers or cpu_allocation()
-    itemsize = np.dtype(dtype).itemsize
+    # A tile holds n_channels planes per voxel (e.g. Cellpose's
+    # cyto+nuclei pair), so the per-voxel cost -- and every budget
+    # derived from it below -- scales with them.
+    if n_channels < 1:
+        raise ValueError(f"n_channels must be >= 1; got {n_channels!r}")
+    itemsize = np.dtype(dtype).itemsize * n_channels
     n_spatial = min(3, len(shape))
 
     if use_gpu:
@@ -359,6 +369,7 @@ def auto_tile_shape_cellpose(
     n_workers: int | None = None,
     model_memory_bytes: int = 2 * 1024**3,
     cellpose_memory_factor: int = 20,
+    n_channels: int = 1,
     verbose: bool = False,
 ) -> tuple[int, ...]:
     """Cellpose-optimised tile shape.
@@ -391,6 +402,10 @@ def auto_tile_shape_cellpose(
         Memory consumed by the Cellpose model weights (default 2 GiB).
     cellpose_memory_factor:
         Cellpose allocates roughly this multiple of raw input bytes (default 20×).
+    n_channels:
+        Channels each tile carries (default 1). Above 1 the per-voxel cost
+        scales with it, so the tile shrinks accordingly -- e.g. the workflow's
+        ``nuclei_channel`` hands Cellpose a cyto+nuclei pair.
     verbose:
         Log the chosen shape and memory estimates.
 
@@ -406,7 +421,12 @@ def auto_tile_shape_cellpose(
     (1, 2048, 2048)
     """
     n_workers = n_workers or cpu_allocation()
-    itemsize = np.dtype(dtype).itemsize
+    # A tile holds n_channels planes per voxel (e.g. Cellpose's
+    # cyto+nuclei pair), so the per-voxel cost -- and every budget
+    # derived from it below -- scales with them.
+    if n_channels < 1:
+        raise ValueError(f"n_channels must be >= 1; got {n_channels!r}")
+    itemsize = np.dtype(dtype).itemsize * n_channels
 
     if use_gpu:
         total_mem = gpu_memory if gpu_memory is not None else _get_gpu_memory()

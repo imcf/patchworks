@@ -321,9 +321,10 @@ occupancy map and the staged labels are byte-for-byte what a single-channel
 run produces, and `merge` and `label_relations` need no changes. Two things
 follow from that:
 
-- A tile holds twice the bytes, so a hand-set `tile_shape` sized to fill a GPU
-  may need halving. `tile_shape: "auto"` sizes from the single-channel array
-  and does not yet know about the pair.
+- A tile holds twice the bytes. `tile_shape: "auto"` accounts for this — it is
+  told the tile carries two channels and shrinks each spatial side by ~1/√2,
+  so the tile still fits the same VRAM budget. A **hand-set** `tile_shape`
+  sized to fill a GPU has no such protection and needs halving yourself.
 - The translation is version-specific. Cellpose 3 gets `channels: [1, 2]`
   (1-based into the channel axis, `0` = grayscale); Cellpose 4 (cpsam) dropped
   `channels` entirely and simply reads both. Either is overridable by setting

@@ -14,9 +14,11 @@ channel: 0 # cytoplasm/membrane channel
 #
 # Only the segment step reads it: the tile geometry, the occupancy map and the
 # staged labels all stay exactly as they are for a single channel -- the pair
-# is stacked on a leading axis that is carried into each tile, not tiled. It
-# does double the bytes a tile holds, so a hand-set `tile_shape` sized to the
-# GPU may need halving.
+# is stacked on a leading axis that is carried into each tile, not tiled.
+#
+# It does double the bytes a tile holds. `tile_shape: "auto"` is told about
+# that and shrinks each spatial side by ~1/sqrt(2) to fit the same VRAM
+# budget; the hand-set tile_shape in common.yaml is not, so halve it yourself.
 #
 # Cellpose 3 turns this into channels: [1, 2]; Cellpose 4 (cpsam) dropped
 # `channels` and just reads both. Override either by setting `channels:` or
