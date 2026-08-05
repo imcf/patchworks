@@ -166,6 +166,7 @@ def stage_tile(
     tile_shape: tuple[int, ...],
     overlap: Overlap = 0,
     component: str = "staged",
+    channel_axis: int | None = None,
 ) -> int:
     """Run *fn* on a single tile and write it into the shared stage store.
 
@@ -192,6 +193,13 @@ def stage_tile(
         :func:`normalize_overlap`).
     component : str, optional
         Array name inside the stage store.
+    channel_axis : int or None, optional
+        Axis of *image* holding channels, which is **not** tiled: it is read
+        whole and handed to *fn* alongside the tile's voxels. ``tile_shape``,
+        ``overlap`` and the stage store stay purely spatial, so *fn* still
+        returns one label per voxel with no channel axis (e.g. Cellpose fed a
+        cytoplasm + nuclei pair returns a single label volume). ``None`` (the
+        default) means *image* is already single-channel.
 
     Returns
     -------
@@ -202,18 +210,30 @@ def stage_tile(
         by a cumulative sum, instead of rewriting the whole store to make the
         ids unique.
     """
-    shape = image.shape
-    sl = spatial_tiles(shape, tile_shape)[index]
+    shape = tuple(image.shape)
+    # The channel axis is carried, not tiled: geometry (tiles, halo, the stage
+    # store) stays spatial, so nothing downstream of fn learns about channels.
+    if channel_axis is None:
+        spatial_shape = shape
+    else:
+        channel_axis %= len(shape)
+        spatial_shape = shape[:channel_axis] + shape[channel_axis + 1 :]
+    sl = spatial_tiles(spatial_shape, tile_shape)[index]
     halo = normalize_overlap(overlap, len(sl), tile_shape=tile_shape)
     expanded, trims = [], []
-    for s, dim, ov in zip(sl, shape, halo):
+    for s, dim, ov in zip(sl, spatial_shape, halo):
         lo = max(0, s.start - ov)
         hi = min(dim, s.stop + ov)
         expanded.append(slice(lo, hi))
         trims.append((s.start - lo, hi - s.stop))
-    block = np.asarray(image[tuple(expanded)])
+    read = list(expanded)
+    if channel_axis is not None:
+        read.insert(channel_axis, slice(None))
+    block = np.asarray(image[tuple(read)])
+    # What fn owes us back: one label per voxel, channel axis consumed.
+    block_spatial = tuple(e.stop - e.start for e in expanded)
     out = np.asarray(fn(block))
-    if out.shape != block.shape:
+    if out.shape != block_spatial:
         # Caught here rather than 6 frames deep in zarr's codec pipeline as
         # "could not broadcast input array from shape (13,1020,1020) into
         # shape (14,1024,1024)", which says nothing about which function is
@@ -224,7 +244,7 @@ def stage_tile(
         name = getattr(fn, "__name__", type(fn).__name__)
         raise ValueError(
             f"segmentation function {name!r} returned shape {out.shape} for "
-            f"a tile of shape {block.shape} (tile {index}). It must return "
+            f"a tile of shape {block_spatial} (tile {index}). It must return "
             "one label per input voxel. Some deconvolution backends crop "
             "their output -- pad or centre it back to the input shape before "
             "returning."

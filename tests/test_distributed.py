@@ -399,3 +399,96 @@ def test_separate_objects_keep_distinct_labels(tmp_path):
     ids = np.unique(merged[merged > 0])
     assert ids.size == 4, f"expected 4 distinct objects, got {ids.size}"
     assert set(ids.tolist()) == {1, 2, 3, 4}  # contiguous after relabel
+
+
+def test_stage_tile_carries_a_channel_axis(tmp_path):
+    """A channel axis reaches fn but is never tiled.
+
+    Cellpose's cyto+nucleus pair: tile geometry, the halo and the stage store
+    all stay purely spatial, so fn sees ``(2, z, y, x)`` and owes back
+    ``(z, y, x)``. Without this, a second channel would either be tiled like a
+    spatial axis or trip stage_tile's shape check.
+    """
+    import numpy as np
+    import zarr
+
+    from patchworks import create_stage, stage_tile
+
+    # Channel 0 carries the signal, channel 1 is blank -- so a swapped or
+    # collapsed channel axis fails rather than quietly segmenting the wrong one.
+    img = np.stack(
+        [
+            np.arange(4 * 8 * 8).reshape(4, 8, 8) % 5,
+            np.zeros((4, 8, 8), dtype=int),
+        ]
+    )
+    assert img.shape == (2, 4, 8, 8)
+
+    tile_shape = (4, 4, 4)
+    stage = create_stage(tmp_path / "s.zarr", (4, 8, 8), tile_shape)
+
+    seen = {}
+
+    def fn(block):
+        seen["shape"] = block.shape
+        assert not block[1].any(), "channel 1 should be the blank one"
+        return (block[0] > 2).astype("int32")
+
+    n = stage_tile(
+        img,
+        fn,
+        stage,
+        0,
+        tile_shape=tile_shape,
+        overlap=1,
+        channel_axis=0,
+    )
+
+    # z is already the full extent, y/x grow by the 1-voxel halo.
+    assert seen["shape"] == (2, 4, 5, 5)
+    assert n == 1
+    staged = zarr.open_group(str(stage))["staged"][:]
+    assert staged.shape == (4, 8, 8)  # store never learned about channels
+    assert staged[:, :4, :4].any()  # the tile actually landed
+
+
+def test_cellpose_run_pairs_channels_and_shifts_z(monkeypatch):
+    """A 2-channel tile must set z_axis past the channel axis.
+
+    With channels stacked on axis 0, z moves to axis 1; leaving z_axis=0 would
+    tell Cellpose the channel axis is z. Cellpose 3 also needs the pair named
+    as ``channels=[1, 2]`` (1-based, 0 = grayscale), which Cellpose 4 dropped.
+    """
+    import numpy as np
+
+    from patchworks.plugins import cellpose as cp
+
+    calls = {}
+
+    class _FakeModel:
+        def eval(self, img, **kwargs):
+            calls["img_shape"] = img.shape
+            calls["kwargs"] = kwargs
+            return np.zeros(img.shape[1:], dtype="int32"), None
+
+    monkeypatch.setattr(cp, "_get_model", lambda _cfg: _FakeModel())
+
+    cfg = cp._make_config("cyto3", diameter=30, do_3D=True, channel_axis=0)
+    block = np.zeros((2, 4, 8, 8), dtype="uint16")
+    out = cp._run(block, cfg)
+
+    assert out.shape == (4, 8, 8)  # labels come back spatial
+    assert calls["kwargs"]["z_axis"] == 1
+    assert calls["kwargs"]["channel_axis"] == 0
+    if cp._CELLPOSE_V4:
+        assert "channels" not in calls["kwargs"]
+    else:
+        assert calls["kwargs"]["channels"] == [1, 2]
+
+    # Single-channel tiles keep the old geometry and grayscale pairing.
+    cfg1 = cp._make_config("cyto3", diameter=30, do_3D=True)
+    cp._run(np.zeros((4, 8, 8), dtype="uint16"), cfg1)
+    assert calls["kwargs"]["z_axis"] == 0
+    assert calls["kwargs"]["channel_axis"] is None
+    if not cp._CELLPOSE_V4:
+        assert calls["kwargs"]["channels"] == [0, 0]

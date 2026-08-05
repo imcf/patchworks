@@ -21,7 +21,11 @@ work_dir = cfg["work_dir"]
 label_name = cfg.get("label_name", "labels")
 
 manifest = load_tiles_json(snakemake.input.tiles)  # noqa: F821
-image = open_image(work_dir, cfg["channel"], cfg["level"])
+# Optional second channel (Cellpose's nucleus input): open_image stacks it on
+# a leading axis that stage_tile carries through without tiling it, so the
+# tile geometry and the staged labels stay exactly as single-channel runs.
+nuclei_channel = cfg.get("nuclei_channel")
+image = open_image(work_dir, cfg["channel"], cfg["level"], nuclei_channel)
 indices = manifest["batches"][batch]
 
 # Built once for the whole batch: this is what makes the model load amortize.
@@ -46,6 +50,7 @@ for n, index in enumerate(indices, 1):
         # Scalar (older manifests) or per-axis list; stage_tile normalizes both.
         overlap=manifest["overlap"],
         component=component,
+        channel_axis=0 if nuclei_channel is not None else None,
     )
     # The per-tile time is what `tiles_per_job` has to be sized from: a job's
     # wall time is roughly N x this, and it must stay inside the QOS ceiling.
