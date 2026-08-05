@@ -68,6 +68,11 @@ Edit `config/config.yaml` (input, output dir, channel, tile shape, Cellpose
 model/diameter/`do_3D`, …) and `profile/slurm/config.yaml` (partitions,
 account, GPU request).
 
+Channel indices are **0-based**. Set `nuclei_channel` alongside `channel` to
+hand Cellpose the nuclear stain as a second input, which usually improves
+cytoplasm segmentation — see
+[Giving Cellpose a nuclei channel](https://imcf.one/patchworks/guide/snakemake/#giving-cellpose-a-nuclei-channel).
+
 ## Run
 
 ```bash

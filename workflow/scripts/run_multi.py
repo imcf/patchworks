@@ -228,6 +228,24 @@ def _validate_configs(paths: list[Path], cfgs: list[dict]) -> str:
                 f"share a chunk layout; got {_spread(key)}"
             )
 
+    # `tile_shape: "auto"` is identical as a *value* across configs while
+    # producing different tiles: the sizer charges per channel, so a config
+    # with nuclei_channel gets a smaller one. The label groups then disagree on
+    # chunk layout and label_relations raises -- after every segmentation has
+    # run. Matching values are not enough here, so check the inputs that feed
+    # the sizer instead.
+    if {repr(cfg.get("tile_shape", "auto")) for cfg in cfgs} == {repr("auto")}:
+        if len({cfg.get("nuclei_channel") is not None for cfg in cfgs}) != 1:
+            problems.append(
+                'tile_shape: "auto" sizes a nuclei_channel config smaller '
+                "(a tile carries two channels), so the label groups would "
+                "not share a chunk layout and label_relations would fail "
+                f"after every segmentation had run; got "
+                f"{_spread('nuclei_channel')}. Set one explicit tile_shape in "
+                "the file `common:` points at, sized for the two-channel "
+                "config."
+            )
+
     # Phase A converts once, from the first config. Anything `convert` reads
     # out of a later config is therefore silently ignored -- someone setting
     # `shard: true` on the second config and watching a million files appear

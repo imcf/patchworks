@@ -79,6 +79,11 @@ own outright. `auto_tile_shape` then sizes each tile to at most half of that
 budget; `auto_tile_shape_cellpose` uses Cellpose's own memory model instead
 (roughly 20× the raw tile bytes, plus ~2 GiB for the model).
 
+"Raw tile bytes" counts every channel a tile carries, so pass `n_channels=2`
+when feeding Cellpose a cyto+nuclei pair — see
+[Multi-channel tiles](tiling.md#multi-channel-tiles). The Snakemake workflow
+does this for you whenever `nuclei_channel` is set.
+
 The device is resolved from `CUDA_VISIBLE_DEVICES`. This matters on
 multi-GPU nodes: NVML enumerates **every** GPU regardless of `--gres=gpu:1`,
 so querying index 0 unconditionally would read a different card's free memory

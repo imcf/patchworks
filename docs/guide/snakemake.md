@@ -330,6 +330,25 @@ follow from that:
   `channels` entirely and simply reads both. Either is overridable by setting
   `channels:` or `channel_axis:` in the `cellpose:` block.
 
+!!! warning "In a `multi.yaml` run, pin `tile_shape` explicitly"
+
+    `label_relations` requires its two label arrays to share a chunk layout,
+    and that layout comes from `tile_shape`. Giving *one* config a
+    `nuclei_channel` while the group uses `tile_shape: "auto"` produces a
+    **smaller** tile for that config only — so the label groups end up chunked
+    differently and the relations step fails, after every segmentation has
+    already run.
+
+    `run_multi`'s cross-config check compares the configured values, and
+    `"auto" == "auto"`, so it flags this case specifically. Fix it by setting
+    one explicit `tile_shape` in `common.yaml`, sized for the two-channel
+    config (roughly each spatial side ÷ √2 versus what you would use for a
+    single channel), so every config shares it.
+
+If you do not need that segmentation related to the others, the alternative is
+to run it on its own against the same `work_dir` and leave it out of
+`multi.yaml`.
+
 `nuclei_channel` applies to the SLURM/Snakemake path. The single-process
 `tile_process` API still takes one `channel`.
 
