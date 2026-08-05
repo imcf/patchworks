@@ -8,6 +8,21 @@
 
 channel: 0 # cytoplasm/membrane channel
 
+# Optional second channel handed to Cellpose as the nucleus input, which
+# usually improves cytoplasm segmentation. Channel indices are 0-based, same
+# as `channel`. Leave it out (or null) for a single-channel run.
+#
+# Only the segment step reads it: the tile geometry, the occupancy map and the
+# staged labels all stay exactly as they are for a single channel -- the pair
+# is stacked on a leading axis that is carried into each tile, not tiled. It
+# does double the bytes a tile holds, so a hand-set `tile_shape` sized to the
+# GPU may need halving.
+#
+# Cellpose 3 turns this into channels: [1, 2]; Cellpose 4 (cpsam) dropped
+# `channels` and just reads both. Override either by setting `channels:` or
+# `channel_axis:` in the cellpose: block below.
+nuclei_channel: 1
+
 # Per-axis halo [z, y, x]. A scalar 30 would expand a [16, 1024, 1024] tile to
 # 76 x 1084 x 1084 = 5.3x the voxels it keeps, nearly all of it wasted z. The
 # z-halo only needs to cover one cell in z, not one cell in x/y.

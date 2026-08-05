@@ -161,9 +161,13 @@ def _make_config(
     gpu : bool
         Run on the GPU.
     channels : list of int or None
-        Cellpose-3 ``[cyto, nucleus]`` channels; defaults to ``[0, 0]``.
+        *Cellpose 3 only.* ``[cyto, nucleus]``, 1-based into the channel axis
+        (0 = grayscale). ``None`` resolves per tile: ``[1, 2]`` when the tile
+        carries two channels, else ``[0, 0]``. Cellpose 4 dropped this
+        argument, so it is ignored there.
     channel_axis : int or None
-        Cellpose-4 channel axis.
+        Axis of the tile holding channels, forwarded to ``eval`` for both
+        Cellpose 3 and 4. ``None`` means single-channel tiles.
     diameter : float or None
         Expected cell diameter in pixels.
     do_3D : bool
@@ -179,7 +183,9 @@ def _make_config(
     return {
         "model": model,
         "gpu": gpu,
-        "channels": channels if channels is not None else [0, 0],
+        # Left as None ("auto") rather than [0, 0]: _run only knows how many
+        # channels a tile actually carries once it has one in hand.
+        "channels": channels,
         "channel_axis": channel_axis,
         "diameter": diameter,
         "do_3D": do_3D,
@@ -284,37 +290,50 @@ def _run(block: np.ndarray, cellpose_dict: dict[str, Any]) -> np.ndarray:
         Integer (``int32``) label array of the same spatial shape.
     """
     do_3D = cellpose_dict["do_3D"]
+    channel_axis = cellpose_dict.get("channel_axis")
+    n_channels = block.shape[channel_axis] if channel_axis is not None else 1
 
-    if _CELLPOSE_V4:
-        kwargs: dict[str, Any] = dict(
-            channel_axis=cellpose_dict.get("channel_axis"),
-            diameter=cellpose_dict["diameter"],
-            do_3D=do_3D,
-            **cellpose_dict.get("cellpose_kwargs", {}),
-        )
-    else:
-        kwargs = dict(
-            channels=cellpose_dict["channels"],
-            diameter=cellpose_dict["diameter"],
-            do_3D=do_3D,
-            **cellpose_dict.get("cellpose_kwargs", {}),
-        )
+    kwargs: dict[str, Any] = dict(
+        channel_axis=channel_axis,
+        diameter=cellpose_dict["diameter"],
+        do_3D=do_3D,
+        **cellpose_dict.get("cellpose_kwargs", {}),
+    )
+    if not _CELLPOSE_V4:
+        # Cellpose 4 (cpsam) dropped `channels` and reads whatever channels
+        # the array carries; Cellpose 3 needs the cyto/nucleus pairing named.
+        channels = cellpose_dict.get("channels")
+        if channels is None:
+            channels = [1, 2] if n_channels >= 2 else [0, 0]
+        kwargs["channels"] = channels
+
+    # Where z sits once the channel axis is accounted for.
+    z_axis = 1 if channel_axis == 0 else 0
 
     if do_3D:
-        kwargs["z_axis"] = 0
+        kwargs["z_axis"] = z_axis
         masks = _eval_with_oom_fallback(block, kwargs, cellpose_dict)
         return masks.astype("int32")
     else:
         # Squeeze singleton z so Cellpose gets a clean 2-D image
-        squeeze = block.ndim == 3 and block.shape[0] == 1
-        if block.ndim == 3 and not squeeze:
+        spatial = list(block.shape)
+        if channel_axis is not None:
+            spatial.pop(channel_axis)
+        squeeze = len(spatial) == 3 and spatial[0] == 1
+        if len(spatial) == 3 and not squeeze:
             raise ValueError(
-                f"do_3D is False but this tile has {block.shape[0]} z-planes. "
+                f"do_3D is False but this tile has {spatial[0]} z-planes. "
                 "Cellpose would receive the stack with no z_axis and treat "
                 "the leading axis as channels. Set do_3D: true, or tile with "
                 "z=1 to segment plane by plane."
             )
-        img = block[0] if squeeze else block
+        if squeeze:
+            img = block[(slice(None),) * z_axis + (0,)]
+            # Dropping z shifts any channel axis that sat behind it.
+            if channel_axis is not None and channel_axis > z_axis:
+                kwargs["channel_axis"] = channel_axis - 1
+        else:
+            img = block
         masks = _eval_with_oom_fallback(img, kwargs, cellpose_dict)
         masks = masks.astype("int32")
         return masks[np.newaxis] if squeeze else masks

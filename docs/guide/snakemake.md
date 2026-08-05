@@ -53,7 +53,8 @@ convert_chunks: null           # null → bounded auto chunks; or [c,z,y,x]
 shard: false                   # true → pack chunks into shards (fewer files)
 
 # tiling
-channel: 0                     # channel to segment (null = keep all)
+channel: 0                     # channel to segment, 0-based (null = keep all)
+nuclei_channel: null           # optional 2nd channel for Cellpose (see below)
 level: 0                       # pyramid level (0 = full resolution)
 tile_shape: "auto"             # "auto", or e.g. [16, 1024, 1024] (zyx)
 gpu_memory_gb: null            # for "auto" on SLURM: your segment GPU's VRAM
@@ -299,6 +300,7 @@ cellpose:
 # config/config_cyto.yaml — only the differences
 label_name: "cyto_labels"
 channel: 0                # cytoplasm/membrane channel
+nuclei_channel: 1         # optional: nuclear stain, as Cellpose's 2nd input
 overlap: [4, 30, 30]
 method: "cellpose"
 cellpose:
@@ -306,6 +308,29 @@ cellpose:
   diameter: 30
   do_3D: true
 ```
+
+### Giving Cellpose a nuclei channel
+
+`nuclei_channel` hands Cellpose a second channel — the nuclear stain — which
+usually improves cytoplasm segmentation. Both indices are 0-based, like
+`channel`.
+
+Only the `segment` step reads it. The pair is stacked on a leading axis that
+is *carried* into each tile rather than tiled, so the tile geometry, the
+occupancy map and the staged labels are byte-for-byte what a single-channel
+run produces, and `merge` and `label_relations` need no changes. Two things
+follow from that:
+
+- A tile holds twice the bytes, so a hand-set `tile_shape` sized to fill a GPU
+  may need halving. `tile_shape: "auto"` sizes from the single-channel array
+  and does not yet know about the pair.
+- The translation is version-specific. Cellpose 3 gets `channels: [1, 2]`
+  (1-based into the channel axis, `0` = grayscale); Cellpose 4 (cpsam) dropped
+  `channels` entirely and simply reads both. Either is overridable by setting
+  `channels:` or `channel_axis:` in the `cellpose:` block.
+
+`nuclei_channel` applies to the SLURM/Snakemake path. The single-process
+`tile_process` API still takes one `channel`.
 
 Run them as two independent SLURM submissions — they touch disjoint files, so
 they can run concurrently. Give each its own `--directory`, because

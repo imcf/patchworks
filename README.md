@@ -25,6 +25,13 @@ patchworks splits a large image into tiles, runs **any callable** on each
 tile in parallel, and merges the results into a globally consistent label array.
 It handles terabyte-scale images without loading them into memory.
 
+> [!NOTE]
+> **On how this was written.** Large parts of patchworks were vibe coded —
+> written with heavy LLM assistance rather than line by line. It is covered by
+> a test suite and has been run on real data, so it is not untested, but the
+> usual caveats apply: read the code before you trust it with anything
+> irreplaceable, and please open an issue if something looks off.
+
 ---
 
 ## Installation

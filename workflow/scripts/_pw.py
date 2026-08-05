@@ -71,7 +71,7 @@ def start_log(path, *, append=True):
     return handle
 
 
-def open_image(work_dir, channel, level):
+def open_image(work_dir, channel, level, nuclei_channel=None):
     """Open the converted image for segmentation.
 
     Parameters
@@ -82,14 +82,38 @@ def open_image(work_dir, channel, level):
         Channel to select.
     level : int
         Pyramid level to read.
+    nuclei_channel : int or None, optional
+        Second channel to stack in front of *channel*, giving a
+        ``(2, z, y, x)`` array whose leading axis is ``[channel,
+        nuclei_channel]``. This is Cellpose's cyto+nucleus pair (see
+        ``config/config_cyto.yaml``). ``None`` (default) returns the plain
+        ``(z, y, x)`` single-channel array.
 
     Returns
     -------
     da.Array
         The (lazy) image array.
     """
-    return load_ome_zarr(
-        str(Path(work_dir) / "image.zarr"), channel=channel, level=level
+    path = str(Path(work_dir) / "image.zarr")
+    if nuclei_channel is None:
+        return load_ome_zarr(path, channel=channel, level=level)
+
+    import dask.array as da
+
+    if nuclei_channel == channel:
+        raise ValueError(
+            f"nuclei_channel ({nuclei_channel}) is the same as channel "
+            f"({channel}); Cellpose would get the same image twice. Channel "
+            "indices are 0-based."
+        )
+    # Two lazy reads of the same spatial box, stacked. The tiling stays
+    # spatial -- stage_tile carries this axis through rather than tiling it.
+    return da.stack(
+        [
+            load_ome_zarr(path, channel=c, level=level)
+            for c in (channel, nuclei_channel)
+        ],
+        axis=0,
     )
 
 
@@ -225,6 +249,24 @@ def validate_config(cfg) -> None:
             )
     elif ts is not None and not all(isinstance(v, int) and v > 0 for v in ts):
         problems.append(f"tile_shape must be positive integers; got {ts!r}")
+
+    nuc = cfg.get("nuclei_channel")
+    if nuc is not None:
+        if isinstance(nuc, bool) or not isinstance(nuc, int):
+            problems.append(
+                "nuclei_channel must be null or a 0-based channel index "
+                f"(e.g. 1); got {nuc!r}"
+            )
+        elif nuc == cfg.get("channel"):
+            problems.append(
+                f"nuclei_channel ({nuc}) is the same as channel; Cellpose "
+                "would get the same image twice. Indices are 0-based."
+            )
+        if cfg.get("method", "cellpose") == "threshold":
+            problems.append(
+                'nuclei_channel has no meaning for method: "threshold", '
+                "which segments a single channel"
+            )
 
     method = cfg.get("method", "cellpose")
     if method not in KNOWN_METHODS:
@@ -378,6 +420,11 @@ def _build_method_fn(cfg):
             for k, v in cp.items()
             if k not in ("model", "diameter", "do_3D", "gpu")
         }
+        if cfg.get("nuclei_channel") is not None:
+            # open_image stacks [channel, nuclei_channel] on axis 0; tell
+            # Cellpose where they are. setdefault so an explicit
+            # cellpose.channel_axis in the config still wins.
+            extra.setdefault("channel_axis", 0)
         return cellpose_fn(
             cp.get("model", "cyto3"),
             gpu=cp.get("gpu", True),
