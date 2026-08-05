@@ -281,11 +281,15 @@ def auto_tile_shape(
     target_bytes:
         Memory ceiling per tile. Default 64 MiB.
     use_gpu:
-        Size tiles against GPU VRAM rather than host RAM.
+        Size tiles against GPU VRAM rather than host RAM. Still capped by
+        host RAM too -- see ``available_memory``.
     gpu_memory:
         Available GPU VRAM in bytes; auto-queried when None.
     available_memory:
-        Available host RAM in bytes; auto-queried when None.
+        Available host RAM in bytes; auto-queried when None. Consulted even
+        when ``use_gpu`` is set: the tile has to be loaded into host memory
+        before (and often after) it reaches the GPU, so it must fit both
+        budgets, not just VRAM.
     n_workers:
         Number of parallel workers (divides the RAM budget).
     n_channels:
@@ -316,7 +320,13 @@ def auto_tile_shape(
     n_spatial = min(3, len(shape))
 
     if use_gpu:
-        mem = gpu_memory if gpu_memory is not None else _get_gpu_memory()
+        # A tile that fits VRAM still has to be decoded into (and often
+        # copied back out of) host RAM first, so a GPU with more memory
+        # than the job's own host allocation must not produce a tile the
+        # job itself can't hold -- take whichever budget is tighter.
+        gpu_mem = gpu_memory if gpu_memory is not None else _get_gpu_memory()
+        host_mem = available_memory or _get_available_memory()
+        mem = min(gpu_mem, host_mem)
         budget = min(target_bytes * 2, mem // 2)
     else:
         mem = available_memory or _get_available_memory()
@@ -395,13 +405,23 @@ def auto_tile_shape_cellpose(
     do_3D:
         Whether Cellpose will run in 3-D mode.
     use_gpu:
-        Size tiles for GPU VRAM.
+        Size tiles for GPU VRAM. Still capped by host RAM too -- see
+        ``available_memory``.
     gpu_memory, available_memory, n_workers:
-        Memory parameters (auto-queried when None).
+        Memory parameters (auto-queried when None). ``available_memory`` is
+        consulted even when ``use_gpu`` is set: Cellpose's ``do_3D``
+        preprocessing (orthogonal-view flows, mask assembly) copies the tile
+        through host memory, so VRAM headroom alone doesn't guarantee the
+        job's own host allocation can hold it.
     model_memory_bytes:
         Memory consumed by the Cellpose model weights (default 2 GiB).
     cellpose_memory_factor:
-        Cellpose allocates roughly this multiple of raw input bytes (default 20×).
+        Cellpose allocates roughly this multiple of raw input bytes (default
+        20×). Applied against whichever of VRAM/host RAM is tighter --
+        ``ponytail:`` this reuses one factor for both budgets as an
+        approximation; if it proves off in practice, calibrate a separate
+        host-side factor from a SLURM job's peak RSS (``seff``/
+        ``/usr/bin/time -v``) and pass it alongside this one.
     n_channels:
         Channels each tile carries (default 1). Above 1 the per-voxel cost
         scales with it, so the tile shrinks accordingly -- e.g. the workflow's
@@ -429,7 +449,13 @@ def auto_tile_shape_cellpose(
     itemsize = np.dtype(dtype).itemsize * n_channels
 
     if use_gpu:
-        total_mem = gpu_memory if gpu_memory is not None else _get_gpu_memory()
+        # A tile that fits VRAM still has to be decoded into (and often
+        # copied back out of) host RAM first, so a GPU with more memory
+        # than the job's own host allocation must not produce a tile the
+        # job itself can't hold -- take whichever budget is tighter.
+        gpu_mem = gpu_memory if gpu_memory is not None else _get_gpu_memory()
+        host_mem = available_memory or _get_available_memory()
+        total_mem = min(gpu_mem, host_mem)
     else:
         total_mem = (available_memory or _get_available_memory()) // n_workers
 
