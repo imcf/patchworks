@@ -83,7 +83,17 @@ set-resources:
     # leaves the job without a device.)
     slurm_partition: "rtx4090"
     gres: "gpu:1"
-    qos: "rtx4090-6hours" # scicore: <partition>-<duration> QOS
+    # rtx4090-6hours wasn't enough: a do_3D whole-z tile (126 planes, full
+    # footprint) can run past 6h even though most same-sized tiles finish in
+    # 2.5-3.5h -- retrying it bought nothing since `runtime` didn't scale with
+    # `attempt` the way `mem_mb` does below, so it hit the identical wall on
+    # every attempt and burned all `retries` for a job that was never going to
+    # finish in the window. rtx4090-1day is scicore's next tier up (see
+    # `sacctmgr show qos format=name,maxwall | grep rtx4090`); 24h is wide
+    # margin over anything observed so far. If a tile still times out at 24h,
+    # that's not a slow tile anymore -- it's stuck, and worth profiling on its
+    # own rather than reaching for rtx4090-1week.
+    qos: "rtx4090-1day" # scicore: <partition>-<duration> QOS
     # A job now processes `tiles_per_job` tiles sequentially, so both memory
     # and runtime scale with that setting — raise it there and re-check here.
     # The old "a tile used ~1G" note predates tile_shape: "auto", which sizes
@@ -101,7 +111,7 @@ set-resources:
     # guess. ``ponytail:`` tighten this once real peak-RSS numbers exist.
     mem_mb: "attempt * 128000"
     cpus_per_task: 4
-    runtime: 360 # 6 hours — must match the QOS, NOT 120 (=2h → killed early)
+    runtime: 1400 # ~23.3h — must stay under the rtx4090-1day QOS cap (24h)
   merge:
     # merge.py sizes its worker pool from the cgroup/SLURM budget rather than
     # the node's core count, and the pyramid is written zarr-natively (one
