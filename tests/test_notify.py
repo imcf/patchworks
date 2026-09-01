@@ -99,6 +99,30 @@ def test_failing_step_reads_the_rule_from_snakemakes_log(tmp_path):
     )
 
 
+def test_failing_step_accepts_snakemakes_list_log(tmp_path):
+    """Snakemake 8+ passes `log` as a list, not a bare path.
+
+    ``LoggerManager.get_logfile()`` returns ``List[str]``, and that's what
+    the `log` variable inside `onerror:` actually is. `Path(a_list)` raises
+    `TypeError`, which the old code caught and turned into `(None, None)` --
+    so this path was *always* silently falling back to the mtime guess it
+    was written to replace, on every real failure.
+    """
+    from patchworks._notify import failing_step
+
+    log = tmp_path / "sm.log"
+    log.write_text(
+        "Error in rule segment:\n"
+        "    jobid: 69\n"
+        "    output: seg/61.done\n"
+        "    log: /w/nuclei_labels/logs/segment/61.log (check log file(s))\n"
+    )
+    expected = ("segment", "/w/nuclei_labels/logs/segment/61.log")
+    assert failing_step([str(log)]) == expected
+    assert failing_step((str(log),)) == expected
+    assert failing_step([]) == (None, None)
+
+
 def test_failing_step_degrades_quietly(tmp_path):
     """It runs inside an error handler, so it must never raise itself."""
     from patchworks._notify import failing_step
