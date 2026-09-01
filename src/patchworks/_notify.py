@@ -159,7 +159,7 @@ def slurm_mail_extra(
 
 
 def failing_step(
-    snakemake_log: Union[str, Path, None],
+    snakemake_log: "Union[str, Path, list, tuple, None]",
 ) -> "tuple[Union[str, None], Union[str, None]]":
     """Find which rule failed, and its log, from Snakemake's own log file.
 
@@ -171,9 +171,12 @@ def failing_step(
 
     Parameters
     ----------
-    snakemake_log : str or Path or None
-        Path to Snakemake's own log (the ``log`` variable inside an
-        ``onerror`` handler).
+    snakemake_log : str, Path, list, tuple, or None
+        Snakemake's own log (the ``log`` variable inside an ``onerror``
+        handler). Snakemake 8+ passes this as a list of paths (its
+        ``LoggerManager.get_logfile()`` returns ``List[str]``, even though
+        there is normally just one) rather than a single string -- take the
+        first entry.
 
     Returns
     -------
@@ -181,6 +184,8 @@ def failing_step(
         ``(rule_name, log_path)``, either of which may be None when the log
         is unreadable or records no rule error.
     """
+    if isinstance(snakemake_log, (list, tuple)):
+        snakemake_log = snakemake_log[0] if snakemake_log else None
     try:
         text = Path(snakemake_log).read_text(errors="replace")
     except (OSError, TypeError, ValueError):
