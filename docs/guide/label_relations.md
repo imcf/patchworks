@@ -6,7 +6,21 @@ the other — by streaming both arrays chunk by chunk, so it scales to
 hundreds of thousands of objects without loading anything fully into RAM.
 
 Both label arrays must share the exact same chunk layout — same
-`tile_shape`/pyramid `level` when they were produced.
+`tile_shape`/pyramid `level` when they were produced. `label_relations()`
+raises rather than silently doing something slower if they don't; rechunk
+one side to match first (same shape, different chunking is a normal dask
+op — some extra I/O reading across misaligned source chunks, not a
+correctness issue):
+
+```python
+if nuclei.chunks != cells.chunks:
+    cells = cells.rechunk(nuclei.chunks)
+```
+
+(The cluster workflow's `run_multi.py`/`relate.py` does this automatically
+— see below — so two configs segmented at different `tile_shape` still
+relate correctly; you only need to do it by hand when calling
+`label_relations()` directly.)
 
 ```python
 import dask.array as da
