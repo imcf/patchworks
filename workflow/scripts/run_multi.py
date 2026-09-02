@@ -20,12 +20,16 @@ Once all segmentations succeed, each configured relation pair is computed via
 patchworks.label_relations and written as an Excel workbook in work_dir,
 with two sheets: one row per a-object (unmatched ones included, with an
 empty b-id and zeros) and one row per b-object (a-object count + total
-overlap, including b-objects with zero matches).
+overlap, including b-objects with zero matches). Under --profile, this runs
+as a submitted SLURM job (see scripts/relate.py) rather than in-process here
+-- same reasoning as the occupancy-map fix: it streams entire label volumes,
+which is real work, not orchestration, and does not belong on the login node.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import subprocess
 import sys
@@ -337,6 +341,28 @@ def main() -> None:
             "otherwise look identical: no email either way."
         ),
     )
+    parser.add_argument(
+        "--relate-partition",
+        default="scicore",
+        help="SLURM partition for the relate step under --profile (default: scicore)",
+    )
+    parser.add_argument(
+        "--relate-mem",
+        default="32G",
+        help="srun --mem for the relate step under --profile (default: 32G)",
+    )
+    parser.add_argument(
+        "--relate-cpus",
+        type=int,
+        default=8,
+        help="srun --cpus-per-task for the relate step under --profile (default: 8)",
+    )
+    parser.add_argument(
+        "--relate-time",
+        type=int,
+        default=180,
+        help="srun --time in minutes for the relate step under --profile (default: 180)",
+    )
     args = parser.parse_args()
 
     workflow_dir = Path(__file__).resolve().parent.parent
@@ -467,96 +493,47 @@ def main() -> None:
     if args.dry_run or not relations:
         return
 
-    import dask.array as da
-    import openpyxl
-    import zarr
+    if args.profile:
+        # Real CPU/IO work -- tens of thousands of zarr chunk reads for a
+        # full-resolution label volume -- not orchestration, so (like the
+        # occupancy map) it does not belong in this driver process on the
+        # login node. Submit it as its own job instead.
+        cmd = [
+            "srun",
+            "--partition",
+            args.relate_partition,
+            "--mem",
+            args.relate_mem,
+            "--cpus-per-task",
+            str(args.relate_cpus),
+            "--time",
+            str(args.relate_time),
+            "--job-name",
+            "pw-relate",
+            sys.executable,
+            str(workflow_dir / "scripts" / "relate.py"),
+            "--work-dir",
+            work_dir,
+            "--image-store",
+            image_store,
+            "--relations",
+            json.dumps(relations),
+        ]
+        rc = _run(cmd, workflow_dir)
+        if rc != 0:
+            print(
+                f"[run_multi] ERROR: relate step failed (exit {rc}). "
+                "Segmentations already succeeded -- only the relation "
+                "workbook(s) are missing. Re-run with the same --config to "
+                "retry just this step.",
+                file=sys.stderr,
+            )
+            sys.exit(rc)
+        return
 
-    from patchworks import label_relations
+    from relate import run_relations
 
-    def _label_ids(name: str) -> list[int]:
-        """Ids present in a label image, without scanning the volume.
-
-        The merge writes n_objects/sequential_labels into the label group's
-        attrs precisely so consumers don't have to re-derive the id set; the
-        ids are 1..n_objects by construction. Fall back to the full scan only
-        for a label group written before those attrs existed -- that scan runs
-        here on the login node, so it is worth avoiding.
-        """
-        attrs = dict(zarr.open_group(f"{image_store}/labels/{name}").attrs)
-        if (
-            attrs.get("sequential_labels")
-            and attrs.get("n_objects") is not None
-        ):
-            return list(range(1, int(attrs["n_objects"]) + 1))
-        print(
-            f"[run_multi] {name}: no n_objects attr, falling back to a full "
-            "scan for its id set",
-            flush=True,
-        )
-        arr = da.from_zarr(image_store, component=f"labels/{name}/0")
-        return sorted(int(x) for x in da.unique(arr[arr > 0]).compute())
-
-    for rel in relations:
-        a_name, b_name = rel["a"], rel["b"]
-        out_path = Path(work_dir) / rel.get(
-            "output", f"{a_name}_to_{b_name}.xlsx"
-        )
-        print(f"[run_multi] relating {a_name} -> {b_name} …", flush=True)
-        a = da.from_zarr(image_store, component=f"labels/{a_name}/0")
-        b = da.from_zarr(image_store, component=f"labels/{b_name}/0")
-        table = label_relations(a, b)
-
-        # label_relations() only returns a-objects that touch a b-object.
-        # Pull the full id sets so unmatched a-objects (zero overlap) and
-        # b-objects with no matches at all still get a row -- otherwise
-        # they'd silently vanish instead of counting as zero.
-        a_ids = _label_ids(a_name)
-        b_ids = _label_ids(b_name)
-
-        per_b = {b_id: {"count": 0, "overlap_voxels": 0} for b_id in b_ids}
-        for m in table.values():
-            agg = per_b.get(m["match"])
-            if agg is not None:
-                agg["count"] += 1
-                agg["overlap_voxels"] += m["overlap_voxels"]
-
-        wb = openpyxl.Workbook()
-        ws_a = wb.active
-        ws_a.title = a_name[:31]  # Excel sheet-name length limit
-        ws_a.append(
-            [
-                f"{a_name}_id",
-                f"{b_name}_id",
-                "overlap_voxels",
-                "overlap_fraction",
-            ]
-        )
-        for a_id in a_ids:
-            m = table.get(a_id)
-            if m is None:
-                ws_a.append([a_id, None, 0, 0])  # no overlap -- still counted
-            else:
-                ws_a.append(
-                    [
-                        a_id,
-                        m["match"],
-                        m["overlap_voxels"],
-                        m["overlap_fraction"],
-                    ]
-                )
-
-        ws_b = wb.create_sheet(title=b_name[:31])
-        ws_b.append([f"{b_name}_id", f"{a_name}_count", "total_overlap_voxels"])
-        for b_id in b_ids:
-            agg = per_b[b_id]
-            ws_b.append([b_id, agg["count"], agg["overlap_voxels"]])
-
-        wb.save(out_path)
-        print(
-            f"[run_multi] wrote {out_path} "
-            f"({len(a_ids)} {a_name}, {len(b_ids)} {b_name})",
-            flush=True,
-        )
+    run_relations(work_dir, image_store, relations)
 
 
 if __name__ == "__main__":
