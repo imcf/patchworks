@@ -186,28 +186,88 @@ def test_relate_script_has_the_real_bookkeeping():
     assert "openpyxl" in src
 
 
-def test_auto_tile_shape_with_a_lone_nuclei_channel_is_refused():
-    """Matching `tile_shape` *values* are not enough when one config is 2-ch.
+def test_mixed_nuclei_channel_auto_passes_validation():
+    """A channel-count mismatch under `tile_shape: "auto"` is no longer
 
-    "auto" == "auto" passes the plain equality check, but the sizer charges
-    per channel, so the nuclei_channel config gets a smaller tile. The label
-    groups then disagree on chunk layout and label_relations raises -- after
-    every segmentation has already run, which is the expensive way to find out.
+    refused at validation time -- it's resolved automatically instead (see
+    `_resolve_shared_tile_shape`), which needs the converted image's real
+    shape/dtype and so can only run after phase A, not from
+    `_validate_configs()`. This used to `sys.exit` here; asserting that
+    would now be testing the wrong layer.
     """
     paths = [Path("a.yaml"), Path("b.yaml")]
     base = {"work_dir": "/w", "tile_shape": "auto", "level": 0}
 
-    bad = [
+    mixed = [
         {**base, "label_name": "a", "channel": 0, "nuclei_channel": 1},
         {**base, "label_name": "b", "channel": 2},
     ]
-    with pytest.raises(SystemExit):
-        _validate_configs(paths, bad)
+    assert _validate_configs(paths, mixed) == "/w"
 
     # Same pair with one explicit shape is fine: both get that tile.
-    pinned = [{**c, "tile_shape": [16, 512, 512]} for c in bad]
+    pinned = [{**c, "tile_shape": [16, 512, 512]} for c in mixed]
     assert _validate_configs(paths, pinned) == "/w"
 
     # And "auto" is fine when every config carries the same channel count.
-    both = [{**bad[0]}, {**bad[1], "nuclei_channel": 3}]
+    both = [{**mixed[0]}, {**mixed[1], "nuclei_channel": 3}]
     assert _validate_configs(paths, both) == "/w"
+
+
+def test_resolve_shared_tile_shape_pins_the_smallest_candidate(
+    tmp_path, monkeypatch
+):
+    """The shared tile must be the tightest of every config's own budget.
+
+    A larger tile than some config's own sizer output would ask that config
+    for more memory than its settings were judged to need -- only the
+    smallest candidate is safe for every config at once.
+    """
+    import run_multi
+
+    class _FakeImage:
+        shape = (10, 100, 100)
+        dtype = "uint16"
+
+    calls = []
+
+    def _fake_load_ome_zarr(store, *, channel, level):
+        calls.append((store, channel, level))
+        return _FakeImage()
+
+    # One tile per config, matched up by call order (channel 0 then 1).
+    fake_tiles = [(8, 64, 64), (4, 32, 32)]
+
+    def _fake_sizer_cellpose(shape, dtype, **kwargs):
+        return fake_tiles[len(calls) - 1]
+
+    monkeypatch.setattr(
+        "patchworks.load_ome_zarr", _fake_load_ome_zarr, raising=False
+    )
+    monkeypatch.setattr(
+        "patchworks.auto_tile_shape_cellpose",
+        _fake_sizer_cellpose,
+        raising=False,
+    )
+
+    seg_cfgs = [
+        {
+            "channel": 0,
+            "level": 0,
+            "method": "cellpose",
+            "cellpose": {"do_3D": True, "gpu": True},
+        },
+        {
+            "channel": 1,
+            "level": 0,
+            "nuclei_channel": 2,
+            "method": "cellpose",
+            "cellpose": {"do_3D": True, "gpu": True},
+        },
+    ]
+    out = run_multi._resolve_shared_tile_shape(
+        seg_cfgs, "/w/image.zarr", str(tmp_path)
+    )
+    assert out == tmp_path / ".multi_tile_shape.generated.yaml"
+    written = yaml.safe_load(out.read_text())
+    assert written == {"tile_shape": [4, 32, 32]}  # the smaller candidate
+    assert len(calls) == 2
