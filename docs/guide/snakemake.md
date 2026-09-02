@@ -415,6 +415,13 @@ results/image.zarr/labels/cyto_labels/
     up front — mainly useful to keep segmentation itself GPU-efficient
     across configs, not required for the relate step to work.)
 
+!!! tip "The relate step's log"
+    Unlike `prepare`/`segment`/`merge`, the relate step isn't a Snakemake
+    rule, so it doesn't get a `log:` directive for free. It writes its own
+    log to `<work_dir>/logs/relate.log` (override with `relate.py --log`),
+    the same tee-to-file-and-stdout behaviour as the other steps — check
+    there instead of scrolling back through `srun`'s live output.
+
 See [Relating labels across segmentations](label_relations.md) for what
 `label_relations()` returns and how to save it yourself — the cluster
 workflow's own automation is below.

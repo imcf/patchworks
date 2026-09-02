@@ -10,6 +10,12 @@ e.g. under srun):
     python scripts/relate.py --work-dir /path/to/work_dir \
         --image-store /path/to/work_dir/image.zarr \
         --relations '[{"a": "nuclei_labels", "b": "cyto_labels", "output": "nuclei_to_cyto.xlsx"}]'
+
+Unlike prepare/segment/merge, this doesn't run as a Snakemake rule, so nothing
+wires up its own logs/<rule>/*.log by default -- srun just streams output to
+whatever invoked it. main() calls start_log() itself instead, writing to
+<work_dir>/logs/relate.log (override with --log), the same tee-to-file-and-
+stdout behaviour the Snakemake-driven scripts get via _pw.start_log.
 """
 
 from __future__ import annotations
@@ -176,7 +182,19 @@ def main() -> None:
             "relations:"
         ),
     )
+    parser.add_argument(
+        "--log",
+        default=None,
+        help="log file path (default: <work-dir>/logs/relate.log)",
+    )
     args = parser.parse_args()
+
+    from _pw import start_log
+
+    log_path = args.log or str(Path(args.work_dir) / "logs" / "relate.log")
+    start_log(log_path)
+    print(f"[relate] logging to {log_path}", flush=True)
+
     run_relations(args.work_dir, args.image_store, json.loads(args.relations))
 
 

@@ -188,6 +188,19 @@ def test_relate_script_has_the_real_bookkeeping():
     assert "openpyxl" in src
 
 
+def test_relate_writes_its_own_log():
+    """relate.py runs via srun, not a Snakemake rule -- nothing else wires up
+
+    its logging (see prepare/segment/merge's `log:` directives), so main()
+    has to call start_log() itself or its output only ever streams to
+    whatever invoked srun and is gone once that terminal scrolls past it.
+    """
+    src = (_workflow_dir() / "scripts" / "relate.py").read_text()
+    assert "from _pw import start_log" in src
+    assert "start_log(" in src
+    assert '"logs" / "relate.log"' in src
+
+
 def test_relate_rechunks_mismatched_label_arrays(tmp_path):
     """A chunk-layout mismatch must be rechunked away, not require a re-run.
 
