@@ -356,7 +356,9 @@ def _resolve_shared_tile_shape(
                 gpu_memory=gpu_bytes,
                 n_channels=n_channels,
             )
-        candidates.append(tuple(int(x) for x in sizer(image.shape, image.dtype)))
+        candidates.append(
+            tuple(int(x) for x in sizer(image.shape, image.dtype))
+        )
 
     tile_shape = min(candidates, key=lambda t: int(np.prod(t)))
     print(
