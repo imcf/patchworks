@@ -188,6 +188,32 @@ def test_relate_script_has_the_real_bookkeeping():
     assert "openpyxl" in src
 
 
+def test_view_script_loads_every_label_by_default():
+    """view.py must not override labels=, or auto-load stops working.
+
+    view_in_napari's labels=None default is what auto-loads every label
+    group under <image>/labels/<name>/ as its own layer -- passing an
+    explicit labels= here would silently drop that and show only one.
+    """
+    src = (_workflow_dir() / "scripts" / "view.py").read_text()
+    assert "from patchworks.plugins.napari import view_in_napari" in src
+    assert "labels=" not in src
+
+
+def test_viewer_is_a_separate_opt_in_pixi_environment():
+    """napari's Qt/GUI deps must stay out of the default headless env.
+
+    Adding them to the default `[pypi-dependencies]` would pull heavy GUI
+    dependencies into every SLURM job's environment for a feature only used
+    interactively.
+    """
+    src = (_workflow_dir() / "pixi.toml").read_text()
+    default_deps = src.split("[pypi-dependencies]")[1].split("[feature")[0]
+    assert "napari" not in default_deps
+    assert 'viewer = { features = ["viewer"] }' in src
+    assert 'extras = ["napari"]' in src
+
+
 def test_relate_writes_its_own_log():
     """relate.py runs via srun, not a Snakemake rule -- nothing else wires up
 

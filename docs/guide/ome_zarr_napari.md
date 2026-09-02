@@ -229,6 +229,20 @@ just one channel instead: `view_in_napari("scan.zarr", channel=0)`.
     napari ships in `patchworks[all]`, or install just it with
     `pip install "patchworks[napari]"`.
 
+!!! tip "From the cluster workflow"
+    `workflow/pixi.toml` has a separate `viewer` environment (napari's Qt/GUI
+    dependencies are kept out of the default headless workflow env on
+    purpose):
+
+    ```bash
+    pixi install -e viewer
+    pixi run -e viewer napari /path/to/work_dir/image.zarr
+    ```
+
+    This wraps `view_in_napari` with its `labels=` argument left at the
+    default, so every label group in the store loads automatically — needs a
+    display (`ssh -X`, or a remote-desktop/VNC session).
+
 !!! tip "Measuring all the objects"
     Once labels are loaded, use
     [napari-chunked-regionprops](https://github.com/imcf/napari-chunked-regionprops)'s
