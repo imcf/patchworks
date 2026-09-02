@@ -451,6 +451,18 @@ the GPU partition stays busy instead of idling through every config's
 `prepare` and multi-hour `merge` in turn. A config that fails does **not**
 abort the others; you get a per-config status and a non-zero exit.
 
+!!! tip "The relate step runs on the cluster too, under `multi-slurm`"
+    `label_relations()` streams every chunk of two full-resolution label
+    volumes — real CPU/IO work, not orchestration. Under `multi-slurm` it is
+    submitted as its own `srun` job (`scripts/relate.py`) instead of running
+    in the driver process on the login node, the same fix already applied to
+    the occupancy map. Tune its allocation with `--relate-partition`,
+    `--relate-mem`, `--relate-cpus` and `--relate-time` (defaults: `scicore`,
+    `32G`, `8`, `180` minutes) — these are wide-margin guesses, not measured
+    numbers, so raise them for a very large or very object-dense pair. Under
+    plain `multi` (no `--profile`), it still runs locally, in-process, as
+    before.
+
 !!! tip "After a killed run"
     Snakemake only releases its lock on a clean exit, so a run that was killed
     (Ctrl-C, an SSH drop, an OOM) leaves the directory locked. Each phase has

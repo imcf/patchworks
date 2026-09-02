@@ -160,6 +160,32 @@ def test_occupancy_is_not_rebuilt_by_the_driver():
     assert "occupancy.zarr" in src
 
 
+def test_relate_is_submitted_via_slurm_under_profile():
+    """The relate step must never run in-process on the submit host.
+
+    Same failure mode as the occupancy map: label_relations() streams every
+    chunk of two full-resolution label volumes. A prior fix moved the map
+    build off the login node; the relate step made the identical mistake and
+    hung there for the same reason until this fix.
+    """
+    src = (_workflow_dir() / "scripts" / "run_multi.py").read_text()
+    assert "from relate import run_relations" in src
+    assert '"srun"' in src
+    assert "label_relations(" not in src
+
+
+def test_relate_script_has_the_real_bookkeeping():
+    """relate.py must be the actual implementation, not a stub.
+
+    Submitting the wrong (or a trimmed-down) script would silently produce a
+    workbook missing the unmatched-label rows the docstring promises.
+    """
+    src = (_workflow_dir() / "scripts" / "relate.py").read_text()
+    assert "def run_relations(" in src
+    assert "label_relations" in src
+    assert "openpyxl" in src
+
+
 def test_auto_tile_shape_with_a_lone_nuclei_channel_is_refused():
     """Matching `tile_shape` *values* are not enough when one config is 2-ch.
 
