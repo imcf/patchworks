@@ -16,7 +16,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
+
+
+def _num_chunks(arr: "da.Array") -> int:  # noqa: F821 - dask imported lazily by callers
+    """Total chunk count of a dask array, for picking the coarser side to rechunk to."""
+    return math.prod(len(c) for c in arr.chunks)
 
 
 def _label_ids(image_store: str, name: str) -> list[int]:
@@ -72,6 +78,35 @@ def run_relations(
         print(f"[relate] relating {a_name} -> {b_name} …", flush=True)
         a = da.from_zarr(image_store, component=f"labels/{a_name}/0")
         b = da.from_zarr(image_store, component=f"labels/{b_name}/0")
+
+        # label_relations() requires matching chunk layouts (it walks both
+        # arrays block-by-block at the same index) but two configs are free
+        # to have segmented at different tile_shape -- e.g. one already
+        # published before the other's config changed, or a cheaper method
+        # naturally sized its tile differently. Same shape, different
+        # chunking is a normal dask op (extra I/O reading across misaligned
+        # source chunks, not a correctness issue), so rechunk the finer side
+        # to the coarser one here rather than require identical tile_shape
+        # across every config up front.
+        if a.chunks != b.chunks:
+            a_n, b_n = _num_chunks(a), _num_chunks(b)
+            if a_n <= b_n:
+                print(
+                    f"[relate] {a_name} chunks {a.chunks} != {b_name} "
+                    f"chunks {b.chunks}; rechunking {b_name} to match "
+                    f"{a_name} (fewer chunks)",
+                    flush=True,
+                )
+                b = b.rechunk(a.chunks)
+            else:
+                print(
+                    f"[relate] {a_name} chunks {a.chunks} != {b_name} "
+                    f"chunks {b.chunks}; rechunking {a_name} to match "
+                    f"{b_name} (fewer chunks)",
+                    flush=True,
+                )
+                a = a.rechunk(b.chunks)
+
         table = label_relations(a, b)
 
         # label_relations() only returns a-objects that touch a b-object.

@@ -8,6 +8,8 @@ sys.path.insert(
     0, str(Path(__file__).resolve().parents[1] / "workflow" / "scripts")
 )
 
+import numpy as np  # noqa: E402
+import openpyxl  # noqa: E402
 import pytest  # noqa: E402
 import yaml  # noqa: E402
 
@@ -184,6 +186,64 @@ def test_relate_script_has_the_real_bookkeeping():
     assert "def run_relations(" in src
     assert "label_relations" in src
     assert "openpyxl" in src
+
+
+def test_relate_rechunks_mismatched_label_arrays(tmp_path):
+    """A chunk-layout mismatch must be rechunked away, not require a re-run.
+
+    Two configs are free to have segmented at different tile_shape (one
+    published before the other's config changed, or a cheaper method sized
+    its own tile differently) -- label_relations() itself refuses mismatched
+    chunks by design, but that only means the caller has to rechunk one side
+    first, not that the whole segmentation needs redoing.
+    """
+    import zarr
+
+    from relate import run_relations
+
+    image_store = str(tmp_path / "image.zarr")
+
+    # a: labels 1 and 2, split at x=5. b: a single label 10 covering all of
+    # a's label 1 and none of label 2 -- built with a *different* chunking.
+    a_data = np.zeros((1, 10), dtype=np.int32)
+    a_data[0, :5] = 1
+    a_data[0, 5:] = 2
+    b_data = np.zeros((1, 10), dtype=np.int32)
+    b_data[0, :5] = 10
+
+    root = zarr.open_group(image_store, mode="w")
+    labels = root.require_group("labels")
+    a_grp = labels.require_group("nuclei_labels")
+    a_arr = a_grp.create_array(
+        name="0", shape=a_data.shape, chunks=(1, 2), dtype=np.int32
+    )
+    a_arr[:] = a_data
+    a_grp.attrs["sequential_labels"] = True
+    a_grp.attrs["n_objects"] = 2
+
+    b_grp = labels.require_group("cyto_labels")
+    b_arr = b_grp.create_array(
+        name="0", shape=b_data.shape, chunks=(1, 5), dtype=np.int32
+    )
+    b_arr[:] = b_data
+    b_grp.attrs["sequential_labels"] = True
+    b_grp.attrs["n_objects"] = 1
+
+    out_dir = tmp_path / "work"
+    out_dir.mkdir()
+    run_relations(
+        str(out_dir),
+        image_store,
+        [{"a": "nuclei_labels", "b": "cyto_labels", "output": "rel.xlsx"}],
+    )
+
+    wb = openpyxl.load_workbook(out_dir / "rel.xlsx")
+    rows = {
+        row[0]: (row[1], row[2], row[3])
+        for row in wb["nuclei_labels"].iter_rows(min_row=2, values_only=True)
+    }
+    assert rows[1] == (10, 5, 1.0)  # label 1 fully inside b's label 10
+    assert rows[2] == (None, 0, 0)  # label 2 touches nothing in b
 
 
 def test_mixed_nuclei_channel_auto_passes_validation():

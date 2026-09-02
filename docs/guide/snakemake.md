@@ -398,20 +398,22 @@ results/image.zarr/labels/nuclei_labels/
 results/image.zarr/labels/cyto_labels/
 ```
 
-!!! tip "Keep `level` identical across configs; `tile_shape` usually takes care of itself"
+!!! tip "Keep `level` identical across configs; `tile_shape` doesn't have to match anymore"
     Different segmentations of the same image can use different `channel`
     and `cellpose:` settings freely, but keep `level` the same across
-    configs — the label arrays then share the exact same chunk layout, which
-    [`label_relations()`](label_relations.md) requires.
+    configs so the label arrays cover the same voxel grid.
 
-    `tile_shape` is a little more forgiving under `run_multi.py`: leaving it
-    on `"auto"` (the default) would normally size a `nuclei_channel` config's
-    tile smaller than a single-channel one (the sizer charges per channel),
-    breaking that same requirement — `run_multi.py` detects this and pins
-    every config to the smallest computed tile automatically, so mixed
-    single-/two-channel configs under `"auto"` just work. Setting an
-    explicit `tile_shape` yourself still requires it to be identical across
-    configs, same as before.
+    `tile_shape` itself no longer has to match. Two configs naturally
+    produce different on-disk chunk layouts when `tile_shape: "auto"`
+    charges a `nuclei_channel` config for a smaller tile than a
+    single-channel one, or when one config was segmented before the other's
+    settings changed, or a cheaper method (e.g. a DoG detector) sized its
+    own tile differently — `relate.py` detects a chunk mismatch per pair and
+    rechunks the finer side to match before relating, so this is no longer
+    something you need to plan around. (`run_multi.py` *also* auto-pins
+    every config under `"auto"` to one shared, smallest-computed tile
+    up front — mainly useful to keep segmentation itself GPU-efficient
+    across configs, not required for the relate step to work.)
 
 See [Relating labels across segmentations](label_relations.md) for what
 `label_relations()` returns and how to save it yourself — the cluster
