@@ -54,6 +54,7 @@ def _snakemake_cmd(
     extra: list[str] | None = None,
     jobname_prefix: str | None = None,
     common: Path | None = None,
+    extra_configfiles: list[Path] | None = None,
 ) -> list[str]:
     """Build one snakemake invocation.
 
@@ -66,10 +67,17 @@ def _snakemake_cmd(
     settings every config shares -- the input, the work_dir, everything
     ``convert`` reads -- live in one file and the per-config file carries only
     what actually differs.
+
+    *extra_configfiles*, when given, are appended after *configfile* and so
+    win over both it and *common* -- used to pin a driver-computed value
+    (e.g. a resolved ``tile_shape``) across every config without editing any
+    config file on disk.
     """
     configfiles = [str(configfile.resolve())]
     if common is not None:
         configfiles.insert(0, str(common.resolve()))
+    if extra_configfiles:
+        configfiles += [str(p.resolve()) for p in extra_configfiles]
     cmd = [
         "snakemake",
         "-s",
@@ -234,21 +242,12 @@ def _validate_configs(paths: list[Path], cfgs: list[dict]) -> str:
 
     # `tile_shape: "auto"` is identical as a *value* across configs while
     # producing different tiles: the sizer charges per channel, so a config
-    # with nuclei_channel gets a smaller one. The label groups then disagree on
-    # chunk layout and label_relations raises -- after every segmentation has
-    # run. Matching values are not enough here, so check the inputs that feed
-    # the sizer instead.
-    if {repr(cfg.get("tile_shape", "auto")) for cfg in cfgs} == {repr("auto")}:
-        if len({cfg.get("nuclei_channel") is not None for cfg in cfgs}) != 1:
-            problems.append(
-                'tile_shape: "auto" sizes a nuclei_channel config smaller '
-                "(a tile carries two channels), so the label groups would "
-                "not share a chunk layout and label_relations would fail "
-                f"after every segmentation had run; got "
-                f"{_spread('nuclei_channel')}. Set one explicit tile_shape in "
-                "the file `common:` points at, sized for the two-channel "
-                "config."
-            )
+    # with nuclei_channel gets a smaller one. The label groups would then
+    # disagree on chunk layout and label_relations would raise -- after every
+    # segmentation had run. That used to be a hard error asking for a manual
+    # explicit tile_shape; main() now resolves and pins one automatically
+    # (see _resolve_shared_tile_shape), once the converted image exists to
+    # size against, so there is nothing to check here anymore.
 
     # Phase A converts once, from the first config. Anything `convert` reads
     # out of a later config is therefore silently ignored -- someone setting
@@ -290,6 +289,92 @@ def _validate_configs(paths: list[Path], cfgs: list[dict]) -> str:
             print(f"[run_multi] ERROR: {p}", file=sys.stderr)
         sys.exit(1)
     return work_dirs.pop()
+
+
+def _resolve_shared_tile_shape(
+    seg_cfgs: list[dict], image_store: str, work_dir: str
+) -> Path:
+    """Auto-size ``tile_shape`` once, shared across every config.
+
+    ``tile_shape: "auto"`` resolves differently per config when
+    ``nuclei_channel`` differs -- the sizer charges per channel, so a
+    two-channel config gets a smaller tile. Left alone, the label groups
+    would end up with different chunk layouts and ``label_relations`` would
+    raise, after every segmentation had already run.
+
+    Computes what each config's own settings (channel count, ``do_3D``,
+    ``diameter``, GPU budget) would actually produce, then pins every config
+    to the *smallest* of them by voxel count -- the most memory-constrained
+    case, and safe for every config since a smaller tile only ever asks for
+    less memory than that config's own budget allows, never more. Configs
+    can therefore use different ``do_3D``/``diameter``/channel-count
+    settings and still end up with one shared, valid ``tile_shape``.
+
+    Only called once the converted image exists (the sizer needs its real
+    shape/dtype), so this runs from ``main()`` after phase A, not from
+    ``_validate_configs()``.
+
+    Returns
+    -------
+    Path
+        A generated one-key YAML file (``tile_shape: [...]``), meant to be
+        passed as an ``extra_configfiles`` entry to ``_snakemake_cmd`` so it
+        overrides every config's own (or common's) ``tile_shape`` value.
+    """
+    from functools import partial
+
+    import numpy as np
+    from patchworks import (
+        auto_tile_shape,
+        auto_tile_shape_cellpose,
+        load_ome_zarr,
+    )
+
+    candidates = []
+    for cfg in seg_cfgs:
+        image = load_ome_zarr(
+            image_store, channel=cfg["channel"], level=int(cfg.get("level", 0))
+        )
+        gpu_gb = cfg.get("gpu_memory_gb")
+        gpu_bytes = int(gpu_gb * 1024**3) if gpu_gb else None
+        n_channels = 2 if cfg.get("nuclei_channel") is not None else 1
+        method = cfg.get("method", "cellpose")
+        if method == "cellpose":
+            cp = cfg["cellpose"]
+            sizer = partial(
+                auto_tile_shape_cellpose,
+                do_3D=cp.get("do_3D", False),
+                use_gpu=cp.get("gpu", True),
+                diameter=cp.get("diameter"),
+                gpu_memory=gpu_bytes,
+                n_channels=n_channels,
+            )
+        else:
+            sizer = partial(
+                auto_tile_shape,
+                use_gpu=gpu_bytes is not None,
+                gpu_memory=gpu_bytes,
+                n_channels=n_channels,
+            )
+        candidates.append(tuple(int(x) for x in sizer(image.shape, image.dtype)))
+
+    tile_shape = min(candidates, key=lambda t: int(np.prod(t)))
+    print(
+        f'[run_multi] tile_shape: "auto" resolves differently across '
+        f"configs (nuclei_channel differs); pinning every config to the "
+        f"smallest computed tile {list(tile_shape)} so the label arrays "
+        f"share a chunk layout. Candidates were {[list(c) for c in candidates]}.",
+        flush=True,
+    )
+
+    override_path = Path(work_dir) / ".multi_tile_shape.generated.yaml"
+    override_path.write_text(
+        "# Generated by run_multi.py -- pins tile_shape across configs so\n"
+        "# label_relations sees matching chunk layouts. Safe to delete; it\n"
+        "# is regenerated on the next multi-config run.\n"
+        f"tile_shape: {list(tile_shape)}\n"
+    )
+    return override_path
 
 
 def _resolve(workflow_dir: Path, path_str: str) -> Path:
@@ -453,6 +538,24 @@ def main() -> None:
         )
         sys.exit(rc)
 
+    # tile_shape: "auto" resolves differently per config when nuclei_channel
+    # differs (the sizer charges per channel) -- pin every config to one
+    # shared, computed value so the label arrays end up with matching chunk
+    # layouts. Needs the just-converted image, so this can only happen here,
+    # not in _validate_configs(). Dry runs never reach a real image.zarr.
+    tile_override = None
+    if not args.dry_run and {
+        cfg.get("tile_shape", "auto") for cfg in seg_cfgs
+    } == {"auto"}:
+        channel_counts = {
+            2 if cfg.get("nuclei_channel") is not None else 1
+            for cfg in seg_cfgs
+        }
+        if len(channel_counts) > 1:
+            tile_override = _resolve_shared_tile_shape(
+                seg_cfgs, image_store, work_dir
+            )
+
     # Phase B: the segmentations touch disjoint files under
     # work_dir/<label_name>/, so run them together and let the GPU partition
     # stay busy instead of idling through each config's prepare and merge.
@@ -470,6 +573,7 @@ def main() -> None:
             # Names the config in squeue, so concurrent runs are tellable apart.
             jobname_prefix=slurm_jobname_prefix(cfg["label_name"]),
             common=common_path,
+            extra_configfiles=[tile_override] if tile_override else None,
         )
         print(f"[run_multi] $ {' '.join(cmd)}", flush=True)
         procs.append((cfg_path.name, subprocess.Popen(cmd, cwd=workflow_dir)))

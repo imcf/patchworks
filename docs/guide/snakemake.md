@@ -398,11 +398,20 @@ results/image.zarr/labels/nuclei_labels/
 results/image.zarr/labels/cyto_labels/
 ```
 
-!!! tip "Keep `tile_shape` (and `level`) identical across configs"
-    Different segmentations of the same image can use different `channel` and
-    `cellpose:` settings freely, but keep `tile_shape`/`level` the same across
+!!! tip "Keep `level` identical across configs; `tile_shape` usually takes care of itself"
+    Different segmentations of the same image can use different `channel`
+    and `cellpose:` settings freely, but keep `level` the same across
     configs — the label arrays then share the exact same chunk layout, which
     [`label_relations()`](label_relations.md) requires.
+
+    `tile_shape` is a little more forgiving under `run_multi.py`: leaving it
+    on `"auto"` (the default) would normally size a `nuclei_channel` config's
+    tile smaller than a single-channel one (the sizer charges per channel),
+    breaking that same requirement — `run_multi.py` detects this and pins
+    every config to the smallest computed tile automatically, so mixed
+    single-/two-channel configs under `"auto"` just work. Setting an
+    explicit `tile_shape` yourself still requires it to be identical across
+    configs, same as before.
 
 See [Relating labels across segmentations](label_relations.md) for what
 `label_relations()` returns and how to save it yourself — the cluster
