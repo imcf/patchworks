@@ -155,9 +155,7 @@ def run_relations(
                 )
 
         ws_b = wb.create_sheet(title=b_name[:31])
-        ws_b.append(
-            [f"{b_name}_id", f"{a_name}_count", "total_overlap_voxels"]
-        )
+        ws_b.append([f"{b_name}_id", f"{a_name}_count", "total_overlap_voxels"])
         for b_id in b_ids:
             agg = per_b[b_id]
             ws_b.append([b_id, agg["count"], agg["overlap_voxels"]])
