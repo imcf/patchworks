@@ -425,6 +425,12 @@ def _build_method_fn(cfg):
             # Cellpose where they are. setdefault so an explicit
             # cellpose.channel_axis in the config still wins.
             extra.setdefault("channel_axis", 0)
+        # do_3D without anisotropy assumes isotropic voxels, which fragments
+        # objects across z for any real (anisotropic) calibration -- fill it
+        # in from the image's own calibration the same way a custom
+        # function's voxel_size gets filled in, unless the config already
+        # set anisotropy explicitly.
+        extra = _with_voxel_size(cellpose_fn, extra, cfg)
         return cellpose_fn(
             cp.get("model", "cyto3"),
             gpu=cp.get("gpu", True),

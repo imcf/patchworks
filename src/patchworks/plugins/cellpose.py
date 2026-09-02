@@ -75,6 +75,40 @@ def _require_cellpose():
         )
 
 
+def cellpose_anisotropy(voxel_size: dict[str, float]) -> float | None:
+    """Cellpose's ``anisotropy`` (z voxel size / lateral voxel size) from a calibration.
+
+    ``do_3D`` assumes isotropic voxels unless told otherwise: without this,
+    Cellpose builds its 3-D flow-field consensus across z-planes it thinks
+    are spaced the same as the xy pixels, which for real data rarely holds
+    and fragments or distorts objects across z. Getting this wrong does not
+    fail loudly -- it just produces a subtly (or not so subtly) wrong
+    segmentation, which is why deriving it beats retyping it.
+
+    Parameters
+    ----------
+    voxel_size : dict
+        Image calibration, e.g. from
+        :func:`patchworks.plugins.ome_zarr.read_pixel_size`. Needs ``z`` and
+        ``x`` (or ``y``) for the lateral size.
+
+    Returns
+    -------
+    float or None
+        ``z / lateral``, or None if the calibration lacks what is needed.
+
+    Examples
+    --------
+    >>> cellpose_anisotropy({"z": 0.24, "y": 0.10833, "x": 0.10833})
+    2.215452783162559
+    """
+    lateral = voxel_size.get("x") or voxel_size.get("y")
+    z = voxel_size.get("z")
+    if not lateral or not z:
+        return None
+    return z / lateral
+
+
 def cellpose_fn(
     model: str = "cyto3",
     *,
@@ -83,6 +117,7 @@ def cellpose_fn(
     do_3D: bool = False,
     channels: list[int] | None = None,
     channel_axis: int | None = None,
+    voxel_size: dict[str, float] | None = None,
     **cellpose_kwargs: Any,
 ) -> Callable[[np.ndarray], np.ndarray]:
     """Return a ready-to-use Cellpose function for ``tile_process``.
@@ -107,6 +142,15 @@ def cellpose_fn(
     channel_axis:
         *Cellpose 4 only.* Index of the channel axis in the input array.
         ``None`` → greyscale input.
+    voxel_size:
+        Physical voxel size as ``{"z": .., "y": .., "x": ..}``. When
+        ``do_3D`` is set and ``anisotropy`` is not already in
+        ``cellpose_kwargs``, it is derived from this via
+        :func:`cellpose_anisotropy` -- an explicit ``anisotropy=`` always
+        wins. The Snakemake workflow passes the image's own calibration
+        automatically; from the API,
+        :func:`patchworks.plugins.ome_zarr.read_pixel_size` reads it from a
+        store.
     **cellpose_kwargs:
         Extra kwargs forwarded to ``model.eval()``
         (e.g. ``flow_threshold``, ``cellprob_threshold``, ``anisotropy``).
@@ -128,15 +172,31 @@ def cellpose_fn(
     >>> fn = cellpose_fn("nuclei", diameter=15)
     >>> result = tile_process("image.zarr", fn, channel=1)
 
-    3-D with anisotropy:
+    3-D with an explicit anisotropy:
 
     >>> fn = cellpose_fn("cyto3", gpu=True, do_3D=True, anisotropy=3.0, diameter=20)
     >>> from functools import partial
     >>> from patchworks import auto_tile_shape_cellpose, tile_process
     >>> tile_fn = partial(auto_tile_shape_cellpose, do_3D=True, use_gpu=True, diameter=20)
     >>> result = tile_process("image.zarr", fn, tile_shape=tile_fn, overlap=10)
+
+    3-D with anisotropy derived from the image's own calibration:
+
+    >>> fn = cellpose_fn("cyto3", gpu=True, do_3D=True, diameter=20,
+    ...                  voxel_size={"z": 0.24, "y": 0.10833, "x": 0.10833})
     """
     _require_cellpose()
+    if do_3D and voxel_size and "anisotropy" not in cellpose_kwargs:
+        anisotropy = cellpose_anisotropy(voxel_size)
+        if anisotropy is not None:
+            logger.info(
+                "anisotropy derived from image calibration: %.4g "
+                "(z=%.4g, lateral=%.4g)",
+                anisotropy,
+                voxel_size.get("z"),
+                voxel_size.get("x") or voxel_size.get("y"),
+            )
+            cellpose_kwargs = {**cellpose_kwargs, "anisotropy": anisotropy}
     cfg = _make_config(
         model, gpu, channels, channel_axis, diameter, do_3D, **cellpose_kwargs
     )
