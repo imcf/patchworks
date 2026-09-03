@@ -12,19 +12,19 @@ from patchworks import (
     tile_process,
 )
 from patchworks.plugins.cellpose import cellpose_fn
+from patchworks.plugins.ome_zarr import read_pixel_size
 
 IMAGE = "image.zarr"
 OUTPUT = "labels_3d.zarr"
 CHANNEL = 0
 DIAMETER = 20  # pixels
-ANISOTROPY = 3.0  # z-spacing / xy-spacing
 
 fn = cellpose_fn(
     "cyto3",
     gpu=True,
     do_3D=True,
     diameter=DIAMETER,
-    anisotropy=ANISOTROPY,
+    voxel_size=read_pixel_size(IMAGE),  # -> anisotropy = z / lateral
 )
 
 tile_fn = partial(
