@@ -68,12 +68,15 @@ method: "cellpose"             # "cellpose" (GPU), "threshold" (no GPU), "custom
 label_name: "cellpose"         # name under image.zarr/labels/
 dilate: 0                      # optional: pixels to grow labels by, any method
 dilate_gpu: false               # dilate via cupy instead of scipy (needs a GPU)
+min_volume: null               # optional: drop objects smaller than this many µm³
 cellpose:
   model: "cyto3"
   diameter: 30
   do_3D: true
   gpu: true
   # extra model.eval() kwargs, e.g. flow_threshold: 0.4
+  # anisotropy: 2.2   # optional: overrides the value derived automatically
+  #                   # from image.zarr's calibration for do_3D (see tip below)
 
 # label pyramid
 pyramid_levels: 5
@@ -93,6 +96,27 @@ sequential_labels: true        # renumber labels to a contiguous 1..N
     (CPU), or on CPU even with `method: "cellpose"` (GPU). See [Growing
     labels afterwards](custom_segmentation.md#growing-labels-afterwards-dilation)
     for how it works and the equivalent direct-API call.
+
+!!! tip "Dropping small objects with `min_volume`"
+    `min_volume: N` drops any object smaller than `N` µm³, once on the
+    **fully merged** image — not per tile, where an object crossing a tile
+    boundary would look smaller than it really is. `null` (default) disables
+    it. Runs after `merge` and before the pyramid is built, so every pyramid
+    level reflects the filtered result, and needs `image.zarr` to carry a
+    pixel size (the same calibration deconvolution's voxel sizes and
+    Cellpose's `anisotropy` are derived from — see the tip below); an
+    uncalibrated store raises rather than silently skipping the filter. See
+    [Filtering by size after merge](merging.md#filtering-by-size-after-merge)
+    for the equivalent direct-API call.
+
+!!! tip "3-D anisotropy is derived automatically"
+    Cellpose's `do_3D` assumes isotropic voxels unless told otherwise —
+    without an `anisotropy`, a real (anisotropic) dataset gets objects
+    fragmented or distorted across z. `segment` now derives it from
+    `image.zarr`'s own calibration (`z` voxel size ÷ lateral voxel size)
+    whenever `do_3D: true` and `cellpose.anisotropy` isn't set explicitly, so
+    there's usually nothing to configure. Set `anisotropy:` yourself in the
+    `cellpose:` block to override it.
 
 !!! tip "Tile size vs runtime"
     `tile_shape: "auto"` sizes each tile to your GPU's VRAM. Smaller tiles =

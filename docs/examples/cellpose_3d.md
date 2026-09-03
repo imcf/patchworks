@@ -14,19 +14,19 @@ plane orientations and takes a 3-D consensus.
 from functools import partial
 from patchworks import auto_tile_shape_cellpose, make_local_cluster, tile_process
 from patchworks.plugins.cellpose import cellpose_fn
+from patchworks.plugins.ome_zarr import read_pixel_size
 
 IMAGE = "image.zarr"
 OUTPUT = "labels_3d.zarr"
 CHANNEL = 0
 DIAMETER = 20  # pixels
-ANISOTROPY = 3.0  # z_spacing / xy_spacing
 
 fn = cellpose_fn(
     "cyto3",
     gpu=True,
     do_3D=True,
     diameter=DIAMETER,
-    anisotropy=ANISOTROPY,
+    voxel_size=read_pixel_size(IMAGE),  # -> anisotropy = z / lateral
 )
 
 # Tile shape: full z, xy tiled for memory
@@ -58,6 +58,15 @@ finally:
     client.close()
     cluster.close()
 ```
+
+!!! tip "Anisotropy is derived from the calibration, not retyped"
+    `do_3D` without `anisotropy` assumes isotropic voxels, which fragments
+    objects across z for any real (anisotropic) dataset. Passing
+    `voxel_size` derives it as `z / lateral` via
+    [`cellpose_anisotropy`](../api/plugins/cellpose.md) instead of keeping a
+    second, driftable copy of the calibration in code. An explicit
+    `anisotropy=` still wins if you pass one. The Snakemake workflow does
+    this automatically — see [Configure the run](../guide/snakemake.md#3-configure-the-run).
 
 ## Memory notes
 
