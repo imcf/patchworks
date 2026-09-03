@@ -1,17 +1,18 @@
-"""Drop label objects below a volume threshold, in place, after merge.
+"""Drop label objects outside a size range, in place, after merge.
 
 Meant to run once, globally, on the fully merged label array -- not per
 tile, where an object's true size isn't known yet (a tile only sees
 whatever fragment of it landed inside that tile's bounds, so a per-tile
-filter would clip or drop objects that are only small *within one tile*).
+filter would clip or drop objects that are only small, or only large,
+*within one tile*).
 
 Two-pass streaming algorithm, mirroring :func:`patchworks.relabel_sequential_zarr`
 -- safe for arrays far larger than RAM. Pass 1 does a chunk-wise
 unique+count to get every label's voxel count (bounded memory: a Python
 dict keyed by label id, not the voxels themselves). Pass 2 builds a LUT
-that zeroes labels under the threshold -- optionally renumbering the
-survivors to a contiguous range in the same pass -- and applies it chunk by
-chunk, writing back into the same store.
+that zeroes labels outside ``[min_voxels, max_voxels]`` -- optionally
+renumbering the survivors to a contiguous range in the same pass -- and
+applies it chunk by chunk, writing back into the same store.
 """
 
 from __future__ import annotations
@@ -86,6 +87,36 @@ def min_voxels_for_volume(
     return math.ceil(min_volume / voxel_volume(voxel_size))
 
 
+def max_voxels_for_volume(
+    max_volume: float, voxel_size: "dict[str, float]"
+) -> int:
+    """Convert a physical volume threshold to a voxel count.
+
+    Rounds down, the mirror image of :func:`min_voxels_for_volume`: an
+    object must not *exceed* *max_volume*, so a voxel count whose volume
+    would tip past it must not survive.
+
+    Parameters
+    ----------
+    max_volume : float
+        Maximum object volume to keep, in the same physical units as
+        *voxel_size* (micrometers³ for an NGFF calibration).
+    voxel_size : dict
+        Per-axis physical size -- see :func:`voxel_volume`.
+
+    Returns
+    -------
+    int
+        Maximum voxel count for an object to survive filtering.
+
+    Examples
+    --------
+    >>> max_voxels_for_volume(5.0, {"z": 0.24, "y": 0.10833, "x": 0.10833})
+    1775
+    """
+    return math.floor(max_volume / voxel_volume(voxel_size))
+
+
 def _chunk_slices(shape, chunks):
     """Every zarr chunk's index expression, in all dimensions.
 
@@ -105,11 +136,12 @@ def _chunk_slices(shape, chunks):
 def filter_labels_by_size(
     store_path: str,
     component: str,
-    min_voxels: int,
+    min_voxels: "int | None" = None,
+    max_voxels: "int | None" = None,
     *,
     relabel: bool = True,
 ) -> "tuple[int, int]":
-    """Drop label objects smaller than *min_voxels*, in place.
+    """Drop label objects outside ``[min_voxels, max_voxels]``, in place.
 
     Two-pass streaming scan (see module docstring) -- the array never has
     to fit in RAM.
@@ -120,15 +152,21 @@ def filter_labels_by_size(
         Path to the zarr store containing the label array.
     component : str
         Array name inside the store to filter in place.
-    min_voxels : int
-        Objects with fewer voxels than this are zeroed (dropped). Use
-        :func:`min_voxels_for_volume` to derive this from a physical
-        volume and calibration.
+    min_voxels : int, optional
+        Objects with fewer voxels than this are zeroed (dropped). ``None``
+        (default) sets no lower bound. Use :func:`min_voxels_for_volume` to
+        derive this from a physical volume and calibration.
+    max_voxels : int, optional
+        Objects with more voxels than this are zeroed (dropped) -- e.g. a
+        segmentation artifact where several objects merged into one giant
+        blob. ``None`` (default) sets no upper bound. Use
+        :func:`max_voxels_for_volume` to derive this from a physical volume
+        and calibration.
     relabel : bool, optional
         Renumber the surviving objects to a contiguous ``1..N`` range in
-        the same LUT that drops the small ones (default ``True``) --
-        otherwise the removed ids leave permanent gaps and survivors keep
-        their original ids.
+        the same LUT that drops the out-of-range ones (default ``True``)
+        -- otherwise the removed ids leave permanent gaps and survivors
+        keep their original ids.
 
     Returns
     -------
@@ -150,6 +188,11 @@ def filter_labels_by_size(
     >>> filter_labels_by_size("labels.zarr", "labels", min_voxels=2)  # doctest: +SKIP
     (1, 1)
     """
+    if min_voxels is None and max_voxels is None:
+        raise ValueError(
+            "filter_labels_by_size needs min_voxels, max_voxels, or both"
+        )
+
     root = zarr.open_group(store_path, mode="r+")
     z = root[component]
     slices = _chunk_slices(z.shape, z.chunks)
@@ -162,7 +205,12 @@ def filter_labels_by_size(
                 continue
             counts[label_id] = counts.get(label_id, 0) + count
 
-    kept = sorted(i for i, c in counts.items() if c >= min_voxels)
+    kept = sorted(
+        i
+        for i, c in counts.items()
+        if (min_voxels is None or c >= min_voxels)
+        and (max_voxels is None or c <= max_voxels)
+    )
     n_kept = len(kept)
     n_removed = len(counts) - n_kept
 
@@ -187,12 +235,15 @@ def filter_labels_by_size(
         block = np.asarray(z[sl])
         z[sl] = lut[block].astype(out_dtype)
 
+    bounds = "-".join(
+        str(v) if v is not None else "" for v in (min_voxels, max_voxels)
+    )
     logger.info(
-        "filter_labels_by_size: dropped %d/%d object(s) under %d voxels, "
+        "filter_labels_by_size: dropped %d/%d object(s) outside [%s] voxels, "
         "%d remain",
         n_removed,
         len(counts),
-        min_voxels,
+        bounds,
         n_kept,
     )
     return n_kept, n_removed

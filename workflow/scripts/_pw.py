@@ -279,6 +279,29 @@ def validate_config(cfg) -> None:
             f"(e.g. 5.0); got {min_volume!r}"
         )
 
+    max_volume = cfg.get("max_volume")
+    if max_volume is not None and (
+        isinstance(max_volume, bool)
+        or not isinstance(max_volume, (int, float))
+        or max_volume <= 0
+    ):
+        problems.append(
+            "max_volume must be null or a positive number of micrometers³ "
+            f"(e.g. 500.0); got {max_volume!r}"
+        )
+
+    if (
+        isinstance(min_volume, (int, float))
+        and not isinstance(min_volume, bool)
+        and isinstance(max_volume, (int, float))
+        and not isinstance(max_volume, bool)
+        and max_volume <= min_volume
+    ):
+        problems.append(
+            f"max_volume ({max_volume}) must be greater than min_volume "
+            f"({min_volume}), or nothing would ever survive the filter"
+        )
+
     method = cfg.get("method", "cellpose")
     if method not in KNOWN_METHODS:
         listed = ", ".join(f'"{m}"' for m in KNOWN_METHODS)

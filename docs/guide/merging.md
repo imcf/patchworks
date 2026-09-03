@@ -136,42 +136,55 @@ merged = merge_tile_labels(
 ## Filtering by size after merge
 
 Once labels are globally consistent, [`filter_labels_by_size`](../api/volume_filter.md)
-can drop objects smaller than a voxel count, in place:
+can drop objects outside a voxel-count range, in place — too small, too large,
+or both:
 
 ```python
 from patchworks import filter_labels_by_size, merge_tile_labels
 
 merged = merge_tile_labels("stage.zarr", write_to="labels.zarr", sequential_labels=True)
-n_kept, n_removed = filter_labels_by_size("labels.zarr", "labels", min_voxels=500)
+# drop anything under 500 voxels, over 50000, or both -- give either bound alone
+n_kept, n_removed = filter_labels_by_size(
+    "labels.zarr", "labels", min_voxels=500, max_voxels=50000
+)
 ```
 
 This has to run **after** the merge, not per tile: a tile only sees whatever
 fragment of an object landed inside its own bounds, so a per-tile filter would
 judge (and possibly drop) an object crossing a tile boundary as if it were
-only that fragment's size.
+only that fragment's size — including judging it too *large*, for a
+`max_voxels` filter, when several separate objects in one tile would in fact
+merge back into one across the boundary.
 
 Like the merge itself, it is a two-pass streaming zarr scan — the array never
 has to fit in RAM. `relabel=True` (the default) folds the size filter into
 the same lookup table that renumbers survivors to a contiguous `1..N` range,
-so dropping small objects costs no extra pass over the volume beyond the scan
-that already counts them.
+so dropping out-of-range objects costs no extra pass over the volume beyond
+the scan that already counts them.
 
 Physical thresholds (µm³) convert to a voxel count via
-[`min_voxels_for_volume`](../api/volume_filter.md), using the same
-`{"z": .., "y": .., "x": ..}` calibration deconvolution and Cellpose's
-`anisotropy` are derived from:
+[`min_voxels_for_volume`](../api/volume_filter.md)/[`max_voxels_for_volume`](../api/volume_filter.md),
+using the same `{"z": .., "y": .., "x": ..}` calibration deconvolution and
+Cellpose's `anisotropy` are derived from. The two round in opposite
+directions — `min_voxels_for_volume` rounds up (an object must *reach* the
+threshold), `max_voxels_for_volume` rounds down (an object must not *exceed*
+it):
 
 ```python
-from patchworks import min_voxels_for_volume
+from patchworks import max_voxels_for_volume, min_voxels_for_volume
 from patchworks.plugins.ome_zarr import read_pixel_size
 
-min_voxels = min_voxels_for_volume(5.0, read_pixel_size("image.zarr"))
-n_kept, n_removed = filter_labels_by_size("labels.zarr", "labels", min_voxels)
+voxel_size = read_pixel_size("image.zarr")
+min_voxels = min_voxels_for_volume(5.0, voxel_size)
+max_voxels = max_voxels_for_volume(500.0, voxel_size)
+n_kept, n_removed = filter_labels_by_size(
+    "labels.zarr", "labels", min_voxels, max_voxels
+)
 ```
 
-On the cluster, set `min_volume: 5.0` in the config instead — see [Configure
-the run](snakemake.md#3-configure-the-run). It runs automatically between
-`merge` and the pyramid build.
+On the cluster, set `min_volume: 5.0`/`max_volume: 500.0` in the config
+instead — see [Configure the run](snakemake.md#3-configure-the-run). Either
+or both run automatically between `merge` and the pyramid build.
 
 ## Sequential label numbering
 
