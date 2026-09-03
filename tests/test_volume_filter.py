@@ -25,6 +25,13 @@ def test_min_voxels_for_volume_rounds_up():
     assert min_voxels_for_volume(5.0, calibration) == 1776
 
 
+def test_max_voxels_for_volume_rounds_down():
+    from patchworks import max_voxels_for_volume
+
+    calibration = {"z": 0.24, "y": 0.10833, "x": 0.10833}
+    assert max_voxels_for_volume(5.0, calibration) == 1775
+
+
 def _write_labels(path, array, chunks):
     root = zarr.open_group(path, mode="w")
     arr = root.create_array(
@@ -133,3 +140,54 @@ def test_filter_labels_by_size_works_across_multiple_chunks(tmp_path):
     out = np.asarray(root["labels"])
     assert set(np.unique(out).tolist()) == {0, 1, 2}
     assert out[0, 3] == 0
+
+
+def test_filter_labels_by_size_drops_large_objects(tmp_path):
+    from patchworks import filter_labels_by_size
+
+    array = np.array(
+        [
+            [1, 0, 2, 2],
+            [0, 0, 2, 2],
+        ]
+    )
+    path = str(tmp_path / "labels.zarr")
+    root = _write_labels(path, array, chunks=(2, 4))
+
+    n_kept, n_removed = filter_labels_by_size(path, "labels", max_voxels=2)
+
+    assert (n_kept, n_removed) == (1, 1)
+    assert np.array_equal(
+        np.asarray(root["labels"]),
+        [
+            [1, 0, 0, 0],
+            [0, 0, 0, 0],
+        ],
+    )
+
+
+def test_filter_labels_by_size_min_and_max_together_keeps_the_middle(tmp_path):
+    from patchworks import filter_labels_by_size
+
+    array = np.array([1, 0, 2, 2, 0, 3, 3, 3])  # sizes: 1, 2, 3
+    path = str(tmp_path / "labels.zarr")
+    root = _write_labels(path, array, chunks=(8,))
+
+    n_kept, n_removed = filter_labels_by_size(
+        path, "labels", min_voxels=2, max_voxels=2, relabel=False
+    )
+
+    assert (n_kept, n_removed) == (1, 2)
+    assert np.array_equal(np.asarray(root["labels"]), [0, 0, 2, 2, 0, 0, 0, 0])
+
+
+def test_filter_labels_by_size_requires_at_least_one_bound(tmp_path):
+    import pytest
+    from patchworks import filter_labels_by_size
+
+    array = np.array([1, 1, 0, 2])
+    path = str(tmp_path / "labels.zarr")
+    _write_labels(path, array, chunks=(4,))
+
+    with pytest.raises(ValueError, match="min_voxels.*max_voxels"):
+        filter_labels_by_size(path, "labels")

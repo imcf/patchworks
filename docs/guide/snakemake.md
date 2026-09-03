@@ -69,6 +69,7 @@ label_name: "cellpose"         # name under image.zarr/labels/
 dilate: 0                      # optional: pixels to grow labels by, any method
 dilate_gpu: false               # dilate via cupy instead of scipy (needs a GPU)
 min_volume: null               # optional: drop objects smaller than this many µm³
+max_volume: null               # optional: drop objects larger than this many µm³
 cellpose:
   model: "cyto3"
   diameter: 30
@@ -97,13 +98,15 @@ sequential_labels: true        # renumber labels to a contiguous 1..N
     labels afterwards](custom_segmentation.md#growing-labels-afterwards-dilation)
     for how it works and the equivalent direct-API call.
 
-!!! tip "Dropping small objects with `min_volume`"
-    `min_volume: N` drops any object smaller than `N` µm³, once on the
-    **fully merged** image — not per tile, where an object crossing a tile
-    boundary would look smaller than it really is. `null` (default) disables
-    it. Runs after `merge` and before the pyramid is built, so every pyramid
-    level reflects the filtered result, and needs `image.zarr` to carry a
-    pixel size (the same calibration deconvolution's voxel sizes and
+!!! tip "Dropping objects by size with `min_volume`/`max_volume`"
+    `min_volume: N` drops any object smaller than `N` µm³; `max_volume: N`
+    drops any object larger than `N` µm³ (e.g. several objects merged into
+    one blob). Set either, both, or neither (`null`, the default, disables
+    each). Both run once on the **fully merged** image — not per tile, where
+    an object crossing a tile boundary would look smaller or larger than it
+    really is. Runs after `merge` and before the pyramid is built, so every
+    pyramid level reflects the filtered result, and needs `image.zarr` to
+    carry a pixel size (the same calibration deconvolution's voxel sizes and
     Cellpose's `anisotropy` are derived from — see the tip below); an
     uncalibrated store raises rather than silently skipping the filter. See
     [Filtering by size after merge](merging.md#filtering-by-size-after-merge)

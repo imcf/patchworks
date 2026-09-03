@@ -57,6 +57,7 @@ from ._relabel import relabel_sequential_array, relabel_sequential_zarr
 from ._relations import label_relations
 from ._volume_filter import (
     filter_labels_by_size,
+    max_voxels_for_volume,
     min_voxels_for_volume,
     voxel_volume,
 )
@@ -92,5 +93,6 @@ __all__ = [
     "dilate_labels",
     "filter_labels_by_size",
     "min_voxels_for_volume",
+    "max_voxels_for_volume",
     "voxel_volume",
 ]

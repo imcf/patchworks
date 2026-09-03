@@ -80,3 +80,44 @@ def test_validate_config_rejects_a_non_positive_min_volume():
         validate_config({"method": "threshold", "min_volume": -1.0})
     with pytest.raises(ValueError, match="min_volume"):
         validate_config({"method": "threshold", "min_volume": "5"})
+
+
+def test_validate_config_accepts_a_positive_max_volume():
+    from _pw import validate_config
+
+    validate_config({"method": "threshold", "max_volume": 500.0})
+    validate_config({"method": "threshold", "max_volume": None})
+
+
+def test_validate_config_rejects_a_non_positive_max_volume():
+    import pytest
+    from _pw import validate_config
+
+    with pytest.raises(ValueError, match="max_volume"):
+        validate_config({"method": "threshold", "max_volume": 0})
+    with pytest.raises(ValueError, match="max_volume"):
+        validate_config({"method": "threshold", "max_volume": -1.0})
+    with pytest.raises(ValueError, match="max_volume"):
+        validate_config({"method": "threshold", "max_volume": "5"})
+
+
+def test_validate_config_accepts_max_volume_above_min_volume():
+    from _pw import validate_config
+
+    validate_config(
+        {"method": "threshold", "min_volume": 5.0, "max_volume": 500.0}
+    )
+
+
+def test_validate_config_rejects_max_volume_at_or_below_min_volume():
+    import pytest
+    from _pw import validate_config
+
+    with pytest.raises(ValueError, match="max_volume"):
+        validate_config(
+            {"method": "threshold", "min_volume": 5.0, "max_volume": 5.0}
+        )
+    with pytest.raises(ValueError, match="max_volume"):
+        validate_config(
+            {"method": "threshold", "min_volume": 500.0, "max_volume": 5.0}
+        )

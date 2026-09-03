@@ -5,3 +5,5 @@
 ::: patchworks.voxel_volume
 
 ::: patchworks.min_voxels_for_volume
+
+::: patchworks.max_voxels_for_volume

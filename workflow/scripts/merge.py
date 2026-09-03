@@ -20,6 +20,7 @@ from patchworks import (
 from patchworks._chunks import _get_available_memory
 from patchworks._volume_filter import (
     filter_labels_by_size,
+    max_voxels_for_volume,
     min_voxels_for_volume,
 )
 from patchworks.plugins.ome_zarr import read_pixel_size, register_labels
@@ -105,24 +106,33 @@ _, n_objects = merge_tile_labels(
 # object's size is never judged from just the fragment one tile happened to
 # see. Runs before the pyramid so every level reflects the filtered result.
 min_volume = cfg.get("min_volume")
-if min_volume:
+max_volume = cfg.get("max_volume")
+if min_volume or max_volume:
     voxel_size = read_pixel_size(image_store)
     if not voxel_size:
         raise RuntimeError(
-            f"min_volume filtering needs calibration in {image_store}, "
-            "which has none -- set min_volume: null, or make sure the "
-            "source carries a pixel size at conversion time"
+            f"min_volume/max_volume filtering needs calibration in "
+            f"{image_store}, which has none -- set both to null, or make "
+            "sure the source carries a pixel size at conversion time"
         )
-    min_voxels = min_voxels_for_volume(min_volume, voxel_size)
+    min_voxels = (
+        min_voxels_for_volume(min_volume, voxel_size) if min_volume else None
+    )
+    max_voxels = (
+        max_voxels_for_volume(max_volume, voxel_size) if max_volume else None
+    )
     n_objects, n_removed = filter_labels_by_size(
         label_group,
         "0",
         min_voxels,
+        max_voxels,
         relabel=cfg.get("sequential_labels", True),
     )
     print(
-        f"[patchworks] volume filter: dropped {n_removed} object(s) under "
-        f"{min_volume} µm³ ({min_voxels} voxels), {n_objects} remain"
+        f"[patchworks] volume filter: dropped {n_removed} object(s) outside "
+        f"[{min_volume or 0}, {max_volume or 'inf'}] µm³ "
+        f"([{min_voxels or 0}, {max_voxels or 'inf'}] voxels), "
+        f"{n_objects} remain"
     )
 
 group = register_labels(

@@ -23,11 +23,13 @@ overlap: [8, 30, 30]
 method: "custom"
 # dilate: 2       # optional: pixels to grow labels by after segmentation
 # dilate_gpu: true # optional: dilate via cupy instead of scipy, needs a GPU
-# min_volume: 5.0 # optional: drop objects smaller than this many µm³.
-#                 # Runs once on the whole merged image (not per tile, where
-#                 # an object crossing a tile boundary would look smaller
-#                 # than it really is) and needs image.zarr to carry a pixel
-#                 # size -- see common.yaml/convert.
+# min_volume: 5.0 # optional: drop objects smaller than this many µm³
+# max_volume: 500.0 # optional: drop objects larger than this many µm³
+#                 # (e.g. several cilia merged into one blob). Either or both
+#                 # -- runs once on the whole merged image (not per tile,
+#                 # where an object crossing a tile boundary would look
+#                 # smaller/larger than it really is) and needs image.zarr
+#                 # to carry a pixel size -- see common.yaml/convert.
 label_name: "cilia_labels"
 custom:
   module: "patchworks.plugins.dog"

@@ -32,6 +32,13 @@ overlap: [4, 30, 30]
 
 method: "cellpose"
 label_name: "cyto_labels"
+# min_volume: 100.0 # optional: drop objects smaller than this many µm³
+# max_volume: 5000.0 # optional: drop objects larger than this many µm³
+#                 # (e.g. several cells merged into one blob). Either or both
+#                 # -- runs once on the whole merged image (not per tile,
+#                 # where an object crossing a tile boundary would look
+#                 # smaller/larger than it really is) and needs image.zarr
+#                 # to carry a pixel size -- see common.yaml/convert.
 cellpose:
   model: "cyto3"
   diameter: 30
