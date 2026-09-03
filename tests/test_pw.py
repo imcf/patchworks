@@ -55,3 +55,28 @@ def test_with_voxel_size_never_overrides_an_explicit_value(tmp_path):
     kwargs = _with_voxel_size(cellpose_fn, {"voxel_size": explicit}, cfg)
 
     assert kwargs["voxel_size"] == explicit
+
+
+def test_validate_config_accepts_a_positive_min_volume():
+    from _pw import validate_config
+
+    validate_config({"method": "threshold", "min_volume": 5.0})
+
+
+def test_validate_config_accepts_no_min_volume():
+    from _pw import validate_config
+
+    validate_config({"method": "threshold"})
+    validate_config({"method": "threshold", "min_volume": None})
+
+
+def test_validate_config_rejects_a_non_positive_min_volume():
+    import pytest
+    from _pw import validate_config
+
+    with pytest.raises(ValueError, match="min_volume"):
+        validate_config({"method": "threshold", "min_volume": 0})
+    with pytest.raises(ValueError, match="min_volume"):
+        validate_config({"method": "threshold", "min_volume": -1.0})
+    with pytest.raises(ValueError, match="min_volume"):
+        validate_config({"method": "threshold", "min_volume": "5"})

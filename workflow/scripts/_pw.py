@@ -268,6 +268,17 @@ def validate_config(cfg) -> None:
                 "which segments a single channel"
             )
 
+    min_volume = cfg.get("min_volume")
+    if min_volume is not None and (
+        isinstance(min_volume, bool)
+        or not isinstance(min_volume, (int, float))
+        or min_volume <= 0
+    ):
+        problems.append(
+            "min_volume must be null or a positive number of micrometers³ "
+            f"(e.g. 5.0); got {min_volume!r}"
+        )
+
     method = cfg.get("method", "cellpose")
     if method not in KNOWN_METHODS:
         listed = ", ".join(f'"{m}"' for m in KNOWN_METHODS)

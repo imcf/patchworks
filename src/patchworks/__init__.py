@@ -55,6 +55,11 @@ from ._occupancy import (
 from ._postprocess import dilate_labels
 from ._relabel import relabel_sequential_array, relabel_sequential_zarr
 from ._relations import label_relations
+from ._volume_filter import (
+    filter_labels_by_size,
+    min_voxels_for_volume,
+    voxel_volume,
+)
 
 try:
     __version__ = _pkg_version("patchworks")
@@ -85,4 +90,7 @@ __all__ = [
     "create_stage",
     "stage_tile",
     "dilate_labels",
+    "filter_labels_by_size",
+    "min_voxels_for_volume",
+    "voxel_volume",
 ]

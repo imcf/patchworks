@@ -18,7 +18,11 @@ from patchworks import (
     safe_worker_count,
 )
 from patchworks._chunks import _get_available_memory
-from patchworks.plugins.ome_zarr import register_labels
+from patchworks._volume_filter import (
+    filter_labels_by_size,
+    min_voxels_for_volume,
+)
+from patchworks.plugins.ome_zarr import read_pixel_size, register_labels
 
 from _pw import load_tiles_json, stage_path, start_log
 
@@ -96,6 +100,31 @@ _, n_objects = merge_tile_labels(
     return_count=True,
     label_counts=label_counts,
 )
+
+# Global, exact volume filter -- runs once on the fully merged array so an
+# object's size is never judged from just the fragment one tile happened to
+# see. Runs before the pyramid so every level reflects the filtered result.
+min_volume = cfg.get("min_volume")
+if min_volume:
+    voxel_size = read_pixel_size(image_store)
+    if not voxel_size:
+        raise RuntimeError(
+            f"min_volume filtering needs calibration in {image_store}, "
+            "which has none -- set min_volume: null, or make sure the "
+            "source carries a pixel size at conversion time"
+        )
+    min_voxels = min_voxels_for_volume(min_volume, voxel_size)
+    n_objects, n_removed = filter_labels_by_size(
+        label_group,
+        "0",
+        min_voxels,
+        relabel=cfg.get("sequential_labels", True),
+    )
+    print(
+        f"[patchworks] volume filter: dropped {n_removed} object(s) under "
+        f"{min_volume} µm³ ({min_voxels} voxels), {n_objects} remain"
+    )
+
 group = register_labels(
     image_store,
     label_name,
