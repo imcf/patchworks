@@ -380,6 +380,7 @@ def auto_tile_shape_cellpose(
     model_memory_bytes: int = 2 * 1024**3,
     cellpose_memory_factor: int = 20,
     n_channels: int = 1,
+    anisotropy: float | None = None,
     verbose: bool = False,
 ) -> tuple[int, ...]:
     """Cellpose-optimised tile shape.
@@ -426,6 +427,13 @@ def auto_tile_shape_cellpose(
         Channels each tile carries (default 1). Above 1 the per-voxel cost
         scales with it, so the tile shrinks accordingly -- e.g. the workflow's
         ``nuclei_channel`` hands Cellpose a cyto+nuclei pair.
+    anisotropy:
+        The ``anisotropy`` Cellpose will be given (``do_3D`` only). It is not
+        merely a hint to the model: Cellpose resizes the tile to
+        ``z * anisotropy`` planes before the net runs, so a 2.2x anisotropy
+        costs 2.2x the z it was handed. Budgeting against the unscaled ``z``
+        under-counts by exactly that factor. ``None`` (the default) assumes
+        isotropic, i.e. no resize.
     verbose:
         Log the chosen shape and memory estimates.
 
@@ -477,7 +485,12 @@ def auto_tile_shape_cellpose(
             chunk_spatial = [1, min(y, tile_side), min(x, tile_side)]
     else:
         z, y, x = shape[-3], shape[-2], shape[-1]
-        max_pixels_per_slice = max(1, (max_raw_bytes // 3) // (z * itemsize))
+        # Cellpose resizes z by `anisotropy` before the net runs, so the tile
+        # it actually holds is that much deeper than the one handed to it.
+        effective_z = z * max(1.0, anisotropy or 1.0)
+        max_pixels_per_slice = max(
+            1, int((max_raw_bytes // 3) // (effective_z * itemsize))
+        )
         tile_side = max(min_tile, int(max_pixels_per_slice**0.5))
         chunk_spatial = [z, min(y, tile_side), min(x, tile_side)]
 

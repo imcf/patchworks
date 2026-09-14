@@ -50,6 +50,17 @@ if ts == "auto":
     n_channels = 2 if cfg.get("nuclei_channel") is not None else 1
     if method == "cellpose":
         cp = cfg["cellpose"]
+        # The same anisotropy segment will derive (or was given). Cellpose
+        # resizes the tile to z * anisotropy planes, so the sizer has to
+        # budget for the resized tile, not the one it hands over.
+        anisotropy = cp.get("anisotropy")
+        if anisotropy is None and cp.get("do_3D", False):
+            from patchworks.plugins.cellpose import cellpose_anisotropy
+            from patchworks.plugins.ome_zarr import read_pixel_size
+
+            anisotropy = cellpose_anisotropy(
+                read_pixel_size(str(Path(work_dir) / "image.zarr"))
+            )
         sizer = partial(
             auto_tile_shape_cellpose,
             do_3D=cp.get("do_3D", False),
@@ -57,6 +68,7 @@ if ts == "auto":
             diameter=cp.get("diameter"),
             gpu_memory=gpu_bytes,
             n_channels=n_channels,
+            anisotropy=anisotropy,
         )
     else:
         # cfg["cellpose"] used to be read unconditionally here, so a DoG or

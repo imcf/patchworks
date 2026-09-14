@@ -117,3 +117,32 @@ def test_gpu_tile_sizing_is_bounded_by_the_host_allocation(monkeypatch):
         "the 1 GiB host grant must shrink the tile below what the same "
         "24 GiB GPU would otherwise allow"
     )
+
+
+def test_auto_tile_shape_cellpose_budgets_for_the_anisotropy_resize():
+    """Cellpose resizes a do_3D tile to z * anisotropy planes before the net
+
+    runs, so budgeting against the unscaled z hands the GPU a tile that is
+    `anisotropy` times bigger than the estimate. Auto-deriving anisotropy
+    turned that from dormant into live, so the sizer has to know about it.
+    """
+    from patchworks import auto_tile_shape_cellpose
+
+    kwargs = dict(
+        shape=(64, 4096, 4096),
+        dtype="uint16",
+        do_3D=True,
+        use_gpu=True,
+        gpu_memory=8 * 1024**3,
+        available_memory=64 * 1024**3,
+    )
+    isotropic = auto_tile_shape_cellpose(**kwargs)
+    anisotropic = auto_tile_shape_cellpose(**kwargs, anisotropy=2.215)
+
+    # z is pinned to the full extent either way; the cost is paid in y/x.
+    assert anisotropic[0] == isotropic[0]
+    assert anisotropic[1] < isotropic[1]
+    assert anisotropic[2] < isotropic[2]
+    # An anisotropy at or below 1 cannot *grow* the budget.
+    assert auto_tile_shape_cellpose(**kwargs, anisotropy=1.0) == isotropic
+    assert auto_tile_shape_cellpose(**kwargs, anisotropy=0.5) == isotropic

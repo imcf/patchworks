@@ -121,3 +121,44 @@ def test_validate_config_rejects_max_volume_at_or_below_min_volume():
         validate_config(
             {"method": "threshold", "min_volume": 500.0, "max_volume": 5.0}
         )
+
+
+def test_validate_config_rejects_a_model_the_install_does_not_have(
+    monkeypatch,
+):
+    """Cellpose does not raise on an unknown model name -- it logs and loads
+
+    its default. A v3 name against a v4 install therefore segments every
+    tile with a model nobody chose, silently. That has to fail in prepare.
+    """
+    import pytest
+    from _pw import validate_config
+
+    import patchworks.plugins.cellpose as cp
+
+    monkeypatch.setattr(cp, "available_models", lambda: ["cpsam", "cpsam_v2"])
+    with pytest.raises(ValueError, match="cyto3"):
+        validate_config({"method": "cellpose", "cellpose": {"model": "cyto3"}})
+
+
+def test_validate_config_accepts_a_model_the_install_has(monkeypatch):
+    from _pw import validate_config
+
+    import patchworks.plugins.cellpose as cp
+
+    monkeypatch.setattr(cp, "available_models", lambda: ["cpsam", "cpsam_v2"])
+    validate_config({"method": "cellpose", "cellpose": {"model": "cpsam"}})
+
+
+def test_validate_config_leaves_a_custom_model_path_alone(
+    monkeypatch, tmp_path
+):
+    """A path is a custom-trained model; no name list can vouch for it."""
+    from _pw import validate_config
+
+    import patchworks.plugins.cellpose as cp
+
+    monkeypatch.setattr(cp, "available_models", lambda: ["cpsam"])
+    custom = tmp_path / "my_model.pth"
+    custom.write_text("")
+    validate_config({"method": "cellpose", "cellpose": {"model": str(custom)}})

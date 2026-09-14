@@ -47,3 +47,27 @@ def test_cellpose_fn_declares_a_voxel_size_parameter():
     # model.eval() argument, not a patchworks-specific one) -- only the raw
     # calibration is a named parameter.
     assert "anisotropy" not in params
+
+
+def test_available_models_is_a_list():
+    """Empty when Cellpose isn't installed -- then no name can be rejected."""
+    from patchworks.plugins.cellpose import available_models
+
+    assert isinstance(available_models(), list)
+
+
+def test_v4_gets_the_model_name_as_pretrained_model():
+    """v4 accepts `model_type=` and then ignores it ("not used in v4.0.1+"),
+
+    leaving pretrained_model at its default -- so passing the configured name
+    there segmented every config with the same default model whatever
+    `model:` said. The name has to reach `pretrained_model=` on v4.
+    """
+    import inspect
+
+    from patchworks.plugins import cellpose as cp
+
+    src = inspect.getsource(cp._get_model)
+    v4_branch = src.split("if _CELLPOSE_V4:")[1].split("else:")[0]
+    assert "pretrained_model=model_type" in v4_branch
+    assert "model_type=model_type" not in v4_branch
