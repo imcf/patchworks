@@ -102,6 +102,21 @@ decon_kwargs=dict(psf=psf, dxpsf=0.05, dzpsf=0.1, wavelength=525, ...)
     so edge tiles keep enough context (a plain intensity/threshold halo is
     too thin).
 
+!!! note "cudaDecon can return a smaller volume than it was given"
+    It rounds each axis down to an FFT-efficient length — e.g. a
+    `(32, 1084, 1084)` tile comes back `(32, 1080, 1080)`, because
+    `1080 = 2³·3³·5` while `1084 = 4·271` — and trims the excess off the
+    **high end**, leaving voxel `(0, 0, 0)` where it was. patchworks restores
+    the input shape before the DoG step (one label per input voxel is
+    required) anchored at that origin, and logs a WARNING with both shapes.
+
+    Anchoring matters: restoring it *centred* instead moves every voxel by
+    `excess // 2` — a 2 px y/x shift for the tile above, identical on every
+    tile. That is invisible on a cell tens of voxels wide and obvious on a
+    cilium a few voxels wide, which is how it was eventually caught. If the
+    logged difference is more than a few voxels, the PSF or the voxel sizes
+    are wrong.
+
 ## Growing the labels afterwards
 
 DoG spots/threads are often thin — grow each label by a few pixels with

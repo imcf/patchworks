@@ -239,18 +239,23 @@ def _run(block: np.ndarray, dog_dict: dict[str, Any]) -> np.ndarray:
 
 
 def _restore_shape(arr: np.ndarray, shape: tuple[int, ...]) -> np.ndarray:
-    """Centre *arr* back into an array of *shape*, cropping or edge-padding.
+    """Restore *arr* to *shape*, anchored at the origin, cropping or padding.
 
     Deconvolution must not change the field of view: patchworks writes the
     result into a destination slice derived from the tile's geometry, so one
     label per input voxel is required.
 
-    Centring is the right correction for a symmetric crop, which is what
-    apodisation produces. The discrepancies observed are small (a voxel in z,
-    a few in x/y) and land inside the halo, which is discarded anyway -- so
-    the labels that survive the trim are unaffected. It is logged at WARNING
-    with the exact shapes so a larger, non-symmetric crop cannot pass
-    silently.
+    The alignment is **origin-anchored**, not centred: cudaDecon rounds each
+    axis down to an FFT-efficient length (e.g. 1084 -> 1080, since
+    1080 = 2**3 * 3**3 * 5 while 1084 = 4 * 271) and trims the excess off the
+    high end, leaving voxel (0, 0, 0) where it was. Re-centring content that
+    was never centred shifts every voxel by ``excess // 2`` -- measured at 2
+    px in y and x on a real (32, 1084, 1084) tile, in the same direction on
+    every tile. That is invisible on a cell tens of voxels across and glaring
+    on a cilium a few voxels across, which is exactly how it was found.
+
+    A mismatch is still logged at WARNING with the exact shapes, since a
+    large one means the PSF or voxel sizes are wrong.
 
     Parameters
     ----------
@@ -271,22 +276,22 @@ def _restore_shape(arr: np.ndarray, shape: tuple[int, ...]) -> np.ndarray:
     (14, 1024)
     """
     logger.warning(
-        "deconvolution returned %s for a %s input; re-centring to the input "
-        "shape. patchworks needs one label per input voxel. A large or "
-        "asymmetric difference here would shift labels -- check the PSF and "
-        "voxel sizes if this is more than a few voxels.",
+        "deconvolution returned %s for a %s input; restoring the input shape "
+        "from the origin. patchworks needs one label per input voxel. A large "
+        "difference here means the PSF or voxel sizes are wrong -- check them "
+        "if this is more than a few voxels.",
         arr.shape,
         shape,
     )
     # Crop first, so an axis that grew is handled before padding the rest.
+    # Both keep voxel 0 where it is: cudaDecon trims off the high end (see the
+    # docstring), so the low corner is the one landmark known to be unmoved.
     crop = tuple(
-        slice((a - s) // 2, (a - s) // 2 + s) if a > s else slice(None)
-        for a, s in zip(arr.shape, shape)
+        slice(0, s) if a > s else slice(None) for a, s in zip(arr.shape, shape)
     )
     arr = arr[crop]
     pad = tuple(
-        ((s - a) // 2, s - a - (s - a) // 2) if a < s else (0, 0)
-        for a, s in zip(arr.shape, shape)
+        (0, s - a) if a < s else (0, 0) for a, s in zip(arr.shape, shape)
     )
     if any(lo or hi for lo, hi in pad):
         arr = np.pad(arr, pad, mode="edge")

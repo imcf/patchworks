@@ -109,20 +109,32 @@ def test_explicit_decon_kwargs_win_over_the_calibration(monkeypatch):
     assert captured["dzpsf"] == 0.2
 
 
-def test_restore_shape_recentres_a_cropped_decon():
+def test_restore_shape_anchors_a_cropped_decon_at_the_origin():
     """cudaDecon can hand back a smaller volume than it was given.
 
-    Observed on a real edge tile: (14, 1024, 1024) in, (13, 1020, 1020) out.
-    patchworks needs one label per input voxel, so the field of view has to be
-    restored before the DoG step.
+    Observed on a real tile: (32, 1084, 1084) in, (32, 1080, 1080) out --
+    each axis rounded down to an FFT-efficient length, with the excess taken
+    off the high end. Restoring it *centred* (what this used to do) moved
+    every voxel by excess // 2, measured as a 2 px y/x shift on real data:
+    invisible on a cell, glaring on a cilium a few voxels across.
     """
     from patchworks.plugins.dog import _restore_shape
 
     arr = np.arange(13 * 1020 * 1020, dtype="float32").reshape(13, 1020, 1020)
     out = _restore_shape(arr, (14, 1024, 1024))
     assert out.shape == (14, 1024, 1024)
-    # The original content is preserved, centred, not resampled.
-    assert np.array_equal(out[0:13, 2:1022, 2:1022], arr)
+    # Content keeps its original indices -- voxel 0 stays voxel 0.
+    assert np.array_equal(out[0:13, 0:1020, 0:1020], arr)
+
+
+def test_restore_shape_crops_from_the_high_end():
+    """The mirror case: an axis that came back too long keeps its low corner."""
+    from patchworks.plugins.dog import _restore_shape
+
+    arr = np.arange(6 * 12, dtype="float32").reshape(6, 12)
+    out = _restore_shape(arr, (4, 8))
+    assert out.shape == (4, 8)
+    assert np.array_equal(out, arr[0:4, 0:8])
 
 
 def test_restore_shape_handles_growth_and_exact_fit():
