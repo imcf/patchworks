@@ -112,14 +112,59 @@ sequential_labels: true        # renumber labels to a contiguous 1..N
     [Filtering by size after merge](merging.md#filtering-by-size-after-merge)
     for the equivalent direct-API call.
 
+!!! warning "`model:` names are version-specific — check which Cellpose you have"
+    Cellpose 3 and 4 have **disjoint** model names: v3 has `cyto3`,
+    `nuclei`, …; v4 replaced them all with the `cpsam` family (`cpsam`,
+    `cpsam_v2`, `cpdino`, …). Neither version *raises* on a name it doesn't
+    know — v4 logs a warning and quietly loads its default (`cpsam_v2`)
+    instead. A `cyto3` left in a config against a v4 install therefore
+    segments every tile with a model you did not choose, and the only
+    evidence is one line in the job log.
+
+    patchworks now rejects an unavailable name in `prepare`, on the cheap
+    CPU job, rather than letting it through. Check what you have with
+    `python -c "import cellpose; print(cellpose.version)"`, then either pick
+    a name that install offers, point `model:` at a custom-trained model's
+    path, or install the version you want — the workflow ships `cellpose3`
+    and `cellpose4` pixi environments (`pixi install -e cellpose3`) for
+    exactly this.
+
 !!! tip "3-D anisotropy is derived automatically"
     Cellpose's `do_3D` assumes isotropic voxels unless told otherwise —
     without an `anisotropy`, a real (anisotropic) dataset gets objects
-    fragmented or distorted across z. `segment` now derives it from
+    fragmented or distorted across z. `segment` derives it from
     `image.zarr`'s own calibration (`z` voxel size ÷ lateral voxel size)
     whenever `do_3D: true` and `cellpose.anisotropy` isn't set explicitly, so
     there's usually nothing to configure. Set `anisotropy:` yourself in the
     `cellpose:` block to override it.
+
+    Note it is not just a hint to the model: Cellpose *resizes* the tile to
+    `z × anisotropy` planes before the net runs. `tile_shape: "auto"`
+    budgets for that resized tile, so a 2.2× anisotropy buys a
+    correspondingly smaller tile rather than an out-of-memory job.
+
+!!! warning "The physically-correct anisotropy is not always the best one"
+    Upsampling z by the true ratio can produce **ring artifacts** and costs
+    runtime proportional to the ratio. A contributor on
+    [cellpose#1408](https://github.com/MouseLand/cellpose/pull/1408) reports
+    that `anisotropy: 1` avoids the rings entirely and is much faster, at
+    the cost of boundaries being off by a few pixels in the top/bottom
+    z-planes, where a cell's cross-section changes fastest — and recommends
+    pairing it with light z-only flow smoothing:
+
+    ```yaml
+    cellpose:
+      do_3D: true
+      anisotropy: 1          # overrides the derived value
+      flow3D_smooth: [1, 0, 0]   # z, y, x -- smooth z only
+    ```
+
+    This is a genuine trade-off, not a strictly better setting, and it is
+    worth testing both on your own data rather than taking either on faith.
+    Reach for it especially if 3-D results look ringed or fragmented along
+    z: that is the symptom this addresses. `flow3D_smooth` accepts a scalar
+    on older Cellpose and a `[z, y, x]` list from the version that merged
+    that PR onward.
 
 !!! tip "Tile size vs runtime"
     `tile_shape: "auto"` sizes each tile to your GPU's VRAM. Smaller tiles =

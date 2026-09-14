@@ -253,6 +253,26 @@ def _make_config(
     }
 
 
+def available_models() -> list[str]:
+    """Pretrained model names the installed Cellpose actually accepts.
+
+    The name set changed completely between major versions -- v3 ships
+    ``cyto3``/``nuclei``/… , v4 replaced them with ``cpsam``-family names --
+    and neither version raises on an unknown one. v4 falls back to its
+    default model with only a log line, so a v3 name in a v4 environment
+    segments everything with the wrong model and nothing fails. Checking the
+    name against this list turns that into a config error instead.
+
+    Returns
+    -------
+    list of str
+        Model names, or an empty list when Cellpose isn't installed or
+        doesn't publish them (in which case no name can be rejected).
+    """
+    names = getattr(_cellpose_models, "MODEL_NAMES", None)
+    return list(names) if names else []
+
+
 def _get_model(cellpose_dict: dict[str, Any]) -> Any:
     """Return a worker-local cached Cellpose model.
 
@@ -272,8 +292,14 @@ def _get_model(cellpose_dict: dict[str, Any]) -> Any:
         gpu = cellpose_dict.get("gpu", False)
         model_type = cellpose_dict["model"]
         if _CELLPOSE_V4:
+            # v4 renamed this: `model_type=` is accepted but explicitly
+            # ignored ("not used in v4.0.1+"), leaving pretrained_model at
+            # its "cpsam_v2" default -- so passing the configured name there
+            # silently segmented *every* config with the same default model,
+            # whatever `model:` said, with only a logger warning to show for
+            # it. `available_models()` rejects an unusable name up front.
             _model_cache[key] = _cellpose_models.CellposeModel(
-                model_type=model_type, gpu=gpu
+                pretrained_model=model_type, gpu=gpu
             )
         else:
             _model_cache[key] = _cellpose_models.Cellpose(

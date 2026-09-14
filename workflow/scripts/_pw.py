@@ -322,29 +322,61 @@ def validate_config(cfg) -> None:
 
 def _cellpose_problems(cp: dict) -> list[str]:
     """Unknown keys in the ``cellpose:`` block, checked against model.eval."""
+    problems = _cellpose_model_problems(cp)
     known = ("model", "diameter", "do_3D", "gpu")
     extra = {k: v for k, v in cp.items() if k not in known}
     if not extra:
-        return []
+        return problems
     try:
         from patchworks.plugins.cellpose import _get_model
     except ImportError:
-        return []
+        return problems
     try:
         model = _get_model({"model": cp.get("model", "cyto3"), "gpu": False})
     except Exception:
         # Weights unavailable here (fetch_model runs separately); skip rather
         # than fail a config that may be perfectly fine.
-        return []
+        return problems
     unknown = _unknown_kwargs(
         model.eval, extra, skip=("channels", "channel_axis")
     )
     if unknown:
-        return [
+        problems.append(
             f"unknown cellpose: key(s) {unknown} -- these are forwarded to "
             "model.eval(), which does not accept them"
-        ]
-    return []
+        )
+    return problems
+
+
+def _cellpose_model_problems(cp: dict) -> list[str]:
+    """Reject a model name the installed Cellpose would silently substitute.
+
+    Cellpose 4 renamed the pretrained models outright, and does not raise on
+    an unknown name -- it logs and loads its default instead. A v3 name
+    (``cyto3``) left in a config against a v4 install therefore segments
+    every tile with the wrong model, silently. A path is left alone: that is
+    a custom-trained model, which no name list can vouch for.
+    """
+    name = cp.get("model", "cyto3")
+    if not isinstance(name, str) or Path(name).exists():
+        return []
+    try:
+        from patchworks.plugins.cellpose import available_models
+    except ImportError:
+        return []
+    names = available_models()
+    if not names or name in names:
+        return []
+    listed = ", ".join(f'"{n}"' for n in names)
+    return [
+        f"cellpose.model {name!r} is not available in the installed Cellpose "
+        f"(it offers {listed}). Cellpose would fall back to its default "
+        "model and log a warning rather than fail, so every tile would be "
+        "segmented with a model you did not choose. Pick one of the above, "
+        "give a path to a custom-trained model, or install the Cellpose "
+        'major version that has it (the workflow ships "cellpose3" and '
+        '"cellpose4" pixi environments).'
+    ]
 
 
 def _custom_problems(spec) -> list[str]:
