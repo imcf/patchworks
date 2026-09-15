@@ -146,3 +146,31 @@ def test_auto_tile_shape_cellpose_budgets_for_the_anisotropy_resize():
     # An anisotropy at or below 1 cannot *grow* the budget.
     assert auto_tile_shape_cellpose(**kwargs, anisotropy=1.0) == isotropic
     assert auto_tile_shape_cellpose(**kwargs, anisotropy=0.5) == isotropic
+
+
+def test_auto_tile_shape_cellpose_budgets_for_the_diameter_rescale():
+    """Cellpose rescales the tile by 30/diameter on *every* axis before the
+
+    net runs, so a diameter below 30 upsamples cubically -- diameter 15 is
+    8x the voxels. The sizer used diameter only as a minimum-tile floor, so
+    it handed the GPU a tile 8x bigger than it had budgeted for.
+    """
+    from patchworks import auto_tile_shape_cellpose
+
+    kwargs = dict(
+        shape=(64, 4096, 4096),
+        dtype="uint16",
+        do_3D=True,
+        use_gpu=True,
+        gpu_memory=8 * 1024**3,
+        available_memory=64 * 1024**3,
+    )
+    native = auto_tile_shape_cellpose(**kwargs, diameter=30)
+    upsampled = auto_tile_shape_cellpose(**kwargs, diameter=15)
+
+    # 30 -> rescale 1.0 (no resize); 15 -> rescale 2.0, so the tile must shrink.
+    assert upsampled[1] < native[1]
+    assert upsampled[2] < native[2]
+    # A diameter above 30 predicts a downsample; that must not *grow* the
+    # tile, since this factor is a safety margin, not a measurement.
+    assert auto_tile_shape_cellpose(**kwargs, diameter=60)[1] <= native[1]

@@ -449,6 +449,18 @@ def auto_tile_shape_cellpose(
     (1, 2048, 2048)
     """
     n_workers = n_workers or cpu_allocation()
+    # Cellpose resizes the tile before the net runs -- by `rescale`
+    # (= 30 / diameter) on every axis, and by `anisotropy` on z as well -- so
+    # the array it actually holds is bigger than the one it was handed, and a
+    # budget computed from the unresized tile under-counts by that factor. A
+    # diameter half the model's 30 px means a 2x upsample per axis: 8x the
+    # voxels, enough to turn a comfortable tile into an OOM.
+    #
+    # Both only ever *shrink* the tile. A predicted downsample (diameter > 30)
+    # would license a bigger one, but these are a safety margin against a
+    # rough memory model, not a measurement to spend headroom on.
+    rescale = max(1.0, 30.0 / diameter) if diameter else 1.0
+    z_resize = max(1.0, anisotropy or 1.0)
     # A tile holds n_channels planes per voxel (e.g. Cellpose's
     # cyto+nuclei pair), so the per-voxel cost -- and every budget
     # derived from it below -- scales with them.
@@ -475,7 +487,8 @@ def auto_tile_shape_cellpose(
     min_tile = int(4 * diameter) if diameter is not None else 1
 
     if n_spatial == 2 or not do_3D:
-        max_pixels_2d = max(1, max_raw_bytes // itemsize)
+        # Two axes resized, so the cost per configured pixel is rescale**2.
+        max_pixels_2d = max(1, int(max_raw_bytes // (itemsize * rescale**2)))
         tile_side = max(min_tile, int(max_pixels_2d**0.5))
         if n_spatial == 2:
             y, x = shape[-2], shape[-1]
@@ -485,9 +498,10 @@ def auto_tile_shape_cellpose(
             chunk_spatial = [1, min(y, tile_side), min(x, tile_side)]
     else:
         z, y, x = shape[-3], shape[-2], shape[-1]
-        # Cellpose resizes z by `anisotropy` before the net runs, so the tile
-        # it actually holds is that much deeper than the one handed to it.
-        effective_z = z * max(1.0, anisotropy or 1.0)
+        # All three axes are resized: z by anisotropy * rescale, y/x by
+        # rescale each -- so one configured voxel costs
+        # anisotropy * rescale**3 of them.
+        effective_z = z * z_resize * rescale**3
         max_pixels_per_slice = max(
             1, int((max_raw_bytes // 3) // (effective_z * itemsize))
         )
