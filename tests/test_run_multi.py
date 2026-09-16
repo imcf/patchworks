@@ -535,3 +535,17 @@ def test_resolve_shared_tile_shape_pins_the_smallest_candidate(
     written = yaml.safe_load(out.read_text())
     assert written == {"tile_shape": [4, 32, 32]}  # the smaller candidate
     assert len(calls) == 2
+
+
+def test_merge_shards_the_label_pyramid():
+    """`shard:` has to reach the label pyramid, not just the conversion.
+
+    Only the pyramid levels can take it: level 0 is written one chunk at a
+    time by concurrent segment jobs (or the merge's own pool), and a shard
+    must be written whole by a single writer -- see _write_pyramid's note.
+    Levels 1..N go through one dask pass, so they can be sharded.
+    """
+    src = (_workflow_dir() / "scripts" / "merge.py").read_text()
+    # The call's own arguments contain ")", so end it on the closing line.
+    register = src.split("register_labels(")[1].split("\n)")[0]
+    assert 'shard=cfg.get("shard", False)' in register
