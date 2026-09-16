@@ -302,6 +302,24 @@ def validate_config(cfg) -> None:
             f"({min_volume}), or nothing would ever survive the filter"
         )
 
+    for key in ("shard", "shard_labels"):
+        value = cfg.get(key)
+        if value is None or isinstance(value, bool):
+            continue
+        if not (
+            isinstance(value, (list, tuple))
+            and value
+            and all(
+                isinstance(v, int) and not isinstance(v, bool) and v > 0
+                for v in value
+            )
+        ):
+            problems.append(
+                f"{key} must be true, false, or an explicit shard shape as a "
+                f"list of positive integers (e.g. [16, 512, 512]); got "
+                f"{value!r}"
+            )
+
     method = cfg.get("method", "cellpose")
     if method not in KNOWN_METHODS:
         listed = ", ".join(f'"{m}"' for m in KNOWN_METHODS)

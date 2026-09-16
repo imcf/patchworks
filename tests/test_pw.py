@@ -162,3 +162,28 @@ def test_validate_config_leaves_a_custom_model_path_alone(
     custom = tmp_path / "my_model.pth"
     custom.write_text("")
     validate_config({"method": "cellpose", "cellpose": {"model": str(custom)}})
+
+
+def test_validate_config_accepts_shard_and_shard_labels():
+    """Both take true/false or an explicit shard shape."""
+    from _pw import validate_config
+
+    for key in ("shard", "shard_labels"):
+        validate_config({"method": "threshold", key: True})
+        validate_config({"method": "threshold", key: False})
+        validate_config({"method": "threshold", key: None})
+        validate_config({"method": "threshold", key: [16, 512, 512]})
+
+
+def test_validate_config_rejects_a_malformed_shard_shape():
+    """A bad shape would otherwise surface hours later, inside the merge."""
+    import pytest
+    from _pw import validate_config
+
+    for key in ("shard", "shard_labels"):
+        with pytest.raises(ValueError, match=key):
+            validate_config({"method": "threshold", key: "auto"})
+        with pytest.raises(ValueError, match=key):
+            validate_config({"method": "threshold", key: [16, 0, 512]})
+        with pytest.raises(ValueError, match=key):
+            validate_config({"method": "threshold", key: []})
