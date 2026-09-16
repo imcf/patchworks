@@ -23,7 +23,11 @@ from patchworks._volume_filter import (
     max_voxels_for_volume,
     min_voxels_for_volume,
 )
-from patchworks.plugins.ome_zarr import read_pixel_size, register_labels
+from patchworks.plugins.ome_zarr import (
+    read_pixel_size,
+    register_labels,
+    reshard_level,
+)
 
 from _pw import load_tiles_json, stage_path, start_log
 
@@ -135,6 +139,23 @@ if min_volume or max_volume:
         f"{n_objects} remain"
     )
 
+# Level 0 could not be sharded while it was being written: the segment jobs
+# (or the merge's own pool) fill it a chunk at a time from several processes,
+# and concurrent writers into one shard read-modify-write the same file and
+# silently drop each other's chunks. Now that every writer is done, one
+# single-threaded pass can rewrite it sharded -- cutting the file count of the
+# largest level by the shard/chunk ratio, which matters on a filesystem that
+# dislikes many small files. It costs a full extra read+write of level 0, so
+# it stays opt-in.
+shard_labels = cfg.get("shard_labels", False)
+if shard_labels:
+    # `true` reuses whatever `shard` asks the conversion for; a list overrides
+    # it with an explicit shard shape. `shard: false` does not veto this --
+    # opting in here is the whole request, and an unsharded raw image with
+    # sharded labels is a perfectly reasonable combination.
+    spec = (cfg.get("shard") or True) if shard_labels is True else shard_labels
+    reshard_level(label_group, "0", shard=spec, progress=True)
+
 group = register_labels(
     image_store,
     label_name,
@@ -143,11 +164,9 @@ group = register_labels(
     progress=True,
     n_objects=n_objects,
     # Same `shard` the conversion uses, so one setting covers the whole
-    # store. Only the pyramid levels can take it: level 0 is written a
-    # chunk at a time by concurrent segment jobs (or the merge's own pool),
-    # and a shard has to be written whole by one writer -- see
-    # _write_pyramid's note. Levels 1..N are written by one dask pass, so
-    # they can be.
+    # store. This one only reaches levels 1..N -- each is written by a single
+    # dask pass, so one writer owns every shard. Level 0 needs the separate
+    # `shard_labels` pass above for the reason given there.
     shard=cfg.get("shard", False),
 )
 

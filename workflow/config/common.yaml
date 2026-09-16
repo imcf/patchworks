@@ -26,6 +26,9 @@ shard: false
 # segmentation builds its own label pyramid.
 pyramid_levels: 5
 pyramid_downscale: 2
+# `shard` above cannot reach the label pyramid's level 0 (many concurrent
+# writers); this rewrites it sharded after the merge, for one extra pass.
+shard_labels: false
 
 # --- tiling (must match across configs so label arrays stay comparable) ---
 level: 0

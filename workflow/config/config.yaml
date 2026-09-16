@@ -74,6 +74,14 @@ cellpose:
 pyramid_levels: 5
 pyramid_downscale: 2
 sequential_labels: true # renumber merged labels to a contiguous 1..N range
+# `shard:` above can only reach the label pyramid's levels 1..N, because
+# level 0 is filled a chunk at a time by concurrent segment jobs and a shard
+# has to be written whole by one writer. Setting this rewrites level 0 sharded
+# once the merge is done — the same data and chunking in far fewer files, at
+# the cost of one extra read+write pass. Turn it on if the filesystem
+# struggles with file counts. `true` reuses `shard`'s spec; a list such as
+# [16, 512, 512] sets an explicit shard shape.
+shard_labels: false
 
 # ---- merge performance --------------------------------------------------
 # null -> size the pool from the job's real budget: the SLURM/cgroup memory

@@ -10,6 +10,7 @@ from patchworks import load_ome_zarr
 from patchworks.plugins.ome_zarr import (
     add_pyramid,
     read_ngff_attr,
+    reshard_level,
     to_ome_zarr,
     write_labels,
 )
@@ -399,6 +400,77 @@ def test_sharding(tmp_path):
     assert (
         getattr(_zarr.open_array(f"{out3}/0", mode="r"), "shards", None) is None
     )
+
+
+def _n_files(path):
+    return sum(1 for p in path.rglob("*") if p.is_file())
+
+
+def test_reshard_level_rewrites_in_place(tmp_path):
+    """A level written unsharded can be resharded afterwards, losslessly.
+
+    That is the only way a label group's level 0 can ever get shards: while
+    it is being written, concurrent tile writers would read-modify-write the
+    same shard file and silently drop each other's chunks. Once they are all
+    done, one pass can do it safely -- and must change nothing but the file
+    layout.
+    """
+    a = np.arange(4 * 64 * 64, dtype="uint32").reshape(4, 64, 64)
+    out = to_ome_zarr(
+        a, tmp_path / "s.zarr", axes="zyx", n_levels=1, chunks=(2, 16, 16)
+    )
+    before = zarr.open_array(f"{out}/0", mode="r")
+    assert getattr(before, "shards", None) is None
+    files_before = _n_files(tmp_path / "s.zarr" / "0")
+
+    assert reshard_level(out, "0", shard=(2, 32, 32)) == f"{out}/0"
+
+    after = zarr.open_array(f"{out}/0", mode="r")
+    assert after.shards == (2, 32, 32)
+    # Same chunking, same data: only how the chunks are packed changed.
+    assert after.chunks == (2, 16, 16)
+    assert np.array_equal(np.asarray(after), a)
+    assert _n_files(tmp_path / "s.zarr" / "0") < files_before
+    # No leftover scratch array beside it.
+    assert not (tmp_path / "s.zarr" / "0__resharding").exists()
+
+
+def test_reshard_level_keeps_attributes(tmp_path):
+    """Array attrs must survive: the merge records its progress in them.
+
+    Losing `patchworks_merge_state` would let a rerun merge already-merged
+    ids and collide unrelated objects, so a reshard that dropped it would be
+    silently destructive rather than merely wasteful.
+    """
+    a = np.zeros((2, 32, 32), dtype="uint32")
+    out = to_ome_zarr(
+        a, tmp_path / "s.zarr", axes="zyx", n_levels=1, chunks=(2, 16, 16)
+    )
+    grp = zarr.open_group(str(out), mode="a")
+    grp["0"].attrs["patchworks_merge_state"] = "done"
+    grp["0"].attrs["patchworks_n_objects"] = 4242
+
+    reshard_level(out, "0", shard=True)
+
+    attrs = dict(zarr.open_group(str(out), mode="r")["0"].attrs)
+    assert attrs["patchworks_merge_state"] == "done"
+    assert attrs["patchworks_n_objects"] == 4242
+
+
+def test_reshard_level_false_is_a_noop(tmp_path):
+    """`shard=False` must not touch the array -- it is the default config."""
+    a = np.arange(2 * 32 * 32, dtype="uint32").reshape(2, 32, 32)
+    out = to_ome_zarr(
+        a, tmp_path / "s.zarr", axes="zyx", n_levels=1, chunks=(2, 16, 16)
+    )
+    mtime = (tmp_path / "s.zarr" / "0").stat().st_mtime_ns
+
+    assert reshard_level(out, "0", shard=False) == f"{out}/0"
+
+    assert (tmp_path / "s.zarr" / "0").stat().st_mtime_ns == mtime
+    z = zarr.open_array(f"{out}/0", mode="r")
+    assert getattr(z, "shards", None) is None
+    assert np.array_equal(np.asarray(z), a)
 
 
 def test_glob_without_sequence_pattern_says_so(tmp_path):

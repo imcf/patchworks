@@ -48,6 +48,7 @@ from __future__ import annotations
 import glob
 import logging
 import math
+import shutil
 import time as _time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext as _nullcontext
@@ -607,6 +608,68 @@ def _to_zarr_level(
     )
     with ctx:
         arr.rechunk(sh).store(z, lock=True, compute=True)
+
+
+def reshard_level(
+    group_path: Union[str, Path],
+    component: str = "0",
+    shard: ShardSpec = True,
+    progress: bool = True,
+) -> str:
+    """Rewrite an existing array in place, sharded, via one dask pass.
+
+    For an array that had to be written *unsharded* because many writers
+    filled it a chunk at a time -- a label group's level 0, written tile by
+    tile by concurrent segment jobs, or by the merge's own worker pool -- a
+    shard cannot be produced while those writers are running: they would
+    read-modify-write the same shard file and silently lose each other's
+    chunks. Doing it afterwards, single-threaded through
+    :func:`_to_zarr_level`, is safe because one writer owns every shard.
+
+    The cost is one extra full read+write of the level, which is why this is
+    opt-in rather than implied by ``shard``.
+
+    Array attributes are carried across. That matters for a label level 0:
+    the merge records how far it got there, and losing that would let a
+    re-run merge already-merged ids and collide unrelated objects.
+
+    Parameters
+    ----------
+    group_path : str or Path
+        Path of the zarr group holding the array.
+    component : str, optional
+        Array name within the group (default ``"0"``).
+    shard : bool or tuple of int, optional
+        Sharding request; see :func:`_shard_for`. ``False`` is a no-op.
+    progress : bool, optional
+        Show a dask progress bar for the rewrite.
+
+    Returns
+    -------
+    str
+        The path of the array that was rewritten.
+    """
+    target = f"{group_path}/{component}"
+    if not shard:
+        return target
+
+    grp = zarr.open_group(str(group_path), mode="a")
+    attrs = dict(grp[component].attrs)
+
+    # Written beside the original, then swapped: rewriting in place would
+    # mean reading an array that is being overwritten underneath.
+    tmp = f"{component}__resharding"
+    src = da.from_zarr(str(group_path), component=component)
+    _to_zarr_level(src, str(group_path), tmp, shard, progress)
+
+    old, new = Path(group_path) / component, Path(group_path) / tmp
+    shutil.rmtree(old)
+    new.rename(old)
+
+    grp = zarr.open_group(str(group_path), mode="a")
+    grp[component].attrs.update(attrs)
+    logger.info("resharded %s (%d attr(s) carried over)", target, len(attrs))
+    return target
 
 
 def _normalize_pixel_size(

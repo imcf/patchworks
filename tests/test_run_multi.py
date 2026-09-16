@@ -537,6 +537,25 @@ def test_resolve_shared_tile_shape_pins_the_smallest_candidate(
     assert len(calls) == 2
 
 
+def test_merge_reshards_level_zero_when_asked():
+    """`shard_labels` has to reshard level 0 *after* everything wrote to it.
+
+    Ordering is the whole correctness argument: the merge and the volume
+    filter both rewrite level 0 a chunk at a time, so a shard created before
+    either of them would be read-modify-written by several writers and lose
+    chunks. It also has to land before `register_labels`, so the pyramid is
+    built from the level that will actually be on disk.
+    """
+    src = (_workflow_dir() / "scripts" / "merge.py").read_text()
+    assert 'cfg.get("shard_labels", False)' in src
+    assert "reshard_level(" in src
+
+    reshard = src.index("reshard_level(label_group")
+    assert src.index("merge_tile_labels(") < reshard
+    assert src.index("filter_labels_by_size(") < reshard
+    assert reshard < src.index("register_labels(\n")
+
+
 def test_merge_shards_the_label_pyramid():
     """`shard:` has to reach the label pyramid, not just the conversion.
 

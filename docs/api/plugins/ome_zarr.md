@@ -25,6 +25,10 @@ resolution, matching anisotropic microscopy stacks.
 
 ::: patchworks.plugins.ome_zarr.register_labels
 
+## reshard_level
+
+::: patchworks.plugins.ome_zarr.reshard_level
+
 ## read_pixel_size
 
 ::: patchworks.plugins.ome_zarr.read_pixel_size
