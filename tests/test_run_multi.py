@@ -568,3 +568,45 @@ def test_merge_shards_the_label_pyramid():
     # The call's own arguments contain ")", so end it on the closing line.
     register = src.split("register_labels(")[1].split("\n)")[0]
     assert 'shard=cfg.get("shard", False)' in register
+
+
+def test_ngff_version_reaches_convert_and_merge():
+    """Both writers need it, or a store ends up half one version.
+
+    convert makes the image; merge adds the label pyramid to it, in a
+    separate job hours later. If only one of them read the key the store
+    would mix zarr v2 arrays with v3 ones.
+    """
+    convert = (_workflow_dir() / "scripts" / "convert.py").read_text()
+    merge = (_workflow_dir() / "scripts" / "merge.py").read_text()
+    for name, src in (("convert.py", convert), ("merge.py", merge)):
+        assert 'ngff_version=cfg.get("ngff_version", "auto")' in src, name
+
+
+def test_ngff_version_must_agree_across_configs():
+    """It decides the store's format, and convert runs once, from config #1."""
+    from run_multi import _CONVERT_KEYS
+
+    assert "ngff_version" in _CONVERT_KEYS
+
+
+def test_store_marker_file_follows_the_zarr_format():
+    """The rules watch a file whose *name* is the zarr format's.
+
+    zarr v3 writes "zarr.json", v2 writes ".zgroup". NGFF 0.4 means a v2
+    store, so a hardcoded zarr.json would leave `convert` waiting forever on
+    a file that is never written.
+    """
+    smk = (_workflow_dir() / "rules" / "common.smk").read_text()
+    assert "ZARR_ROOT_FILE" in smk
+    assert '".zgroup"' in smk
+    assert '"zarr.json"' in smk
+    assert 'IMAGE_OK = f"{IMAGE}/{ZARR_ROOT_FILE}"' in smk
+    assert 'OCCUPANCY_OK = f"{OCCUPANCY}/{ZARR_ROOT_FILE}"' in smk
+
+    # Both scripts that turn the marker back into a store path must strip
+    # whichever name is in use.
+    for script in ("convert.py", "build_occupancy.py"):
+        src = (_workflow_dir() / "scripts" / script).read_text()
+        assert '.removesuffix("/zarr.json")' in src, script
+        assert '.removesuffix("/.zgroup")' in src, script

@@ -168,6 +168,7 @@ group = register_labels(
     # dask pass, so one writer owns every shard. Level 0 needs the separate
     # `shard_labels` pass above for the reason given there.
     shard=cfg.get("shard", False),
+    ngff_version=cfg.get("ngff_version", "auto"),
 )
 
 if not in_place:

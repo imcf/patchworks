@@ -18,27 +18,38 @@ _ZARR_V3 = int(zarr.__version__.split(".")[0]) >= 3
 _ZARR_V3 = int(zarr.__version__.split(".")[0]) >= 3
 
 
-def zarr_compressor_kwargs() -> dict:
+def zarr_compressor_kwargs(zarr_format: int = 3) -> dict:
     """Keyword arguments pinning the compression codec for a new array.
 
     zstd is already zarr v3's default, but relying on a library default means
     the stores patchworks writes change silently if that default ever moves.
     Labels in particular are highly compressible, so this is worth stating.
 
+    The codec *object* depends on the format of the array being written, not
+    on the installed zarr: zarr-python 3 can write a zarr-v2 array (which is
+    what NGFF 0.4 needs), and a v2 array rejects ``zarr.codecs.ZstdCodec`` --
+    it wants the numcodecs one.
+
+    Parameters
+    ----------
+    zarr_format : int, optional
+        Format of the array about to be created, 2 or 3 (default 3).
+
     Returns
     -------
     dict
-        ``compressors=``/``compressor=`` as the installed zarr expects, or
+        ``compressors=``/``compressor=`` as that combination expects, or
         empty if the codec cannot be built (then the default applies).
     """
     try:
-        if _ZARR_V3:
+        if _ZARR_V3 and zarr_format != 2:
             from zarr.codecs import ZstdCodec
 
             return {"compressors": (ZstdCodec(level=1),)}
         import numcodecs
 
-        return {"compressor": numcodecs.Zstd(level=1)}
+        codec = numcodecs.Zstd(level=1)
+        return {"compressors": (codec,)} if _ZARR_V3 else {"compressor": codec}
     except Exception:  # pragma: no cover - depends on the installed zarr
         logger.debug("could not pin a compressor; using zarr's default")
         return {}

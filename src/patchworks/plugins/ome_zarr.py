@@ -45,12 +45,14 @@ Usage
 
 from __future__ import annotations
 
+import contextvars
 import glob
 import logging
 import math
 import shutil
 import time as _time
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from contextlib import nullcontext as _nullcontext
 from itertools import product as _iproduct
 from pathlib import Path
@@ -224,10 +226,156 @@ _ZARR_V3 = int(zarr.__version__.split(".")[0]) >= 3
 # layout follows the zarr version actually being written.
 _NGFF_VERSION_V3 = "0.5"
 
+# Which zarr format each NGFF version is defined over. The two are not
+# independent choices: 0.4 is specified against zarr v2 and 0.5 against v3,
+# so asking for a version is also asking for a store format.
+_NGFF_ZARR_FORMAT = {_NGFF_VERSION: 2, _NGFF_VERSION_V3: 3}
+# Released but deliberately not written; see _resolve_ngff_version.
+_NGFF_UNSUPPORTED = ("0.6",)
+
+# Set for the duration of one public write call. A ContextVar rather than a
+# plain global so concurrent writers (the pyramid's own thread pool, or two
+# stores written from one process) cannot see each other's target.
+_ngff_target: "contextvars.ContextVar[Union[str, None]]" = (
+    contextvars.ContextVar("patchworks_ngff_target", default=None)
+)
+
+
+def _resolve_ngff_version(requested: Union[str, None] = None) -> str:
+    """Validate an NGFF version request and resolve ``"auto"``.
+
+    ``"auto"`` (the default) picks the version matching the installed zarr:
+    0.5 on zarr v3, 0.4 on v2. An explicit version is honoured instead --
+    including 0.4 on a zarr-v3 install, which writes a zarr-v2 store.
+
+    Parameters
+    ----------
+    requested : str or None, optional
+        ``"auto"``/``None``, or an NGFF version string.
+
+    Returns
+    -------
+    str
+        The version that will be written.
+
+    Raises
+    ------
+    ValueError
+        For an unknown version, or for one patchworks cannot yet write.
+    """
+    if requested in (None, "auto"):
+        return _NGFF_VERSION_V3 if _ZARR_V3 else _NGFF_VERSION
+    requested = str(requested)
+    if requested in _NGFF_UNSUPPORTED:
+        raise ValueError(
+            f"NGFF {requested} is released but patchworks does not write it "
+            "yet: it replaces a multiscale's `axes` with `coordinateSystems` "
+            "and requires `input`/`output` on every coordinate transformation "
+            "(RFC-5), which is a different metadata document, not a version "
+            "bump. No reader supports it yet either -- ome-zarr-py, and so "
+            f'napari, still default to {_NGFF_VERSION_V3}. Use "auto".'
+        )
+    if requested not in _NGFF_ZARR_FORMAT:
+        known = ", ".join(sorted(_NGFF_ZARR_FORMAT))
+        raise ValueError(
+            f'unknown ngff_version {requested!r}; expected "auto" or one '
+            f"of {known}"
+        )
+    if _NGFF_ZARR_FORMAT[requested] == 3 and not _ZARR_V3:
+        raise ValueError(
+            f"NGFF {requested} is defined over zarr v3, but zarr "
+            f"{zarr.__version__} is installed; upgrade zarr or use "
+            f'ngff_version "{_NGFF_VERSION}"'
+        )
+    return requested
+
 
 def ngff_version() -> str:
-    """NGFF version matching the zarr format this build writes."""
-    return _NGFF_VERSION_V3 if _ZARR_V3 else _NGFF_VERSION
+    """NGFF version currently being written.
+
+    Inside a write call this reflects that call's ``ngff_version=``;
+    outside one it is the version an ``"auto"`` write would produce.
+    """
+    return _resolve_ngff_version(_ngff_target.get())
+
+
+def _zarr_format() -> int:
+    """Zarr format matching the NGFF version currently being written."""
+    return _NGFF_ZARR_FORMAT[ngff_version()]
+
+
+def _group_zarr_format(group_or_path) -> int:
+    """Zarr format to write into *group_or_path*.
+
+    An existing store wins over the requested NGFF version: mixing v2 and v3
+    arrays in one store leaves something no reader can open, and the label
+    groups in particular are written by a later call (the merge's
+    ``register_labels``) than the image was. ``ngff_version`` therefore
+    decides the format only when there is no store yet.
+    """
+    if not _ZARR_V3:
+        return 2
+    try:
+        if isinstance(group_or_path, (str, Path)):
+            grp = zarr.open_group(str(group_or_path), mode="r")
+        else:
+            grp = group_or_path
+        return int(grp.metadata.zarr_format)
+    except Exception:
+        return _zarr_format()
+
+
+def _ngff_version_for(group_or_path) -> str:
+    """NGFF version to record for a store, given the format it is in.
+
+    The metadata layout is part of the version: 0.4 puts its keys at the top
+    level of a zarr-v2 store, 0.5 nests them under ``ome`` in a v3 one.
+    Writing one store's arrays in v2 and its metadata in the 0.5 layout would
+    describe a store that does not exist, so both follow the same source of
+    truth -- the store -- and the requested version only decides a new one.
+    """
+    fmt = _group_zarr_format(group_or_path)
+    requested = ngff_version()
+    if _NGFF_ZARR_FORMAT[requested] == fmt:
+        return requested
+    return _NGFF_VERSION if fmt == 2 else _NGFF_VERSION_V3
+
+
+def _open_group(path, mode: str = "a") -> "zarr.Group":
+    """Open (or create) a group in the zarr format being written.
+
+    ``zarr_format=`` only matters when the group does not exist yet: an
+    existing store keeps its own format, which is what re-opening one for
+    ``labels/`` has to do. Passing it unconditionally would make zarr refuse
+    to reopen a v2 store on a 0.5 write, so it is passed only on creation.
+    """
+    path = str(path)
+    kwargs = {}
+    if _ZARR_V3 and not zarr.storage.LocalStore(path).root.exists():
+        kwargs["zarr_format"] = _zarr_format()
+    return zarr.open_group(path, mode=mode, **kwargs)
+
+
+@contextmanager
+def _writing_ngff(requested: Union[str, None]):
+    """Pin the NGFF version for everything written inside the block.
+
+    ``"auto"`` *inherits* an enclosing pin rather than re-deriving one from
+    the installed zarr. The public writers call each other -- write_labels
+    into register_labels into add_pyramid -- each with its own ``"auto"``
+    default, and without inheritance the inner call would silently drag the
+    store back to 0.5 halfway through a 0.4 write.
+    """
+    current = _ngff_target.get()
+    if requested in (None, "auto") and current is not None:
+        resolved = current
+    else:
+        resolved = _resolve_ngff_version(requested)
+    token = _ngff_target.set(resolved)
+    try:
+        yield resolved
+    finally:
+        _ngff_target.reset(token)
 
 
 def read_ngff_attr(attrs, key: str, default=None):
@@ -262,13 +410,14 @@ def write_ngff_attrs(group, **entries) -> None:
     written at different times onto the same group -- ``multiscales`` by the
     pyramid, then ``image-label`` when the labels are registered.
     """
-    if not _ZARR_V3:
+    version = _ngff_version_for(group)
+    if _NGFF_ZARR_FORMAT[version] == 2:
         for key, value in entries.items():
             group.attrs[key] = value
         return
     existing = dict(group.attrs).get("ome")
     merged = dict(existing) if isinstance(existing, dict) else {}
-    merged["version"] = _NGFF_VERSION_V3
+    merged["version"] = version
     merged.update(entries)
     group.attrs["ome"] = merged
 
@@ -343,6 +492,7 @@ def _shard_for(
     chunks: tuple[int, ...],
     shape: tuple[int, ...],
     dtype,
+    zarr_format: Union[int, None] = None,
 ) -> Union[tuple[int, ...], None]:
     """Resolve the ``shard`` argument into a concrete shard shape.
 
@@ -357,17 +507,24 @@ def _shard_for(
         Array shape.
     dtype : data-type
         Array dtype.
+    zarr_format : int or None, optional
+        Format of the store being written. ``None`` (default) falls back to
+        the format the requested NGFF version implies. Zarr v2 has no
+        sharding codec, so 2 always means "no shards".
 
     Returns
     -------
     tuple of int or None
         The shard shape, or ``None`` when not sharding
-        (also when zarr is older than v3).
+        (also when the target store is zarr v2 / NGFF 0.4).
     """
     if not shard:
         return None
-    if not _ZARR_V3:
-        logger.warning("sharding requires zarr v3; writing unsharded.")
+    if (zarr_format if zarr_format is not None else _zarr_format()) == 2:
+        logger.warning(
+            "sharding requires zarr v3 (NGFF %s); writing unsharded.",
+            _NGFF_VERSION_V3,
+        )
         return None
     if shard is True:
         return _auto_shard(chunks, shape, dtype)
@@ -414,7 +571,7 @@ def _create_level_array(
     """Create (replacing any existing) a pyramid level array in *group*."""
     if name in group:
         del group[name]
-    kwargs = zarr_compressor_kwargs()
+    kwargs = zarr_compressor_kwargs(_group_zarr_format(group))
     if _ZARR_V3:
         return group.create_array(
             name, shape=shape, chunks=chunks, dtype=dtype, **kwargs
@@ -590,13 +747,24 @@ def _to_zarr_level(
     None
     """
     inner = arr.chunksize
-    sh = _shard_for(shard, inner, arr.shape, arr.dtype)
+    fmt = _group_zarr_format(group_path)
+    sh = _shard_for(shard, inner, arr.shape, arr.dtype, fmt)
     ctx = _progress_ctx(progress, f"{Path(group_path).name}/{component}")
     if not sh:
         with ctx:
-            da.to_zarr(arr, group_path, component=component, overwrite=True)
+            da.to_zarr(
+                arr,
+                group_path,
+                component=component,
+                overwrite=True,
+                **(
+                    {"zarr_format": _group_zarr_format(group_path)}
+                    if _ZARR_V3
+                    else {}
+                ),
+            )
         return
-    grp = zarr.open_group(group_path, mode="a")
+    grp = _open_group(group_path)
     if component in grp:
         del grp[component]
     z = grp.create_array(
@@ -652,8 +820,16 @@ def reshard_level(
     target = f"{group_path}/{component}"
     if not shard:
         return target
+    if _group_zarr_format(group_path) == 2:
+        logger.warning(
+            "%s is a zarr v2 store (NGFF %s), which has no sharding codec; "
+            "leaving it unsharded.",
+            target,
+            _NGFF_VERSION,
+        )
+        return target
 
-    grp = zarr.open_group(str(group_path), mode="a")
+    grp = _open_group(group_path)
     attrs = dict(grp[component].attrs)
 
     # Written beside the original, then swapped: rewriting in place would
@@ -666,7 +842,7 @@ def reshard_level(
     shutil.rmtree(old)
     new.rename(old)
 
-    grp = zarr.open_group(str(group_path), mode="a")
+    grp = _open_group(group_path)
     grp[component].attrs.update(attrs)
     logger.info("resharded %s (%d attr(s) carried over)", target, len(attrs))
     return target
@@ -829,7 +1005,7 @@ def _write_pyramid(
             # the dask route rechunks *upward* here (e.g. (16,512,512) back to
             # (16,1024,1024)), pulling four source chunks per output chunk and
             # letting the threaded scheduler stockpile the intermediates.
-            grp = zarr.open_group(group_path, mode="a")
+            grp = _open_group(group_path)
             src_arr = grp[prev_name]
             out_chunks = _level_chunks(
                 tuple(src_arr.chunks), strides, axes, next_shape
@@ -896,9 +1072,10 @@ def _write_multiscales(
         "axes": _axes_meta(axes, calibrated),
         "datasets": datasets,
     }
-    if not _ZARR_V3:
-        entry["version"] = _NGFF_VERSION  # 0.5 carries it on the ome group
-    write_ngff_attrs(zarr.open_group(group_path, mode="a"), multiscales=[entry])
+    version = _ngff_version_for(group_path)
+    if _NGFF_ZARR_FORMAT[version] == 2:
+        entry["version"] = version  # 0.5 carries it on the ome group instead
+    write_ngff_attrs(_open_group(group_path), multiscales=[entry])
 
 
 def read_pixel_size(store: Union[str, Path]) -> PixelSize:
@@ -1378,7 +1555,7 @@ def _write_imaris_pyramid(
     base = ims(path, ResolutionLevelLock=0)
     n_levels = int(getattr(base, "ResolutionLevels", 1) or 1)
 
-    zarr.open_group(out, mode="w" if overwrite else "w-")
+    _open_group(out, mode="w" if overwrite else "w-")
     datasets: list[dict] = []
     axes = ""
     calibrated = False
@@ -1483,6 +1660,7 @@ def to_ome_zarr(
     reuse_pyramid: bool = False,
     progress: bool = True,
     overwrite: bool = False,
+    ngff_version: Union[str, None] = "auto",
 ) -> str:
     """Write *source* as a pyramidal, calibrated OME-ZARR store.
 
@@ -1544,6 +1722,12 @@ def to_ome_zarr(
         for a consistent XY-only, nearest-neighbour NGFF pyramid).
     overwrite : bool, optional
         Overwrite an existing store at *out_path*.
+    ngff_version : str or None, optional
+        NGFF version (and therefore zarr format) to write: ``"auto"``
+        (default) follows the installed zarr -- 0.5 on v3, 0.4 on v2 --
+        while ``"0.4"`` pins the older, zarr-v2 layout for tools that
+        cannot read 0.5 yet. 0.4 has no sharding codec, so ``shard`` is
+        ignored there. See :func:`ngff_version`.
 
     Returns
     -------
@@ -1563,57 +1747,60 @@ def to_ome_zarr(
     ... )  # doctest: +SKIP
     'ZT18_Male4_Left.zarr'
     """
-    if downscale < 2:
-        raise ValueError("downscale must be >= 2")
-    if n_levels < 1:
-        raise ValueError("n_levels must be >= 1")
+    with _writing_ngff(ngff_version):
+        if downscale < 2:
+            raise ValueError("downscale must be >= 2")
+        if n_levels < 1:
+            raise ValueError("n_levels must be >= 1")
 
-    # Reuse an Imaris file's own resolution pyramid instead of rebuilding it.
-    if (
-        reuse_pyramid
-        and isinstance(source, (str, Path))
-        and str(source).lower().endswith(".ims")
-    ):
-        try:
-            return _write_imaris_pyramid(
-                str(source),
-                str(out_path),
+        # Reuse an Imaris file's own resolution pyramid instead of rebuilding it.
+        if (
+            reuse_pyramid
+            and isinstance(source, (str, Path))
+            and str(source).lower().endswith(".ims")
+        ):
+            try:
+                return _write_imaris_pyramid(
+                    str(source),
+                    str(out_path),
+                    chunks=chunks,
+                    overwrite=overwrite,
+                    shard=shard,
+                    progress=progress,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "reuse_pyramid failed (%s); rebuilding the pyramid instead.",
+                    exc,
+                )
+
+        arr, axes, detected = _to_dask(source, axes, scene, sequence_pattern)
+        if len(axes) != arr.ndim:
+            raise ValueError(
+                f"axes {axes!r} has {len(axes)} entries but array is {arr.ndim}-D"
+            )
+
+        ps = _normalize_pixel_size(pixel_size, axes) if pixel_size else detected
+        base_scale = _base_scale(axes, ps)
+
+        out = str(out_path)
+        _open_group(out, mode="w" if overwrite else "w-")
+        with _bounded_scheduler(arr):
+            datasets = _write_pyramid(
+                arr,
+                axes,
+                out,
+                n_levels=n_levels,
+                downscale=downscale,
                 chunks=chunks,
-                overwrite=overwrite,
+                base_scale=base_scale,
                 shard=shard,
                 progress=progress,
             )
-        except Exception as exc:
-            logger.warning(
-                "reuse_pyramid failed (%s); rebuilding the pyramid instead.",
-                exc,
-            )
-
-    arr, axes, detected = _to_dask(source, axes, scene, sequence_pattern)
-    if len(axes) != arr.ndim:
-        raise ValueError(
-            f"axes {axes!r} has {len(axes)} entries but array is {arr.ndim}-D"
+        _write_multiscales(
+            out, axes, datasets, Path(out).stem, calibrated=bool(ps)
         )
-
-    ps = _normalize_pixel_size(pixel_size, axes) if pixel_size else detected
-    base_scale = _base_scale(axes, ps)
-
-    out = str(out_path)
-    zarr.open_group(out, mode="w" if overwrite else "w-")
-    with _bounded_scheduler(arr):
-        datasets = _write_pyramid(
-            arr,
-            axes,
-            out,
-            n_levels=n_levels,
-            downscale=downscale,
-            chunks=chunks,
-            base_scale=base_scale,
-            shard=shard,
-            progress=progress,
-        )
-    _write_multiscales(out, axes, datasets, Path(out).stem, calibrated=bool(ps))
-    return out
+        return out
 
 
 def add_pyramid(
@@ -1627,6 +1814,7 @@ def add_pyramid(
     chunks: Union[tuple[int, ...], None] = None,
     shard: ShardSpec = False,
     progress: bool = True,
+    ngff_version: Union[str, None] = "auto",
 ) -> str:
     """Add downsampled pyramid levels to an existing single-resolution zarr.
 
@@ -1660,6 +1848,12 @@ def add_pyramid(
         Sharding request (see :func:`to_ome_zarr`'s *shard*).
     progress : bool, optional
         Show a per-level dask progress bar (default ``True``).
+    ngff_version : str or None, optional
+        NGFF version (and therefore zarr format) to write: ``"auto"``
+        (default) follows the installed zarr -- 0.5 on v3, 0.4 on v2 --
+        while ``"0.4"`` pins the older, zarr-v2 layout for tools that
+        cannot read 0.5 yet. 0.4 has no sharding codec, so ``shard`` is
+        ignored there. See :func:`ngff_version`.
 
     Returns
     -------
@@ -1671,49 +1865,52 @@ def add_pyramid(
     >>> add_pyramid("scan.zarr", n_levels=4)  # doctest: +SKIP
     'scan.zarr'
     """
-    if downscale < 2:
-        raise ValueError("downscale must be >= 2")
-    if n_levels < 1:
-        raise ValueError("n_levels must be >= 1")
+    with _writing_ngff(ngff_version):
+        if downscale < 2:
+            raise ValueError("downscale must be >= 2")
+        if n_levels < 1:
+            raise ValueError("n_levels must be >= 1")
 
-    gp = str(group_path)
-    root = zarr.open_group(gp, mode="r")
-    multiscales = read_ngff_attr(root.attrs, "multiscales")
-    if multiscales:
-        base = multiscales[0]["datasets"][0]["path"]
+        gp = str(group_path)
+        root = zarr.open_group(gp, mode="r")
+        multiscales = read_ngff_attr(root.attrs, "multiscales")
+        if multiscales:
+            base = multiscales[0]["datasets"][0]["path"]
+            if axes is None:
+                axes = "".join(a["name"] for a in multiscales[0]["axes"])
+
+        base_arr = da.from_zarr(gp, component=base)
         if axes is None:
-            axes = "".join(a["name"] for a in multiscales[0]["axes"])
+            axes = _default_axes(base_arr.ndim)
+        if len(axes) != base_arr.ndim:
+            raise ValueError(
+                f"axes {axes!r} has {len(axes)} entries but array is "
+                f"{base_arr.ndim}-D"
+            )
 
-    base_arr = da.from_zarr(gp, component=base)
-    if axes is None:
-        axes = _default_axes(base_arr.ndim)
-    if len(axes) != base_arr.ndim:
-        raise ValueError(
-            f"axes {axes!r} has {len(axes)} entries but array is "
-            f"{base_arr.ndim}-D"
+        if pixel_size:
+            ps = _normalize_pixel_size(pixel_size, axes)
+        else:
+            ps = _read_zarr_calibration(gp, axes)
+        base_scale = _base_scale(axes, ps)
+
+        datasets = _write_pyramid(
+            base_arr,
+            axes,
+            gp,
+            n_levels=n_levels,
+            downscale=downscale,
+            chunks=chunks,
+            base_scale=base_scale,
+            base_name=base,
+            write_base=False,
+            shard=shard,
+            progress=progress,
         )
-
-    if pixel_size:
-        ps = _normalize_pixel_size(pixel_size, axes)
-    else:
-        ps = _read_zarr_calibration(gp, axes)
-    base_scale = _base_scale(axes, ps)
-
-    datasets = _write_pyramid(
-        base_arr,
-        axes,
-        gp,
-        n_levels=n_levels,
-        downscale=downscale,
-        chunks=chunks,
-        base_scale=base_scale,
-        base_name=base,
-        write_base=False,
-        shard=shard,
-        progress=progress,
-    )
-    _write_multiscales(gp, axes, datasets, Path(gp).stem, calibrated=bool(ps))
-    return gp
+        _write_multiscales(
+            gp, axes, datasets, Path(gp).stem, calibrated=bool(ps)
+        )
+        return gp
 
 
 def register_labels(
@@ -1728,6 +1925,7 @@ def register_labels(
     shard: ShardSpec = False,
     progress: bool = True,
     n_objects: Union[int, None] = None,
+    ngff_version: Union[str, None] = "auto",
 ) -> str:
     """Pyramidalise and register an existing ``labels/<name>/0`` base level.
 
@@ -1769,6 +1967,12 @@ def register_labels(
         https://github.com/imcf/napari-chunked-regionprops) can use the
         known id set instead of re-deriving it with a full-volume scan of
         its own.
+    ngff_version : str or None, optional
+        NGFF version (and therefore zarr format) to write: ``"auto"``
+        (default) follows the installed zarr -- 0.5 on v3, 0.4 on v2 --
+        while ``"0.4"`` pins the older, zarr-v2 layout for tools that
+        cannot read 0.5 yet. 0.4 has no sharding codec, so ``shard`` is
+        ignored there. See :func:`ngff_version`.
 
     Returns
     -------
@@ -1780,37 +1984,40 @@ def register_labels(
     >>> register_labels("scan.zarr", "cells")  # doctest: +SKIP
     'scan.zarr/labels/cells'
     """
-    store = str(image_store)
-    group = f"{store}/labels/{name}"
-    if not pixel_size:
-        arr0 = da.from_zarr(group, component="0")
-        lab_axes = axes or _default_axes(arr0.ndim)
-        pixel_size = _read_zarr_calibration(store, lab_axes)
-    add_pyramid(
-        group,
-        base="0",
-        axes=axes,
-        pixel_size=pixel_size,
-        n_levels=n_levels,
-        downscale=downscale,
-        chunks=chunks,
-        shard=shard,
-        progress=progress,
-    )
-    grp = zarr.open_group(group, mode="a")
-    write_ngff_attrs(grp, **{"image-label": {"version": ngff_version()}})
-    if n_objects is not None:
-        # patchworks' own hints, not NGFF keys, so they stay at the top level
-        # where a consumer can find them without knowing the layout.
-        grp.attrs["n_objects"] = int(n_objects)
-        grp.attrs["sequential_labels"] = True
+    with _writing_ngff(ngff_version):
+        store = str(image_store)
+        group = f"{store}/labels/{name}"
+        if not pixel_size:
+            arr0 = da.from_zarr(group, component="0")
+            lab_axes = axes or _default_axes(arr0.ndim)
+            pixel_size = _read_zarr_calibration(store, lab_axes)
+        add_pyramid(
+            group,
+            base="0",
+            axes=axes,
+            pixel_size=pixel_size,
+            n_levels=n_levels,
+            downscale=downscale,
+            chunks=chunks,
+            shard=shard,
+            progress=progress,
+        )
+        grp = _open_group(group)
+        write_ngff_attrs(
+            grp, **{"image-label": {"version": _ngff_version_for(grp)}}
+        )
+        if n_objects is not None:
+            # patchworks' own hints, not NGFF keys, so they stay at the top level
+            # where a consumer can find them without knowing the layout.
+            grp.attrs["n_objects"] = int(n_objects)
+            grp.attrs["sequential_labels"] = True
 
-    labels_grp = zarr.open_group(f"{store}/labels", mode="a")
-    registered = list(read_ngff_attr(labels_grp.attrs, "labels", []) or [])
-    if name not in registered:
-        registered.append(name)
-    write_ngff_attrs(labels_grp, labels=registered)
-    return group
+        labels_grp = _open_group(f"{store}/labels")
+        registered = list(read_ngff_attr(labels_grp.attrs, "labels", []) or [])
+        if name not in registered:
+            registered.append(name)
+        write_ngff_attrs(labels_grp, labels=registered)
+        return group
 
 
 def write_labels(
@@ -1827,6 +2034,7 @@ def write_labels(
     progress: bool = True,
     overwrite: bool = False,
     n_objects: Union[int, None] = None,
+    ngff_version: Union[str, None] = "auto",
 ) -> str:
     """Store *labels* inside *image_store* under the NGFF ``labels/`` group.
 
@@ -1868,6 +2076,12 @@ def write_labels(
     n_objects : int or None, optional
         Exact non-background object count, if known — forwarded to
         :func:`register_labels`; see its docstring for what this enables.
+    ngff_version : str or None, optional
+        NGFF version (and therefore zarr format) to write: ``"auto"``
+        (default) follows the installed zarr -- 0.5 on v3, 0.4 on v2 --
+        while ``"0.4"`` pins the older, zarr-v2 layout for tools that
+        cannot read 0.5 yet. 0.4 has no sharding codec, so ``shard`` is
+        ignored there. See :func:`ngff_version`.
 
     Returns
     -------
@@ -1889,33 +2103,34 @@ def write_labels(
     ... )  # doctest: +SKIP
     'scan.zarr/labels/cells'
     """
-    arr = labels if isinstance(labels, da.Array) else da.asarray(labels)
-    if axes is None:
-        axes = _default_axes(arr.ndim)
-    if len(axes) != arr.ndim:
-        raise ValueError(
-            f"axes {axes!r} has {len(axes)} entries but array is {arr.ndim}-D"
+    with _writing_ngff(ngff_version):
+        arr = labels if isinstance(labels, da.Array) else da.asarray(labels)
+        if axes is None:
+            axes = _default_axes(arr.ndim)
+        if len(axes) != arr.ndim:
+            raise ValueError(
+                f"axes {axes!r} has {len(axes)} entries but array is {arr.ndim}-D"
+            )
+
+        store = str(image_store)
+        root = _open_group(store)
+        parent = root.require_group("labels")
+        if overwrite and name in parent:
+            del parent[name]
+        parent.require_group(name)
+
+        label_group = f"{store}/labels/{name}"
+        base = arr.rechunk(chunks or _default_chunks(arr.shape, axes))
+        _to_zarr_level(base, label_group, "0", shard, progress)
+        return register_labels(
+            store,
+            name,
+            axes=axes,
+            pixel_size=pixel_size,
+            n_levels=n_levels,
+            downscale=downscale,
+            chunks=chunks,
+            shard=shard,
+            progress=progress,
+            n_objects=n_objects,
         )
-
-    store = str(image_store)
-    root = zarr.open_group(store, mode="a")
-    parent = root.require_group("labels")
-    if overwrite and name in parent:
-        del parent[name]
-    parent.require_group(name)
-
-    label_group = f"{store}/labels/{name}"
-    base = arr.rechunk(chunks or _default_chunks(arr.shape, axes))
-    _to_zarr_level(base, label_group, "0", shard, progress)
-    return register_labels(
-        store,
-        name,
-        axes=axes,
-        pixel_size=pixel_size,
-        n_levels=n_levels,
-        downscale=downscale,
-        chunks=chunks,
-        shard=shard,
-        progress=progress,
-        n_objects=n_objects,
-    )

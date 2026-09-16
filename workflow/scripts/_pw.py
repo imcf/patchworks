@@ -302,6 +302,26 @@ def validate_config(cfg) -> None:
             f"({min_volume}), or nothing would ever survive the filter"
         )
 
+    ngff = cfg.get("ngff_version", "auto")
+    if ngff not in (None, "auto", "0.4", "0.5"):
+        extra = ""
+        if str(ngff) == "0.6":
+            extra = (
+                " NGFF 0.6 is released but replaces `axes` with "
+                "`coordinateSystems` and requires input/output on every "
+                "coordinate transformation (RFC-5); no reader supports it "
+                "yet, ome-zarr-py and napari included."
+            )
+        problems.append(
+            f'ngff_version must be "auto", "0.4" or "0.5"; got {ngff!r}.{extra}'
+        )
+    elif str(ngff) == "0.4" and cfg.get("shard"):
+        problems.append(
+            'ngff_version "0.4" is defined over zarr v2, which has no '
+            "sharding codec, so shard/shard_labels cannot take effect. Set "
+            'shard: false, or use ngff_version "auto".'
+        )
+
     for key in ("shard", "shard_labels"):
         value = cfg.get(key)
         if value is None or isinstance(value, bool):

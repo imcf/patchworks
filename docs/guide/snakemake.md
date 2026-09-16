@@ -52,6 +52,7 @@ reuse_pyramid: true            # .ims: copy its own pyramid (fast)
 convert_chunks: null           # null → bounded auto chunks; or [c,z,y,x]
 shard: false                   # true → pack chunks into shards (fewer files);
                                # covers the image and the label pyramids
+ngff_version: "auto"           # OME-ZARR version: "auto" (0.5), or "0.4"
 
 # tiling
 channel: 0                     # channel to segment, 0-based (null = keep all)
@@ -136,6 +137,41 @@ shard_labels: false            # true → also reshard label level 0 after the
     is 7,616 files per label group, well under the 200,000 at which the
     conversion starts warning. On scicore that is fine; on a filesystem with
     a tighter inode or per-directory budget it may not be.
+
+!!! tip "Which OME-ZARR version gets written (`ngff_version`)"
+    OME-ZARR is versioned, and the version decides the **zarr format** as
+    well as the metadata layout — the two are not separate choices. NGFF 0.4
+    is specified over zarr v2 and puts `multiscales`, `labels` and
+    `image-label` at the top level of the store's attributes; 0.5 is the
+    zarr-v3 revision and nests them under an `ome` key.
+
+    `ngff_version: "auto"` (the default) follows the installed zarr, which on
+    any current environment means **0.5**. Pin `"0.4"` only when a downstream
+    tool still cannot read 0.5:
+
+    ```yaml
+    ngff_version: "0.4"
+    shard: false           # required: zarr v2 has no sharding codec
+    ```
+
+    That is a real trade-off, not a formality — 0.4 means a zarr-v2 store, and
+    sharding is a zarr-v3 feature, so `shard`/`shard_labels` stop doing
+    anything. The workflow refuses the combination rather than silently
+    ignoring it. The store's own root file changes too (`.zgroup` instead of
+    `zarr.json`), which the rules account for.
+
+    Writing into an **existing** store always follows that store's format,
+    whatever this key says: the label pyramid is written by `merge`, long
+    after `convert` made the image, and a store with v2 arrays and v3
+    metadata is one no reader can open.
+
+    **What about 0.6?** It was released on 14 September 2026 and patchworks
+    does not write it. It is not a version bump but a different metadata
+    document: RFC-5 replaces a multiscale's `axes` with `coordinateSystems`
+    and requires an `input`/`output` pair on every coordinate transformation.
+    Nothing reads it yet either — ome-zarr-py, and so napari, still default
+    to 0.5. Setting `ngff_version: "0.6"` is rejected with that explanation
+    rather than writing a store you could not open.
 
 !!! tip "Dropping objects by size with `min_volume`/`max_volume`"
     `min_volume: N` drops any object smaller than `N` µm³; `max_volume: N`
@@ -401,6 +437,7 @@ input: "/data/scan.ims"
 work_dir: "/scratch/results"
 tile_shape: [16, 1024, 1024]
 shard: false                   # true → far fewer files, same chunks
+ngff_version: "auto"           # convert reads it, so it belongs here
 tiles_per_job: 4
 ```
 
@@ -492,6 +529,10 @@ snakemake --workflow-profile profile/slurm --configfile config/common.yaml confi
     `run_multi` refuses to start when those keys disagree across configs and
     tells you which one — but if you drive the configs by hand, keep them in
     `common.yaml`.
+
+    `ngff_version` is in that list: it decides the store's zarr format, so a
+    second config disagreeing about it would describe a store that is not the
+    one on disk.
 
     `merge` runs once **per config**, so the keys it reads —
     `pyramid_levels`, `pyramid_downscale`, `sequential_labels`,
