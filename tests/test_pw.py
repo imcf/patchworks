@@ -187,3 +187,38 @@ def test_validate_config_rejects_a_malformed_shard_shape():
             validate_config({"method": "threshold", key: [16, 0, 512]})
         with pytest.raises(ValueError, match=key):
             validate_config({"method": "threshold", key: []})
+
+
+def test_validate_config_accepts_the_supported_ngff_versions():
+    from _pw import validate_config
+
+    for value in ("auto", "0.4", "0.5", None):
+        validate_config({"method": "threshold", "ngff_version": value})
+
+
+def test_validate_config_rejects_an_unwritable_ngff_version():
+    """0.6 is released; naming it must explain why it is still refused."""
+    import pytest
+    from _pw import validate_config
+
+    with pytest.raises(ValueError, match="coordinateSystems"):
+        validate_config({"method": "threshold", "ngff_version": "0.6"})
+    with pytest.raises(ValueError, match="ngff_version"):
+        validate_config({"method": "threshold", "ngff_version": "latest"})
+
+
+def test_validate_config_rejects_sharding_on_ngff_04():
+    """Zarr v2 has no sharding codec, so the pair is a contradiction.
+
+    Silently ignoring `shard` here would be the worst outcome: the whole
+    point of turning it on is a filesystem that cannot take the file count.
+    """
+    import pytest
+    from _pw import validate_config
+
+    with pytest.raises(ValueError, match="no sharding codec"):
+        validate_config(
+            {"method": "threshold", "ngff_version": "0.4", "shard": True}
+        )
+    # ...but 0.4 on its own is fine.
+    validate_config({"method": "threshold", "ngff_version": "0.4"})

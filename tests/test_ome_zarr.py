@@ -648,3 +648,259 @@ def test_many_chunks_suggests_sharding(caplog):
             (4, 126, 1024, 1024), (1, 16, 1024, 1024), shard=False
         )
     assert caplog.text == ""
+
+
+def test_ngff_version_auto_matches_the_installed_zarr(tmp_path):
+    """The default must keep writing exactly what it wrote before."""
+    from patchworks.plugins.ome_zarr import _ZARR_V3, ngff_version
+
+    assert ngff_version() == ("0.5" if _ZARR_V3 else "0.4")
+
+    a = np.arange(2 * 32 * 32, dtype="uint16").reshape(2, 32, 32)
+    out = to_ome_zarr(
+        a, tmp_path / "a.zarr", axes="zyx", n_levels=1, chunks=(2, 16, 16)
+    )
+    attrs = dict(zarr.open_group(str(out), mode="r").attrs)
+    if _ZARR_V3:
+        assert attrs["ome"]["version"] == "0.5"
+    else:
+        assert attrs["multiscales"][0]["version"] == "0.4"
+
+
+@pytest.mark.parametrize("version", ["0.4", "0.5"])
+def test_ngff_version_pins_the_layout_and_the_zarr_format(tmp_path, version):
+    """Version and zarr format are one choice, not two.
+
+    0.4 is specified over zarr v2 with the NGFF keys at the top level; 0.5 is
+    the v3 revision and nests them under ``ome``. A store written half one
+    way and half the other is one no reader can open.
+    """
+    from patchworks.plugins.ome_zarr import _ZARR_V3
+
+    if version == "0.5" and not _ZARR_V3:
+        pytest.skip("0.5 needs zarr v3")
+
+    a = np.arange(4 * 32 * 32, dtype="uint16").reshape(4, 32, 32)
+    labels = np.zeros((4, 32, 32), dtype="uint32")
+    labels[1:3, 4:12, 4:12] = 9
+
+    out = to_ome_zarr(
+        a,
+        tmp_path / "a.zarr",
+        axes="zyx",
+        n_levels=2,
+        chunks=(2, 16, 16),
+        ngff_version=version,
+    )
+    write_labels(out, labels, name="cells", n_levels=2, ngff_version=version)
+
+    expected_format = 2 if version == "0.4" else 3
+    for component in ("0", "1", "labels/cells/0", "labels/cells/1"):
+        arr = zarr.open_array(f"{out}/{component}", mode="r")
+        assert arr.metadata.zarr_format == expected_format, component
+
+    attrs = dict(zarr.open_group(str(out), mode="r").attrs)
+    if version == "0.4":
+        assert "ome" not in attrs
+        assert attrs["multiscales"][0]["version"] == "0.4"
+    else:
+        assert attrs["ome"]["version"] == "0.5"
+
+    # Round-trips whatever the layout.
+    assert np.array_equal(
+        np.asarray(load_ome_zarr(out, channel=None, level=0)), a
+    )
+    assert np.array_equal(
+        np.asarray(zarr.open_array(f"{out}/labels/cells/0", mode="r")), labels
+    )
+
+
+def test_existing_store_format_beats_the_requested_version(tmp_path):
+    """Labels added later must not flip the store's format underneath it.
+
+    `merge` calls register_labels with the default "auto" long after convert
+    made the image. If "auto" re-derived the format from the installed zarr
+    it would write v3 label arrays into a v2 store -- half a store each way,
+    readable as neither.
+    """
+    from patchworks.plugins.ome_zarr import _ZARR_V3, register_labels
+
+    if not _ZARR_V3:
+        pytest.skip("needs zarr v3 installed to have a choice to get wrong")
+
+    a = np.zeros((4, 32, 32), dtype="uint16")
+    out = to_ome_zarr(
+        a,
+        tmp_path / "a.zarr",
+        axes="zyx",
+        n_levels=1,
+        chunks=(2, 16, 16),
+        ngff_version="0.4",
+    )
+    grp = zarr.open_group(f"{out}/labels/cells", mode="a", zarr_format=2)
+    base = grp.create_array(
+        "0", shape=(4, 32, 32), chunks=(2, 16, 16), dtype="uint32"
+    )
+    base[:] = 0
+
+    # No ngff_version= at all -- exactly how workflow/scripts/merge.py calls it.
+    register_labels(out, "cells", n_levels=2, progress=False, n_objects=0)
+
+    for component in ("labels/cells/0", "labels/cells/1"):
+        arr = zarr.open_array(f"{out}/{component}", mode="r")
+        assert arr.metadata.zarr_format == 2, component
+    label_attrs = dict(zarr.open_group(f"{out}/labels/cells", mode="r").attrs)
+    assert "ome" not in label_attrs
+    assert label_attrs["image-label"]["version"] == "0.4"
+
+
+def test_sharding_is_refused_on_a_zarr_v2_store(tmp_path, caplog):
+    """Zarr v2 has no sharding codec -- say so instead of raising."""
+    from patchworks.plugins.ome_zarr import _ZARR_V3, reshard_level
+
+    if not _ZARR_V3:
+        pytest.skip("needs zarr v3 installed")
+
+    a = np.arange(4 * 32 * 32, dtype="uint16").reshape(4, 32, 32)
+    out = to_ome_zarr(
+        a,
+        tmp_path / "a.zarr",
+        axes="zyx",
+        n_levels=1,
+        chunks=(2, 16, 16),
+        ngff_version="0.4",
+        shard=True,
+    )
+    arr = zarr.open_array(f"{out}/0", mode="r")
+    assert arr.metadata.zarr_format == 2
+    assert getattr(arr, "shards", None) is None
+
+    with caplog.at_level("WARNING"):
+        reshard_level(out, "0", shard=True, progress=False)
+    assert "no sharding codec" in caplog.text
+    arr = zarr.open_array(f"{out}/0", mode="r")
+    assert arr.metadata.zarr_format == 2
+    assert np.array_equal(np.asarray(arr), a)
+
+
+def test_unsupported_ngff_versions_are_refused(tmp_path):
+    """0.6 is released but is a different document, not a version bump."""
+    from patchworks.plugins.ome_zarr import _resolve_ngff_version
+
+    with pytest.raises(ValueError, match="coordinateSystems"):
+        _resolve_ngff_version("0.6")
+    with pytest.raises(ValueError, match="unknown ngff_version"):
+        _resolve_ngff_version("latest")
+    with pytest.raises(ValueError, match="unknown ngff_version"):
+        to_ome_zarr(
+            np.zeros((2, 8, 8), "uint16"),
+            tmp_path / "bad.zarr",
+            axes="zyx",
+            n_levels=1,
+            ngff_version="9.9",
+        )
+
+
+def test_ngff_pin_does_not_leak_out_of_the_write(tmp_path):
+    """The pin is per-call: a later default write must not inherit it."""
+    from patchworks.plugins.ome_zarr import _ZARR_V3, ngff_version
+
+    if not _ZARR_V3:
+        pytest.skip("needs zarr v3 installed")
+
+    a = np.zeros((2, 16, 16), dtype="uint16")
+    to_ome_zarr(
+        a,
+        tmp_path / "pinned.zarr",
+        axes="zyx",
+        n_levels=1,
+        ngff_version="0.4",
+    )
+    assert ngff_version() == "0.5"
+
+    out = to_ome_zarr(a, tmp_path / "after.zarr", axes="zyx", n_levels=1)
+    assert zarr.open_array(f"{out}/0", mode="r").metadata.zarr_format == 3
+
+
+def _ngff_errors(version, schema_name, doc):
+    """Validate *doc* against a vendored official NGFF schema."""
+    import json
+    from pathlib import Path
+
+    from jsonschema import Draft202012Validator
+    from referencing import Registry, Resource
+    from referencing.jsonschema import DRAFT202012
+
+    root = Path(__file__).parent / "ngff_schemas" / version
+    # The schemas $ref each other by their published URL, so register the
+    # local copies under exactly those URLs rather than letting the validator
+    # try to fetch them -- the test has to pass offline.
+    registry = Registry().with_resources(
+        (
+            f"https://ngff.openmicroscopy.org/{version}"
+            f"/schemas/{f.stem}.schema",
+            Resource.from_contents(
+                json.loads(f.read_text()), default_specification=DRAFT202012
+            ),
+        )
+        for f in root.glob("*.schema")
+    )
+    schema = json.loads((root / f"{schema_name}.schema").read_text())
+    validator = Draft202012Validator(schema, registry=registry)
+    return [
+        f"{'/'.join(map(str, e.path)) or '<root>'}: {e.message}"
+        for e in validator.iter_errors(doc)
+    ]
+
+
+@pytest.mark.parametrize("version", ["0.4", "0.5"])
+def test_output_conforms_to_the_official_ngff_schemas(tmp_path, version):
+    """What patchworks writes must validate as OME-ZARR, not just load here.
+
+    Round-tripping through patchworks' own reader proves nothing about
+    whether napari, ome-zarr-py or Fiji can open the store. These are the
+    schemas from ome/ngff-spec at the matching tag, so a change to how a
+    store is described cannot quietly stop being OME-ZARR.
+    """
+    pytest.importorskip("jsonschema")
+    from patchworks.plugins.ome_zarr import _ZARR_V3
+
+    if version == "0.5" and not _ZARR_V3:
+        pytest.skip("0.5 needs zarr v3")
+
+    image = np.arange(4 * 64 * 64, dtype="uint16").reshape(4, 64, 64)
+    labels = np.zeros((4, 64, 64), dtype="uint32")
+    labels[1:3, 10:30, 10:30] = 7
+
+    out = to_ome_zarr(
+        image,
+        tmp_path / "a.zarr",
+        axes="zyx",
+        n_levels=3,
+        chunks=(2, 32, 32),
+        pixel_size={"z": 0.24, "y": 0.108, "x": 0.108},
+        progress=False,
+        ngff_version=version,
+    )
+    write_labels(
+        out,
+        labels,
+        name="cilia",
+        n_levels=3,
+        progress=False,
+        n_objects=1,
+        ngff_version=version,
+    )
+
+    image_attrs = dict(zarr.open_group(str(out), mode="r").attrs)
+    label_attrs = dict(zarr.open_group(f"{out}/labels/cilia", mode="r").attrs)
+
+    # The image group and the label group are both multiscale images; the
+    # label group additionally has to satisfy the image-label schema.
+    for schema_name, doc, what in (
+        ("image", image_attrs, "image group"),
+        ("image", label_attrs, "label group multiscales"),
+        ("label", label_attrs, "label group image-label"),
+    ):
+        errors = _ngff_errors(version, schema_name, doc)
+        assert not errors, f"NGFF {version} {what}: {errors}"

@@ -17,7 +17,11 @@ from _pw import start_log
 start_log(snakemake.log[0])  # noqa: F821
 cfg = snakemake.config  # noqa: F821
 
-image_store = str(snakemake.input[0]).removesuffix("/zarr.json")  # noqa: F821
+image_store = (
+    str(snakemake.input[0])  # noqa: F821
+    .removesuffix("/zarr.json")
+    .removesuffix("/.zgroup")
+)
 level = int(cfg.get("level", 0))
 
 # Sizing the block from the tile keeps the map discriminating: a block as

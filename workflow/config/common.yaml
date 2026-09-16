@@ -20,6 +20,9 @@ convert_chunks: null
 # files. Worth turning on for anything large; convert warns when a store is
 # heading past ~200,000 chunks, which a shared filesystem will not enjoy.
 shard: false
+# OME-ZARR (NGFF) version: "auto" (0.5 on zarr v3), or "0.4" for a zarr-v2
+# store when a downstream tool cannot read 0.5. 0.4 disables sharding.
+ngff_version: "auto"
 
 # --- label pyramid (read by merge, i.e. once per config) ---
 # Shared here for convenience, but a per-config file may override these: each

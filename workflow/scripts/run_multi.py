@@ -270,6 +270,7 @@ _CONVERT_KEYS = (
     "convert_chunks",
     "shard",
     "reuse_pyramid",
+    "ngff_version",
 )
 
 

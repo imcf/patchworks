@@ -17,6 +17,12 @@ work_dir: "/path/to/results" # everything is written under here
 reuse_pyramid: false # for .ims: copy its own pyramid (fast); else rebuild
 convert_chunks: null # null → patchworks' bounded auto chunks; or [c,z,y,x]
 shard: false # true → pack chunks into shards (zarr v3; fewer files)
+# OME-ZARR (NGFF) version to write. "auto" follows the installed zarr: 0.5 on
+# zarr v3 (the default everywhere now), 0.4 on zarr v2. Pin "0.4" only if a
+# downstream tool cannot read 0.5 yet — it writes a zarr-v2 store, which has
+# no sharding codec, so `shard` stops working. 0.6 is released but nothing
+# reads it yet; see docs/guide/snakemake.md.
+ngff_version: "auto"
 # For a folder of single-plane TIFFs (input: a glob), set the filename regex
 # below; named groups become axes, e.g. one file per Z/C plane:
 # sequence_pattern: '_T(?P<T>\d+)_Z(?P<Z>\d+)_C(?P<C>\d+)_V\d+'

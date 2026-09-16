@@ -2,17 +2,24 @@
 
 WORK = config["work_dir"]
 IMAGE = f"{WORK}/image.zarr"
+# The store's own root metadata file, whose name is the zarr format's: v3
+# writes "zarr.json", v2 writes ".zgroup". `ngff_version: "0.4"` selects v2
+# (0.4 is defined over it), so hardcoding zarr.json would leave the convert
+# rule waiting for a file that is never written.
+ZARR_ROOT_FILE = (
+    ".zgroup" if str(config.get("ngff_version", "auto")) == "0.4" else "zarr.json"
+)
 # A single file inside the store, used as the convert rule's output and as the
 # dependency marker for downstream rules. Tracking a leaf file (not the
 # directory) lets Snakemake skip conversion when the store already exists and
 # avoids wiping the whole store on a re-run (same trick as imcf/sopa).
-IMAGE_OK = f"{IMAGE}/zarr.json"
+IMAGE_OK = f"{IMAGE}/{ZARR_ROOT_FILE}"
 
 # Max-pooled occupancy summary, a sibling of the image (not a node inside it,
 # which zarr would refuse to walk). Shared by every config against this image,
 # so it is keyed on the image and the level rather than on label_name.
 OCCUPANCY = f"{WORK}/image.occupancy.zarr/{int(config.get('level', 0))}"
-OCCUPANCY_OK = f"{OCCUPANCY}/zarr.json"
+OCCUPANCY_OK = f"{OCCUPANCY}/{ZARR_ROOT_FILE}"
 OCCUPANCYLOG = f"{WORK}/logs/occupancy.log"
 
 # Everything below is per-segmentation, namespaced under WORK/<label_name>/, so

@@ -41,6 +41,14 @@ matches the store, and reads both.
 
 ::: patchworks.plugins.ome_zarr.ngff_version
 
+Every writer takes an `ngff_version=` keyword: `"auto"` (default) follows the
+installed zarr — 0.5 on v3, 0.4 on v2 — and `"0.4"` pins the older, zarr-v2
+layout. Writing into an existing store always follows *that store's* format,
+so a label pyramid added later can never disagree with the image it sits in.
+NGFF 0.6 is released but not written: RFC-5 replaces `axes` with
+`coordinateSystems` and requires `input`/`output` on every coordinate
+transformation, and no reader supports it yet.
+
 ::: patchworks.plugins.ome_zarr.read_ngff_attr
 
 ::: patchworks.plugins.ome_zarr.write_ngff_attrs
