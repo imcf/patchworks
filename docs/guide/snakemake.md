@@ -50,7 +50,8 @@ work_dir: "/scratch/results"   # everything is written here
 # conversion (input → pyramidal OME-ZARR)
 reuse_pyramid: true            # .ims: copy its own pyramid (fast)
 convert_chunks: null           # null → bounded auto chunks; or [c,z,y,x]
-shard: false                   # true → pack chunks into shards (fewer files)
+shard: false                   # true → pack chunks into shards (fewer files);
+                               # covers the image and the label pyramids
 
 # tiling
 channel: 0                     # channel to segment, 0-based (null = keep all)
@@ -97,6 +98,26 @@ sequential_labels: true        # renumber labels to a contiguous 1..N
     (CPU), or on CPU even with `method: "cellpose"` (GPU). See [Growing
     labels afterwards](custom_segmentation.md#growing-labels-afterwards-dilation)
     for how it works and the equivalent direct-API call.
+
+!!! tip "What `shard: true` does and does not cover"
+    Without sharding, one chunk is one file, and a fine-chunked level 0 can
+    run to ~950k of them — painful on a shared filesystem at write time and
+    on every read after. `shard: true` packs chunks into far fewer files
+    without changing the chunking or the memory profile.
+
+    It applies to **the converted image (all levels)** and to **the label
+    pyramid levels (1..N)**. It does *not* apply to **label level 0**, and
+    that is a hard constraint rather than an oversight: a shard has to be
+    written whole by a single writer, while level 0 is written one chunk at
+    a time by concurrent `segment` jobs (or by the merge's own worker pool).
+    Sharding it would mean two writers doing a read-modify-write on the same
+    shard file and silently losing each other's chunks.
+
+    Level 0 is also the level with the most chunks, so check whether it is
+    actually a problem for your data before worrying about it — a
+    `(126, 34000, 28500)` image at the `(16, 1024, 1024)` label chunk cap is
+    7,616 files per label group, well under the 200,000 at which the
+    conversion starts warning.
 
 !!! tip "Dropping objects by size with `min_volume`/`max_volume`"
     `min_volume: N` drops any object smaller than `N` µm³; `max_volume: N`

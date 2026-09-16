@@ -142,6 +142,13 @@ group = register_labels(
     downscale=int(cfg.get("pyramid_downscale", 2)),
     progress=True,
     n_objects=n_objects,
+    # Same `shard` the conversion uses, so one setting covers the whole
+    # store. Only the pyramid levels can take it: level 0 is written a
+    # chunk at a time by concurrent segment jobs (or the merge's own pool),
+    # and a shard has to be written whole by one writer -- see
+    # _write_pyramid's note. Levels 1..N are written by one dask pass, so
+    # they can be.
+    shard=cfg.get("shard", False),
 )
 
 if not in_place:
