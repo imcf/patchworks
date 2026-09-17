@@ -117,6 +117,12 @@ set-resources:
     # the node's core count, and the pyramid is written zarr-natively (one
     # source chunk per task) instead of through a dask rechunk — so this no
     # longer has to cover an unbounded scheduler.
+    #
+    # `shard_labels: true` adds one more pass over level 0 (rewriting it
+    # sharded). That pass *does* go through a dask rechunk, but it bounds its
+    # own pool the same way — cgroup budget, not machine cores. It roughly
+    # doubles this rule's I/O, so raise runtime if the merge is already near
+    # the limit; `seff <jobid>` on a previous merge tells you the headroom.
     mem_mb: "attempt * 64000"
     cpus_per_task: 32
     runtime: 240
