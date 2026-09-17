@@ -904,3 +904,56 @@ def test_output_conforms_to_the_official_ngff_schemas(tmp_path, version):
     ):
         errors = _ngff_errors(version, schema_name, doc)
         assert not errors, f"NGFF {version} {what}: {errors}"
+
+
+def test_sharded_write_bounds_its_dask_pool(tmp_path):
+    """The one dask rechunk in this module must not size itself to the node.
+
+    dask's threaded scheduler defaults to one worker per *machine* core. On a
+    128-core cluster node that is 128 tasks each holding a whole shard
+    (~512 MB by default) inside whatever cgroup the job was granted -- the
+    same class of OOM that made convert.py pin its scheduler.
+    """
+    from patchworks.plugins.ome_zarr import _ZARR_V3
+
+    if not _ZARR_V3:
+        pytest.skip("sharding needs zarr v3")
+
+    seen = {}
+    import dask
+
+    real = dask.config.set
+
+    class _spy:
+        def __init__(self, *args, **kwargs):
+            if "num_workers" in kwargs:
+                seen["num_workers"] = kwargs["num_workers"]
+                seen["scheduler"] = kwargs.get("scheduler")
+            self._ctx = real(*args, **kwargs)
+
+        def __enter__(self):
+            return self._ctx.__enter__()
+
+        def __exit__(self, *exc):
+            return self._ctx.__exit__(*exc)
+
+    a = np.arange(16 * 256 * 256, dtype="uint32").reshape(16, 256, 256)
+    out = to_ome_zarr(
+        a, tmp_path / "a.zarr", axes="zyx", n_levels=1, chunks=(4, 64, 64)
+    )
+    dask.config.set = _spy
+    try:
+        from patchworks.plugins.ome_zarr import reshard_level
+
+        reshard_level(out, "0", shard=True, progress=False)
+    finally:
+        dask.config.set = real
+
+    assert seen.get("scheduler") == "threads"
+    assert isinstance(seen.get("num_workers"), int)
+    assert seen["num_workers"] >= 1
+    # and it must be a real bound, not the machine's core count
+    import os
+
+    assert seen["num_workers"] <= max(1, os.cpu_count() or 1)
+    assert np.array_equal(np.asarray(zarr.open_array(f"{out}/0", mode="r")), a)

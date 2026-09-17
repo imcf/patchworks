@@ -58,11 +58,12 @@ from itertools import product as _iproduct
 from pathlib import Path
 from typing import Union
 
+import dask
 import dask.array as da
 import numpy as np
 import zarr
 
-from .._chunks import cpu_allocation
+from .._chunks import cpu_allocation, safe_worker_count
 from .._progress import (
     PROGRESS_INTERVAL_S as _PROGRESS_INTERVAL_S,
 )
@@ -774,7 +775,26 @@ def _to_zarr_level(
         shards=sh,
         dtype=arr.dtype,
     )
-    with ctx:
+    # Rechunking to the shard size is the one place this module hands work to
+    # dask's scheduler, and dask defaults to one thread per *machine* core --
+    # on a 128-core node that is 128 tasks each holding a whole shard
+    # (~512 MB by default), inside whatever cgroup the job was granted. Bound
+    # it here rather than in each caller, so a direct API call is as safe as
+    # the workflow's.
+    shard_nbytes = int(np.prod(sh)) * arr.dtype.itemsize
+    n_workers = max(
+        1,
+        min(
+            cpu_allocation(),
+            safe_worker_count(shard_nbytes, fn_overhead=3),
+        ),
+    )
+    logger.debug(
+        "resharding with %d worker(s) for %.0f MB shards",
+        n_workers,
+        shard_nbytes / 1024**2,
+    )
+    with ctx, dask.config.set(scheduler="threads", num_workers=n_workers):
         arr.rechunk(sh).store(z, lock=True, compute=True)
 
 
