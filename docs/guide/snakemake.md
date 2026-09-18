@@ -333,6 +333,41 @@ set-resources:
     runtime: 240
 ```
 
+!!! warning "`runtime` is capped by the QOS, and sbatch rejects — it does not truncate"
+    Every `runtime:` above is bounded by the QOS the job lands in. Ask for
+    more and **`sbatch` refuses the job**, so it never starts:
+
+    ```
+    sbatch: error: QOSMaxWallDurationPerJobLimit
+    sbatch: error: Batch job submission failed: Job violates accounting/QOS policy
+    ```
+
+    The giveaway is an **empty log file**: the rule's `logs/<rule>.log` is
+    created by Snakemake but nothing ever writes to it, because the script
+    never ran. The reason appears only in the submission error, not in the
+    log.
+
+    Raising `runtime` past the cap therefore does not work on its own — you
+    have to request a QOS that allows it, per rule:
+
+    ```yaml
+    set-resources:
+      merge:
+        qos: "1day"      # a QOS your account may use on that partition
+        runtime: 720
+    ```
+
+    List what you may ask for, and each one's ceiling:
+
+    ```bash
+    sacctmgr show assoc user=$USER format=partition,qos%40
+    sacctmgr show qos format=name,maxwall
+    ```
+
+    On scicore the default QOS allows 6h, which is why the shipped profile
+    keeps every CPU rule at or below `runtime: 360` and gives the long
+    `segment` rule an explicit `qos:`.
+
 Then launch (from a login node — Snakemake submits and watches the jobs):
 
 ```bash

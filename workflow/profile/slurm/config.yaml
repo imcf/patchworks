@@ -38,6 +38,20 @@ keep-going: true
 retries: 2
 
 # Defaults for every rule (CPU jobs).
+#
+# RUNTIME CEILING: every `runtime:` below is capped by the QOS the job lands
+# in, and a job asking for more is rejected by *sbatch* -- it never starts, so
+# its log file stays empty and only the submission error says why:
+#
+#   sbatch: error: QOSMaxWallDurationPerJobLimit
+#
+# On scicore the default QOS on `scicore` allows 6h, which is why convert and
+# occupancy sit at exactly 360 and nothing here exceeds it. To go past that,
+# request a longer QOS for that rule as `segment` does below -- raising
+# `runtime` alone will not work. Check what you may ask for with:
+#
+#   sacctmgr show assoc user=$USER format=partition,qos%40
+#   sacctmgr show qos format=name,maxwall
 default-resources:
   slurm_partition: "scicore"
   # slurm_account: "my_account"
@@ -121,8 +135,16 @@ set-resources:
     # `shard_labels: true` adds one more pass over level 0 (rewriting it
     # sharded). That pass *does* go through a dask rechunk, but it bounds its
     # own pool the same way — cgroup budget, not machine cores. It roughly
-    # doubles this rule's I/O, so raise runtime if the merge is already near
-    # the limit; `seff <jobid>` on a previous merge tells you the headroom.
+    # doubles this rule's I/O; `seff <jobid>` on a previous merge tells you
+    # whether the headroom below still covers it.
+    #
+    # 360 is the ceiling under scicore's default QOS (see the note on
+    # default-resources). If the merge genuinely needs longer, ask for a QOS
+    # that allows it rather than just raising runtime — otherwise sbatch
+    # rejects the job before it starts and merge.log is left empty:
+    #
+    #   qos: "1day"        # whatever `sacctmgr show assoc user=$USER` lists
+    #   runtime: 720
     mem_mb: "attempt * 64000"
     cpus_per_task: 32
     runtime: 240
