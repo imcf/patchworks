@@ -681,7 +681,23 @@ abort the others; you get a per-config status and a non-zero exit.
     caps the wall time below `--relate-time` — `srun` fails immediately with
     `QOSMaxWallDurationPerJobLimit` when that happens; `sacctmgr -p show
     assoc user=$USER` and `sacctmgr -p show qos` list what's available and
-    each one's `MaxWall`. Under plain `multi` (no `--profile`), relations
+    each one's `MaxWall`.
+
+    The same settings can live in the multi config as a `relate:` block, so
+    the shipped `pixi run multi-slurm` task keeps working without extra
+    flags:
+
+    ```yaml
+    # config/multi.yaml
+    relate:
+      qos: "1day"
+      time: 720        # minutes, per pair; must stay under that QOS's MaxWall
+    ```
+
+    A `--relate-*` flag overrides the block for that one key; anything the
+    block does not set keeps its default. An unknown key there is an error
+    rather than silently ignored, since a typo would otherwise run with the
+    default you meant to replace. Under plain `multi` (no `--profile`), relations
     still run locally, in-process, one after another, as before.
 
     Because every pair gets its own job, one running long no longer starves

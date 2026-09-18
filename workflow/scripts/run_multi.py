@@ -191,6 +191,67 @@ def _test_email(cfg: dict) -> int:
     return 1
 
 
+# Fallbacks for the relate step, used when neither a --relate-* flag nor a
+# `relate:` block in the multi config supplies a value. Wide-margin guesses,
+# not measured numbers -- see docs/guide/snakemake.md.
+RELATE_DEFAULTS = {
+    "partition": "scicore",
+    "mem": "32G",
+    "cpus": 8,
+    "time": 180,
+    "qos": None,
+}
+
+
+def _relate_settings(multi_cfg: dict, args) -> dict:
+    """Resolve the relate step's SLURM settings.
+
+    Precedence is flag > config > default. Putting them in the config file
+    matters because the shipped `pixi run multi-slurm` task is a fixed
+    command: a cluster whose default QOS caps the wall time below
+    ``time`` has no way to say so without either editing that task or
+    abandoning it for a hand-written command line.
+
+    Parameters
+    ----------
+    multi_cfg : dict
+        The parsed multi-segmentation config, whose optional ``relate:``
+        block may carry any of ``partition``, ``mem``, ``cpus``, ``time``,
+        ``qos``.
+    args : argparse.Namespace
+        Parsed CLI arguments; each ``relate_*`` is None when not passed.
+
+    Returns
+    -------
+    dict
+        One value per key of :data:`RELATE_DEFAULTS`.
+
+    Raises
+    ------
+    ValueError
+        If ``relate:`` is not a mapping, or carries an unknown key -- a
+        typo there would otherwise be silently ignored and the job would
+        run with the default that the user thought they had replaced.
+    """
+    block = multi_cfg.get("relate", {}) or {}
+    if not isinstance(block, dict):
+        raise ValueError(
+            f"`relate:` in the multi config must be a mapping of "
+            f"{'/'.join(RELATE_DEFAULTS)}; got {type(block).__name__}"
+        )
+    unknown = set(block) - set(RELATE_DEFAULTS)
+    if unknown:
+        raise ValueError(
+            f"unknown key(s) in `relate:`: {', '.join(sorted(unknown))}; "
+            f"expected any of {', '.join(sorted(RELATE_DEFAULTS))}"
+        )
+    resolved = {}
+    for key, fallback in RELATE_DEFAULTS.items():
+        flag = getattr(args, f"relate_{key}", None)
+        resolved[key] = flag if flag is not None else block.get(key, fallback)
+    return resolved
+
+
 def _relate_cmd(
     rel: dict,
     *,
@@ -495,41 +556,54 @@ def main() -> None:
             "otherwise look identical: no email either way."
         ),
     )
+    # Defaults are None here, not the real values: main() has to tell "not
+    # passed" from "passed the default" so a `relate:` block in multi.yaml can
+    # fill the gap while an explicit flag still wins. RELATE_DEFAULTS holds
+    # the actual fallbacks.
     parser.add_argument(
         "--relate-partition",
-        default="scicore",
-        help="SLURM partition for the relate step under --profile (default: scicore)",
+        help=(
+            "SLURM partition for the relate step under --profile "
+            f"(default: {RELATE_DEFAULTS['partition']}). Overrides `relate:` "
+            "in the multi config."
+        ),
     )
     parser.add_argument(
         "--relate-mem",
-        default="32G",
-        help="srun --mem for the relate step under --profile (default: 32G)",
+        help=(
+            "srun --mem for the relate step under --profile "
+            f"(default: {RELATE_DEFAULTS['mem']}). Overrides `relate:` in "
+            "the multi config."
+        ),
     )
     parser.add_argument(
         "--relate-cpus",
         type=int,
-        default=8,
-        help="srun --cpus-per-task for the relate step under --profile (default: 8)",
+        help=(
+            "srun --cpus-per-task for the relate step under --profile "
+            f"(default: {RELATE_DEFAULTS['cpus']}). Overrides `relate:` in "
+            "the multi config."
+        ),
     )
     parser.add_argument(
         "--relate-time",
         type=int,
-        default=180,
         help=(
             "srun --time in minutes for the relate step under --profile "
-            "(default: 180). Each relation pair is its own SLURM job, so "
-            "this bounds one relation, not the whole relations: list."
+            f"(default: {RELATE_DEFAULTS['time']}). Each relation pair is "
+            "its own SLURM job, so this bounds one relation, not the whole "
+            "relations: list. Overrides `relate:` in the multi config."
         ),
     )
     parser.add_argument(
         "--relate-qos",
-        default=None,
         help=(
             "srun --qos for the relate step under --profile. Omit to let "
             "SLURM pick your account's default QOS for the partition -- set "
             "this explicitly if that default's MaxWall is shorter than "
             "--relate-time (sacctmgr -p show assoc/qos shows what's "
-            "available, e.g. '1day', '1week')."
+            "available, e.g. '1day', '1week'). Overrides `relate:` in the "
+            "multi config."
         ),
     )
     args = parser.parse_args()
@@ -678,6 +752,7 @@ def main() -> None:
         sys.exit(1)
 
     relations = multi_cfg.get("relations", [])
+    relate = _relate_settings(multi_cfg, args)
     if args.dry_run or not relations:
         return
 
@@ -703,11 +778,11 @@ def main() -> None:
                 work_dir=work_dir,
                 image_store=image_store,
                 workflow_dir=workflow_dir,
-                relate_partition=args.relate_partition,
-                relate_mem=args.relate_mem,
-                relate_cpus=args.relate_cpus,
-                relate_time=args.relate_time,
-                relate_qos=args.relate_qos,
+                relate_partition=relate["partition"],
+                relate_mem=relate["mem"],
+                relate_cpus=relate["cpus"],
+                relate_time=relate["time"],
+                relate_qos=relate["qos"],
             )
             print(f"[run_multi] $ {' '.join(cmd)}", flush=True)
             procs.append(
