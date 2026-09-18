@@ -24,6 +24,24 @@ segmentations:
 - config/config_cyto.yaml
 - config/config_cilia.yaml
 
+# SLURM settings for the relate step under --profile. Optional: omit the block
+# and the defaults below apply. They live here rather than only as --relate-*
+# flags so `pixi run multi-slurm` -- a fixed command -- still works on a
+# cluster whose default QOS caps the wall time below `time`. A --relate-*
+# flag overrides whatever is set here.
+#
+# `time` bounds ONE relation (each pair is its own job), and must stay under
+# the MaxWall of `qos`, or srun refuses the job before it starts. List what
+# you may use with:
+#   sacctmgr show assoc user=$USER format=partition,qos%40
+#   sacctmgr show qos format=name,maxwall
+# relate:
+#   partition: "scicore"   # default: scicore
+#   mem: "32G"             # default: 32G
+#   cpus: 8                # default: 8
+#   time: 180              # minutes, per pair; default: 180
+#   qos: "1day"            # default: your account's default QOS
+
 relations:
 - a: nuclei_labels
   b: cyto_labels

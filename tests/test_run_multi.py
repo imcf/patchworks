@@ -610,3 +610,74 @@ def test_store_marker_file_follows_the_zarr_format():
         src = (_workflow_dir() / "scripts" / script).read_text()
         assert '.removesuffix("/zarr.json")' in src, script
         assert '.removesuffix("/.zgroup")' in src, script
+
+
+class _NoRelateFlags:
+    relate_partition = None
+    relate_mem = None
+    relate_cpus = None
+    relate_time = None
+    relate_qos = None
+
+
+def test_relate_settings_fall_back_to_the_documented_defaults():
+    from run_multi import RELATE_DEFAULTS, _relate_settings
+
+    assert _relate_settings({}, _NoRelateFlags()) == RELATE_DEFAULTS
+
+
+def test_relate_settings_read_the_multi_config():
+    """`pixi run multi-slurm` is a fixed command, so the QOS must be config.
+
+    A cluster whose default QOS caps the wall time below `time` otherwise has
+    to abandon the shipped task for a hand-written command line.
+    """
+    from run_multi import _relate_settings
+
+    out = _relate_settings(
+        {"relate": {"qos": "1day", "time": 720}}, _NoRelateFlags()
+    )
+    assert out["qos"] == "1day"
+    assert out["time"] == 720
+    # untouched keys keep their defaults
+    assert out["partition"] == "scicore"
+    assert out["mem"] == "32G"
+
+
+def test_relate_flag_overrides_the_config():
+    from run_multi import _relate_settings
+
+    class _Flags(_NoRelateFlags):
+        relate_time = 999
+
+    out = _relate_settings({"relate": {"qos": "1day", "time": 720}}, _Flags())
+    assert out["time"] == 999
+    assert out["qos"] == "1day"  # not overridden, so the config still wins
+
+
+def test_relate_block_typos_are_rejected():
+    """A silently ignored typo would run with the default the user replaced."""
+    import pytest
+    from run_multi import _relate_settings
+
+    with pytest.raises(ValueError, match="unknown key"):
+        _relate_settings({"relate": {"qs": "1day"}}, _NoRelateFlags())
+    with pytest.raises(ValueError, match="must be a mapping"):
+        _relate_settings({"relate": ["1day"]}, _NoRelateFlags())
+
+
+def test_shipped_multi_config_relate_block_is_valid():
+    """The template's commented example must match what the parser accepts."""
+    import re
+
+    import yaml
+    from run_multi import RELATE_DEFAULTS
+
+    text = (_workflow_dir() / "config" / "multi.yaml").read_text()
+    block = re.search(r"^# relate:\n((?:^#   .*\n)+)", text, re.M)
+    assert block, "multi.yaml no longer documents the relate: block"
+    uncommented = "relate:\n" + re.sub(r"^# ", "", block.group(1), flags=re.M)
+    parsed = yaml.safe_load(uncommented)["relate"]
+    assert set(parsed) <= set(RELATE_DEFAULTS), set(parsed) - set(
+        RELATE_DEFAULTS
+    )
