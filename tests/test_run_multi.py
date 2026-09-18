@@ -110,11 +110,17 @@ def test_convert_keys_must_agree_across_configs():
         _validate_configs(paths, bad)
 
 
-def test_shipped_multi_configs_are_consistent():
+def test_shipped_multi_configs_are_consistent(tmp_path):
     """The shipped example must satisfy its own validator.
 
     It is the thing users copy, so a config set that run_multi would refuse to
     start is worse than no example at all.
+
+    The templates' paths are placeholders, which the validator now rejects on
+    purpose (running them unedited used to die deep in pathlib instead). What
+    is being checked here is the *structure* they teach -- one shared
+    work_dir, one tile_shape, convert's keys in the shared file -- so point
+    them at a real directory first and check that.
     """
     cfg_dir = Path(__file__).resolve().parents[1] / "workflow" / "config"
     multi = yaml.safe_load((cfg_dir / "multi.yaml").read_text())
@@ -122,7 +128,12 @@ def test_shipped_multi_configs_are_consistent():
     paths = [cfg_dir.parent / p for p in multi["segmentations"]]
     cfgs = [{**common, **yaml.safe_load(p.read_text())} for p in paths]
 
-    assert _validate_configs(paths, cfgs) == common["work_dir"]
+    work_dir = str(tmp_path / "results")
+    for cfg in cfgs:
+        cfg["work_dir"] = work_dir
+        cfg["input"] = str(tmp_path / "scan.ims")
+
+    assert _validate_configs(paths, cfgs) == work_dir
     # Every key convert reads comes from the shared file, not a per-config one.
     for path in paths:
         own = yaml.safe_load(path.read_text())
@@ -681,3 +692,58 @@ def test_shipped_multi_config_relate_block_is_valid():
     assert set(parsed) <= set(RELATE_DEFAULTS), set(parsed) - set(
         RELATE_DEFAULTS
     )
+
+
+def test_template_placeholders_are_refused_with_a_useful_message(capsys):
+    """Running the shipped templates unedited must say so, not crash.
+
+    `pixi run multi-slurm` points at workflow/config/, so someone who has
+    their own configs elsewhere gets the templates by default. That used to
+    reach state-directory creation and die four pathlib frames deep on
+    `PermissionError: '/path'`, naming neither the setting nor the file.
+    """
+    cfgs = [
+        {
+            "work_dir": "/path/to/results",
+            "input": "/path/to/scan.ims",
+            "tile_shape": [16, 1024, 1024],
+            "level": 0,
+        }
+    ]
+    with pytest.raises(SystemExit):
+        _validate_configs([Path("config_nuclei.yaml")], cfgs)
+    # Problems are printed and exited on, so the message is on stderr.
+    message = capsys.readouterr().err
+    assert "placeholder" in message
+    assert "config_nuclei.yaml" in message
+    assert "work_dir" in message and "input" in message
+
+
+def test_uncreatable_work_dir_is_refused(monkeypatch, tmp_path, capsys):
+    """A work_dir you cannot write fails before the first job is launched."""
+    from run_multi import os as run_multi_os
+
+    base = tmp_path / "readonly"
+    base.mkdir()
+    cfgs = [
+        {
+            "work_dir": str(base / "results"),
+            "input": str(tmp_path / "scan.ims"),
+            "tile_shape": [16, 1024, 1024],
+            "level": 0,
+        }
+    ]
+    # Writable: accepted, and the work_dir need not exist yet.
+    assert _validate_configs([Path("c.yaml")], cfgs) == str(base / "results")
+
+    # Not writable: refused. Patched rather than chmod'ed because the test
+    # suite may run as root, for whom every directory is writable.
+    real_access = run_multi_os.access
+    monkeypatch.setattr(
+        run_multi_os,
+        "access",
+        lambda p, mode: False if str(p) == str(base) else real_access(p, mode),
+    )
+    with pytest.raises(SystemExit):
+        _validate_configs([Path("c.yaml")], cfgs)
+    assert "not creatable" in capsys.readouterr().err

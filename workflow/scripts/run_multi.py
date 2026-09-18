@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -335,6 +336,10 @@ _CONVERT_KEYS = (
 )
 
 
+# Prefix used by every path placeholder in the shipped config templates.
+_PLACEHOLDER_PREFIX = "/path/to"
+
+
 def _validate_configs(paths: list[Path], cfgs: list[dict]) -> str:
     """Check the cross-config invariants before anything is submitted.
 
@@ -359,6 +364,37 @@ def _validate_configs(paths: list[Path], cfgs: list[dict]) -> str:
             f"configs must share one work_dir (label_relations compares "
             f"against a single image.zarr); got {_spread('work_dir')}"
         )
+
+    # The shipped config/ files are templates. Running them unedited used to
+    # get all the way to creating the state directory and die as a four-frame
+    # pathlib traceback ending in `PermissionError: '/path'`, which names
+    # neither the setting nor the file it came from.
+    for key in ("work_dir", "input"):
+        for path, cfg in zip(paths, cfgs):
+            value = str(cfg.get(key, ""))
+            if value.startswith(_PLACEHOLDER_PREFIX):
+                problems.append(
+                    f"{path.name} still has the template's placeholder "
+                    f"{key}: {value!r}. The files under workflow/config/ are "
+                    "examples -- point `--config` at your own copies, or "
+                    "edit them for this dataset."
+                )
+
+    # A work_dir that cannot be created fails much later, after the first
+    # Snakemake process is already being launched.
+    work_dir = next(iter(work_dirs), None) if len(work_dirs) == 1 else None
+    if work_dir and not str(work_dir).startswith(_PLACEHOLDER_PREFIX):
+        target = Path(work_dir)
+        existing = target
+        while not existing.exists() and existing != existing.parent:
+            existing = existing.parent
+        if not existing.exists():
+            problems.append(f"work_dir {work_dir} has no reachable parent")
+        elif not os.access(existing, os.W_OK):
+            problems.append(
+                f"work_dir {work_dir} is not creatable: no write permission "
+                f"on {existing}"
+            )
 
     for key in ("tile_shape", "level"):
         values = {repr(cfg.get(key)) for cfg in cfgs}
