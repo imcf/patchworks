@@ -127,10 +127,25 @@ shard_labels: false            # true → also reshard label level 0 after the
     `true` reuses whatever spec `shard` carries; a list overrides it.
     `shard: false` does not veto it — an unsharded image with sharded labels
     is a valid combination. It is opt-in because it costs one extra full
-    read+write of level 0, and because it is the level with the most chunks
-    it is also the one worth paying for. The array's attributes (including
-    the merge's own completion marker) are carried across, so a later rerun
-    still sees the merge as done.
+    read+write of level 0. The array's attributes (including the merge's own
+    completion marker) are carried across, so a later rerun still sees the
+    merge as done.
+
+    **Set both keys.** A level's chunks shrink in step with the array
+    (`ceil(chunk / stride)`), so every pyramid level holds roughly as many
+    chunks as level 0 rather than a quarter of them — level 0 is under a
+    third of a label group's files, and `shard_labels` on its own leaves the
+    rest unsharded. For a `(126, 14336, 9216)` volume at `(14, 729, 729)`
+    chunks:
+
+    | level | chunks | sharded |
+    |---|---|---|
+    | 0 | 2,340 | 147 |
+    | 1 | 2,340 | 37 |
+    | 2 | 2,340 | 12 |
+    | 3 | 1,134 | 9 |
+    | 4 | 315 | 9 |
+    | **total** | **8,469** | **214** |
 
     Check whether the file count is actually a problem for your data first —
     a `(126, 34000, 28500)` image at the `(16, 1024, 1024)` label chunk cap

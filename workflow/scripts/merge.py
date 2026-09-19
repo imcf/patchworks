@@ -156,9 +156,7 @@ if min_volume or max_volume:
 # is invisible from the config and only shows up as a slow `ls` weeks later.
 level0 = zarr.open_array(f"{label_group}/0", mode="r")
 n_chunks = int(
-    np.prod(
-        [-(-s // c) for s, c in zip(level0.shape, level0.chunks)]
-    )
+    np.prod([-(-s // c) for s, c in zip(level0.shape, level0.chunks)])
 )
 print(
     f"[patchworks] {label_name} level 0: shape={level0.shape} "
@@ -166,13 +164,25 @@ print(
 )
 
 shard_labels = cfg.get("shard_labels", False)
-if not shard_labels and n_chunks > 5000:
+if (not shard_labels or not cfg.get("shard")) and n_chunks > 2000:
+    # Both keys, not one: a level's chunks shrink in step with the array
+    # (ceil(chunk/stride)), so every pyramid level holds roughly as many
+    # chunks as level 0 rather than a quarter -- level 0 is under a third of
+    # a label group's files, and `shard_labels` alone leaves the rest.
+    missing = " and ".join(
+        k
+        for k, on in (
+            ("shard", cfg.get("shard")),
+            ("shard_labels", shard_labels),
+        )
+        if not on
+    )
     print(
-        f"[patchworks] NOTE: {n_chunks:,} chunks means {n_chunks:,} files in "
-        f"{label_group}/0 alone, and one label group per config. Set "
-        "`shard_labels: true` to pack them into far fewer files (one extra "
-        "pass over level 0), or re-run with a tile_shape that is a multiple "
-        f"of the {LABEL_CHUNK_CAP} chunk cap."
+        f"[patchworks] NOTE: level 0 alone is {n_chunks:,} chunks, and each "
+        "pyramid level holds about as many again, so this label group is "
+        f"roughly {n_chunks * 3.5:,.0f} files. Set `{missing}: true` to pack "
+        "them into shards -- `shard` covers levels 1..N, `shard_labels` "
+        "covers level 0, and only both together cover the whole group."
     )
 if shard_labels:
     # `true` reuses whatever `shard` asks the conversion for; a list overrides

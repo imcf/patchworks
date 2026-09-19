@@ -805,5 +805,7 @@ def test_merge_reports_the_label_chunk_cost():
     assert "LABEL_CHUNK_CAP = (16, 1024, 1024)" in src
     assert "-> {n_chunks:,} chunks" in src
     # The note has to name the remedy, and only fire when it is not taken.
-    assert "if not shard_labels and n_chunks >" in src
-    assert "shard_labels: true" in src
+    # Both keys, not just shard_labels: each pyramid level holds about as
+    # many chunks as level 0, so level 0 is under a third of the group.
+    assert 'if (not shard_labels or not cfg.get("shard"))' in src
+    assert "`shard` covers levels 1..N" in src
