@@ -45,3 +45,60 @@ def test_label_relations_chunk_mismatch_raises():
     b = da.zeros((4, 4), chunks=(4, 4), dtype=np.int32)
     with pytest.raises(ValueError, match="chunk layout"):
         label_relations(a, b)
+
+
+def test_label_relations_reports_progress(caplog, monkeypatch):
+    """A multi-hour scan must say it is alive, not just print at the end.
+
+    `ex.map` returns results in submission order, so one slow early chunk
+    withheld every later result and the log stayed empty however many had
+    actually finished -- a real run showed two lines after 1.5 hours,
+    indistinguishable from a hang.
+    """
+    import dask.array as da
+    import numpy as np
+
+    from patchworks import _relations
+
+    # Report on every chunk rather than once a minute, so the mechanism is
+    # observable in a test instead of only in an hours-long job.
+    monkeypatch.setattr(_relations, "_PROGRESS_INTERVAL_S", 0.0)
+
+    rng = np.random.default_rng(0)
+    a = da.from_array(
+        rng.integers(0, 5, (8, 64, 64), dtype="uint32"), chunks=(4, 32, 32)
+    )
+    b = da.from_array(
+        rng.integers(0, 5, (8, 64, 64), dtype="uint32"), chunks=(4, 32, 32)
+    )
+
+    with caplog.at_level("INFO"):
+        _relations.label_relations(a, b)
+
+    text = caplog.text
+    assert "scanning 8 chunk(s)" in text
+    # Periodic lines while it runs, including a final 100%.
+    assert "label_relations: 1/8" in text
+    assert "8/8 (100%)" in text
+
+
+def test_label_relations_is_independent_of_completion_order():
+    """Switching to as_completed must not change a single row.
+
+    Chunks now land in whatever order they finish rather than in submission
+    order, so the merge downstream has to be order-insensitive.
+    """
+    import dask.array as da
+    import numpy as np
+
+    from patchworks import label_relations
+
+    rng = np.random.default_rng(3)
+    a_arr = rng.integers(0, 12, (12, 96, 96), dtype="uint32")
+    b_arr = rng.integers(0, 12, (12, 96, 96), dtype="uint32")
+    a = da.from_array(a_arr, chunks=(4, 32, 32))
+    b = da.from_array(b_arr, chunks=(4, 32, 32))
+
+    assert label_relations(a, b, n_workers=1) == label_relations(
+        a, b, n_workers=8
+    )

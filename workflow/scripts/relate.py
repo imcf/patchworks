@@ -23,12 +23,29 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import time
 from pathlib import Path
 
 
 def _num_chunks(arr: "da.Array") -> int:  # noqa: F821 - dask imported lazily by callers
     """Total chunk count of a dask array, for picking the coarser side to rechunk to."""
     return math.prod(len(c) for c in arr.chunks)
+
+
+def _n_objects(image_store: str, name: str) -> str:
+    """Object count from the label group's attrs, for a log line.
+
+    Read from the metadata the merge already wrote, never by scanning -- a
+    progress line that costs a full volume read would defeat its own purpose.
+    """
+    import zarr
+
+    try:
+        attrs = dict(zarr.open_group(f"{image_store}/labels/{name}").attrs)
+    except Exception:  # pragma: no cover - a log line must never fail the run
+        return "object count unknown"
+    n = attrs.get("n_objects")
+    return f"{int(n):,} objects" if n is not None else "object count unknown"
 
 
 def _label_ids(image_store: str, name: str) -> list[int]:
@@ -121,8 +138,21 @@ def run_relations(
             )
             continue
         print(f"[relate] relating {a_name} -> {b_name} …", flush=True)
+        started = time.monotonic()
         a = da.from_zarr(image_store, component=f"labels/{a_name}/0")
         b = da.from_zarr(image_store, component=f"labels/{b_name}/0")
+
+        # What this pair actually costs, before it starts costing it. A
+        # relation runs for hours on a real dataset, and until now the log
+        # said only "relating a -> b" and then nothing at all until it
+        # finished -- indistinguishable from a hang.
+        for name, arr in ((a_name, a), (b_name, b)):
+            print(
+                f"[relate]   {name}: shape={arr.shape} chunks="
+                f"{tuple(c[0] for c in arr.chunks)} "
+                f"({_num_chunks(arr):,} chunks, {_n_objects(image_store, name)})",
+                flush=True,
+            )
 
         # label_relations() requires matching chunk layouts (it walks both
         # arrays block-by-block at the same index) but two configs are free
@@ -153,6 +183,11 @@ def run_relations(
                 a = a.rechunk(b.chunks)
 
         table = label_relations(a, b)
+        print(
+            f"[relate] {a_name} -> {b_name}: matched {len(table):,} object(s) "
+            f"in {(time.monotonic() - started) / 60:.1f}m",
+            flush=True,
+        )
 
         # label_relations() only returns a-objects that touch a b-object.
         # Pull the full id sets so unmatched a-objects (zero overlap) and

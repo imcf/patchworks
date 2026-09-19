@@ -700,6 +700,11 @@ abort the others; you get a per-config status and a non-zero exit.
     default you meant to replace. Under plain `multi` (no `--profile`), relations
     still run locally, in-process, one after another, as before.
 
+    Each pair logs its shape, chunk count and object count before it starts,
+    then a progress line roughly once a minute (`label_relations: 412/3,600
+    (11%) after 7m, ~55m left`), so a long relation is distinguishable from a
+    hung one in `logs/relate/<a>_to_<b>.log`.
+
     Because every pair gets its own job, one running long no longer starves
     the others out of a shared time budget, and a pair that gets killed no
     longer takes an already-finished sibling's workbook down with it.
