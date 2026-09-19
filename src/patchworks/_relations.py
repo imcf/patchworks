@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import logging
-from concurrent.futures import ThreadPoolExecutor
+import time as _time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Union
 
@@ -11,6 +12,8 @@ import dask.array as da
 import numpy as np
 
 from ._chunks import cpu_allocation
+from ._progress import PROGRESS_INTERVAL_S as _PROGRESS_INTERVAL_S
+from ._progress import log_progress
 
 logger = logging.getLogger(__name__)
 
@@ -97,14 +100,35 @@ def label_relations(
     total = int(np.prod(n_blocks))
     nw = n_workers if n_workers is not None else min(4, cpu_allocation())
 
+    logger.info(
+        "label_relations: scanning %d chunk(s) of %s with %d worker(s)",
+        total,
+        "x".join(str(n) for n in a.shape),
+        nw,
+    )
+
     def _one(flat_idx: int) -> np.ndarray:
         idx = np.unravel_index(flat_idx, n_blocks)
         return _chunk_pairs(
             np.asarray(a.blocks[idx]), np.asarray(b.blocks[idx])
         )
 
+    # as_completed, not ex.map: map returns an iterator that yields in
+    # submission order, so one slow early chunk withholds every later result
+    # and the log stays silent however many have actually finished. This step
+    # runs for hours in a batch job where the only question the log has to
+    # answer is "working, or hung?".
+    started = _time.monotonic()
+    last = started
+    parts = []
     with ThreadPoolExecutor(max_workers=nw) as ex:
-        parts = list(ex.map(_one, range(total)))
+        futures = {ex.submit(_one, i): i for i in range(total)}
+        for done, future in enumerate(as_completed(futures), start=1):
+            parts.append(future.result())
+            now = _time.monotonic()
+            if now - last >= _PROGRESS_INTERVAL_S or done == total:
+                log_progress("label_relations", done, total, started)
+                last = now
 
     rows = [p for p in parts if p.size]
     if not rows:
