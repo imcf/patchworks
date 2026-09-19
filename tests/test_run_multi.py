@@ -747,3 +747,63 @@ def test_uncreatable_work_dir_is_refused(monkeypatch, tmp_path, capsys):
     with pytest.raises(SystemExit):
         _validate_configs([Path("c.yaml")], cfgs)
     assert "not creatable" in capsys.readouterr().err
+
+
+def test_iso_export_command_preserves_a_zarr_tree():
+    """The .iso has to be readable on Windows, not just on Linux.
+
+    A zarr store nests deeper than ISO-9660's 8 levels, so without `-D` the
+    tree is relocated into RR_MOVED -- which Rock Ridge readers undo
+    transparently and Windows does not, leaving Explorer a scrambled tree
+    that still *looks* like it copied fine. Joliet carries the long names
+    Windows reads; level 3 stores a >4 GB shard as multiple extents.
+    """
+    import importlib.util
+    from pathlib import Path as _Path
+
+    spec = importlib.util.spec_from_file_location(
+        "export_iso", _workflow_dir() / "scripts" / "export_iso.py"
+    )
+    export_iso = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(export_iso)
+
+    cmd = export_iso.build_command(
+        _Path("/data/image.zarr"), _Path("/out/image.zarr.iso")
+    )
+    for flag in ("-R", "-J", "-joliet-long", "-D", "-graft-points"):
+        assert flag in cmd, flag
+    assert cmd[cmd.index("-iso-level") + 1] == "3"
+    # The store must land as its own directory inside the image, not as a
+    # bare 0/ 1/ labels/ at the root.
+    assert cmd[-1] == "/image.zarr=/data/image.zarr"
+
+
+def test_iso_volume_id_is_always_acceptable():
+    """xorriso rejects a volid over 32 chars or with odd characters."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "export_iso", _workflow_dir() / "scripts" / "export_iso.py"
+    )
+    export_iso = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(export_iso)
+
+    for name in ("image", "Elena out-multi", "x" * 80, "...", ""):
+        volid = export_iso.volume_id(name)
+        assert 1 <= len(volid) <= 32, (name, volid)
+        assert all(c.isalnum() or c == "_" for c in volid), (name, volid)
+
+
+def test_merge_reports_the_label_chunk_cost():
+    """The file count must be visible in the log, not discovered by `ls`.
+
+    Label chunks are inherited from tile_shape, so an auto-sized tile that
+    is not a multiple of the cap (729 against 1024) multiplies the file
+    count ~2.25x with nothing in the config hinting at it.
+    """
+    src = (_workflow_dir() / "scripts" / "merge.py").read_text()
+    assert "LABEL_CHUNK_CAP = (16, 1024, 1024)" in src
+    assert "-> {n_chunks:,} chunks" in src
+    # The note has to name the remedy, and only fire when it is not taken.
+    assert "if not shard_labels and n_chunks >" in src
+    assert "shard_labels: true" in src

@@ -173,6 +173,27 @@ shard_labels: false            # true → also reshard label level 0 after the
     to 0.5. Setting `ngff_version: "0.6"` is rejected with that explanation
     rather than writing a store you could not open.
 
+!!! tip "Exporting a store as a single `.iso`"
+    A zarr store is tens of thousands of small files, which copies slowly
+    everywhere and badly to Windows. `pixi run iso` packs a finished store
+    into one image that mounts read-only with a double-click:
+
+    ```bash
+    pixi run iso --store /path/to/image.zarr --dry-run   # report, write nothing
+    pixi run iso --store /path/to/image.zarr
+    ```
+
+    Mount it: **Windows** right-click → Mount; **macOS** double-click or
+    `hdiutil attach`; **Linux** `sudo mount -o loop <iso> /mnt/point`. The
+    store inside opens with napari/patchworks unchanged — same bytes, just
+    packaged.
+
+    Needs `xorriso` on PATH (`conda install -c conda-forge xorriso`). The
+    image is ISO-9660 level 3 with Rock Ridge *and* Joliet and deep-directory
+    relocation disabled, because a zarr v3 chunk path nests deeper than
+    ISO-9660's 8 levels — without that, Windows sees a tree flattened into
+    `RR_MOVED` that still looks like it copied correctly.
+
 !!! tip "Dropping objects by size with `min_volume`/`max_volume`"
     `min_volume: N` drops any object smaller than `N` µm³; `max_volume: N`
     drops any object larger than `N` µm³ (e.g. several objects merged into
