@@ -57,6 +57,13 @@ dry = "snakemake -s Snakefile --configfile config/config.yaml --rerun-triggers m
 go = "snakemake -s Snakefile --configfile config/config.yaml --rerun-triggers mtime --cores 8"
 slurm = "snakemake --workflow-profile profile/slurm --configfile config/config.yaml"
 
+# Pack a finished store into one .iso, for copying to a laptop or a share
+# without moving tens of thousands of small files. Mounts read-only on
+# Windows (right-click -> Mount), macOS and Linux:
+#   pixi run iso --store /path/to/image.zarr [--dry-run]
+# Needs xorriso on PATH (conda install -c conda-forge xorriso).
+iso = "python scripts/export_iso.py"
+
 # Run every segmentation config listed in config/multi.yaml (in order), then
 # relate their labels by voxel overlap (patchworks.label_relations) and write
 # a CSV per configured pair — see config/multi.yaml and

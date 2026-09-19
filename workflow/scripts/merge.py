@@ -35,6 +35,9 @@ start_log(snakemake.log[0])  # noqa: F821
 cfg = snakemake.config  # noqa: F821
 work_dir = cfg["work_dir"]
 label_name = cfg.get("label_name", "labels")
+# Level 0 keeps napari-friendly chunks even when the tile is much larger; the
+# cap has to divide the tile so workers still write whole chunks.
+LABEL_CHUNK_CAP = (16, 1024, 1024)
 image_store = str(Path(work_dir) / "image.zarr")
 label_group = f"{image_store}/labels/{label_name}"
 
@@ -90,7 +93,7 @@ else:
     if label_name in parent:
         del parent[label_name]
     parent.require_group(label_name)
-    out_chunks = capped_output_chunks(staged.chunks, (16, 1024, 1024))
+    out_chunks = capped_output_chunks(staged.chunks, LABEL_CHUNK_CAP)
 
 _, n_objects = merge_tile_labels(
     target_path,
@@ -147,7 +150,30 @@ if min_volume or max_volume:
 # largest level by the shard/chunk ratio, which matters on a filesystem that
 # dislikes many small files. It costs a full extra read+write of level 0, so
 # it stays opt-in.
+# Say what the label store will cost in files, and why. The chunk shape is
+# inherited from tile_shape, so an auto-sized tile that is not a multiple of
+# the cap (e.g. 729 against 1024) quietly multiplies the file count -- which
+# is invisible from the config and only shows up as a slow `ls` weeks later.
+level0 = zarr.open_array(f"{label_group}/0", mode="r")
+n_chunks = int(
+    np.prod(
+        [-(-s // c) for s, c in zip(level0.shape, level0.chunks)]
+    )
+)
+print(
+    f"[patchworks] {label_name} level 0: shape={level0.shape} "
+    f"chunks={level0.chunks} -> {n_chunks:,} chunks"
+)
+
 shard_labels = cfg.get("shard_labels", False)
+if not shard_labels and n_chunks > 5000:
+    print(
+        f"[patchworks] NOTE: {n_chunks:,} chunks means {n_chunks:,} files in "
+        f"{label_group}/0 alone, and one label group per config. Set "
+        "`shard_labels: true` to pack them into far fewer files (one extra "
+        "pass over level 0), or re-run with a tile_shape that is a multiple "
+        f"of the {LABEL_CHUNK_CAP} chunk cap."
+    )
 if shard_labels:
     # `true` reuses whatever `shard` asks the conversion for; a list overrides
     # it with an explicit shard shape. `shard: false` does not veto this --
