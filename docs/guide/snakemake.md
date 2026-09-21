@@ -192,6 +192,27 @@ shard_labels: false            # true → also reshard label level 0 after the
     to 0.5. Setting `ngff_version: "0.6"` is rejected with that explanation
     rather than writing a store you could not open.
 
+!!! tip "Repacking a store that was written unsharded (`pixi run reshard`)"
+    Sharding normally has to be chosen before a store is written, because
+    concurrent writers cannot share a shard file. Once the store is finished
+    nothing is writing it, so a single pass can repack it in place — same
+    data, same chunking, same metadata, far fewer files, no re-conversion and
+    no re-segmentation:
+
+    ```bash
+    pixi run reshard --store /path/to/image.zarr --dry-run     # report only
+    pixi run reshard --store /path/to/image.zarr --labels-only
+    ```
+
+    It skips anything already sharded, so re-running it is a no-op, and it
+    carries each array's attributes across — including the merge's own
+    completion marker, without which a later re-run would merge already-merged
+    ids together.
+
+    Submit it rather than running it on a login node: it reads and writes
+    every level. Mind the QOS ceiling (see the warning in section 5b) —
+    `sbatch --qos=1day --time=12:00:00 --cpus-per-task=8 --mem=64G`.
+
 !!! tip "Exporting a store as a single `.iso`"
     A zarr store is tens of thousands of small files, which copies slowly
     everywhere and badly to Windows. `pixi run iso` packs a finished store
