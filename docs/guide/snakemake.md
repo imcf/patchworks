@@ -131,21 +131,25 @@ shard_labels: false            # true → also reshard label level 0 after the
     completion marker) are carried across, so a later rerun still sees the
     merge as done.
 
-    **Set both keys.** A level's chunks shrink in step with the array
-    (`ceil(chunk / stride)`), so every pyramid level holds roughly as many
-    chunks as level 0 rather than a quarter of them — level 0 is under a
-    third of a label group's files, and `shard_labels` on its own leaves the
-    rest unsharded. For a `(126, 14336, 9216)` volume at `(14, 729, 729)`
-    chunks:
+    **Set both keys**, but expect level 0 to dominate. `shard: true` sends
+    the pyramid down the dask path, where each level is rechunked to the
+    `(16, 1024, 1024)` cap — so levels 1..N shrink fourfold each, the way
+    you would expect. Level 0 does not: its chunks come from `tile_shape`,
+    it is the full-resolution level, and it is the one `shard` cannot reach.
 
-    | level | chunks | sharded |
+    Measured on a real `(126, 45961, 42072)` label group whose tiles are 32%
+    occupied (empty chunks are never written):
+
+    | level | files, `shard` only | with `shard_labels` too |
     |---|---|---|
-    | 0 | 2,340 | 147 |
-    | 1 | 2,340 | 37 |
-    | 2 | 2,340 | 12 |
-    | 3 | 1,134 | 9 |
-    | 4 | 315 | 9 |
-    | **total** | **8,469** | **214** |
+    | 0 | ~10,656 | ~666 |
+    | 1–4 | ~462 | ~462 |
+    | **total** | **~11,100** | **~1,130** |
+
+    So level 0 is ~96% of a label group here, and `shard` alone barely moves
+    the file count. The two keys are not interchangeable and neither is
+    redundant — `shard` handles the pyramid, `shard_labels` handles the level
+    that actually holds the files.
 
     Check whether the file count is actually a problem for your data first —
     a `(126, 34000, 28500)` image at the `(16, 1024, 1024)` label chunk cap
