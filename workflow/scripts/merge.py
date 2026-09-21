@@ -172,10 +172,11 @@ print(
     f"shard_labels={shard_labels!r}"
 )
 if (not shard_labels or not cfg.get("shard")) and n_chunks > 2000:
-    # Both keys, not one: a level's chunks shrink in step with the array
-    # (ceil(chunk/stride)), so every pyramid level holds roughly as many
-    # chunks as level 0 rather than a quarter -- level 0 is under a third of
-    # a label group's files, and `shard_labels` alone leaves the rest.
+    # Both keys, and level 0 is the one that matters. `shard` sends the
+    # pyramid down the dask path, where each level is rechunked to the cap
+    # and so shrinks fourfold; level 0 keeps tile_shape's chunks and is the
+    # level `shard` cannot reach. On a real store it was 96% of the group's
+    # files, so `shard` alone barely moved the count.
     missing = " and ".join(
         k
         for k, on in (
@@ -185,11 +186,11 @@ if (not shard_labels or not cfg.get("shard")) and n_chunks > 2000:
         if not on
     )
     print(
-        f"[patchworks] NOTE: level 0 alone is {n_chunks:,} chunks, and each "
-        "pyramid level holds about as many again, so this label group is "
-        f"roughly {n_chunks * 3.5:,.0f} files. Set `{missing}: true` to pack "
-        "them into shards -- `shard` covers levels 1..N, `shard_labels` "
-        "covers level 0, and only both together cover the whole group."
+        f"[patchworks] NOTE: level 0 is {n_chunks:,} chunks, and typically "
+        "the great majority of this label group's files -- the pyramid "
+        "levels above it shrink fourfold each. Set `" + missing + ": true` "
+        "to pack them into shards: `shard` covers levels 1..N, "
+        "`shard_labels` covers level 0, which is the one that counts."
     )
 if shard_labels:
     # `true` reuses whatever `shard` asks the conversion for; a list overrides
