@@ -164,6 +164,13 @@ print(
 )
 
 shard_labels = cfg.get("shard_labels", False)
+# Echo what was actually read, not just what it leads to. A key set in the
+# wrong config file is silent otherwise: the run behaves as if it were never
+# written, and the log gives no way to tell that from the feature failing.
+print(
+    f"[patchworks] sharding: shard={cfg.get('shard', False)!r} "
+    f"shard_labels={shard_labels!r}"
+)
 if (not shard_labels or not cfg.get("shard")) and n_chunks > 2000:
     # Both keys, not one: a level's chunks shrink in step with the array
     # (ceil(chunk/stride)), so every pyramid level holds roughly as many
