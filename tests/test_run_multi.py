@@ -813,3 +813,36 @@ def test_merge_reports_the_label_chunk_cost():
     # otherwise indistinguishable from the feature not working.
     assert "[patchworks] sharding: shard=" in src
     assert "shard_labels={shard_labels!r}" in src
+
+
+def test_reshard_task_is_wired_up():
+    """The retrofit script has to ship, not live in a chat message.
+
+    A store written before `shard_labels` was turned on needs repacking, and
+    telling someone to save a file by hand loses it -- `git pull` should
+    deliver it like every other script here.
+    """
+    wf = _workflow_dir()
+    assert (wf / "scripts" / "reshard_store.py").is_file()
+    pixi = (wf / "pixi.toml").read_text()
+    assert 'reshard = "python scripts/reshard_store.py"' in pixi
+    # The QOS trap bit us on the merge; the task's own comment must warn.
+    assert "--qos=1day" in pixi
+
+
+def test_reshard_script_skips_already_sharded_arrays():
+    """Re-running it must be a no-op, not a second full rewrite."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "reshard_store", _workflow_dir() / "scripts" / "reshard_store.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    src = (_workflow_dir() / "scripts" / "reshard_store.py").read_text()
+    assert "already sharded" in src
+    assert "--labels-only" in src
+    assert "--dry-run" in src
+    # It must never silently eat a merge-state attr.
+    assert "patchworks_merge_state" in src
