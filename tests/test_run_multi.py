@@ -809,3 +809,7 @@ def test_merge_reports_the_label_chunk_cost():
     # many chunks as level 0, so level 0 is under a third of the group.
     assert 'if (not shard_labels or not cfg.get("shard"))' in src
     assert "`shard` covers levels 1..N" in src
+    # And echo the values it read: a key set in the wrong config file is
+    # otherwise indistinguishable from the feature not working.
+    assert "[patchworks] sharding: shard=" in src
+    assert "shard_labels={shard_labels!r}" in src
