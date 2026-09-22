@@ -29,9 +29,8 @@ from pathlib import Path
 from typing import Any, Union
 
 import dask.array as da
-import zarr
 
-from .._io import load_ome_zarr
+from .._io import from_zarr_any, load_ome_zarr, open_group_any
 from .ome_zarr import read_ngff_attr
 
 logger = logging.getLogger(__name__)
@@ -84,7 +83,7 @@ def _has_multiscales(path: Union[str, Path]) -> bool:
     bool
         True if the group has a ``multiscales`` attribute.
     """
-    root = zarr.open_group(str(path), mode="r")
+    root = open_group_any(path)
     return read_ngff_attr(root.attrs, "multiscales") is not None
 
 
@@ -105,7 +104,7 @@ def _multiscale_levels(
     list of da.Array
         One lazy array per resolution level.
     """
-    root = zarr.open_group(str(path), mode="r")
+    root = open_group_any(path)
     datasets = read_ngff_attr(root.attrs, "multiscales")[0]["datasets"]
     return [
         load_ome_zarr(path, channel=channel, level=i)
@@ -204,7 +203,7 @@ def _label_hint(path: Union[str, Path]) -> dict[str, Any]:
         ``metadata=``/merge into a bigger dict either way.
     """
     try:
-        attrs = zarr.open_group(str(path), mode="r").attrs
+        attrs = open_group_any(path).attrs
     except Exception:
         return {}
     if "n_objects" not in attrs:
@@ -229,7 +228,7 @@ def _inner_label_names(store: Union[str, Path]) -> list[str]:
         Registered label-image names (empty if there are none).
     """
     try:
-        grp = zarr.open_group(f"{store}/labels", mode="r")
+        grp = open_group_any(f"{store}/labels")
     except Exception:
         return []
     return list(read_ngff_attr(grp.attrs, "labels", []) or [])
@@ -256,9 +255,9 @@ def _resolve_labels(
         if _has_multiscales(source):
             levels = _multiscale_levels(source, None)
             return [lvl.astype("int32") for lvl in levels]
-        arr = da.from_zarr(str(source), component=component)
+        arr = from_zarr_any(source, component=component)
     elif isinstance(source, (str, Path)):
-        arr = da.from_zarr(str(source))
+        arr = from_zarr_any(source)
     else:
         arr = da.asarray(source)
     return arr.astype("int32")

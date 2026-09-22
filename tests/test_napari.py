@@ -104,3 +104,78 @@ def test_label_hint_empty_without_n_objects(tmp_path):
 def test_label_hint_missing_store_returns_empty():
     """A path that doesn't exist (or isn't a label group) just yields {}."""
     assert nplugin._label_hint("/no/such/store.zarr") == {}
+
+
+def test_a_zip_bundle_opens_exactly_like_the_directory(tmp_path):
+    """`pixi run napari` must work on a bundle, not only on a directory.
+
+    Every reader here builds group paths by string-joining
+    (f"{store}/labels/{name}"), which a bundle breaks: the archive is a
+    file. Without this, packing a store made it unviewable.
+    """
+    import zipfile
+    from pathlib import Path
+
+    import zarr
+
+    from patchworks.plugins import napari as napari_plugin
+    from patchworks.plugins.ome_zarr import (
+        read_pixel_size,
+        register_labels,
+        to_ome_zarr,
+    )
+
+    image = np.arange(4 * 64 * 64, dtype="uint16").reshape(4, 64, 64)
+    store = to_ome_zarr(
+        image,
+        tmp_path / "image.zarr",
+        axes="zyx",
+        n_levels=3,
+        chunks=(2, 32, 32),
+        pixel_size={"z": 0.24, "y": 0.108, "x": 0.108},
+        progress=False,
+    )
+    labels = np.zeros((4, 64, 64), dtype="uint32")
+    labels[1:3, 10:30, 10:30] = 7
+    group = zarr.open_group(f"{store}/labels/cilia", mode="a")
+    base = group.create_array(
+        "0", shape=labels.shape, chunks=(2, 32, 32), dtype="uint32"
+    )
+    base[:] = labels
+    register_labels(store, "cilia", n_levels=3, progress=False, n_objects=1)
+
+    bundle = tmp_path / "image.zarr.zip"
+    with zipfile.ZipFile(bundle, "w", zipfile.ZIP_STORED) as archive:
+        for item in sorted(Path(store).rglob("*")):
+            if item.is_file():
+                archive.write(item, item.relative_to(Path(store).parent))
+
+    for source in (str(store), str(bundle)):
+        label_group = f"{source}/labels/cilia"
+        assert napari_plugin._inner_label_names(source) == ["cilia"], source
+        assert napari_plugin._has_multiscales(source), source
+        assert [
+            tuple(level.shape)
+            for level in napari_plugin._multiscale_levels(source, None)
+        ] == [(4, 64, 64), (4, 32, 32), (4, 16, 16)], source
+        assert [
+            tuple(level.shape)
+            for level in napari_plugin._multiscale_levels(label_group, None)
+        ] == [(4, 64, 64), (4, 32, 32), (4, 16, 16)], source
+        assert napari_plugin._label_hint(label_group)["n_objects"] == 1
+        assert napari_plugin._pyramid_calibration(label_group, 3) == (
+            [0.24, 0.108, 0.108],
+            ["micrometer"] * 3,
+        ), source
+        assert read_pixel_size(source) == {
+            "z": 0.24,
+            "y": 0.108,
+            "x": 0.108,
+        }, source
+
+    # And the pixel data itself round-trips.
+    from patchworks import load_ome_zarr
+
+    assert np.array_equal(
+        np.asarray(load_ome_zarr(str(bundle), channel=None, level=0)), image
+    )
