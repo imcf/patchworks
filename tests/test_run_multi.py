@@ -968,3 +968,43 @@ def test_zip_task_is_wired_up():
 
     pixi = tomllib.loads((_workflow_dir() / "pixi.toml").read_text())
     assert pixi["tasks"]["zip"] == ("python scripts/export_iso.py --format zip")
+
+
+def test_cupy_is_available_without_editing_pixi_toml():
+    """A cluster needing cupy must not have to patch this file.
+
+    cupy's wheel is CUDA-version-specific, so it cannot be a plain
+    dependency -- but carrying it as a local commit meant a rebase conflict
+    on every release that touched pixi.toml. Ship both variants as opt-in
+    environments instead.
+    """
+    import tomllib
+
+    pixi = tomllib.loads((_workflow_dir() / "pixi.toml").read_text())
+
+    assert pixi["feature"]["cuda12"]["pypi-dependencies"] == {
+        "cupy-cuda12x": "*"
+    }
+    assert pixi["feature"]["cuda13"]["pypi-dependencies"] == {
+        "cupy-cuda13x": "*"
+    }
+    for env in ("cuda12", "cuda13"):
+        assert env in pixi["environments"], env
+    # The default env must stay free of cupy: it is GPU- and
+    # CUDA-version-specific, and most steps do not need it.
+    assert not any(k.startswith("cupy") for k in pixi["dependencies"])
+    assert not any(
+        k.startswith("cupy") for k in pixi.get("pypi-dependencies", {})
+    )
+
+
+def test_gpu_environments_combine_with_the_cellpose_pins():
+    """A cluster can need both a pinned Cellpose and cupy."""
+    import tomllib
+
+    pixi = tomllib.loads((_workflow_dir() / "pixi.toml").read_text())
+    for env, feats in (
+        ("cellpose4-cuda12", {"cp4", "cuda12"}),
+        ("cellpose4-cuda13", {"cp4", "cuda13"}),
+    ):
+        assert set(pixi["environments"][env]["features"]) == feats, env

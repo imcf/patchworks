@@ -93,10 +93,21 @@ shard_labels: false            # true → also reshard label level 0 after the
     `dilate: N` grows every label by `N` pixels once segmentation finishes,
     regardless of `method`. `0` (default) disables it. Runs on CPU (scipy)
     by default; set `dilate_gpu: true` to dilate via cupy instead — that
-    needs `cupy` installed in the segment job's environment (matching your
-    CUDA version, e.g. `pip install cupy-cuda12x`) and a GPU allocated for
+    needs `cupy` in the segment job's environment and a GPU allocated for
     that job (`set-resources: segment:` in `profile/slurm/config.yaml`,
-    same as for a GPU `method`). It's independent of whatever `method`
+    same as for a GPU `method`). cupy ships one wheel per CUDA major
+    version, so pick the environment that matches yours rather than editing
+    `pixi.toml`:
+
+    ```bash
+    nvidia-smi                       # read the CUDA version off a GPU node
+    pixi install -e cuda12           # or -e cuda13
+    pixi run -e cuda12 multi-slurm   # every task works in these too
+    ```
+
+    A pixi environment includes the default feature as well, so `-e cuda12`
+    is "everything the default has, plus cupy". `cellpose4-cuda12` and
+    `cellpose4-cuda13` combine it with the pinned Cellpose. It's independent of whatever `method`
     itself runs on — you can dilate on GPU even with `method: "threshold"`
     (CPU), or on CPU even with `method: "cellpose"` (GPU). See [Growing
     labels afterwards](custom_segmentation.md#growing-labels-afterwards-dilation)
