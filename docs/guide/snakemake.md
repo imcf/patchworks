@@ -247,15 +247,30 @@ shard_labels: false            # true → also reshard label level 0 after the
     so the viewer works on one directly — same layers, same calibration,
     same auto-loaded label groups:
 
+    On the cluster (needs a display — `ssh -X` or VNC):
+
     ```bash
     pixi install -e viewer
     pixi run -e viewer napari /path/to/image.zarr.zip
     ```
 
-    The `viewer` environment is the one meant to run on **your own machine**
-    — it solves on Windows, macOS and Linux, unlike everything else here,
-    which is linux-64 only (cudadecon and the GPU segmentation stack). Copy
-    the bundle off the cluster and open it locally; no unpacking needed. It is written `ZIP_STORED` — the chunks are already
+    **On your own machine, skip pixi.** This workspace is linux-64 only:
+    `cudadecon` and the GPU segmentation stack have no Windows or macOS
+    build, and a platform declared anywhere in `pixi.toml` — on the
+    workspace *or* on one feature — makes every environment solve for it,
+    so the GPU ones break. A plain virtual environment is the right tool
+    for looking at a result:
+
+    ```bash
+    python -m venv napari-env
+    napari-env/bin/activate            # Windows: napari-env\Scripts\activate
+    pip install "patchworks[napari]>=2.8.0"
+    python workflow/scripts/view.py /path/to/image.zarr.zip
+    ```
+
+    `>=2.8.0` matters: reading a store out of a bundle landed there, and an
+    older patchworks fails on a `.zip` with a `GroupNotFoundError` that says
+    nothing about the version. It is written `ZIP_STORED` — the chunks are already
     zstd-compressed, so deflating them again would cost a full pass to save
     almost nothing — and entry by entry, so memory stays flat.
 

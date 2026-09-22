@@ -1134,28 +1134,31 @@ def test_bundle_store_path_is_made_absolute():
     assert store.endswith("results/image.zarr")
 
 
-def test_viewer_environment_solves_off_the_cluster():
-    """The viewer is the one environment people run on their own machine.
+def test_manifest_declares_exactly_one_platform():
+    """A platform declared anywhere makes *every* environment solve for it.
 
-    Everything else here is linux-64 (cudadecon, the GPU stack), but someone
-    looking at a result copied to a laptop needs it to solve on Windows or
-    macOS -- `pixi run -e viewer napari` failed outright with "no compatible
-    Python interpreter for 'win-64'".
+    Not the intersection per environment, as the per-feature `platforms`
+    key suggests: putting win-64/osx-arm64 on the viewer feature alone made
+    `cellpose4` fail on osx-arm64, where cudadecon has no build. So the GPU
+    stack pins the whole manifest to linux-64, and viewing a result
+    elsewhere is a plain venv, not a pixi environment.
     """
     import tomllib
 
     pixi = tomllib.loads((_workflow_dir() / "pixi.toml").read_text())
-    viewer = pixi["feature"]["viewer"]
-    for platform in ("linux-64", "win-64", "osx-arm64"):
-        assert platform in viewer["platforms"], platform
-    # The workspace itself stays linux-64: adding a platform there would add
-    # it to the default feature, hence to the GPU environments, which then
-    # have to solve cudadecon for a platform it is not built for.
     assert pixi["workspace"]["platforms"] == ["linux-64"]
-    # An environment's platforms are the intersection of its features', so
-    # it must drop the linux-64-only default feature -- and then carry its
-    # own python, which the default feature was providing.
+    for name, feature in pixi["feature"].items():
+        assert "platforms" not in feature, name
+
+
+def test_viewer_environment_is_lean():
+    """It carries what a viewer needs, not the GPU segmentation stack."""
+    import tomllib
+
+    pixi = tomllib.loads((_workflow_dir() / "pixi.toml").read_text())
+    viewer = pixi["feature"]["viewer"]
     assert pixi["environments"]["viewer"]["no-default-feature"] is True
+    # ...and therefore has to carry its own python.
     assert "python" in viewer["dependencies"]
     assert "napari" in viewer["tasks"]
 

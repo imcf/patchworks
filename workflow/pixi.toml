@@ -10,11 +10,11 @@
 #                          # open a store in napari, every label auto-loaded.
 #                          # Also takes a `pixi run zip` bundle directly:
 #                          #   pixi run -e viewer napari <image.zarr.zip>
-#                          # On the cluster this needs a display (ssh -X or
-#                          # remote-desktop/VNC); it is the one environment
-#                          # here that also solves on Windows/macOS, so the
-#                          # usual thing is to copy a bundle to your own
-#                          # machine and open it there.
+#                          # Needs a display (ssh -X or remote-desktop/VNC).
+#                          # This workspace is linux-64 only; to view a
+#                          # result on your own machine use a plain venv:
+#                          #   pip install "patchworks[napari]>=2.8.0"
+#                          #   python scripts/view.py <image.zarr.zip>
 #
 # On a cluster, put this project on a shared filesystem the compute nodes can
 # read: the SLURM jobs re-launch snakemake from this env's interpreter.
@@ -66,21 +66,21 @@ cupy-cuda13x = "*"
 # default headless SLURM environment, so it's a separate opt-in feature --
 # pixi install -e viewer, not part of the default `pixi install`.
 #
-# It is also the one environment people run on their *own* machine, to look
-# at a result copied off the cluster -- so unlike everything else here it
-# has to solve on Windows and macOS too. That is why it declares its own
-# platforms and its own python, and why the `viewer` environment below sets
-# no-default-feature: the default feature is linux-64-only (cudadecon, and
-# the whole GPU segmentation stack), and an environment's platforms are the
-# intersection of its features'.
+# It sets no-default-feature below, so it carries only what a viewer needs
+# (and its own python) instead of dragging the whole GPU segmentation stack
+# into a session that just looks at a result.
 #
-# Do NOT run `pixi workspace platform add win-64`: that adds the platform to
-# the *workspace*, hence to the default feature and so to every environment,
-# and the GPU ones then have to solve cudadecon for a platform it is not
-# built for. The per-feature list here is what keeps the two apart.
-[feature.viewer]
-platforms = ["linux-64", "win-64", "osx-arm64"]
-
+# This environment is linux-64 like everything else here, and deliberately:
+# adding a platform anywhere in this manifest -- on the workspace *or* on a
+# single feature -- puts it in the set pixi solves every environment for,
+# and the GPU ones then fail on `cudadecon`, which has no build for Windows
+# or macOS. There is no way to make one environment cross-platform while the
+# others stay linux-only.
+#
+# To view a result on your own machine, skip pixi and use a plain venv:
+#   pip install "patchworks[napari]>=2.8.0"
+#   python scripts/view.py <image.zarr.zip>
+# See docs/guide/snakemake.md.
 [feature.viewer.dependencies]
 python = "3.12.*"
 
