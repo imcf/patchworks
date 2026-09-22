@@ -40,6 +40,22 @@ cellpose = ">=3.0,<4"
 [feature.cp4.pypi-dependencies]
 cellpose = ">=4"
 
+# cupy, for `dilate_gpu: true` and the dog plugin's `use_gpu: true`. The
+# wheel is CUDA-version-specific, so it cannot be a plain dependency -- pick
+# the environment matching your cluster's CUDA instead of editing this file:
+#
+#   nvidia-smi                       # read the CUDA version off a GPU node
+#   pixi install -e cuda12           # or -e cuda13
+#   pixi run -e cuda12 multi-slurm   # every task works in these too
+#
+# A pixi environment includes the default feature as well, so `-e cuda12` is
+# "everything the default has, plus cupy" -- nothing else needs changing.
+[feature.cuda12.pypi-dependencies]
+cupy-cuda12x = "*"
+
+[feature.cuda13.pypi-dependencies]
+cupy-cuda13x = "*"
+
 # napari pulls in a lot of Qt/GUI dependencies that don't belong in the
 # default headless SLURM environment, so it's a separate opt-in feature --
 # pixi install -e viewer, not part of the default `pixi install`.
@@ -50,11 +66,19 @@ patchworks = { version = "*", extras = ["napari"] }
 napari = "python scripts/view.py"
 
 # Named environments: pixi install -e cellpose3 / -e cellpose4 / -e viewer
+#                     pixi install -e cuda12 / -e cuda13   (adds cupy)
 # The base patchworks[cellpose] (>=3.0) is further constrained by each feature.
+# Each of these is the default environment *plus* its feature, so tasks and
+# every other dependency are available in all of them.
 [environments]
 cellpose3 = { features = ["cp3"], solve-group = "cp3" }
 cellpose4 = { features = ["cp4"], solve-group = "cp4" }
 viewer = { features = ["viewer"] }
+cuda12 = { features = ["cuda12"] }
+cuda13 = { features = ["cuda13"] }
+# Combined, for a cluster that needs a pinned Cellpose *and* cupy.
+cellpose4-cuda12 = { features = ["cp4", "cuda12"], solve-group = "cp4-cu12" }
+cellpose4-cuda13 = { features = ["cp4", "cuda13"], solve-group = "cp4-cu13" }
 
 [tasks]
 # --rerun-triggers mtime: don't redo finished steps (e.g. the conversion) just

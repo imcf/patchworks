@@ -81,8 +81,11 @@ backend `fn` used — pass `use_gpu=True` to dilate via cupy instead:
 fn = dilate_labels(fn, iterations=2, use_gpu=True)
 ```
 
-Needs `cupy` installed **manually**, matching your CUDA version (e.g.
-`pip install cupy-cuda12x`) — it's never installed automatically by
+Needs `cupy`, matching your CUDA version. Under the Snakemake workflow, use
+the environment that already carries it — `pixi install -e cuda12` (or
+`-e cuda13`), then `pixi run -e cuda12 <task>`; outside it, install the
+matching wheel yourself (e.g. `pip install cupy-cuda12x`). It's never
+installed automatically by
 patchworks, unlike Cellpose's GPU support (which comes for free via
 PyTorch's self-contained CUDA wheels); cupy ships one wheel per CUDA major
 version, so there's no single generic pin that works everywhere. On the
