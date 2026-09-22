@@ -301,11 +301,25 @@ def test_viewer_is_a_separate_opt_in_pixi_environment():
     dependencies into every SLURM job's environment for a feature only used
     interactively.
     """
+    import tomllib
+
     src = (_workflow_dir() / "pixi.toml").read_text()
     default_deps = src.split("[pypi-dependencies]")[1].split("[feature")[0]
     assert "napari" not in default_deps
-    assert 'viewer = { features = ["viewer"] }' in src
-    assert 'extras = ["napari"]' in src
+
+    # Asserted on the parsed manifest rather than an exact line: the literal
+    # `viewer = { features = ["viewer"] }` broke the moment the environment
+    # gained no-default-feature, which is not what this test is about.
+    pixi = tomllib.loads(src)
+    assert pixi["environments"]["viewer"]["features"] == ["viewer"]
+    assert (
+        "napari"
+        in (
+            pixi["feature"]["viewer"]["pypi-dependencies"]["patchworks"][
+                "extras"
+            ]
+        )
+    )
 
 
 def test_relate_writes_its_own_log():
@@ -1118,3 +1132,35 @@ def test_bundle_store_path_is_made_absolute():
     assert _Path(store).is_absolute(), store
     assert _Path(output).is_absolute(), output
     assert store.endswith("results/image.zarr")
+
+
+def test_viewer_environment_solves_off_the_cluster():
+    """The viewer is the one environment people run on their own machine.
+
+    Everything else here is linux-64 (cudadecon, the GPU stack), but someone
+    looking at a result copied to a laptop needs it to solve on Windows or
+    macOS -- `pixi run -e viewer napari` failed outright with "no compatible
+    Python interpreter for 'win-64'".
+    """
+    import tomllib
+
+    pixi = tomllib.loads((_workflow_dir() / "pixi.toml").read_text())
+    viewer = pixi["feature"]["viewer"]
+    for platform in ("linux-64", "win-64", "osx-64", "osx-arm64"):
+        assert platform in viewer["platforms"], platform
+    # An environment's platforms are the intersection of its features', so
+    # it must drop the linux-64-only default feature -- and then carry its
+    # own python, which the default feature was providing.
+    assert pixi["environments"]["viewer"]["no-default-feature"] is True
+    assert "python" in viewer["dependencies"]
+    assert "napari" in viewer["tasks"]
+
+
+def test_viewer_requires_a_patchworks_that_reads_bundles():
+    """An older patchworks opens a .zip with an error about groups, not age."""
+    import tomllib
+
+    pixi = tomllib.loads((_workflow_dir() / "pixi.toml").read_text())
+    spec = pixi["feature"]["viewer"]["pypi-dependencies"]["patchworks"]
+    assert spec["version"].startswith(">=2.8"), spec
+    assert "napari" in spec["extras"]

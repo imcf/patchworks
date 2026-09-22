@@ -248,8 +248,14 @@ shard_labels: false            # true → also reshard label level 0 after the
     same auto-loaded label groups:
 
     ```bash
+    pixi install -e viewer
     pixi run -e viewer napari /path/to/image.zarr.zip
-    ``` It is written `ZIP_STORED` — the chunks are already
+    ```
+
+    The `viewer` environment is the one meant to run on **your own machine**
+    — it solves on Windows, macOS and Linux, unlike everything else here,
+    which is linux-64 only (cudadecon and the GPU segmentation stack). Copy
+    the bundle off the cluster and open it locally; no unpacking needed. It is written `ZIP_STORED` — the chunks are already
     zstd-compressed, so deflating them again would cost a full pass to save
     almost nothing — and entry by entry, so memory stays flat.
 
