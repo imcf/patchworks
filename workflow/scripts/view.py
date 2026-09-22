@@ -2,7 +2,12 @@
 
 Usage:
     pixi run -e viewer napari /path/to/image.zarr
+    pixi run -e viewer napari /path/to/image.zarr.zip     # a `pixi run zip` bundle
     pixi run -e viewer napari /path/to/image.zarr --channel 1
+
+A `.zip` bundle is read in place, without unpacking: same layers, same
+calibration, same auto-loaded label groups as the directory it was packed
+from.
 
 Needs the `viewer` pixi environment (`pixi install -e viewer`) -- napari's
 Qt/GUI dependencies live there, not in the default headless workflow env --
@@ -20,7 +25,11 @@ from patchworks.plugins.napari import view_in_napari
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "image", help="OME-ZARR store to open, e.g. work_dir/image.zarr"
+        "image",
+        help=(
+            "OME-ZARR store to open, e.g. work_dir/image.zarr -- or a "
+            "work_dir/image.zarr.zip bundle, read without unpacking"
+        ),
     )
     parser.add_argument(
         "--channel",

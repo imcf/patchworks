@@ -55,6 +55,91 @@ def zarr_compressor_kwargs(zarr_format: int = 3) -> dict:
         return {}
 
 
+def open_zarr_source(
+    store_path: Union[str, Path],
+) -> tuple[Union[str, "zarr.storage.StoreLike"], str]:
+    """Resolve a store path, transparently opening a ``.zip`` bundle.
+
+    A store packed by ``pixi run zip`` is one file holding
+    ``<name>.zarr/...``. zarr reads it in place through a ``ZipStore``, so
+    nothing has to be unpacked first -- but a plain path string does not,
+    and every reader here takes a path. This returns what zarr and dask
+    should actually be handed, plus the prefix to prepend to a component.
+
+    Parameters
+    ----------
+    store_path : str or Path
+        A ``.zarr`` directory, or a ``.zip`` bundle containing one.
+
+    Returns
+    -------
+    tuple
+        ``(source, prefix)``. For a directory, the path and ``""``. For a
+        bundle, an open read-only ``ZipStore`` and the store's name inside
+        it, so a component is addressed as ``f"{prefix}/{component}"``.
+
+    Raises
+    ------
+    ValueError
+        If a ``.zip`` does not hold exactly one top-level store.
+    """
+    text = str(store_path)
+    if ".zip" not in text:
+        return text, ""
+
+    import zipfile
+
+    # The bundle may be addressed with a group path after it, e.g.
+    # "scan.zarr.zip/labels/cells" -- callers build those by string-joining.
+    head, _, tail = text.partition(".zip")
+    archive_path = head + ".zip"
+    with zipfile.ZipFile(archive_path) as archive:
+        tops = {
+            name.split("/", 1)[0] for name in archive.namelist() if "/" in name
+        }
+    if len(tops) != 1:
+        raise ValueError(
+            f"{archive_path} must contain exactly one top-level store; found "
+            f"{sorted(tops) or 'nothing'}. Bundles written by "
+            "`pixi run zip` always do."
+        )
+    prefix = tops.pop()
+    inner = tail.strip("/")
+    if inner:
+        prefix = f"{prefix}/{inner}"
+    return zarr.storage.ZipStore(archive_path, mode="r"), prefix
+
+
+def open_group_any(path: Union[str, Path], mode: str = "r"):
+    """``zarr.open_group`` that also accepts a path *inside* a .zip bundle.
+
+    Callers build group paths by string-joining (``f"{store}/labels"``),
+    which a bundle breaks: the archive is a file, not a directory. Split on
+    the ``.zip`` instead, so ``bundle.zip/labels/cells`` resolves to the
+    right group inside it.
+    """
+    source, prefix = open_zarr_source(path)
+    return zarr.open_group(source, path=prefix, mode=mode)
+
+
+def from_zarr_any(path: Union[str, Path], component: str | None = None):
+    """``dask.array.from_zarr`` that also accepts a .zip bundle."""
+    import dask.array as _da
+
+    source, prefix = open_zarr_source(path)
+    inner = _component(prefix, component) if component else prefix
+    return (
+        _da.from_zarr(source, component=inner)
+        if inner
+        else _da.from_zarr(source)
+    )
+
+
+def _component(prefix: str, name: str) -> str:
+    """Join a bundle prefix and a component, tolerating an empty prefix."""
+    return f"{prefix}/{name}" if prefix else name
+
+
 def load_ome_zarr(
     store_path: Union[str, Path],
     channel: int | None = 0,
@@ -86,7 +171,8 @@ def load_ome_zarr(
     >>> arr.shape
     (128, 2048, 2048)
     """
-    root = zarr.open_group(str(store_path), mode="r")
+    source, prefix = open_zarr_source(store_path)
+    root = zarr.open_group(source, path=prefix, mode="r")
     # OME-ZARR 0.5 nests under "ome" key; older stores use "multiscales" directly
     _attrs = dict(root.attrs)
     _ms = _attrs.get("multiscales") or _attrs.get("ome", {}).get("multiscales")
@@ -104,7 +190,9 @@ def load_ome_zarr(
         if zarr_ndim > len(chunks):
             zarr_chunks = (1,) * (zarr_ndim - len(chunks)) + tuple(chunks)
 
-    arr = da.from_zarr(str(store_path), component=path, chunks=zarr_chunks)
+    arr = da.from_zarr(
+        source, component=_component(prefix, path), chunks=zarr_chunks
+    )
     if channel is not None:
         arr = _select_channel(arr, channel, _ms[0], store_path)
     return arr

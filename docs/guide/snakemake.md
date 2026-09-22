@@ -243,7 +243,13 @@ shard_labels: false            # true → also reshard label level 0 after the
     ```
 
     Windows Explorer opens it natively, and unzipping gives the store back
-    byte for byte. It is written `ZIP_STORED` — the chunks are already
+    byte for byte. patchworks reads a bundle wherever it takes a store path,
+    so the viewer works on one directly — same layers, same calibration,
+    same auto-loaded label groups:
+
+    ```bash
+    pixi run -e viewer napari /path/to/image.zarr.zip
+    ``` It is written `ZIP_STORED` — the chunks are already
     zstd-compressed, so deflating them again would cost a full pass to save
     almost nothing — and entry by entry, so memory stays flat.
 

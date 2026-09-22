@@ -68,7 +68,7 @@ from .._progress import (
     PROGRESS_INTERVAL_S as _PROGRESS_INTERVAL_S,
 )
 from .._progress import dask_progress, log_progress
-from .._io import load_ome_zarr, zarr_compressor_kwargs
+from .._io import load_ome_zarr, open_group_any, zarr_compressor_kwargs
 
 logger = logging.getLogger(__name__)
 
@@ -1144,7 +1144,9 @@ def _read_zarr_calibration(store: Union[str, Path], axes: str) -> PixelSize:
         the store has no multiscales metadata).
     """
     try:
-        root = zarr.open_group(str(store), mode="r")
+        # open_group_any, not zarr.open_group: the store may be a .zip
+        # bundle, possibly with a group path after it.
+        root = open_group_any(store)
         ms = read_ngff_attr(root.attrs, "multiscales")[0]
         ax = [a["name"] for a in ms["axes"]]
         scale = ms["datasets"][0]["coordinateTransformations"][0]["scale"]
