@@ -87,6 +87,12 @@ reshard = "python scripts/reshard_store.py"
 # --help if none of them is there.
 iso = "python scripts/export_iso.py"
 
+# Pack a store into ONE .zip instead. Needs nothing beyond Python, and zarr
+# reads a store straight out of it without unpacking (zarr.storage.ZipStore),
+# so it is the one to use where no ISO builder exists:
+#   pixi run zip --store /path/to/image.zarr --dry-run
+zip = "python scripts/export_iso.py --format zip"
+
 # Run every segmentation config listed in config/multi.yaml (in order), then
 # relate their labels by voxel overlap (patchworks.label_relations) and write
 # a CSV per configured pair — see config/multi.yaml and
