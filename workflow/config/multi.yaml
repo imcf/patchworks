@@ -42,6 +42,27 @@ segmentations:
 #   time: 180              # minutes, per pair; default: 180
 #   qos: "1day"            # default: your account's default QOS
 
+# Pack the finished store into ONE file, as the last step, once every
+# segmentation and relation has succeeded. Off unless `format` is set.
+# A failed relation skips it: a bundle of a half-finished run would look
+# complete while missing workbooks.
+#
+# zip needs nothing beyond Python, and patchworks reads a store straight out
+# of one -- `pixi run -e viewer napari image.zarr.zip` works. iso mounts as a
+# read-only drive instead, but needs xorriso/genisoimage/mkisofs installed.
+#
+# Under --profile it is submitted as its own job (it reads everything the run
+# produced, which a login node kills silently). `time` must stay under the
+# MaxWall of `qos`, same trap as the relate step.
+# bundle:
+#   format: "zip"        # "zip", "iso", or omit for no bundle
+#   output: null         # default: <image.zarr>.zip beside the store
+#   partition: "scicore" # default: scicore
+#   mem: "8G"            # default: 8G -- xorriso/zipfile both stream
+#   cpus: 2              # default: 2
+#   time: 720            # minutes; default: 720
+#   qos: "1day"          # default: your account's default QOS
+
 relations:
 - a: nuclei_labels
   b: cyto_labels

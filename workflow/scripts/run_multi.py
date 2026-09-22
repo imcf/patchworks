@@ -253,6 +253,120 @@ def _relate_settings(multi_cfg: dict, args) -> dict:
     return resolved
 
 
+# Packing the finished store into one file. Off by default: it is a full
+# read of everything the run produced, which only makes sense when the
+# result is about to leave the cluster.
+BUNDLE_DEFAULTS = {
+    "format": None,  # None = don't bundle; "zip" or "iso"
+    "output": None,  # None = <store>.<format> beside it
+    "partition": "scicore",
+    "mem": "8G",
+    "cpus": 2,
+    "time": 720,
+    "qos": None,
+}
+
+
+def _bundle_settings(multi_cfg: dict, args) -> dict:
+    """Resolve the final packing step's settings.
+
+    Same precedence as :func:`_relate_settings` -- flag > config > default
+    -- so `pixi run multi-slurm`, a fixed command, can still produce a
+    bundle by way of the config alone.
+
+    Raises
+    ------
+    ValueError
+        For an unknown key or an unsupported format, rather than silently
+        not bundling after a run that took hours.
+    """
+    block = multi_cfg.get("bundle", {}) or {}
+    if not isinstance(block, dict):
+        raise ValueError(
+            "`bundle:` in the multi config must be a mapping of "
+            f"{'/'.join(BUNDLE_DEFAULTS)}; got {type(block).__name__}"
+        )
+    unknown = set(block) - set(BUNDLE_DEFAULTS)
+    if unknown:
+        raise ValueError(
+            f"unknown key(s) in `bundle:`: {', '.join(sorted(unknown))}; "
+            f"expected any of {', '.join(sorted(BUNDLE_DEFAULTS))}"
+        )
+    resolved = {}
+    for key, fallback in BUNDLE_DEFAULTS.items():
+        flag = getattr(args, f"bundle_{key}", None)
+        resolved[key] = flag if flag is not None else block.get(key, fallback)
+    if resolved["format"] not in (None, "zip", "iso"):
+        raise ValueError(
+            f'bundle format must be "zip" or "iso"; got {resolved["format"]!r}'
+        )
+    return resolved
+
+
+def _bundle_cmd(
+    image_store: str, workflow_dir: Path, bundle: dict, profile: bool
+) -> list[str]:
+    """Build the invocation that packs the finished store into one file.
+
+    Under ``--profile`` this is an ``srun``, for the same reason the
+    occupancy and relate steps are: it reads every file the run produced,
+    which a login node kills without a message.
+    """
+    script = str(workflow_dir / "scripts" / "export_iso.py")
+    # Absolute: the command runs with cwd=workflow_dir, so a relative
+    # work_dir would otherwise be resolved against the workflow directory
+    # rather than against where the driver was invoked.
+    inner = [
+        sys.executable,
+        script,
+        "--store",
+        str(Path(image_store).resolve()),
+        "--format",
+        bundle["format"],
+        "--overwrite",
+    ]
+    if bundle["output"]:
+        inner += ["--output", str(Path(bundle["output"]).resolve())]
+    if not profile:
+        return inner
+    cmd = ["srun", "--partition", bundle["partition"]]
+    if bundle["qos"]:
+        cmd += ["--qos", bundle["qos"]]
+    cmd += [
+        "--mem",
+        bundle["mem"],
+        "--cpus-per-task",
+        str(bundle["cpus"]),
+        "--time",
+        str(bundle["time"]),
+        "--job-name",
+        slurm_jobname_prefix(f"bundle-{bundle['format']}"),
+    ]
+    return cmd + inner
+
+
+def _run_bundle(
+    image_store: str, workflow_dir: Path, bundle: dict, profile: bool
+) -> int:
+    """Pack the store, returning the exit code (0 when not configured)."""
+    if not bundle["format"]:
+        return 0
+    cmd = _bundle_cmd(image_store, workflow_dir, bundle, profile)
+    print(f"[run_multi] $ {' '.join(cmd)}", flush=True)
+    code = subprocess.run(cmd, cwd=workflow_dir).returncode
+    if code:
+        print(
+            f"[run_multi] ERROR: bundling failed (exit {code}). Everything "
+            "the run produced is already on disk -- the store is complete, "
+            "only the single-file copy is missing. Re-run "
+            "`pixi run zip --store <image.zarr>` to retry just this step.",
+            file=sys.stderr,
+        )
+    else:
+        print("[run_multi] bundle: ok", flush=True)
+    return code
+
+
 def _relate_cmd(
     rel: dict,
     *,
@@ -632,6 +746,17 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--bundle",
+        dest="bundle_format",
+        choices=("zip", "iso"),
+        help=(
+            "after everything succeeds, pack the finished store into one "
+            "file. Overrides `bundle:` in the multi config. zip needs "
+            "nothing extra; iso needs xorriso/genisoimage/mkisofs and "
+            "mounts as a drive."
+        ),
+    )
+    parser.add_argument(
         "--relate-qos",
         help=(
             "srun --qos for the relate step under --profile. Omit to let "
@@ -789,8 +914,18 @@ def main() -> None:
 
     relations = multi_cfg.get("relations", [])
     relate = _relate_settings(multi_cfg, args)
-    if args.dry_run or not relations:
+    bundle = _bundle_settings(multi_cfg, args)
+    if args.dry_run:
+        if bundle["format"]:
+            print(
+                f"[run_multi] would bundle the store as .{bundle['format']} "
+                "once everything is done"
+            )
         return
+    if not relations:
+        # No relations to compute, but the store is finished, so the
+        # bundling step still applies.
+        sys.exit(_run_bundle(image_store, workflow_dir, bundle, args.profile))
 
     if args.profile:
         # Real CPU/IO work -- tens of thousands of zarr chunk reads for a
@@ -841,12 +976,15 @@ def main() -> None:
                 "up-to-date workbooks are skipped, not recomputed).",
                 file=sys.stderr,
             )
+            # Not bundled: a bundle of a run whose relations failed would
+            # look complete and quietly be missing workbooks.
             sys.exit(1)
-        return
+        sys.exit(_run_bundle(image_store, workflow_dir, bundle, args.profile))
 
     from relate import run_relations
 
     run_relations(work_dir, image_store, relations)
+    sys.exit(_run_bundle(image_store, workflow_dir, bundle, args.profile))
 
 
 if __name__ == "__main__":
