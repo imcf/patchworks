@@ -202,3 +202,153 @@ def test_a_zip_bundle_opens_exactly_like_the_directory(tmp_path):
     # A non-zarr path must still go to bioio, not be mistaken for a store.
     assert not napari_plugin._is_zarr("scan.ims")
     assert not napari_plugin._is_zarr(42)
+
+
+@pytest.fixture
+def stub_napari(monkeypatch):
+    """A recording stand-in for napari, so view_in_napari can be driven here.
+
+    The plugin's resolvers were covered individually while the function that
+    calls them was not, which is how a bundle reached bioio: every helper
+    worked, the dispatcher above them did not. This drives the real
+    entry point and hands back the layers it would have added.
+    """
+    import sys
+    import types
+
+    added = []
+
+    class _Viewer:
+        def add_image(self, data, **kwargs):
+            added.append(("image", kwargs.get("name"), data, kwargs))
+
+        def add_labels(self, data, **kwargs):
+            added.append(("labels", kwargs.get("name"), data, kwargs))
+
+    napari = types.ModuleType("napari")
+    napari.Viewer = _Viewer
+    utils = types.ModuleType("napari.utils")
+    colormaps = types.ModuleType("napari.utils.colormaps")
+    colormaps.CyclicLabelColormap = type("CyclicLabelColormap", (), {})
+    napari.utils = utils
+    utils.colormaps = colormaps
+    for name, module in (
+        ("napari", napari),
+        ("napari.utils", utils),
+        ("napari.utils.colormaps", colormaps),
+    ):
+        monkeypatch.setitem(sys.modules, name, module)
+    return added
+
+
+def _multi_store(tmp_path):
+    """An image with three label groups, as a real run leaves it."""
+    import zarr
+
+    from patchworks.plugins.ome_zarr import register_labels
+
+    image = np.arange(2 * 4 * 32 * 32, dtype="uint16").reshape(2, 4, 32, 32)
+    store = to_ome_zarr(
+        image,
+        tmp_path / "image.zarr",
+        axes="czyx",
+        n_levels=2,
+        chunks=(1, 2, 16, 16),
+        pixel_size={"z": 0.24, "y": 0.10833, "x": 0.10833},
+        progress=False,
+    )
+    for index, name in enumerate(
+        ("nuclei_labels", "cyto_labels", "cilia_labels"), start=1
+    ):
+        labels = np.zeros((4, 32, 32), dtype="uint32")
+        labels[1:3, 4:12, 4:12] = index
+        group = zarr.open_group(f"{store}/labels/{name}", mode="a")
+        base = group.create_array(
+            "0", shape=labels.shape, chunks=(2, 16, 16), dtype="uint32"
+        )
+        base[:] = labels
+        register_labels(
+            store, name, n_levels=2, progress=False, n_objects=index
+        )
+    return store
+
+
+def _bundle(store, tmp_path, name="image.zarr.zip"):
+    import zipfile
+    from pathlib import Path as _Path
+
+    out = tmp_path / name
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_STORED) as archive:
+        for item in sorted(_Path(store).rglob("*")):
+            if item.is_file():
+                archive.write(item, item.relative_to(_Path(store).parent))
+    return out
+
+
+def test_view_in_napari_loads_a_bundle_exactly_like_a_directory(
+    tmp_path, stub_napari
+):
+    """Every layer, name, scale and hint must match between the two."""
+    store = _multi_store(tmp_path)
+    bundle = _bundle(store, tmp_path)
+
+    def layers_for(source):
+        stub_napari.clear()
+        nplugin.view_in_napari(str(source), show=False, glasbey=False)
+        return [
+            (
+                kind,
+                name,
+                [tuple(level.shape) for level in data],
+                tuple(kwargs.get("scale") or ()),
+                (kwargs.get("metadata") or {}).get("n_objects"),
+            )
+            for kind, name, data, kwargs in stub_napari
+        ]
+
+    from_directory = layers_for(store)
+    from_bundle = layers_for(bundle)
+
+    # The image plus all three label groups, auto-loaded.
+    assert [(kind, name) for kind, name, *_ in from_directory] == [
+        ("image", "image"),
+        ("labels", "nuclei_labels"),
+        ("labels", "cyto_labels"),
+        ("labels", "cilia_labels"),
+    ]
+    assert from_bundle == from_directory
+
+
+def test_view_in_napari_bundle_keeps_channel_selection(tmp_path, stub_napari):
+    """--channel has to work on a bundle too, not just the whole stack."""
+    store = _multi_store(tmp_path)
+    bundle = _bundle(store, tmp_path)
+
+    for source in (store, bundle):
+        stub_napari.clear()
+        nplugin.view_in_napari(
+            str(source), channel=1, show=False, glasbey=False
+        )
+        kind, name, data, _ = stub_napari[0]
+        assert kind == "image"
+        # Channel axis dropped, so the leading axis is z.
+        assert data[0].shape == (4, 32, 32), source
+
+
+def test_bundle_name_need_not_match_the_store(tmp_path, stub_napari):
+    """`--output whatever.zip` must still open.
+
+    The inner store name is read from the archive listing, not guessed
+    from the filename.
+    """
+    store = _multi_store(tmp_path)
+    bundle = _bundle(store, tmp_path, name="results-for-elena.zip")
+
+    stub_napari.clear()
+    nplugin.view_in_napari(str(bundle), show=False, glasbey=False)
+    assert [name for _, name, _, _ in stub_napari] == [
+        "image",
+        "nuclei_labels",
+        "cyto_labels",
+        "cilia_labels",
+    ]

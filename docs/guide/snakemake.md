@@ -272,9 +272,16 @@ shard_labels: false            # true → also reshard label level 0 after the
     workspace has none of those dependencies, so it solves everywhere and
     holds only what napari needs.
 
-    It pins `patchworks>=2.8.0`, the version that reads a store out of a
-    bundle; an older one fails on a `.zip` with a `GroupNotFoundError` that
-    says nothing about the version. It is written `ZIP_STORED` — the chunks are already
+    It pins a patchworks that reads a store out of a bundle; an older one
+    fails on a `.zip` with an error about the archive not being a zarr
+    group, or about a missing `bioio`, neither of which mentions the
+    version.
+
+    A bundle loads exactly what the directory does — the image with every
+    channel and pyramid level, all three label groups auto-loaded, the same
+    calibration and the same object counts — and `--channel` works on it
+    too. The archive's name does not matter: the store inside is found from
+    the listing, so `--output results-for-elena.zip` opens the same way. It is written `ZIP_STORED` — the chunks are already
     zstd-compressed, so deflating them again would cost a full pass to save
     almost nothing — and entry by entry, so memory stays flat.
 
