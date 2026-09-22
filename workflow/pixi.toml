@@ -20,11 +20,6 @@ platforms = ["linux-64"]
 
 [dependencies]
 python = "3.12.*"
-# Builds the .iso for `pixi run iso`. A C tool that streams straight to the
-# output file, so packing a store costs roughly no memory however many files
-# it holds -- unlike the pure-Python ISO builders, which assemble the image
-# in RAM and die partway through on a store this size.
-xorriso = "*"
 
 # Default env uses patchworks[cellpose] (>=3.0, resolves to latest compatible).
 # "dog" -> pycudadecon, for config_cilia.yaml's deconvolution step (part of
@@ -78,6 +73,12 @@ reshard = "python scripts/reshard_store.py"
 # Windows (right-click -> Mount), macOS and Linux:
 #   pixi run iso --store /path/to/image.zarr [--dry-run]
 # Needs xorriso on PATH (conda install -c conda-forge xorriso).
+# NOT a conda dependency: no ISO-building C tool exists on conda-forge
+# (only pycdlib, which is pure Python and assembles the image in RAM --
+# exactly what falls over on a store with tens of thousands of files). The
+# script uses whichever of xorriso/genisoimage/mkisofs the system provides;
+# check with `which xorriso genisoimage mkisofs`, and see the script's
+# --help if none of them is there.
 iso = "python scripts/export_iso.py"
 
 # Run every segmentation config listed in config/multi.yaml (in order), then
