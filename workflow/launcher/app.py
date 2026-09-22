@@ -15,16 +15,32 @@ See README.md for the security tradeoffs of password-based SSH login.
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import io
 import shlex
 import time
 from datetime import datetime
+from pathlib import Path
 
 import paramiko
 import streamlit as st
 import yaml
 
 st.set_page_config(page_title="patchworks launcher", layout="wide")
+
+CLUSTERS_FILE = Path(__file__).with_name("clusters.yaml")
+
+# ---------------------------------------------------------------------------
+# Cluster presets
+# ---------------------------------------------------------------------------
+
+
+def load_clusters() -> dict:
+    if not CLUSTERS_FILE.exists():
+        return {}
+    return yaml.safe_load(CLUSTERS_FILE.read_text()) or {}
+
 
 # ---------------------------------------------------------------------------
 # SSH connection
@@ -35,14 +51,53 @@ def get_client() -> paramiko.SSHClient | None:
     return st.session_state.get("ssh_client")
 
 
-def connect(host: str, port: int, username: str, password: str) -> None:
+def _fingerprint(key: paramiko.PKey) -> str:
+    digest = hashlib.sha256(key.asbytes()).digest()
+    return "SHA256:" + base64.b64encode(digest).decode().rstrip("=")
+
+
+class PinnedHostKeyPolicy(paramiko.MissingHostKeyPolicy):
+    """Accept a host key only if it matches a pre-configured fingerprint.
+
+    Used when a cluster preset carries ``host_key_fingerprint`` — refusing a
+    mismatch is what actually protects a shared, publicly reachable
+    deployment from a MITM'd first connection; a plain
+    ``paramiko.AutoAddPolicy`` (still used when a preset has no pinned
+    fingerprint, or for a custom host) trusts whatever key is presented.
+    """
+
+    def __init__(self, expected_fingerprint: str):
+        self.expected = expected_fingerprint
+
+    def missing_host_key(self, client, hostname, key):
+        got = _fingerprint(key)
+        if got != self.expected:
+            raise paramiko.SSHException(
+                f"host key fingerprint mismatch for {hostname}: "
+                f"expected {self.expected}, got {got}. Refusing to connect "
+                "-- this could mean the pinned fingerprint in clusters.yaml "
+                "is stale, or the connection is being intercepted."
+            )
+        client.get_host_keys().add(hostname, key.get_name(), key)
+
+
+def connect(
+    host: str,
+    port: int,
+    username: str,
+    password: str,
+    pinned_fingerprint: str = "",
+) -> None:
     client = paramiko.SSHClient()
     client.load_system_host_keys()
-    # Unknown-host keys are accepted automatically rather than verified
-    # against a known_hosts entry — convenient for a first connection to a
-    # cluster login node, but it means a MITM on that first connection would
-    # go unnoticed. See README.md.
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    if pinned_fingerprint:
+        client.set_missing_host_key_policy(
+            PinnedHostKeyPolicy(pinned_fingerprint)
+        )
+    else:
+        # No pinned fingerprint for this cluster: trust-on-first-use rather
+        # than verified — see README.md's security notes.
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     client.connect(
         host, port=port, username=username, password=password, timeout=15
     )
@@ -325,20 +380,42 @@ def render_monitor():
 
 st.title("patchworks launcher")
 
+clusters = load_clusters()
+
 with st.sidebar:
-    st.header("Remote host")
+    st.header("Cluster")
     if get_client() is None:
-        host = st.text_input("host")
-        port = st.number_input("port", value=22, min_value=1, max_value=65535)
-        username = st.text_input("username")
+        cluster_name = st.selectbox(
+            "preset", ["Custom"] + sorted(clusters), index=0
+        )
+        preset = clusters.get(cluster_name, {})
+        if cluster_name != "Custom" and not preset.get("host_key_fingerprint"):
+            st.warning(
+                f"{cluster_name}'s host key isn't pinned in clusters.yaml "
+                "-- the first connection is trusted, not verified. See "
+                "README.md."
+            )
+
+        host = st.text_input("host", value=preset.get("host", ""))
+        port = st.number_input(
+            "port", value=int(preset.get("port", 22)), min_value=1, max_value=65535
+        )
+        username = st.text_input("username", help="your own login on that cluster")
         password = st.text_input("password", type="password")
         st.caption(
-            "Password is used only for this SSH connection and is never "
-            "written to disk."
+            "Your password is used only to open this SSH connection, for "
+            "this browser session, and is never written to disk."
         )
         if st.button("Connect", type="primary", disabled=not (host and username)):
             try:
-                connect(host, int(port), username, password)
+                connect(
+                    host,
+                    int(port),
+                    username,
+                    password,
+                    pinned_fingerprint=preset.get("host_key_fingerprint", ""),
+                )
+                st.session_state["preset"] = preset
                 st.rerun()
             except Exception as e:
                 st.error(f"connection failed: {e}")
@@ -348,17 +425,20 @@ with st.sidebar:
             get_client().close()
             del st.session_state["ssh_client"]
             st.session_state.pop("job", None)
+            st.session_state.pop("preset", None)
             st.rerun()
 
     st.divider()
     st.header("Remote workflow")
+    preset = st.session_state.get("preset", {})
     remote_workflow_dir = st.text_input(
         "workflow directory on the remote host",
-        help="absolute path to patchworks/workflow there",
+        help=f"absolute path to patchworks/workflow there, e.g. "
+        f"{preset.get('workflow_dir_hint', '/path/to/patchworks/workflow')}",
     )
     setup_cmd = st.text_area(
         "environment setup command (optional)",
-        value="",
+        value=preset.get("setup_cmd", ""),
         help=(
             "run before snakemake, e.g. `module load pixi && eval \"$(pixi "
             "shell-hook)\"` or `source /path/to/venv/bin/activate`"

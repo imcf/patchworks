@@ -1,0 +1,31 @@
+# Known clusters, offered as presets in the launcher's sidebar. Each user
+# still types their own username/password — this file only fills in the
+# connection details that are the same for everyone on a given cluster.
+#
+# Fields:
+#   host                 SSH hostname (required)
+#   port                 SSH port (default 22)
+#   workflow_dir_hint     placeholder shown for "workflow directory" (a real
+#                        path is user/project-specific, so this is not a
+#                        default, just an example)
+#   setup_cmd            shell command run before `snakemake`, e.g. to
+#                        activate the pixi env that has snakemake on PATH
+#   host_key_fingerprint the cluster's SSH host key fingerprint
+#                        (`ssh-keyscan -t ed25519 <host> | ssh-keygen -lf -`,
+#                        or ask the cluster's admins), as
+#                        "SHA256:xxxxxxxx...". When set, the launcher
+#                        verifies the presented key against it and refuses to
+#                        connect on a mismatch. When left blank, the launcher
+#                        falls back to trust-on-first-use and shows a warning
+#                        in the UI -- fill this in before relying on this
+#                        preset for real logins.
+
+scicore:
+  # TODO: confirm sciCORE's current login-node hostname with the
+  # University of Basel / IT before relying on this preset -- not
+  # verified against live infrastructure by whoever wrote this file.
+  host: "login.scicore.unibas.ch"
+  port: 22
+  workflow_dir_hint: "/scicore/home/<group>/<user>/patchworks/workflow"
+  setup_cmd: 'eval "$(pixi shell-hook)"'
+  host_key_fingerprint: ""
