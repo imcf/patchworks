@@ -89,12 +89,53 @@ def volume_id(name: str) -> str:
     return cleaned[:_VOLID_MAX].strip("_") or "PATCHWORKS"
 
 
+# Every mkisofs-compatible builder, best first. They take the same options;
+# xorriso needs `-as mkisofs` to emulate them. None of these is installable
+# from conda-forge -- it carries no ISO-building C tool, only pycdlib, which
+# is pure Python, assembles the image in RAM and does not survive a store
+# with tens of thousands of files -- so this uses whatever the system has.
+_BUILDERS = (
+    ("xorriso", ["-as", "mkisofs"]),
+    ("genisoimage", []),
+    ("mkisofs", []),
+)
+
+
+def find_builder() -> tuple[str, list[str]]:
+    """The first available ISO builder, as ``(executable, leading args)``.
+
+    Raises
+    ------
+    SystemExit
+        When none is on PATH, naming every way to get one.
+    """
+    for name, prefix in _BUILDERS:
+        path = shutil.which(name)
+        if path:
+            return path, prefix
+    raise SystemExit(
+        "no ISO builder found. This needs one of: "
+        + ", ".join(n for n, _ in _BUILDERS)
+        + ".\n\n"
+        "conda-forge does not package any of them, so `pixi add` will not "
+        "help. Options, in order of least effort:\n"
+        "  * check whether the cluster already has one, possibly behind a "
+        "module: `which xorriso genisoimage mkisofs`, `module avail xorriso`\n"
+        "  * ask the cluster admins to install xorriso (it is a small, "
+        "standard package)\n"
+        "  * build the image somewhere else -- copy the store with `tar` "
+        "(one stream, no per-file cost) and pack it into an .iso there\n\n"
+        "Do NOT substitute a pure-Python ISO builder: it assembles the whole "
+        "image in memory and dies partway through a store this size."
+    )
+
+
 def build_command(store: Path, output: Path) -> list[str]:
-    """The xorriso invocation that packs *store* into *output*."""
+    """The ISO-builder invocation that packs *store* into *output*."""
+    executable, prefix = find_builder()
     return [
-        "xorriso",
-        "-as",
-        "mkisofs",
+        executable,
+        *prefix,
         # Rock Ridge (Linux/macOS) and Joliet (Windows) both carry the long
         # names; plain ISO-9660 alone would mangle them.
         "-R",
@@ -155,14 +196,8 @@ def main() -> int:
         else store.with_suffix(store.suffix + ".iso")
     )
 
-    if shutil.which("xorriso") is None:
-        raise SystemExit(
-            "xorriso is not on PATH. It is declared in workflow/pixi.toml, "
-            "so `pixi install` should provide it -- run that, and use "
-            "`pixi run iso` rather than calling this script directly. "
-            "Outside pixi: `conda install -c conda-forge xorriso` or "
-            "`apt install xorriso`."
-        )
+    # Fails here with the full explanation if nothing suitable is installed.
+    find_builder()
 
     size, count = tree_size(store)
     print(f"store  : {store}")

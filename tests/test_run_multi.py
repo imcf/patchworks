@@ -848,19 +848,59 @@ def test_reshard_script_skips_already_sharded_arrays():
     assert "patchworks_merge_state" in src
 
 
-def test_iso_task_declares_its_tool():
-    """`pixi run iso` must not depend on xorriso happening to be installed.
+def test_iso_tool_is_not_a_conda_dependency():
+    """Declaring xorriso broke `pixi install` for every environment.
 
-    The task shipped before xorriso was declared, so the documented command
-    failed on a clean environment with "xorriso is not installed" -- and the
-    obvious fallback is a pure-Python ISO builder that assembles the image
-    in RAM and dies partway through a store this size.
+    conda-forge carries no ISO-building C tool, so `xorriso = "*"` is
+    unsolvable and takes the whole environment down with it -- a worse
+    failure than the missing tool, because it blocks segmentation too.
     """
     import tomllib
 
     pixi = tomllib.loads((_workflow_dir() / "pixi.toml").read_text())
-    assert "xorriso" in pixi["dependencies"]
+    for tool in ("xorriso", "genisoimage", "mkisofs", "libisoburn"):
+        assert tool not in pixi["dependencies"], tool
     assert pixi["tasks"]["iso"] == "python scripts/export_iso.py"
+
+
+def test_iso_script_accepts_any_mkisofs_compatible_builder():
+    """xorriso, genisoimage and mkisofs take the same options.
+
+    Only xorriso needs `-as mkisofs` to emulate them, so whichever the
+    cluster happens to provide should work.
+    """
+    import importlib.util
+    from pathlib import Path as _Path
+
+    spec = importlib.util.spec_from_file_location(
+        "export_iso", _workflow_dir() / "scripts" / "export_iso.py"
+    )
+    export_iso = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(export_iso)
+
+    assert [n for n, _ in export_iso._BUILDERS] == [
+        "xorriso",
+        "genisoimage",
+        "mkisofs",
+    ]
+
+    export_iso.shutil.which = lambda n: (
+        f"/usr/bin/{n}" if n == "genisoimage" else None
+    )
+    cmd = export_iso.build_command(
+        _Path("/data/image.zarr"), _Path("/out/i.iso")
+    )
+    assert cmd[0].endswith("genisoimage")
+    assert "-as" not in cmd  # only xorriso needs the emulation prefix
+    for flag in ("-R", "-J", "-D", "-graft-points"):
+        assert flag in cmd, flag
+
+    export_iso.shutil.which = lambda n: None
+    with pytest.raises(SystemExit) as excinfo:
+        export_iso.find_builder()
+    message = str(excinfo.value)
+    assert "conda-forge does not package any of them" in message
+    assert "pure-Python ISO builder" in message
 
 
 def test_iso_script_says_to_submit_it():

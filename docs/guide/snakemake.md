@@ -239,10 +239,18 @@ shard_labels: false            # true → also reshard label level 0 after the
       --wrap "cd $PWD && pixi run iso --store /path/to/image.zarr"
     ```
 
-    `xorriso` is declared in `workflow/pixi.toml`, so `pixi install` provides
-    it. It streams straight to the output file, so the file count costs no
-    memory — unlike a pure-Python ISO builder, which assembles the image in
-    RAM and will not survive a store this size. The
+    It needs **`xorriso`, `genisoimage` or `mkisofs`** from the system —
+    whichever is present. None of them is on conda-forge (it carries no
+    ISO-building C tool), so this is deliberately *not* a pixi dependency:
+    declaring one makes `pixi install` unsolvable and takes every
+    environment down with it. Check with
+    `which xorriso genisoimage mkisofs`, and try `module avail` before
+    asking an admin.
+
+    Do not substitute a pure-Python ISO builder such as `pycdlib`: those
+    assemble the whole image in RAM and die partway through a store with
+    tens of thousands of files. The C tools stream straight to the output
+    file, so the file count costs no memory at all. The
     image is ISO-9660 level 3 with Rock Ridge *and* Joliet and deep-directory
     relocation disabled, because a zarr v3 chunk path nests deeper than
     ISO-9660's 8 levels — without that, Windows sees a tree flattened into
