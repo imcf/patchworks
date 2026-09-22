@@ -20,6 +20,11 @@ platforms = ["linux-64"]
 
 [dependencies]
 python = "3.12.*"
+# Builds the .iso for `pixi run iso`. A C tool that streams straight to the
+# output file, so packing a store costs roughly no memory however many files
+# it holds -- unlike the pure-Python ISO builders, which assemble the image
+# in RAM and die partway through on a store this size.
+xorriso = "*"
 
 # Default env uses patchworks[cellpose] (>=3.0, resolves to latest compatible).
 # "dog" -> pycudadecon, for config_cilia.yaml's deconvolution step (part of
