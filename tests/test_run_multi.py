@@ -908,3 +908,17 @@ def test_iso_script_says_to_submit_it():
     src = (_workflow_dir() / "scripts" / "export_iso.py").read_text()
     assert "do not run it on a login node" in src
     assert "sbatch" in src and "--qos=1day" in src
+
+
+def test_dog_extra_has_its_native_library():
+    """patchworks[dog] pulls pycudadecon, which binds to the cudadecon lib.
+
+    Without it the deconvolution step in config_cilia.yaml imports fine and
+    fails at first use, on a GPU node, hours into a run.
+    """
+    import tomllib
+
+    pixi = tomllib.loads((_workflow_dir() / "pixi.toml").read_text())
+    assert "cudadecon" in pixi["dependencies"]
+    # cupy is deliberately absent: cupy-cuda12x/13x is chosen per cluster.
+    assert not any(k.startswith("cupy") for k in pixi["dependencies"])

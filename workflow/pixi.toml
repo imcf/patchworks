@@ -20,6 +20,12 @@ platforms = ["linux-64"]
 
 [dependencies]
 python = "3.12.*"
+# The C library pycudadecon binds to. The default environment asks for
+# patchworks[dog] -> pycudadecon, so without this the deconvolution step in
+# config_cilia.yaml imports and then fails at first use. cupy is NOT here:
+# it is CUDA-version-specific (cupy-cuda12x / cupy-cuda13x), so it stays a
+# per-cluster addition.
+cudadecon = ">=0.7.0,<0.8"
 
 # Default env uses patchworks[cellpose] (>=3.0, resolves to latest compatible).
 # "dog" -> pycudadecon, for config_cilia.yaml's deconvolution step (part of
