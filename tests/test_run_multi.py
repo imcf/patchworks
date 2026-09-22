@@ -922,3 +922,49 @@ def test_dog_extra_has_its_native_library():
     assert "cudadecon" in pixi["dependencies"]
     # cupy is deliberately absent: cupy-cuda12x/13x is chosen per cluster.
     assert not any(k.startswith("cupy") for k in pixi["dependencies"])
+
+
+def test_zip_export_needs_no_external_tool(tmp_path):
+    """Where no ISO builder exists, the zip format must still work.
+
+    scicore has none of xorriso/genisoimage/mkisofs and conda-forge cannot
+    supply one, so a store there can only be bundled this way.
+    """
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "export_iso", _workflow_dir() / "scripts" / "export_iso.py"
+    )
+    export_iso = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(export_iso)
+
+    store = tmp_path / "image.zarr"
+    (store / "labels" / "cells" / "0" / "c").mkdir(parents=True)
+    (store / "zarr.json").write_text("{}")
+    (store / "labels" / "cells" / "0" / "c" / "0").write_bytes(b"chunk")
+
+    output = tmp_path / "image.zarr.zip"
+    # No builder available must not matter for this path.
+    export_iso.shutil.which = lambda n: None
+    export_iso.write_zip(store, output, progress=False)
+
+    import zipfile
+
+    with zipfile.ZipFile(output) as archive:
+        names = archive.namelist()
+    # Paths are relative to the store's parent, so it unpacks to a usable
+    # store rather than a bare 0/ labels/.
+    assert "image.zarr/zarr.json" in names
+    assert "image.zarr/labels/cells/0/c/0" in names
+    # Stored, not deflated: the chunks are already compressed.
+    with zipfile.ZipFile(output) as archive:
+        assert all(
+            i.compress_type == zipfile.ZIP_STORED for i in archive.infolist()
+        )
+
+
+def test_zip_task_is_wired_up():
+    import tomllib
+
+    pixi = tomllib.loads((_workflow_dir() / "pixi.toml").read_text())
+    assert pixi["tasks"]["zip"] == ("python scripts/export_iso.py --format zip")

@@ -55,6 +55,8 @@ import argparse
 import shutil
 import subprocess
 import sys
+import time
+import zipfile
 from pathlib import Path
 
 # UDF revision 2.01 is the one every current Windows/macOS/Linux mounts
@@ -163,6 +165,39 @@ def build_command(store: Path, output: Path) -> list[str]:
     ]
 
 
+def write_zip(store: Path, output: Path, progress: bool = True) -> None:
+    """Pack *store* into a single uncompressed .zip.
+
+    ``ZIP_STORED``, not deflate: every chunk is already zstd-compressed, so
+    re-compressing costs a full pass over the data to save almost nothing.
+
+    Written entry by entry, so memory stays flat however many files the
+    store holds -- the failure mode of the pure-Python *ISO* builders is
+    that they assemble the image in RAM first, which this does not do.
+    """
+    total = sum(1 for p in store.rglob("*") if p.is_file())
+    done = 0
+    started = time.monotonic()
+    with zipfile.ZipFile(
+        output, "w", zipfile.ZIP_STORED, allowZip64=True
+    ) as archive:
+        for item in sorted(store.rglob("*")):
+            if not item.is_file():
+                continue
+            # Relative to the store's *parent*, so the archive contains
+            # image.zarr/... and unpacks to a usable store rather than a
+            # bare 0/ 1/ labels/.
+            archive.write(item, item.relative_to(store.parent))
+            done += 1
+            if progress and (done % 2000 == 0 or done == total):
+                elapsed = time.monotonic() - started
+                print(
+                    f"  {done:,}/{total:,} files ({100 * done / total:.0f}%) "
+                    f"after {elapsed / 60:.1f}m",
+                    flush=True,
+                )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=__doc__,
@@ -181,9 +216,21 @@ def main() -> int:
         help="report what would be written, build nothing",
     )
     parser.add_argument(
+        "--format",
+        choices=("iso", "zip"),
+        default="iso",
+        help=(
+            "iso (default): mounts read-only as a drive on Windows/macOS/"
+            "Linux, but needs xorriso/genisoimage/mkisofs on the system. "
+            "zip: needs nothing beyond Python, and zarr reads a store "
+            "straight out of it without unpacking "
+            "(zarr.storage.ZipStore) -- but it does not mount as a drive."
+        ),
+    )
+    parser.add_argument(
         "--overwrite",
         action="store_true",
-        help="replace an existing .iso instead of refusing",
+        help="replace an existing archive instead of refusing",
     )
     args = parser.parse_args()
 
@@ -193,11 +240,12 @@ def main() -> int:
     output = (
         Path(args.output).resolve()
         if args.output
-        else store.with_suffix(store.suffix + ".iso")
+        else store.with_suffix(f"{store.suffix}.{args.format}")
     )
 
-    # Fails here with the full explanation if nothing suitable is installed.
-    find_builder()
+    if args.format == "iso":
+        # Fails here, with the full explanation, if nothing suitable exists.
+        find_builder()
 
     size, count = tree_size(store)
     print(f"store  : {store}")
@@ -220,24 +268,45 @@ def main() -> int:
             f"not enough space: need ~{human(needed)}, have {human(free)}"
         )
 
-    command = build_command(store, output)
-    print(f"\n$ {' '.join(command)}")
+    if args.format == "iso":
+        command = build_command(store, output)
+        print(f"\n$ {' '.join(command)}")
+    else:
+        command = None
+        print("\npacking with python's zipfile (ZIP_STORED, no re-compression)")
     if args.dry_run:
         print("\n--dry-run: nothing written.")
         return 0
 
-    result = subprocess.run(command)
-    if result.returncode != 0:
-        raise SystemExit(f"xorriso failed with exit code {result.returncode}")
+    if command is None:
+        write_zip(store, output)
+    else:
+        result = subprocess.run(command)
+        if result.returncode != 0:
+            raise SystemExit(
+                f"{Path(command[0]).name} failed with exit code "
+                f"{result.returncode}"
+            )
 
     made = output.stat().st_size
     print(f"\nwrote {output} ({human(made)})")
-    print(
-        "\nMount it read-only:\n"
-        "  Windows  right-click -> Mount\n"
-        "  macOS    double-click, or `hdiutil attach <iso>`\n"
-        "  Linux    `sudo mount -o loop <iso> /mnt/point`"
-    )
+    if args.format == "iso":
+        print(
+            "\nMount it read-only:\n"
+            "  Windows  right-click -> Mount\n"
+            "  macOS    double-click, or `hdiutil attach <iso>`\n"
+            "  Linux    `sudo mount -o loop <iso> /mnt/point`"
+        )
+    else:
+        print(
+            "\nRead it without unpacking:\n"
+            "  import zarr\n"
+            f'  store = zarr.storage.ZipStore("{output.name}", mode="r")\n'
+            f'  group = zarr.open_group(store, path="{store.name}", '
+            'mode="r")\n'
+            "\nOr just open it in Windows Explorer / unzip it to get the "
+            "store back as a directory."
+        )
     return 0
 
 

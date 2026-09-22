@@ -213,7 +213,36 @@ shard_labels: false            # true → also reshard label level 0 after the
     every level. Mind the QOS ceiling (see the warning in section 5b) —
     `sbatch --qos=1day --time=12:00:00 --cpus-per-task=8 --mem=64G`.
 
-!!! tip "Exporting a store as a single `.iso`"
+!!! tip "Exporting a store as a single file (`.zip` or `.iso`)"
+    A zarr store is tens of thousands of small files, which copies slowly
+    everywhere and badly to Windows. Two ways to make it one file:
+
+    ```bash
+    pixi run zip --store /path/to/image.zarr        # needs nothing extra
+    pixi run iso --store /path/to/image.zarr        # needs an ISO builder
+    ```
+
+    **`.zip` is the one that always works.** It needs nothing beyond Python,
+    and zarr reads a store straight out of it *without unpacking*:
+
+    ```python
+    import zarr
+    store = zarr.storage.ZipStore("image.zarr.zip", mode="r")
+    group = zarr.open_group(store, path="image.zarr", mode="r")
+    ```
+
+    Windows Explorer opens it natively, and unzipping gives the store back
+    byte for byte. It is written `ZIP_STORED` — the chunks are already
+    zstd-compressed, so deflating them again would cost a full pass to save
+    almost nothing — and entry by entry, so memory stays flat.
+
+    **`.iso` mounts as a read-only drive**, which `.zip` does not, so the
+    store can be opened in place by anything that takes a path. The cost is
+    that it needs `xorriso`, `genisoimage` or `mkisofs` on the system, and
+    none of them is on conda-forge, so on a cluster without one this option
+    is simply unavailable.
+
+!!! tip "Details of the `.iso` format"
     A zarr store is tens of thousands of small files, which copies slowly
     everywhere and badly to Windows. `pixi run iso` packs a finished store
     into one image that mounts read-only with a double-click:
