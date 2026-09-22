@@ -228,7 +228,21 @@ shard_labels: false            # true → also reshard label level 0 after the
     store inside opens with napari/patchworks unchanged — same bytes, just
     packaged.
 
-    Needs `xorriso` on PATH (`conda install -c conda-forge xorriso`). The
+    **Submit it rather than running it on a login node**: packing a store
+    reads every file and writes the whole image, and a shared login node
+    kills a process that large with no message — the run just returns to the
+    prompt partway through, leaving no usable `.iso`. Same QOS ceiling as
+    everything else:
+
+    ```bash
+    sbatch --qos=1day --time=12:00:00 --cpus-per-task=4 --mem=8G \
+      --wrap "cd $PWD && pixi run iso --store /path/to/image.zarr"
+    ```
+
+    `xorriso` is declared in `workflow/pixi.toml`, so `pixi install` provides
+    it. It streams straight to the output file, so the file count costs no
+    memory — unlike a pure-Python ISO builder, which assembles the image in
+    RAM and will not survive a store this size. The
     image is ISO-9660 level 3 with Rock Ridge *and* Joliet and deep-directory
     relocation disabled, because a zarr v3 chunk path nests deeper than
     ISO-9660's 8 levels — without that, Windows sees a tree flattened into

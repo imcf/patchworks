@@ -846,3 +846,25 @@ def test_reshard_script_skips_already_sharded_arrays():
     assert "--dry-run" in src
     # It must never silently eat a merge-state attr.
     assert "patchworks_merge_state" in src
+
+
+def test_iso_task_declares_its_tool():
+    """`pixi run iso` must not depend on xorriso happening to be installed.
+
+    The task shipped before xorriso was declared, so the documented command
+    failed on a clean environment with "xorriso is not installed" -- and the
+    obvious fallback is a pure-Python ISO builder that assembles the image
+    in RAM and dies partway through a store this size.
+    """
+    import tomllib
+
+    pixi = tomllib.loads((_workflow_dir() / "pixi.toml").read_text())
+    assert "xorriso" in pixi["dependencies"]
+    assert pixi["tasks"]["iso"] == "python scripts/export_iso.py"
+
+
+def test_iso_script_says_to_submit_it():
+    """A login node kills a whole-store pass with no message at all."""
+    src = (_workflow_dir() / "scripts" / "export_iso.py").read_text()
+    assert "do not run it on a login node" in src
+    assert "sbatch" in src and "--qos=1day" in src

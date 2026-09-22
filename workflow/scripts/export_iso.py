@@ -21,9 +21,23 @@ this combination works everywhere and is verified by round-trip below.
 
 Usage
 -----
+    pixi run iso --store /path/to/image.zarr --dry-run   # report, write nothing
     pixi run iso --store /path/to/image.zarr
     pixi run iso --store /path/to/image.zarr --output /elsewhere/scan.iso
-    pixi run iso --store /path/to/image.zarr --dry-run
+
+**Submit it, do not run it on a login node.** Packing a store reads every
+file and writes the whole image; a shared login node kills a process that
+big without a message, and the run simply returns to the prompt partway
+through with no error and no usable .iso. Mind the QOS wall-time ceiling
+too (see docs/guide/snakemake.md):
+
+    sbatch --qos=1day --time=12:00:00 --cpus-per-task=4 --mem=8G \
+      --job-name=iso --output=iso-%j.log \
+      --wrap "cd $PWD && pixi run iso --store /path/to/image.zarr"
+
+Memory is not the constraint here: xorriso streams to the output file
+rather than assembling the image in RAM, so the file count does not cost
+memory. Time and free disk space are.
 
 Reading it back
 ---------------
@@ -143,9 +157,11 @@ def main() -> int:
 
     if shutil.which("xorriso") is None:
         raise SystemExit(
-            "xorriso is not installed. It builds the image; install it with "
-            "your package manager (e.g. `apt install xorriso`, "
-            "`conda install -c conda-forge xorriso`) and re-run."
+            "xorriso is not on PATH. It is declared in workflow/pixi.toml, "
+            "so `pixi install` should provide it -- run that, and use "
+            "`pixi run iso` rather than calling this script directly. "
+            "Outside pixi: `conda install -c conda-forge xorriso` or "
+            "`apt install xorriso`."
         )
 
     size, count = tree_size(store)
