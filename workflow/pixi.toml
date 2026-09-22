@@ -73,8 +73,13 @@ cupy-cuda13x = "*"
 # no-default-feature: the default feature is linux-64-only (cudadecon, and
 # the whole GPU segmentation stack), and an environment's platforms are the
 # intersection of its features'.
+#
+# Do NOT run `pixi workspace platform add win-64`: that adds the platform to
+# the *workspace*, hence to the default feature and so to every environment,
+# and the GPU ones then have to solve cudadecon for a platform it is not
+# built for. The per-feature list here is what keeps the two apart.
 [feature.viewer]
-platforms = ["linux-64", "win-64", "osx-64", "osx-arm64"]
+platforms = ["linux-64", "win-64", "osx-arm64"]
 
 [feature.viewer.dependencies]
 python = "3.12.*"

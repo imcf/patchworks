@@ -1146,8 +1146,12 @@ def test_viewer_environment_solves_off_the_cluster():
 
     pixi = tomllib.loads((_workflow_dir() / "pixi.toml").read_text())
     viewer = pixi["feature"]["viewer"]
-    for platform in ("linux-64", "win-64", "osx-64", "osx-arm64"):
+    for platform in ("linux-64", "win-64", "osx-arm64"):
         assert platform in viewer["platforms"], platform
+    # The workspace itself stays linux-64: adding a platform there would add
+    # it to the default feature, hence to the GPU environments, which then
+    # have to solve cudadecon for a platform it is not built for.
+    assert pixi["workspace"]["platforms"] == ["linux-64"]
     # An environment's platforms are the intersection of its features', so
     # it must drop the linux-64-only default feature -- and then carry its
     # own python, which the default feature was providing.
