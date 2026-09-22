@@ -55,7 +55,13 @@ def _require_napari():
 
 
 def _is_zarr(src: Any) -> bool:
-    """Whether *src* is a path ending in ``.zarr``.
+    """Whether *src* names a zarr store, directory or ``.zip`` bundle.
+
+    The ``.zip`` case matters: everything downstream reads a bundle fine,
+    but this is the gate that decides whether to go there at all. Matching
+    only ``.zarr`` sent a bundle to bioio, which reported a missing
+    optional dependency -- a confusing way to say "this is not an image
+    file", about a store patchworks had just written.
 
     Parameters
     ----------
@@ -65,9 +71,13 @@ def _is_zarr(src: Any) -> bool:
     Returns
     -------
     bool
-        True for a str/Path ending in ``.zarr``.
+        True for a str/Path ending in ``.zarr``, or naming a ``.zip``
+        bundle (optionally with a group path after it).
     """
-    return isinstance(src, (str, Path)) and str(src).endswith(".zarr")
+    if not isinstance(src, (str, Path)):
+        return False
+    text = str(src)
+    return text.endswith(".zarr") or ".zip" in text
 
 
 def _has_multiscales(path: Union[str, Path]) -> bool:

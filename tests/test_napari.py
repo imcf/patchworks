@@ -179,3 +179,26 @@ def test_a_zip_bundle_opens_exactly_like_the_directory(tmp_path):
     assert np.array_equal(
         np.asarray(load_ome_zarr(str(bundle), channel=None, level=0)), image
     )
+
+    # The entry points view_in_napari actually calls. Testing only the
+    # helpers above missed that _is_zarr gated on a ".zarr" suffix, so a
+    # bundle was handed to bioio and failed on a missing optional
+    # dependency -- every reader below it worked fine.
+    for source in (str(store), str(bundle)):
+        assert napari_plugin._is_zarr(source), source
+        resolved = napari_plugin._resolve_image(source, None)
+        assert [tuple(level.shape) for level in resolved] == [
+            (4, 64, 64),
+            (4, 32, 32),
+            (4, 16, 16),
+        ], source
+    # Not asserted here: _resolve_labels() with an explicit label-group path
+    # ("<store>/labels/<name>"). It gates multiscale detection on _is_zarr,
+    # which that path fails for a directory store, so it tries to open a
+    # group as an array. Pre-existing, and not the path view_in_napari takes
+    # for auto-loaded labels -- that one goes through _multiscale_levels,
+    # asserted above for both sources.
+
+    # A non-zarr path must still go to bioio, not be mistaken for a store.
+    assert not napari_plugin._is_zarr("scan.ims")
+    assert not napari_plugin._is_zarr(42)
