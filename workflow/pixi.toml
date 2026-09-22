@@ -11,10 +11,11 @@
 #                          # Also takes a `pixi run zip` bundle directly:
 #                          #   pixi run -e viewer napari <image.zarr.zip>
 #                          # Needs a display (ssh -X or remote-desktop/VNC).
-#                          # This workspace is linux-64 only; to view a
-#                          # result on your own machine use a plain venv:
-#                          #   pip install "patchworks[napari]>=2.8.0"
-#                          #   python scripts/view.py <image.zarr.zip>
+#                          # This workspace is linux-64 only -- to view a
+#                          # result on your own machine, use the separate
+#                          # viewer workspace, which solves everywhere:
+#                          #   cd viewer && pixi install
+#                          #   pixi run napari <image.zarr.zip>
 #
 # On a cluster, put this project on a shared filesystem the compute nodes can
 # read: the SLURM jobs re-launch snakemake from this env's interpreter.
@@ -77,10 +78,9 @@ cupy-cuda13x = "*"
 # or macOS. There is no way to make one environment cross-platform while the
 # others stay linux-only.
 #
-# To view a result on your own machine, skip pixi and use a plain venv:
-#   pip install "patchworks[napari]>=2.8.0"
-#   python scripts/view.py <image.zarr.zip>
-# See docs/guide/snakemake.md.
+# To view a result on your own machine (Windows/macOS included), use the
+# separate workspace in viewer/ -- a second manifest is the only way, since
+# platforms are not scoped per feature. See viewer/pixi.toml.
 [feature.viewer.dependencies]
 python = "3.12.*"
 

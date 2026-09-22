@@ -1171,3 +1171,32 @@ def test_viewer_requires_a_patchworks_that_reads_bundles():
     spec = pixi["feature"]["viewer"]["pypi-dependencies"]["patchworks"]
     assert spec["version"].startswith(">=2.8"), spec
     assert "napari" in spec["extras"]
+
+
+def test_viewer_workspace_solves_everywhere():
+    """Viewing a result must work on a laptop, and only a second manifest can.
+
+    Platforms are not scoped per feature: one declared anywhere goes into
+    the set pixi solves every environment in that manifest for, so putting
+    win-64 on the workflow manifest breaks the GPU environments, which need
+    linux-64-only cudadecon. A separate workspace has none of them.
+    """
+    import tomllib
+
+    manifest = _workflow_dir() / "viewer" / "pixi.toml"
+    assert manifest.is_file()
+    pixi = tomllib.loads(manifest.read_text())
+
+    for platform in ("linux-64", "win-64", "osx-arm64"):
+        assert platform in pixi["workspace"]["platforms"], platform
+    # Nothing linux-only may leak in, or it stops solving elsewhere.
+    assert "cudadecon" not in pixi["dependencies"]
+    assert set(pixi["pypi-dependencies"]) == {"patchworks"}
+    spec = pixi["pypi-dependencies"]["patchworks"]
+    assert spec["extras"] == ["napari"]
+    assert spec["version"].startswith(">=2.8")
+
+    # It reuses the workflow's viewer script rather than duplicating it.
+    task = pixi["tasks"]["napari"]
+    assert task == "python ../scripts/view.py"
+    assert (manifest.parent / "../scripts/view.py").resolve().is_file()

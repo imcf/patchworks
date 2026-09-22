@@ -1,0 +1,36 @@
+# A pixi workspace for *viewing* results -- separate from ../pixi.toml on
+# purpose.
+#
+#   cd workflow/viewer
+#   pixi install
+#   pixi run napari /path/to/image.zarr
+#   pixi run napari /path/to/image.zarr.zip      # a `pixi run zip` bundle
+#
+# Why a second manifest rather than an environment in the first one: the
+# workflow manifest needs cudadecon and the GPU segmentation stack, which
+# are built for linux-64 only. A platform declared anywhere in a manifest --
+# on the workspace or on a single feature -- goes into the set pixi solves
+# *every* environment in it for, so adding win-64 there makes the GPU
+# environments unsolvable. There is no way to exempt one environment.
+#
+# Nothing here needs a GPU or a cluster, so this one solves on Windows,
+# macOS and Linux, and holds only what napari needs.
+
+[workspace]
+name = "patchworks-viewer"
+channels = ["conda-forge"]
+platforms = ["linux-64", "win-64", "osx-arm64", "osx-64"]
+
+[dependencies]
+python = "3.12.*"
+
+# >=2.8.0: reading a store straight out of a .zip bundle landed there. An
+# older patchworks installs happily and then fails to open one with a
+# GroupNotFoundError that says nothing about the version.
+[pypi-dependencies]
+patchworks = { version = ">=2.8.0", extras = ["napari"] }
+
+[tasks]
+# Tasks run with the manifest's directory as cwd, so this reaches the
+# viewer script shared with the workflow rather than duplicating it.
+napari = "python ../scripts/view.py"
