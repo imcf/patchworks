@@ -254,23 +254,27 @@ shard_labels: false            # true → also reshard label level 0 after the
     pixi run -e viewer napari /path/to/image.zarr.zip
     ```
 
-    **On your own machine, skip pixi.** This workspace is linux-64 only:
-    `cudadecon` and the GPU segmentation stack have no Windows or macOS
-    build, and a platform declared anywhere in `pixi.toml` — on the
-    workspace *or* on one feature — makes every environment solve for it,
-    so the GPU ones break. A plain virtual environment is the right tool
-    for looking at a result:
+    **On your own machine — Windows or macOS included — use the separate
+    viewer workspace:**
 
     ```bash
-    python -m venv napari-env
-    napari-env/bin/activate            # Windows: napari-env\Scripts\activate
-    pip install "patchworks[napari]>=2.8.0"
-    python workflow/scripts/view.py /path/to/image.zarr.zip
+    cd workflow/viewer
+    pixi install
+    pixi run napari /path/to/image.zarr.zip
     ```
 
-    `>=2.8.0` matters: reading a store out of a bundle landed there, and an
-    older patchworks fails on a `.zip` with a `GroupNotFoundError` that says
-    nothing about the version. It is written `ZIP_STORED` — the chunks are already
+    It is a second pixi manifest, and that is the only way to do it: the
+    workflow manifest needs `cudadecon` and the GPU stack, which are
+    linux-64 only, and a platform declared anywhere in a manifest — on the
+    workspace *or* on a single feature — goes into the set pixi solves
+    *every* environment in it for. Adding `win-64` there makes the GPU
+    environments unsolvable, with no way to exempt one. A separate
+    workspace has none of those dependencies, so it solves everywhere and
+    holds only what napari needs.
+
+    It pins `patchworks>=2.8.0`, the version that reads a store out of a
+    bundle; an older one fails on a `.zip` with a `GroupNotFoundError` that
+    says nothing about the version. It is written `ZIP_STORED` — the chunks are already
     zstd-compressed, so deflating them again would cost a full pass to save
     almost nothing — and entry by entry, so memory stays flat.
 
