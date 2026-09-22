@@ -1008,3 +1008,113 @@ def test_gpu_environments_combine_with_the_cellpose_pins():
         ("cellpose4-cuda13", {"cp4", "cuda13"}),
     ):
         assert set(pixi["environments"][env]["features"]) == feats, env
+
+
+class _NoBundleFlags:
+    bundle_format = None
+    bundle_output = None
+    bundle_partition = None
+    bundle_mem = None
+    bundle_cpus = None
+    bundle_time = None
+    bundle_qos = None
+
+
+def test_bundling_is_off_unless_asked():
+    """It is a full read of everything the run produced."""
+    from run_multi import _bundle_settings
+
+    assert _bundle_settings({}, _NoBundleFlags())["format"] is None
+
+
+def test_bundle_settings_read_the_multi_config():
+    """`pixi run multi-slurm` is fixed, so this has to work from config."""
+    from run_multi import _bundle_settings
+
+    out = _bundle_settings(
+        {"bundle": {"format": "zip", "qos": "1day"}}, _NoBundleFlags()
+    )
+    assert out["format"] == "zip"
+    assert out["qos"] == "1day"
+    assert out["mem"] == "8G"  # untouched keys keep their defaults
+
+
+def test_bundle_rejects_a_bad_format_or_typo():
+    """Silently not bundling after a run of hours is the wrong failure."""
+    import pytest
+    from run_multi import _bundle_settings
+
+    with pytest.raises(ValueError, match='must be "zip" or "iso"'):
+        _bundle_settings({"bundle": {"format": "tar"}}, _NoBundleFlags())
+    with pytest.raises(ValueError, match="unknown key"):
+        _bundle_settings({"bundle": {"frmat": "zip"}}, _NoBundleFlags())
+    with pytest.raises(ValueError, match="must be a mapping"):
+        _bundle_settings({"bundle": ["zip"]}, _NoBundleFlags())
+
+
+def test_bundle_is_submitted_under_a_profile():
+    """It reads every file the run produced -- not on the login node."""
+    from pathlib import Path as _Path
+
+    from run_multi import _bundle_cmd
+
+    bundle = {
+        "format": "zip",
+        "output": None,
+        "partition": "scicore",
+        "mem": "8G",
+        "cpus": 2,
+        "time": 720,
+        "qos": "1day",
+    }
+    cmd = _bundle_cmd("/w/image.zarr", _Path("/workflow"), bundle, True)
+    assert cmd[0] == "srun"
+    assert "--qos" in cmd and "1day" in cmd
+    assert cmd[cmd.index("--time") + 1] == "720"
+    assert cmd[-1] == "--overwrite"
+    assert "--format" in cmd and "zip" in cmd
+    assert str(_Path("/workflow/scripts/export_iso.py")) in cmd
+
+    # Without a profile it runs in-process, no srun.
+    local = _bundle_cmd("/w/image.zarr", _Path("/workflow"), bundle, False)
+    assert "srun" not in local
+
+
+def test_bundle_runs_after_the_relations_not_before():
+    """A bundle of a run whose relations failed would look complete."""
+    src = (_workflow_dir() / "scripts" / "run_multi.py").read_text()
+    # The failure branch exits without bundling...
+    failed = src.index("relation(s) failed")
+    exit_one = src.index("sys.exit(1)", failed)
+    bundle_after = src.index("_run_bundle", exit_one)
+    assert exit_one < bundle_after
+    # ...and the success path bundles.
+    assert src.count("_run_bundle(image_store, workflow_dir, bundle") == 3
+
+
+def test_bundle_store_path_is_made_absolute():
+    """The command runs with cwd=workflow_dir, not the driver's cwd.
+
+    A relative work_dir would otherwise be resolved against the workflow
+    directory, and the step would fail with "not a directory" after the
+    whole run had already succeeded.
+    """
+    from pathlib import Path as _Path
+
+    from run_multi import _bundle_cmd
+
+    bundle = {
+        "format": "zip",
+        "output": "out/bundle.zip",
+        "partition": "scicore",
+        "mem": "8G",
+        "cpus": 2,
+        "time": 720,
+        "qos": None,
+    }
+    cmd = _bundle_cmd("results/image.zarr", _Path("/workflow"), bundle, False)
+    store = cmd[cmd.index("--store") + 1]
+    output = cmd[cmd.index("--output") + 1]
+    assert _Path(store).is_absolute(), store
+    assert _Path(output).is_absolute(), output
+    assert store.endswith("results/image.zarr")

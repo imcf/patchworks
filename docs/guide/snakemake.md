@@ -253,6 +253,24 @@ shard_labels: false            # true → also reshard label level 0 after the
     zstd-compressed, so deflating them again would cost a full pass to save
     almost nothing — and entry by entry, so memory stays flat.
 
+    **Automatically, at the end of a run.** Add a `bundle:` block to the
+    multi config and `pixi run multi-slurm` packs the store itself, once
+    every segmentation *and* relation has succeeded:
+
+    ```yaml
+    # config/multi.yaml
+    bundle:
+      format: "zip"    # or "iso"; omit the block for no bundle
+      qos: "1day"      # `time` must stay under this QOS's MaxWall
+    ```
+
+    Or `--bundle zip` for a one-off. Under `--profile` it is submitted as
+    its own job, for the same reason the occupancy and relate steps are. A
+    failed relation skips it deliberately: a bundle of a half-finished run
+    would look complete while missing workbooks. If the packing itself
+    fails, nothing is lost — the store is complete on disk and
+    `pixi run zip` retries just that step.
+
     **`.iso` mounts as a read-only drive**, which `.zip` does not, so the
     store can be opened in place by anything that takes a path. The cost is
     that it needs `xorriso`, `genisoimage` or `mkisofs` on the system, and
