@@ -26,7 +26,8 @@ import tempfile
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from itertools import product as _iproduct
-from multiprocessing import Pool as _Pool
+import multiprocessing as _mp
+import sys
 from pathlib import Path
 from typing import Any, Mapping, Sequence, Union
 
@@ -515,6 +516,24 @@ def _offsets_from_counts(
     return offsets
 
 
+def _pool_context():
+    """Multiprocessing context for the relabel pool.
+
+    ``fork`` on Linux, pinned explicitly: Python 3.14 changed the Linux
+    default to ``forkserver``, which (like ``spawn``) re-imports the caller's
+    main module in every worker. A script without an
+    ``if __name__ == "__main__":`` guard -- the pipeline's own Snakemake
+    ``merge.py``, every example in the docs, most notebooks-turned-scripts --
+    then re-runs its whole body per worker and the merge dies. The workers
+    only need module-level state set by ``_init_worker``, and the pool is
+    started once staging has finished, so forking is safe here. Elsewhere
+    (macOS, Windows) the platform default stands: fork is unsafe or absent.
+    """
+    if sys.platform.startswith("linux"):
+        return _mp.get_context("fork")
+    return _mp.get_context()
+
+
 def _scratch_store(base: Union[str, Path, None], name: str) -> tuple[str, str]:
     """Path for a scratch zarr store, plus what to delete when done with it.
 
@@ -823,7 +842,7 @@ def zarr_native_merge(
             for task in it:
                 _relabel_chunk_worker(task)
         else:
-            with _Pool(
+            with _pool_context().Pool(
                 processes=n_w,
                 initializer=_init_worker,
                 initargs=(

@@ -541,3 +541,44 @@ def test_otsu_matches_scikit_image():
     for s in samples:
         assert np.isclose(_otsu_threshold(s), threshold_otsu(s), atol=1e-3)
     assert _otsu_threshold(np.array([], "uint16")) == 0.0
+
+
+def test_merge_pool_does_not_rerun_an_unguarded_script(tmp_path):
+    """A script without a __main__ guard must still merge with >1 worker.
+
+    Python 3.14 made forkserver the Linux default, which re-imports the
+    caller's main module in every worker: the pipeline's Snakemake merge.py
+    and the docs' examples then re-run their whole body per worker and die.
+    """
+    import subprocess
+    import sys
+    import textwrap
+
+    script = tmp_path / "unguarded.py"
+    script.write_text(
+        textwrap.dedent(
+            f"""
+            import numpy as np, zarr
+            from patchworks._merge import zarr_native_merge
+            print("TOP-LEVEL", flush=True)
+            g = zarr.open_group({str(tmp_path / "s.zarr")!r}, mode="w")
+            a = g.create_array(
+                "staged", shape=(4, 8, 8), chunks=(1, 8, 8), dtype="int32"
+            )
+            a[:] = 1
+            zarr_native_merge(
+                {str(tmp_path / "s.zarr")!r}, "staged",
+                {str(tmp_path / "o.zarr")!r}, "labels", n_workers=2,
+            )
+            print("MERGED", flush=True)
+            """
+        )
+    )
+    run = subprocess.run(
+        [sys.executable, str(script)],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert run.returncode == 0, run.stderr
+    assert run.stdout.split() == ["TOP-LEVEL", "MERGED"]
