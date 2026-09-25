@@ -102,3 +102,31 @@ def test_label_relations_is_independent_of_completion_order():
     assert label_relations(a, b, n_workers=1) == label_relations(
         a, b, n_workers=8
     )
+
+
+def test_overlap_fraction_counts_voxels_over_background():
+    """Half a nucleus over background is 50% contained, not 100%.
+
+    The denominator used to count only voxels that overlapped *some* b
+    label, so any part of an a label over b's background vanished from it.
+    """
+    a = np.zeros((2, 8), dtype=np.int32)
+    a[:, 0:4] = 1  # 8 voxels
+    b = np.zeros((2, 8), dtype=np.int32)
+    b[:, 0:2] = 5  # covers half of nucleus 1; the rest is background
+
+    table = label_relations(
+        da.from_array(a, chunks=(1, 2)), da.from_array(b, chunks=(1, 2))
+    )
+    assert table[1]["match"] == 5
+    assert table[1]["overlap_voxels"] == 4
+    assert table[1]["overlap_fraction"] == 0.5
+
+
+def test_label_relations_breaks_ties_to_the_lowest_b():
+    a = np.ones((1, 4), dtype=np.int32)
+    b = np.array([[9, 9, 3, 3]], dtype=np.int32)
+    table = label_relations(
+        da.from_array(a, chunks=(1, 2)), da.from_array(b, chunks=(1, 2))
+    )
+    assert table[1]["match"] == 3

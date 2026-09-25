@@ -1,6 +1,7 @@
 """Snakemake script: plan tiles, create the empty stage store, list work."""
 
 import json
+import shutil
 from functools import partial
 from pathlib import Path
 
@@ -8,6 +9,7 @@ import numpy as np
 import zarr
 
 from patchworks import (
+    set_compression,
     auto_empty_threshold,
     auto_tile_shape,
     auto_tile_shape_cellpose,
@@ -20,12 +22,20 @@ from patchworks import (
     tile_occupancy,
 )
 
-from _pw import open_image, stage_path, start_log, validate_config
+from _pw import (
+    halo_path,
+    open_image,
+    stage_path,
+    start_log,
+    validate_config,
+)
 
 # Chunking ceiling for the written labels, so a viewer can page them lazily.
 LABEL_CHUNK_CAP = (16, 1024, 1024)
 
 start_log(snakemake.log[0])  # noqa: F821
+# Codec for every array this step creates (config `compression:`).
+set_compression(snakemake.config.get("compression", "zstd"))  # noqa: F821
 cfg = snakemake.config  # noqa: F821
 work_dir = cfg["work_dir"]
 label_name = cfg.get("label_name", "labels")
@@ -59,7 +69,10 @@ if ts == "auto":
             from patchworks.plugins.ome_zarr import read_pixel_size
 
             anisotropy = cellpose_anisotropy(
-                read_pixel_size(str(Path(work_dir) / "image.zarr"))
+                read_pixel_size(
+                    str(Path(work_dir) / "image.zarr"),
+                    level=int(cfg.get("level", 0)),
+                )
             )
         sizer = partial(
             auto_tile_shape_cellpose,
@@ -190,6 +203,8 @@ else:
         "chunked for viewing"
     )
 create_stage(target_path, image.shape, tile_shape, component=target_component)
+# Halo strips from an earlier run describe tiles that no longer exist.
+shutil.rmtree(halo_path(work_dir, label_name), ignore_errors=True)
 
 Path(work_dir, label_name, "tiles.json").write_text(
     json.dumps(

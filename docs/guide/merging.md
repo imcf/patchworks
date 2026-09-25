@@ -108,6 +108,87 @@ on the array itself, and refuses to guess on a re-run:
 Without that, a second pass would add each tile's offset to ids that are
 already global, which can land two unrelated objects on the same id.
 
+## IoU stitching: keeping touching cells apart
+
+Touching-label merging joins *any* two labels that touch across a tile
+boundary. That is right for one object cut in two by the seam, and wrong for
+two different cells pressed against each other exactly there: they become one
+object.
+
+`stitch="iou"` asks the tiles instead. Each tile already predicts labels in
+its halo, the strip it reads beyond its own edge; those predictions are kept
+(one small `.npz` per tile) rather than thrown away. Across every boundary,
+both tiles have then labelled the same overlap zone, and a pair of labels is
+joined only when their IoU over that zone reaches `iou_threshold` (default
+0.5) — when both tiles agree they saw the same object.
+
+```python
+tile_process(
+    "image.zarr", fn, tile_shape=(16, 1024, 1024), overlap=30, stitch="iou"
+)
+```
+
+It needs `overlap > 0`: without a halo there is no shared zone to compare.
+An axis with no halo — 2-D tiles one plane thick, stacked in z — falls back to
+the IoU of the two boundary slices, which is Cellpose's own `stitch_threshold`
+rule for building 3-D objects out of 2-D planes. On the cluster, set
+`stitch: "iou"` (and optionally `iou_threshold:`) in the config.
+
+With `merge_tile_labels`, pass the `halo_dir` that
+[`stage_tile`](../api/tile_process.md)`(..., halo_dir=...)` wrote.
+
+## Checking the seams
+
+A well-stitched result does not care where the tiles were. One that does
+shows it at the seams: objects ending abruptly on a tile boundary, because
+the tile on the other side decided differently or the pieces were not
+joined. [`seam_report`](../api/seams.md) measures exactly that, without
+ground truth: at each seam, the fraction of labels with nothing continuing
+on the other side, against the same fraction on planes halfway through the
+tiles, where nothing was stitched.
+
+```python
+from patchworks import seam_report
+
+report = seam_report("scan.zarr/labels/cells", tile_shape=(16, 1024, 1024))
+report["axes"][2]  # {'seam_rate': 0.04, 'interior_rate': 0.05, 'ratio': 0.8, ...}
+```
+
+A ratio near 1 means the seams are invisible. Well above it (a warning is
+logged past 2×), the tiling shows: raise `overlap` to about one object, or
+try `stitch="iou"`. `worst_seams` lists the faces to look at in the viewer.
+The cluster workflow runs it after every merge and writes
+`<work_dir>/<label_name>/seams.json` (`seam_report: false` turns it off).
+
+## Choosing the overlap from the data
+
+The halo exists so that tiling does not change the result — and that is
+testable. [`suggest_overlap`](../api/seams.md) segments a crop spanning 2×2
+tiles once *without* tiling, then tiled at increasing overlaps, and returns
+the smallest overlap whose result matches the untiled one (object-level F1
+≥ 0.99):
+
+```python
+from patchworks import load_ome_zarr, suggest_overlap
+
+image = load_ome_zarr("scan.zarr", channel=0)
+suggest_overlap(image, fn, tile_shape=(16, 512, 512))
+# {'overlap': 16, 'scores': {0: 0.91, 4: 0.95, 8: 0.97, 16: 0.995}, ...}
+```
+
+Pass `region=` to test a crop with typical objects (an empty one agrees at
+any overlap). On the command line: `patchworks segment ... --tile-shape
+16,512,512 --overlap auto`.
+
+## Resuming an interrupted run
+
+`tile_process(..., resume=True)` stages into a store named after the run's
+inputs (image, tiling, overlap, `fn` and its bound arguments, output) and
+records each finished tile. If the run dies, the store is kept; rerunning the
+same call skips every tile already done. It is removed once the run succeeds.
+The pipeline does the same per SLURM batch, so a retried job continues from
+its last finished tile.
+
 ## Using the merge step standalone
 
 You can call the merge step directly on any existing label array or zarr:

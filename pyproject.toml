@@ -19,23 +19,34 @@ keywords = [
     "bioimage",
 ]
 classifiers = [
-    "Development Status :: 5 - Production/Stable",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Scientific/Engineering :: Image Processing",
 ]
 
-requires-python = ">=3.9"
+# zarr-python 3 (itself Python >= 3.11) is required: NGFF 0.5 stores,
+# sharding and the create_array API have no zarr-2 equivalent. It still
+# writes NGFF 0.4 (zarr-v2 format) stores when asked to.
+# Floors are the oldest releases the suite passes on (CI's "minimum
+# versions" job holds them there): zarr < 3.0.3 hangs in the merge's
+# forked workers, < 3.1.3 rejects tifffile's store; zarr 3.1 needs numpy
+# 1.26; dask < 2024.10 fails 57 tests; scipy 1.11 is the first to build
+# against numpy 1.26 on 3.11.
+requires-python = ">=3.11"
 dependencies = [
-    "dask[array]>=2023.1.0",
-    "numpy>=1.24",
-    "zarr>=2.14",
-    "scipy>=1.9",
+    "dask[array]>=2024.10.0",
+    "numpy>=1.26",
+    "zarr>=3.1.3",
+    "scipy>=1.11",
+    # Free RAM bounds worker counts and auto tile sizes; without it a
+    # workstation (no SLURM, no cgroup limit) falls back to a blind 8 GiB.
+    "psutil",
 ]
 
 [project.optional-dependencies]
@@ -49,6 +60,12 @@ cellpose4 = ["cellpose>=4"]
 # cupy-cuda12x), install it separately to match your CUDA version.
 dog = ["pycudadecon"]
 gpu = ["nvidia-ml-py"]
+# remote reads/writes s3://, gs:// and https:// stores through fsspec
+# (credentials come from the usual AWS/GCP environment or config files).
+remote = ["fsspec[http,s3,gcs]"]
+# distributed backs make_local_cluster and the live dashboard tile_process
+# opens for single-GPU runs (it falls back to threads without it).
+distributed = ["dask[distributed,diagnostics]"]
 # bioio enables converting any image format (CZI, LIF, ND2, OME-TIFF, …) to
 # OME-ZARR. Ships the common native readers (faster than going through Java)
 # plus bioio-bioformats, the Bio-Formats catch-all reader (needs a JVM).
@@ -98,6 +115,9 @@ napari = [
 workflow = ["snakemake>=8", "snakemake-executor-plugin-slurm", "openpyxl"]
 # jsonschema validates what we write against the vendored official
 # OME-NGFF schemas (tests/ngff_schemas/); without it that one test skips.
+# openpyxl -> tests/test_run_multi.py checks the relations workbook.
+# ruff is pinned to the version CI lints with (.github/workflows/lint.yml),
+# so a local `ruff check` agrees with CI.
 dev = [
     "pytest",
     "pytest-cov",
@@ -105,14 +125,20 @@ dev = [
     "psutil",
     "tqdm",
     "jsonschema>=4.18",
+    "openpyxl",
+    "ruff==0.15.18",
+    "mypy>=1.10",
 ]
 docs = ["mkdocs-material>=9.0", "mkdocstrings[python]>=0.24"]
 all = [
-    "patchworks[io,gpu,bioio,imaris,napari]",
+    "patchworks[io,gpu,distributed,bioio,imaris,napari]",
     "psutil",
     "tqdm",
     "scikit-image",
 ]
+
+[project.scripts]
+patchworks = "patchworks.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/imcf/patchworks"
@@ -127,5 +153,29 @@ packages = ["src/patchworks"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
+[tool.mypy]
+python_version = "3.11"
+files = ["src/patchworks"]
+ignore_missing_imports = true
+warn_unused_ignores = true
+# Enforced now: arity and unpacking, undefined names and attributes, calls
+# with wrong or missing arguments -- the classes that are real bugs here.
+# Off for now: numpy/zarr/dask typing noise (zarr attrs are loosely typed
+# JSON, dask's decorated methods confuse call checks, and variables such as
+# tile_process's `image` are narrowed from "path or array" by reassignment).
+# Tighten module by module by removing codes from this list.
+disable_error_code = [
+    "union-attr",
+    "arg-type",
+    "index",
+    "operator",
+    "call-overload",
+    "type-var",
+    "func-returns-value",
+    "assignment",
+    "return-value",
+]
+
 [tool.ruff]
 line-length = 80
+target-version = "py311"

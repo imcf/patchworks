@@ -44,6 +44,7 @@ Optional extras:
 
 ```bash
 pip install "patchworks[gpu]"       # GPU VRAM querying (nvidia-ml-py)
+pip install "patchworks[distributed]" # Dask cluster + live dashboard
 pip install "patchworks[cellpose]"  # Cellpose plugin (>=3.0, v3 or v4)
 pip install "patchworks[cellpose3]" # Cellpose plugin, pinned to v3.x
 pip install "patchworks[cellpose4]" # Cellpose plugin, pinned to v4+
@@ -185,6 +186,18 @@ from disk, so terabyte volumes convert in bounded RAM. See the
 
 ---
 
+## From the command line
+
+```bash
+patchworks convert scan.czi scan.zarr
+patchworks segment scan.zarr --method cellpose --model cyto3 --diameter 30 --gpu
+patchworks info scan.zarr
+patchworks view scan.zarr
+```
+
+See [Command line](https://imcf.one/patchworks/guide/cli/) for every method
+and flag.
+
 ## Common patterns
 
 ### Auto-size tiles from available memory
@@ -318,12 +331,12 @@ Full docs, guides and tutorials: **<https://imcf.one/patchworks/>**
 
 ## Requirements
 
-- Python ≥ 3.9
-- dask[array], numpy, zarr, scipy
+- Python ≥ 3.11
+- dask[array], numpy, zarr ≥ 3.1.3, scipy, psutil (RAM-aware tile and worker
+  sizing)
 
 Optional:
 
-- `psutil` — accurate RAM sizing for `tile_shape="auto"`
 - `nvidia-ml-py` — accurate GPU VRAM sizing
 - `tqdm` — progress bars
 - `cellpose` — Cellpose plugin, v3 or v4 (`patchworks[cellpose]`);

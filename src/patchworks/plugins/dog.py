@@ -6,23 +6,23 @@ components. CPU (scipy) or GPU (cupy) backed.
 
 Usage
 -----
->>> from patchworks.plugins.dog import dog_label_fn
->>> from patchworks import tile_process
+>>> from patchworks.plugins.dog import dog_label_fn  # doctest: +SKIP
+>>> from patchworks import tile_process  # doctest: +SKIP
 >>>
->>> fn = dog_label_fn(low_sigma=1.0, high_sigma=3.0, threshold=0.02)
->>> result = tile_process("image.zarr", fn, tile_shape=(1, 2048, 2048),
+>>> fn = dog_label_fn(low_sigma=1.0, high_sigma=3.0, threshold=0.02)  # doctest: +SKIP
+>>> result = tile_process("image.zarr", fn, tile_shape=(1, 2048, 2048),  # doctest: +SKIP
 ...                       overlap=8, write_to="labels.zarr", progress=True)
 
 With deconvolution first (widen ``overlap`` to cover the PSF support):
 
->>> fn = dog_label_fn(
+>>> fn = dog_label_fn(  # doctest: +SKIP
 ...     low_sigma=1.0, high_sigma=3.0, threshold=0.02,
 ...     decon_kwargs=dict(psf=psf, dxpsf=xy_scale, dxdata=xy_scale,
 ...                        dzpsf=z_scale, dzdata=z_scale,
 ...                        wavelength=wavelength, na=numerical_aperture,
 ...                        nimm=refractive_index),
 ... )
->>> result = tile_process("image.zarr", fn, tile_shape=(1, 2048, 2048), overlap=32)
+>>> result = tile_process("image.zarr", fn, tile_shape=(1, 2048, 2048), overlap=32)  # doctest: +SKIP
 
 For the Snakemake workflow's ``method: "custom"`` (see
 docs/guide/custom_segmentation.md), use the
@@ -146,14 +146,17 @@ def dog_label_fn(
     use_gpu: bool = False,
     decon_kwargs: dict[str, Any] | None = None,
     voxel_size: dict[str, float] | None = None,
+    sigma_units: str = "px",
 ) -> Callable[[np.ndarray], np.ndarray]:
     """Return a ready-to-use DoG labeler for ``tile_process``.
 
     Parameters
     ----------
     low_sigma, high_sigma:
-        Gaussian sigmas (pixels) for the narrow/wide blur.
-        ``dog = blur(low_sigma) - blur(high_sigma)``.
+        Gaussian sigmas for the narrow/wide blur, one number or one per axis.
+        ``dog = blur(low_sigma) - blur(high_sigma)``. In pixels by default,
+        which on an anisotropic stack blurs z far further (physically) than
+        x/y; see *sigma_units*.
     threshold:
         Binary threshold applied to the DoG image (``dog > threshold``).
     use_gpu:
@@ -178,12 +181,31 @@ def dog_label_fn(
         workflow passes the image's own calibration automatically; from the
         API, :func:`patchworks.plugins.ome_zarr.read_pixel_size` reads it from
         a store.
+    sigma_units:
+        ``"px"`` (default) or ``"um"``. With ``"um"`` the sigmas are
+        physical distances, converted per axis with *voxel_size* -- so a
+        cilium is blurred by the same distance along z as across it, however
+        coarse the z-step.
 
     Returns
     -------
     Callable[[ndarray], ndarray]
         Picklable function ready for ``tile_process``.
     """
+    if sigma_units not in ("px", "um"):
+        raise ValueError(
+            f'sigma_units must be "px" or "um", got {sigma_units!r}'
+        )
+    if sigma_units == "um":
+        if not voxel_size:
+            raise ValueError('sigma_units="um" needs voxel_size')
+        low_sigma = _physical_sigma(low_sigma, voxel_size)
+        high_sigma = _physical_sigma(high_sigma, voxel_size)
+        logger.info(
+            "DoG sigmas in pixels (z, y, x): low %s, high %s",
+            low_sigma,
+            high_sigma,
+        )
     if use_gpu:
         _require_cupy()
     if decon_kwargs is not None:
@@ -211,6 +233,175 @@ def dog_label_fn(
     return partial(_run, dog_dict=cfg)
 
 
+# pycudadecon.decon's keywords, by the step they configure. The one-shot
+# decon() rebuilds the OTF and re-initialises cudaDecon on every call -- for
+# every tile -- so the plugin drives the steps itself and caches both.
+_OTF_KEYS = (
+    "dzpsf",
+    "dxpsf",
+    "wavelength",
+    "na",
+    "nimm",
+    "otf_bgrd",
+    "krmax",
+    "fixorigin",
+    "cleanup_otf",
+    "max_otf_size",
+    "skewed_decon",
+)
+_INIT_KEYS = (
+    "dzdata",
+    "dxdata",
+    "dzpsf",
+    "dxpsf",
+    "deskew",
+    "rotate",
+    "width",
+    "skewed_decon",
+)
+_RUN_KEYS = (
+    "background",
+    "n_iters",
+    "shift",
+    "napodize",
+    "nz_blend",
+    "pad_val",
+    "dup_rev_z",
+    "skewed_decon",
+)
+# Per process: cudaDecon keeps one global context, so one cached state.
+_decon_state: dict[str, Any] = {}
+
+
+def _drop_decon_state() -> None:
+    """Release cudaDecon's context and forget the cache (OOM, process end)."""
+    if _decon_state.get("ctx_key") is not None:
+        try:
+            import pycudadecon
+
+            pycudadecon.rl_cleanup()
+        except Exception:  # pragma: no cover - best effort on the way out
+            logger.debug("rl_cleanup failed", exc_info=True)
+    otf_dir = _decon_state.get("otf_dir")
+    _decon_state.clear()
+    if otf_dir:
+        import shutil
+
+        shutil.rmtree(otf_dir, ignore_errors=True)
+
+
+def _cached_decon(img: np.ndarray, kwargs: dict[str, Any]) -> np.ndarray:
+    """``pycudadecon.decon(img, **kwargs)``, with its setup cached per process.
+
+    The OTF is generated once per PSF + OTF settings, and cudaDecon is
+    initialised once per tile shape (edge tiles differ, and re-initialise).
+    A PSF given as an array, or any keyword the cache does not model, falls
+    back to the uncached one-shot call.
+    """
+    import os
+
+    import pycudadecon
+
+    known = {"psf", *_OTF_KEYS, *_INIT_KEYS, *_RUN_KEYS}
+    psf = kwargs.get("psf")
+    if not isinstance(psf, (str, os.PathLike)) or set(kwargs) - known:
+        return pycudadecon.decon(images=img, **kwargs)
+
+    otf_kw = {k: kwargs[k] for k in _OTF_KEYS if k in kwargs}
+    otf_key = (str(psf), repr(sorted(otf_kw.items())))
+    if _decon_state.get("otf_key") != otf_key:
+        import tempfile
+
+        _drop_decon_state()
+        otf_dir = tempfile.mkdtemp(prefix="pws_otf_")
+        path = os.path.join(otf_dir, "otf.tif")
+        pycudadecon.make_otf(str(psf), path, **otf_kw)
+        _decon_state.update(otf_key=otf_key, otf_path=path, otf_dir=otf_dir)
+        if not _decon_state.get("atexit"):
+            import atexit
+
+            atexit.register(_drop_decon_state)
+            _decon_state["atexit"] = True
+
+    init_kw = {k: kwargs[k] for k in _INIT_KEYS if k in kwargs}
+    ctx_key = (tuple(img.shape), otf_key, repr(sorted(init_kw.items())))
+    if _decon_state.get("ctx_key") != ctx_key:
+        if _decon_state.get("ctx_key") is not None:
+            pycudadecon.rl_cleanup()
+        pycudadecon.rl_init(img.shape, _decon_state["otf_path"], **init_kw)
+        _decon_state["ctx_key"] = ctx_key
+    return pycudadecon.rl_decon(
+        img, **{k: kwargs[k] for k in _RUN_KEYS if k in kwargs}
+    )
+
+
+def _axial_fwhm_um(wavelength_nm: float, na: float, n: float) -> float:
+    """Widefield axial FWHM, ``0.88 lambda / (n - sqrt(n^2 - NA^2))``."""
+    na = min(na, n * 0.999)
+    return 0.88 * (wavelength_nm / 1000) / (n - (n * n - na * na) ** 0.5)
+
+
+def _resolve_dup_rev_z(
+    kwargs: dict[str, Any], shape: tuple[int, ...]
+) -> dict[str, Any]:
+    """Decide ``dup_rev_z: "auto"`` for a tile of *shape*.
+
+    cudaDecon's FFTs wrap around in z, so on a tile only a few PSF lengths
+    deep, light from its top planes bleeds into its bottom ones (and back):
+    faint ghost copies of objects near either face. ``dup_rev_z`` mirrors
+    the stack in z first, which removes the wrap at twice the z-work. "auto"
+    turns it on when the tile is shallower than 4 axial FWHMs of the PSF
+    (estimated from wavelength, NA and immersion index -- the same values
+    the OTF is built from).
+    """
+    if kwargs.get("dup_rev_z") != "auto":
+        return kwargs
+    fwhm = _axial_fwhm_um(
+        float(kwargs.get("wavelength", 520)),
+        float(kwargs.get("na", 1.25)),
+        float(kwargs.get("nimm", 1.3)),
+    )
+    depth = shape[0] * float(kwargs.get("dzdata", 0.5))
+    on = depth < 4 * fwhm
+    key = (tuple(shape), on)
+    if _decon_state.get("dup_logged") != key:
+        logger.info(
+            "dup_rev_z auto: tile depth %.2f um vs axial FWHM %.2f um -> %s",
+            depth,
+            fwhm,
+            "mirroring in z (tile too shallow for the PSF)" if on else "off",
+        )
+        _decon_state["dup_logged"] = key
+    return {**kwargs, "dup_rev_z": on}
+
+
+def _physical_sigma(
+    sigma: float | tuple[float, ...], voxel_size: dict[str, float]
+) -> tuple[float, ...]:
+    """Micrometre sigma(s) -> per-axis pixel sigmas, ordered (z, y, x).
+
+    A scalar applies to every axis; a 2-tuple is (y, x); a 3-tuple is
+    (z, y, x). An axis the calibration lacks falls back to 1 um per voxel.
+    """
+    axes = "zyx"
+    values = (
+        (float(sigma),) * 3
+        if np.isscalar(sigma)
+        else tuple(float(v) for v in sigma)
+    )
+    names = axes[-len(values) :]
+    return tuple(
+        v / float(voxel_size.get(a) or 1.0) for v, a in zip(values, names)
+    )
+
+
+def _fit_sigma(sigma: Any, ndim: int) -> Any:
+    """Trim a (z, y, x) sigma to a 2-D tile's (y, x)."""
+    if np.isscalar(sigma) or len(sigma) == ndim:
+        return sigma
+    return tuple(sigma)[-ndim:]
+
+
 def _run(block: np.ndarray, dog_dict: dict[str, Any]) -> np.ndarray:
     """Deconvolve (optional), then DoG-threshold-label one tile.
 
@@ -235,6 +426,8 @@ def _run(block: np.ndarray, dog_dict: dict[str, Any]) -> np.ndarray:
     return retry_on_oom(
         lambda: _segment_once(block, dog_dict, use_gpu),
         enabled=gpu_involved,
+        # Give the co-tenant cudaDecon's buffers too, not just cupy's pool.
+        on_release=_drop_decon_state,
     )
 
 
@@ -306,15 +499,8 @@ def _segment_once(
 
     decon_kwargs = dog_dict["decon_kwargs"]
     if decon_kwargs is not None:
-        # ponytail: re-inits the GPU/OTF context on every tile via the
-        # one-shot decon() API. Ceiling: per-tile setup cost dominates on
-        # many small tiles. Upgrade: cache a pycudadecon.RLContext per
-        # worker process (see cellpose.py's _model_cache) if that shows up
-        # in the per-tile timing that tile_process logs.
-        from pycudadecon import decon
-
         before = img.shape
-        img = decon(images=img, **decon_kwargs)
+        img = _cached_decon(img, _resolve_dup_rev_z(decon_kwargs, img.shape))
         if img.shape != before:
             # cudaDecon returns a slightly smaller volume for some input
             # sizes (e.g. (14,1024,1024) -> (13,1020,1020) on an edge tile).
@@ -334,8 +520,12 @@ def _segment_once(
 
     low_blur = high_blur = dog_image = mask = labels = None
     try:
-        low_blur = gaussian_filter(img, sigma=dog_dict["low_sigma"])
-        high_blur = gaussian_filter(img, sigma=dog_dict["high_sigma"])
+        low_blur = gaussian_filter(
+            img, sigma=_fit_sigma(dog_dict["low_sigma"], img.ndim)
+        )
+        high_blur = gaussian_filter(
+            img, sigma=_fit_sigma(dog_dict["high_sigma"], img.ndim)
+        )
         dog_image = low_blur - high_blur
         low_blur = high_blur = None  # peak is here; drop what's already used
         mask = dog_image > dog_dict["threshold"]
@@ -384,7 +574,7 @@ def segment(tile: np.ndarray, **kwargs: Any) -> np.ndarray:
 # ``segment`` takes **kwargs, so its own signature accepts anything. Point at
 # the function that really validates them so the workflow can reject a typo'd
 # key in `prepare` instead of on a GPU node hours later.
-segment.patchworks_kwargs_target = dog_label_fn
+setattr(segment, "patchworks_kwargs_target", dog_label_fn)
 
 
 # Keep the lower-level name available for advanced users

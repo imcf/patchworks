@@ -110,3 +110,20 @@ backoff rather than falling back to the CPU, where a single tile can take
 over an hour. Before each backoff it releases its own device memory
 (including any cached Cellpose model), since holding that is exactly what
 starves the other job. Both torch and cupy OOM errors are recognised.
+
+## Several GPUs in one run
+
+On a node with more than one GPU, `gpus=` runs one worker process per
+device, each pinned to its GPU (through `CUDA_VISIBLE_DEVICES`) before CUDA
+starts, with tiles handed out as workers free up:
+
+```python
+fn = cellpose_fn("cyto3", gpu=True, diameter=30)
+tile_process("scan.zarr", fn, tile_shape=(16, 1024, 1024), use_gpu=True, gpus=4)
+```
+
+`gpus=4` takes the first four visible devices (the first four of
+`CUDA_VISIBLE_DEVICES` when SLURM set it); a list picks them by id. From the
+command line: `patchworks segment ... --gpu --gpus 4`. Workers are forked, so
+this is Linux only. The Snakemake workflow spreads tiles over GPUs as separate
+SLURM jobs instead.

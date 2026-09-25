@@ -9,26 +9,27 @@ consistent labels.
 
 Quick start
 -----------
->>> from patchworks import tile_process
+>>> from patchworks import tile_process  # doctest: +SKIP
 >>>
->>> def my_fn(tile):
+>>> def my_fn(tile):  # doctest: +SKIP
 ...     from skimage.filters import threshold_otsu
 ...     from skimage.measure import label
 ...     return label(tile > threshold_otsu(tile)).astype("int32")
 >>>
->>> result = tile_process("image.zarr", my_fn, write_to="labels.zarr")
+>>> result = tile_process("image.zarr", my_fn, write_to="labels.zarr")  # doctest: +SKIP
 
 With Cellpose:
 
->>> from patchworks.plugins.cellpose import cellpose_fn
->>> fn = cellpose_fn("cyto3", gpu=True, diameter=30)
->>> tile_process("image.zarr", fn, tile_shape=(1, 2048, 2048),
+>>> from patchworks.plugins.cellpose import cellpose_fn  # doctest: +SKIP
+>>> fn = cellpose_fn("cyto3", gpu=True, diameter=30)  # doctest: +SKIP
+>>> tile_process("image.zarr", fn, tile_shape=(1, 2048, 2048),  # doctest: +SKIP
 ...              overlap=20, write_to="labels.zarr", progress=True)
 """
 
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 
+from ._autotune import object_f1, suggest_overlap
 from ._chunks import (
     auto_overlap,
     auto_tile_shape,
@@ -44,7 +45,13 @@ from ._distributed import (
     spatial_tiles,
     stage_tile,
 )
-from ._io import auto_empty_threshold, estimate_empty_tiles, load_ome_zarr
+from ._io import (
+    auto_empty_threshold,
+    compression,
+    estimate_empty_tiles,
+    load_ome_zarr,
+    set_compression,
+)
 from ._merge import capped_output_chunks, merge_tile_labels
 from ._occupancy import (
     block_for_tile,
@@ -52,9 +59,11 @@ from ._occupancy import (
     occupancy_path,
     tile_occupancy,
 )
-from ._postprocess import dilate_labels
+from ._postprocess import dilate_labels, fill_holes, open_labels
+from ._provenance import provenance, read_provenance
 from ._relabel import relabel_sequential_array, relabel_sequential_zarr
 from ._relations import label_relations
+from ._seams import seam_report
 from ._volume_filter import (
     filter_labels_by_size,
     max_voxels_for_volume,
@@ -78,6 +87,8 @@ __all__ = [
     "load_ome_zarr",
     "estimate_empty_tiles",
     "auto_empty_threshold",
+    "compression",
+    "set_compression",
     "block_for_tile",
     "build_occupancy_map",
     "occupancy_path",
@@ -86,11 +97,18 @@ __all__ = [
     "relabel_sequential_array",
     "relabel_sequential_zarr",
     "label_relations",
+    "seam_report",
+    "suggest_overlap",
+    "object_f1",
+    "provenance",
+    "read_provenance",
     "normalize_overlap",
     "spatial_tiles",
     "create_stage",
     "stage_tile",
     "dilate_labels",
+    "fill_holes",
+    "open_labels",
     "filter_labels_by_size",
     "min_voxels_for_volume",
     "max_voxels_for_volume",

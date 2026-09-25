@@ -46,6 +46,8 @@ nav:
   - Measurements: guide/measurements.md
   - OME-ZARR & napari: guide/ome_zarr_napari.md
   - Cluster workflow (Snakemake): guide/snakemake.md
+  - Web launcher (Streamlit): guide/launcher.md
+  - Command line: guide/cli.md
   - Pitfalls: guide/pitfalls.md
 - Examples:
   - Cellpose 2-D: examples/cellpose_2d.md
@@ -62,6 +64,8 @@ nav:
   - Tile sizing: api/chunks.md
   - I/O helpers: api/io.md
   - Relabelling: api/relabel.md
+  - Seam report: api/seams.md
+  - Provenance: api/provenance.md
   - Cluster helpers: api/cluster.md
   - Plugins:
     - Cellpose: api/plugins/cellpose.md

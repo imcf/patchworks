@@ -1,0 +1,110 @@
+name: Tests
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The floor (requires-python) and the newest release.
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install
+        run: pip install -e ".[dev]"
+
+      - name: pytest
+        run: pytest -q
+
+      - name: docstring examples
+        run: pytest -q --doctest-modules src
+
+  other-platforms:
+    # Not yet verified on macOS or Windows (no CI ran there before), so this
+    # job reports without failing the build; promote it into the matrix
+    # above once it is green.
+    runs-on: ${{ matrix.os }}
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: pip install -e ".[dev]"
+
+      - name: pytest
+        run: pytest -q
+
+  minimum-versions:
+    # The pyproject floors are only true if something runs on them.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install at the declared minimums
+        run: pip install -e ".[dev]" -c .github/min-versions.txt
+
+      - name: pytest
+        run: pytest -q
+
+  benchmarks:
+    # Head vs base on the same runner, reported in the job summary with a
+    # warning per case >25% slower. Never fails the build: shared runners
+    # are too noisy for a hard gate.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Benchmark the pull request
+        run: |
+          cp -r benchmarks "$RUNNER_TEMP/bench"
+          pip install -e .
+          python "$RUNNER_TEMP/bench/bench.py" "$RUNNER_TEMP/head.json"
+
+      - name: Benchmark the base branch
+        run: |
+          git worktree add "$RUNNER_TEMP/base" "origin/${{ github.base_ref }}"
+          python -m venv "$RUNNER_TEMP/venv-base"
+          "$RUNNER_TEMP/venv-base/bin/pip" install "$RUNNER_TEMP/base"
+          "$RUNNER_TEMP/venv-base/bin/python" "$RUNNER_TEMP/bench/bench.py" \
+            "$RUNNER_TEMP/base.json"
+
+      - name: Compare
+        run: |
+          python "$RUNNER_TEMP/bench/compare.py" \
+            "$RUNNER_TEMP/base.json" "$RUNNER_TEMP/head.json" \
+            | tee -a "$GITHUB_STEP_SUMMARY"

@@ -222,3 +222,57 @@ def test_validate_config_rejects_sharding_on_ngff_04():
         )
     # ...but 0.4 on its own is fine.
     validate_config({"method": "threshold", "ngff_version": "0.4"})
+
+
+def test_segment_progress_resumes_only_the_same_batch(tmp_path):
+    """A retried batch skips the tiles an earlier attempt already staged."""
+    import zarr
+
+    from _pw import (
+        load_segment_progress,
+        save_segment_progress,
+        segment_progress_path,
+    )
+
+    from patchworks import create_stage
+
+    stage = create_stage(tmp_path / "stage.zarr", (4, 8, 8), (1, 8, 8))
+    path = segment_progress_path(stage, 3)
+    assert load_segment_progress(path, [0, 1, 2], (1, 8, 8)) == {}
+
+    save_segment_progress(path, [0, 1, 2], (1, 8, 8), {0: 5, 1: 0})
+    assert load_segment_progress(path, [0, 1, 2], (1, 8, 8)) == {0: 5, 1: 0}
+    # A different batch layout or tile shape is stale, not resumable.
+    assert load_segment_progress(path, [0, 1], (1, 8, 8)) == {}
+    assert load_segment_progress(path, [0, 1, 2], (2, 8, 8)) == {}
+    # The checkpoint sits inside the store without confusing zarr ...
+    assert zarr.open_group(stage, mode="r")["staged"].shape == (4, 8, 8)
+    # ... and dies with it when prepare recreates the stage.
+    create_stage(stage, (4, 8, 8), (1, 8, 8))
+    assert load_segment_progress(path, [0, 1, 2], (1, 8, 8)) == {}
+
+
+def test_validate_config_checks_stitch_and_iou_threshold():
+    import pytest
+    from _pw import validate_config
+
+    validate_config({"method": "threshold", "stitch": "iou"})
+    validate_config({"method": "threshold", "iou_threshold": 0.3})
+    with pytest.raises(ValueError, match="stitch"):
+        validate_config({"method": "threshold", "stitch": "glue"})
+    with pytest.raises(ValueError, match="iou_threshold"):
+        validate_config({"method": "threshold", "iou_threshold": 0})
+
+
+def test_build_fn_applies_fill_holes_and_opening():
+    import numpy as np
+    from _pw import build_fn
+
+    tile = np.zeros((1, 12, 12), "uint16")
+    tile[0, 2:9, 2:9] = 1000
+    tile[0, 5, 5] = 0  # a hole the threshold leaves
+    fn = build_fn(
+        {"method": "threshold", "fill_holes": "per_plane", "open_radius": 1}
+    )
+    out = fn(tile)
+    assert out[0, 5, 5] == out[0, 3, 3] != 0

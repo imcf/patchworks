@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sys
 from functools import partial
 from pathlib import Path
@@ -139,6 +140,59 @@ def stage_path(work_dir, label_name):
     return str(Path(work_dir) / label_name / "stage.zarr")
 
 
+def halo_path(work_dir, label_name):
+    """Where segment jobs keep halo strips for ``stitch: iou``.
+
+    Beside the label group, never inside it: the label group is what gets
+    exported, and these are scratch for the merge.
+    """
+    return str(Path(work_dir) / label_name / "halo")
+
+
+def segment_progress_path(target_path, batch):
+    """Per-tile checkpoint of one segment batch, kept *inside* the target.
+
+    Inside, so it lives and dies with the tiles it vouches for: ``prepare``
+    recreates the target (stage store or label group) from scratch, which
+    removes the checkpoint too. One kept anywhere else could outlive a wiped
+    store and have a retry skip tiles whose data no longer exists.
+    """
+    return Path(target_path) / f".patchworks_segment_{int(batch)}.json"
+
+
+def load_segment_progress(path, indices, tile_shape):
+    """Tile label counts already staged by an earlier attempt of this batch.
+
+    Returns an empty dict unless the checkpoint describes this exact batch
+    (same tiles, same tile shape): anything else is stale.
+    """
+    try:
+        saved = json.loads(Path(path).read_text())
+    except (OSError, ValueError):
+        return {}
+    if saved.get("indices") != list(indices) or saved.get("tile_shape") != list(
+        tile_shape
+    ):
+        return {}
+    return {int(k): int(v) for k, v in saved.get("counts", {}).items()}
+
+
+def save_segment_progress(path, indices, tile_shape, counts):
+    """Atomically record the tiles finished so far (write, then rename)."""
+    path = Path(path)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(
+        json.dumps(
+            {
+                "indices": list(indices),
+                "tile_shape": list(tile_shape),
+                "counts": {str(k): int(v) for k, v in counts.items()},
+            }
+        )
+    )
+    os.replace(tmp, path)
+
+
 def load_tiles_json(path):
     """Load the tile manifest written by ``prepare_tiles.py``.
 
@@ -183,7 +237,8 @@ def _with_voxel_size(fn, kwargs, cfg):
     from patchworks.plugins.ome_zarr import read_pixel_size
 
     store = str(Path(cfg["work_dir"]) / "image.zarr")
-    calibration = read_pixel_size(store)
+    # The tiles fn sees come from `level`, so their voxels are that level's.
+    calibration = read_pixel_size(store, level=int(cfg.get("level", 0)))
     if not calibration:
         logging.getLogger(__name__).warning(
             "%s takes voxel_size but %s carries no calibration; set the "
@@ -340,6 +395,20 @@ def validate_config(cfg) -> None:
                 f"{value!r}"
             )
 
+    try:
+        from patchworks._io import parse_compression
+
+        parse_compression(cfg.get("compression", "zstd"))
+    except ValueError as exc:
+        problems.append(str(exc))
+
+    stitch = cfg.get("stitch", "touch")
+    if stitch not in ("touch", "iou"):
+        problems.append(f'stitch must be "touch" or "iou"; got {stitch!r}')
+    thr = cfg.get("iou_threshold", 0.5)
+    if not isinstance(thr, (int, float)) or not 0 < thr <= 1:
+        problems.append(f"iou_threshold must be in (0, 1]; got {thr!r}")
+
     method = cfg.get("method", "cellpose")
     if method not in KNOWN_METHODS:
         listed = ", ".join(f'"{m}"' for m in KNOWN_METHODS)
@@ -462,6 +531,17 @@ def build_fn(cfg):
         ``(ndarray) -> ndarray`` returning integer labels.
     """
     fn = _build_method_fn(cfg)
+
+    # Post-processing, in order: fill holes, cut spurs, then grow.
+    holes = cfg.get("fill_holes")
+    if holes:
+        from patchworks import fill_holes
+
+        fn = fill_holes(fn, per_plane=holes == "per_plane")
+    if cfg.get("open_radius"):
+        from patchworks import open_labels
+
+        fn = open_labels(fn, radius=int(cfg["open_radius"]))
 
     dilate = cfg.get("dilate")
     if dilate:

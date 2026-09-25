@@ -17,3 +17,9 @@ used as a skip list. See [Skipping empty tiles](../guide/skip_empty.md).
 ::: patchworks.tile_occupancy
 
 ::: patchworks.auto_empty_threshold
+
+## Compression
+
+::: patchworks.compression
+
+::: patchworks.set_compression

@@ -83,20 +83,15 @@ def test_ngff_layout_matches_the_zarr_version(tmp_path):
     """
     import json
 
-    from patchworks.plugins.ome_zarr import _ZARR_V3
-
     out = tmp_path / "layout.zarr"
     to_ome_zarr(np.zeros((4, 8, 8), "uint16"), out, axes="zyx", n_levels=2)
     write_labels(out, np.ones((4, 8, 8), "int32"), name="cells", n_objects=1)
 
     root = json.load(open(out / "zarr.json"))["attributes"]
-    if _ZARR_V3:
-        assert "ome" in root, "v3 must nest NGFF keys under 'ome'"
-        assert root["ome"]["version"] == "0.5"
-        assert "multiscales" in root["ome"]
-        assert "multiscales" not in root, "0.4 layout must not linger"
-    else:
-        assert root["multiscales"][0]["version"] == "0.4"
+    assert "ome" in root, "v3 must nest NGFF keys under 'ome'"
+    assert root["ome"]["version"] == "0.5"
+    assert "multiscales" in root["ome"]
+    assert "multiscales" not in root, "0.4 layout must not linger"
 
     # Both label keys land in the same place, written at different times.
     lg = zarr.open_group(f"{out}/labels/cells", mode="r")
@@ -172,7 +167,7 @@ def test_imaris_without_reader(tmp_path):
 
 
 def test_pyramid_roundtrip(tmp_path):
-    """Levels are written, downsampled by striding, and read back intact."""
+    """Levels are written, block-averaged, and read back intact."""
     a = np.arange(8 * 8 * 8, dtype="int32").reshape(8, 8, 8)
     out = tmp_path / "vol.zarr"
 
@@ -186,9 +181,11 @@ def test_pyramid_roundtrip(tmp_path):
     assert l0.shape == (8, 8, 8)
     assert l1.shape == (8, 4, 4)
     assert l2.shape == (8, 2, 2)
-    # Full resolution is byte-identical; downsampling is nearest (label-safe).
+    # Full resolution is byte-identical; an image level is the 2x2 block mean
+    # (rounded half to even, as np.rint does).
     assert np.array_equal(np.asarray(l0), a)
-    assert np.array_equal(np.asarray(l1), a[:, ::2, ::2])
+    mean = a.reshape(8, 4, 2, 4, 2).mean(axis=(2, 4))
+    assert np.array_equal(np.asarray(l1), np.rint(mean).astype("int32"))
 
 
 def test_non_spatial_axis_not_downsampled(tmp_path):
@@ -302,7 +299,8 @@ def test_add_pyramid_to_flat_store(tmp_path):
     assert load_ome_zarr(store, channel=None, level=0).shape == (8, 8, 8)
     l1 = load_ome_zarr(store, channel=None, level=1)
     assert l1.shape == (8, 4, 4)  # Z preserved
-    assert np.array_equal(np.asarray(l1), base[:, ::2, ::2])
+    mean = base.reshape(8, 4, 2, 4, 2).mean(axis=(2, 4))
+    assert np.array_equal(np.asarray(l1), np.rint(mean).astype("int32"))
 
 
 def test_write_labels_into_store(tmp_path):
@@ -652,19 +650,16 @@ def test_many_chunks_suggests_sharding(caplog):
 
 def test_ngff_version_auto_matches_the_installed_zarr(tmp_path):
     """The default must keep writing exactly what it wrote before."""
-    from patchworks.plugins.ome_zarr import _ZARR_V3, ngff_version
+    from patchworks.plugins.ome_zarr import ngff_version
 
-    assert ngff_version() == ("0.5" if _ZARR_V3 else "0.4")
+    assert ngff_version() == "0.5"
 
     a = np.arange(2 * 32 * 32, dtype="uint16").reshape(2, 32, 32)
     out = to_ome_zarr(
         a, tmp_path / "a.zarr", axes="zyx", n_levels=1, chunks=(2, 16, 16)
     )
     attrs = dict(zarr.open_group(str(out), mode="r").attrs)
-    if _ZARR_V3:
-        assert attrs["ome"]["version"] == "0.5"
-    else:
-        assert attrs["multiscales"][0]["version"] == "0.4"
+    assert attrs["ome"]["version"] == "0.5"
 
 
 @pytest.mark.parametrize("version", ["0.4", "0.5"])
@@ -675,11 +670,6 @@ def test_ngff_version_pins_the_layout_and_the_zarr_format(tmp_path, version):
     the v3 revision and nests them under ``ome``. A store written half one
     way and half the other is one no reader can open.
     """
-    from patchworks.plugins.ome_zarr import _ZARR_V3
-
-    if version == "0.5" and not _ZARR_V3:
-        pytest.skip("0.5 needs zarr v3")
-
     a = np.arange(4 * 32 * 32, dtype="uint16").reshape(4, 32, 32)
     labels = np.zeros((4, 32, 32), dtype="uint32")
     labels[1:3, 4:12, 4:12] = 9
@@ -723,10 +713,7 @@ def test_existing_store_format_beats_the_requested_version(tmp_path):
     it would write v3 label arrays into a v2 store -- half a store each way,
     readable as neither.
     """
-    from patchworks.plugins.ome_zarr import _ZARR_V3, register_labels
-
-    if not _ZARR_V3:
-        pytest.skip("needs zarr v3 installed to have a choice to get wrong")
+    from patchworks.plugins.ome_zarr import register_labels
 
     a = np.zeros((4, 32, 32), dtype="uint16")
     out = to_ome_zarr(
@@ -756,10 +743,7 @@ def test_existing_store_format_beats_the_requested_version(tmp_path):
 
 def test_sharding_is_refused_on_a_zarr_v2_store(tmp_path, caplog):
     """Zarr v2 has no sharding codec -- say so instead of raising."""
-    from patchworks.plugins.ome_zarr import _ZARR_V3, reshard_level
-
-    if not _ZARR_V3:
-        pytest.skip("needs zarr v3 installed")
+    from patchworks.plugins.ome_zarr import reshard_level
 
     a = np.arange(4 * 32 * 32, dtype="uint16").reshape(4, 32, 32)
     out = to_ome_zarr(
@@ -803,10 +787,7 @@ def test_unsupported_ngff_versions_are_refused(tmp_path):
 
 def test_ngff_pin_does_not_leak_out_of_the_write(tmp_path):
     """The pin is per-call: a later default write must not inherit it."""
-    from patchworks.plugins.ome_zarr import _ZARR_V3, ngff_version
-
-    if not _ZARR_V3:
-        pytest.skip("needs zarr v3 installed")
+    from patchworks.plugins.ome_zarr import ngff_version
 
     a = np.zeros((2, 16, 16), dtype="uint16")
     to_ome_zarr(
@@ -863,11 +844,6 @@ def test_output_conforms_to_the_official_ngff_schemas(tmp_path, version):
     store is described cannot quietly stop being OME-ZARR.
     """
     pytest.importorskip("jsonschema")
-    from patchworks.plugins.ome_zarr import _ZARR_V3
-
-    if version == "0.5" and not _ZARR_V3:
-        pytest.skip("0.5 needs zarr v3")
-
     image = np.arange(4 * 64 * 64, dtype="uint16").reshape(4, 64, 64)
     labels = np.zeros((4, 64, 64), dtype="uint32")
     labels[1:3, 10:30, 10:30] = 7
@@ -914,11 +890,6 @@ def test_sharded_write_bounds_its_dask_pool(tmp_path):
     (~512 MB by default) inside whatever cgroup the job was granted -- the
     same class of OOM that made convert.py pin its scheduler.
     """
-    from patchworks.plugins.ome_zarr import _ZARR_V3
-
-    if not _ZARR_V3:
-        pytest.skip("sharding needs zarr v3")
-
     seen = {}
     import dask
 
@@ -957,3 +928,147 @@ def test_sharded_write_bounds_its_dask_pool(tmp_path):
 
     assert seen["num_workers"] <= max(1, os.cpu_count() or 1)
     assert np.array_equal(np.asarray(zarr.open_array(f"{out}/0", mode="r")), a)
+
+
+def test_downsample_mean_is_an_exact_block_average():
+    """Partial edge blocks average what they have, and ints are rounded."""
+    from patchworks.plugins.ome_zarr import _downsample
+
+    a = np.array([[1, 3, 5], [3, 5, 8], [10, 10, 7]], dtype="uint16")
+    out = _downsample(a, (2, 2), "mean")
+    np.testing.assert_array_equal(out, [[3, 6], [10, 7]])
+    assert out.dtype == np.uint16
+    np.testing.assert_array_equal(
+        _downsample(a, (2, 2), "nearest"), [[1, 5], [10, 7]]
+    )
+
+
+@pytest.mark.parametrize("shard", [False, True])
+def test_image_pyramid_is_averaged_labels_are_not(tmp_path, shard):
+    """Images get block means (streamed or via dask); labels keep ids."""
+    rng = np.random.default_rng(1)
+    img = rng.integers(0, 4000, (2, 70, 90)).astype("uint16")
+    out = to_ome_zarr(
+        img, tmp_path / "a.zarr", axes="zyx", n_levels=3, shard=shard
+    )
+    lvl1 = np.asarray(zarr.open_group(str(out), mode="r")["1"][:])
+    expect = img.astype(float).reshape(2, 35, 2, 45, 2).mean(axis=(2, 4))
+    np.testing.assert_array_equal(lvl1, np.rint(expect).astype("uint16"))
+
+    labels = np.zeros((2, 70, 90), "int32")
+    labels[:, :, ::2] = 7  # averaging would invent 3s and 4s
+    write_labels(out, labels, name="cells", n_levels=2, shard=shard)
+    lab1 = np.asarray(zarr.open_group(f"{out}/labels/cells", mode="r")["1"][:])
+    assert set(np.unique(lab1)) <= {0, 7}
+
+
+def test_nearest_downsampling_can_still_be_asked_for(tmp_path):
+    img = np.arange(2 * 8 * 8, dtype="uint16").reshape(2, 8, 8)
+    out = to_ome_zarr(
+        img, tmp_path / "a.zarr", axes="zyx", n_levels=2, downsample="nearest"
+    )
+    lvl1 = zarr.open_group(str(out), mode="r")["1"][:]
+    np.testing.assert_array_equal(lvl1, img[:, ::2, ::2])
+    with pytest.raises(ValueError, match="downsample"):
+        to_ome_zarr(img, tmp_path / "b.zarr", axes="zyx", downsample="max")
+
+
+def _physical_centroid(mask, scale, translation):
+    idx = np.argwhere(mask).mean(axis=0)
+    return idx * np.asarray(scale) + np.asarray(translation)
+
+
+def test_labels_segmented_at_a_coarser_level_land_on_the_image(tmp_path):
+    """Labels made at level 1 must carry level 1's geometry, not level 0's.
+
+    They used to inherit level 0's voxel size, so a level-1 segmentation was
+    drawn at half size, drifting off the image away from the origin -- a
+    "shift" that grows across the field of view.
+    """
+
+    from patchworks import tile_process
+    from patchworks.plugins.ome_zarr import read_pixel_size, read_translation
+
+    img = np.zeros((4, 128, 128), "uint16")
+    img[1:3, 90:100, 70:84] = 1000  # far from the origin, so drift shows
+    store = to_ome_zarr(
+        img,
+        tmp_path / "a.zarr",
+        axes="zyx",
+        n_levels=3,
+        pixel_size={"z": 0.5, "y": 0.2, "x": 0.2},
+    )
+    assert read_pixel_size(store, level=1) == {"z": 0.5, "y": 0.4, "x": 0.4}
+    assert read_translation(store, level=1) == {"y": 0.1, "x": 0.1}
+
+    def seg(tile):
+        return (tile > 500).astype("int32")
+
+    tile_process(store, seg, level=1, channel=None, overlap=0, progress=False)
+    group = f"{store}/labels/labels"
+    assert read_pixel_size(group) == read_pixel_size(store, level=1)
+
+    lab = np.asarray(zarr.open_group(group, mode="r")["0"][:])
+    lab_scale = [read_pixel_size(group)[a] for a in "zyx"]
+    lab_t = [read_translation(group).get(a, 0.0) for a in "zyx"]
+    got = _physical_centroid(lab > 0, lab_scale, lab_t)
+    want = _physical_centroid(img > 0, [0.5, 0.2, 0.2], [0, 0, 0])
+    np.testing.assert_allclose(got, want, atol=1e-6)
+
+
+def test_block_mode_keeps_small_objects_and_ids():
+    """Majority vote: any object beats background, ties go to block order."""
+    from patchworks.plugins.ome_zarr import _downsample
+
+    a = np.array(
+        [
+            [0, 0, 5, 5, 0],
+            [0, 9, 5, 3, 0],
+            [0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 4],
+        ],
+        dtype="int32",
+    )
+    out = _downsample(a[None], (1, 2, 2), "mode")[0]
+    # 9 is one voxel in a background block: nearest would have dropped it.
+    np.testing.assert_array_equal(out, [[9, 5, 0], [0, 0, 4]])
+    assert _downsample(a[None], (1, 2, 2), "nearest")[0][0, 0] == 0
+
+
+def test_label_pyramid_keeps_objects_nearest_would_drop(tmp_path):
+    img = np.zeros((1, 64, 64), "uint16")
+    labels = np.zeros((1, 64, 64), "int32")
+    # 16 single-voxel objects, all on odd coordinates: decimation's sampled
+    # grid (even coordinates) misses every one of them.
+    ids = iter(range(1, 17))
+    for y in range(1, 64, 16):
+        for x in range(1, 64, 16):
+            labels[0, y, x] = next(ids)
+    store = to_ome_zarr(img, tmp_path / "a.zarr", axes="zyx", n_levels=1)
+    write_labels(store, labels, name="dots", n_levels=3)
+    grp = zarr.open_group(f"{store}/labels/dots", mode="r")
+    for level in ("1", "2"):
+        assert set(np.unique(grp[level][:])) - {0} == set(range(1, 17))
+
+
+@pytest.mark.parametrize("dtype", ["uint8", "uint16", "int16", "float32"])
+def test_fast_block_mean_matches_the_general_path(dtype):
+    """The whole-block fast path rounds exactly like the general one."""
+    from patchworks.plugins.ome_zarr import _downsample
+
+    rng = np.random.default_rng(3)
+    hi = 200 if dtype in ("uint8", "int16") else 60000
+    a = rng.integers(0, hi, (3, 16, 24)).astype(dtype)
+    if dtype == "int16":
+        a -= 100
+    fast = _downsample(a, (1, 2, 2), "mean")
+    general = np.rint(a.astype(float).reshape(3, 8, 2, 12, 2).mean((2, 4)))
+    if dtype != "float32":
+        np.testing.assert_array_equal(fast, general.astype(dtype))
+    else:
+        np.testing.assert_allclose(fast, a.reshape(3, 8, 2, 12, 2).mean((2, 4)))
+    # Every .5 tie: 0,1 -> 0; 1,2 -> 2; 2,3 -> 2 (half to even).
+    ties = np.array([[[0, 1, 1, 2, 2, 3]]], dtype="uint8")
+    np.testing.assert_array_equal(
+        _downsample(ties, (1, 1, 2), "mean"), [[[0, 2, 2]]]
+    )

@@ -46,9 +46,12 @@ A single full-resolution array is slow to browse: every pan or zoom touches the
 whole plane. A **pyramid** stores progressively downsampled copies, so a viewer
 only reads the resolution it needs. Pyramids here downsample **X and Y only** —
 `Z` (and channel/time) stay at full resolution, matching anisotropic microscopy
-stacks. Downsampling is **strided, nearest-neighbour**: the correct choice for
-label images, since interpolating label values would invent objects that never
-existed.
+stacks. Images are **block-averaged** (each pixel of a level is the mean of the
+2×2 block below it), which keeps overviews free of the aliasing and noise
+speckle plain subsampling gives fluorescence data; label images are
+**nearest-neighbour** subsampled, since averaging label values would invent
+objects that never existed. Pass `downsample="nearest"` to `to_ome_zarr` for
+the old behaviour on an image.
 
 ## Convert any image to OME-ZARR
 
@@ -113,7 +116,7 @@ input — see [Cluster usage](snakemake.md).
 !!! note "Imaris pyramids: rebuild (default) or reuse"
     `.ims` files carry their own resolution pyramid. By default `to_ome_zarr`
     reads only the **full-resolution** level and **builds a fresh NGFF pyramid**
-    (XY-only, nearest-neighbour, calibrated) for consistency. Pass
+    (XY-only, block-averaged, calibrated) for consistency. Pass
     `reuse_pyramid=True` to instead **copy the Imaris levels** as-is — faster,
     no recompute, keeping each level's native scale:
 
@@ -269,3 +272,21 @@ view_in_napari("scan.zarr")  # labels auto-loaded from scan.zarr/labels/
 Plugging in a different segmentation method is just swapping `fn` — any
 callable taking a tile and returning an integer label array works (see the
 Cellpose and StarDist examples).
+
+## Remote stores (S3, GCS, HTTP)
+
+Any fsspec URL works wherever a store path does — `s3://bucket/scan.zarr`,
+`gs://…`, `https://…` — for reading, segmenting and writing labels back into
+the store (`pip install "patchworks[remote]"` for the S3/GCS/HTTP backends;
+credentials come from the usual AWS/GCP environment variables or config
+files):
+
+```python
+tile_process("s3://bucket/scan.zarr", fn, tile_shape=(16, 1024, 1024))
+view_in_napari("https://example.org/data/scan.zarr")
+```
+
+Scratch data (the stage store, the merge's lookup table) always stays on local
+disk — in the system temp directory, or `stage_dir=` — so only the final
+labels travel. `reshard_level` needs a local store: it swaps directories by
+renaming, which object stores cannot do.

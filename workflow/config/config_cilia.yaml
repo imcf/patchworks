@@ -37,6 +37,11 @@ custom:
   kwargs:
     low_sigma: 1.0
     high_sigma: 3.0
+    # In pixels: on a 0.2 um z-step / 0.1 um pixel stack that blurs z twice
+    # as far (physically) as x/y. sigma_units: "um" states them as
+    # distances instead (e.g. low 0.1, high 0.3), converted per axis with
+    # the image's calibration.
+    # sigma_units: "um"
     threshold: 0.02
     # use_gpu: true          # optional: also run the blur/label step on GPU
     decon_kwargs:
@@ -52,3 +57,8 @@ custom:
       wavelength: 525
       na: 1.4
       nimm: 1.515
+      # cudaDecon's FFTs wrap in z: on a shallow tile, light from the top
+      # planes bleeds into the bottom ones -- faint ghost copies near both
+      # faces. "auto" mirrors the stack in z (2x the z-work) whenever the
+      # tile is shallower than 4 axial FWHMs of this PSF; true/false force it.
+      # dup_rev_z: "auto"

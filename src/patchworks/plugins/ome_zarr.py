@@ -22,11 +22,15 @@ ImageJ/resolution tags — and written into the NGFF ``coordinateTransformations
 so the µm/pixel sizing is preserved. Pass ``pixel_size=`` to override or to
 supply it for bare arrays.
 
-Downsampling uses strided (nearest-neighbour) subsampling — the correct,
-label-preserving choice — and only on **X and Y**; ``z`` (and channel/time)
-stay at full resolution. Every level is built by reading the *previous level
+Downsampling is only on **X and Y**; ``z`` (and channel/time) stay at full
+resolution. Images are **block-averaged** (each output pixel is the mean of
+the ``downscale x downscale`` block it covers), which keeps overview levels
+free of the aliasing and shot-noise speckle that plain decimation gives a
+fluorescence image. Labels are **decimated** (nearest-neighbour), the
+label-preserving choice: averaging ids would invent objects that never
+existed. Every level is built by reading the *previous level
 back from disk*, so the pyramid never materialises a whole volume in RAM.
-Because decimation needs no halo, levels are written zarr-natively: each
+Because neither method needs a halo, levels are written zarr-natively: each
 level's chunks are chosen as ``ceil(src_chunk / stride)`` so one task reads
 exactly one source chunk and writes exactly one output chunk, making peak
 memory ``n_workers × one chunk`` by construction. Explicit ``chunks=`` or
@@ -38,8 +42,8 @@ and :func:`write_labels` (store a label image under the NGFF ``labels/`` group).
 
 Usage
 -----
->>> from patchworks.plugins.ome_zarr import to_ome_zarr
->>> to_ome_zarr("scan.ims", "scan.zarr")
+>>> from patchworks.plugins.ome_zarr import to_ome_zarr  # doctest: +SKIP
+>>> to_ome_zarr("scan.ims", "scan.zarr")  # doctest: +SKIP
 'scan.zarr'
 """
 
@@ -68,7 +72,14 @@ from .._progress import (
     PROGRESS_INTERVAL_S as _PROGRESS_INTERVAL_S,
 )
 from .._progress import dask_progress, log_progress
-from .._io import load_ome_zarr, open_group_any, zarr_compressor_kwargs
+from .._io import compression as _compression
+from .._provenance import write_provenance
+from .._io import (
+    is_remote,
+    load_ome_zarr,
+    open_group_any,
+    zarr_compressor_kwargs,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -220,7 +231,6 @@ def _default_chunks(
 
 ShardSpec = Union[bool, tuple[int, ...]]
 _SHARD_TARGET_BYTES = 512 * 1024**2  # aim for ~512 MB shards
-_ZARR_V3 = int(zarr.__version__.split(".")[0]) >= 3
 # NGFF 0.4 is defined over zarr v2 and puts its keys at the top level of
 # .zattrs; 0.5 is the zarr-v3 revision and nests them under an "ome" key with
 # the version there. Writing v3 data with 0.4's layout matches neither, so the
@@ -245,9 +255,9 @@ _ngff_target: "contextvars.ContextVar[Union[str, None]]" = (
 def _resolve_ngff_version(requested: Union[str, None] = None) -> str:
     """Validate an NGFF version request and resolve ``"auto"``.
 
-    ``"auto"`` (the default) picks the version matching the installed zarr:
-    0.5 on zarr v3, 0.4 on v2. An explicit version is honoured instead --
-    including 0.4 on a zarr-v3 install, which writes a zarr-v2 store.
+    ``"auto"`` (the default) picks 0.5, the version defined over the zarr v3
+    that patchworks requires. An explicit version is honoured instead --
+    including 0.4, which writes a zarr-v2 store.
 
     Parameters
     ----------
@@ -265,7 +275,7 @@ def _resolve_ngff_version(requested: Union[str, None] = None) -> str:
         For an unknown version, or for one patchworks cannot yet write.
     """
     if requested in (None, "auto"):
-        return _NGFF_VERSION_V3 if _ZARR_V3 else _NGFF_VERSION
+        return _NGFF_VERSION_V3
     requested = str(requested)
     if requested in _NGFF_UNSUPPORTED:
         raise ValueError(
@@ -281,12 +291,6 @@ def _resolve_ngff_version(requested: Union[str, None] = None) -> str:
         raise ValueError(
             f'unknown ngff_version {requested!r}; expected "auto" or one '
             f"of {known}"
-        )
-    if _NGFF_ZARR_FORMAT[requested] == 3 and not _ZARR_V3:
-        raise ValueError(
-            f"NGFF {requested} is defined over zarr v3, but zarr "
-            f"{zarr.__version__} is installed; upgrade zarr or use "
-            f'ngff_version "{_NGFF_VERSION}"'
         )
     return requested
 
@@ -314,8 +318,6 @@ def _group_zarr_format(group_or_path) -> int:
     ``register_labels``) than the image was. ``ngff_version`` therefore
     decides the format only when there is no store yet.
     """
-    if not _ZARR_V3:
-        return 2
     try:
         if isinstance(group_or_path, (str, Path)):
             grp = zarr.open_group(str(group_or_path), mode="r")
@@ -352,9 +354,29 @@ def _open_group(path, mode: str = "a") -> "zarr.Group":
     """
     path = str(path)
     kwargs = {}
-    if _ZARR_V3 and not zarr.storage.LocalStore(path).root.exists():
+    if not _store_exists(path):
         kwargs["zarr_format"] = _zarr_format()
     return zarr.open_group(path, mode=mode, **kwargs)
+
+
+def _store_exists(path: str) -> bool:
+    """Whether a zarr group already exists at *path* (local or a URL).
+
+    A local check on a URL always says no, which would re-open an existing
+    remote NGFF 0.4 (zarr v2) store as v3.
+    """
+    if not is_remote(path):
+        return zarr.storage.LocalStore(path).root.exists()
+    try:
+        zarr.open_group(path, mode="r")
+    except (
+        FileNotFoundError,
+        KeyError,
+        ValueError,
+        zarr.errors.GroupNotFoundError,
+    ):
+        return False
+    return True
 
 
 @contextmanager
@@ -573,13 +595,155 @@ def _create_level_array(
     if name in group:
         del group[name]
     kwargs = zarr_compressor_kwargs(_group_zarr_format(group))
-    if _ZARR_V3:
-        return group.create_array(
-            name, shape=shape, chunks=chunks, dtype=dtype, **kwargs
-        )
-    return group.zeros(
-        name, shape=shape, chunks=chunks, dtype=dtype, overwrite=True, **kwargs
+    return group.create_array(
+        name, shape=shape, chunks=chunks, dtype=dtype, **kwargs
     )
+
+
+DownsampleMethod = str  # "mean" or "nearest"
+_DOWNSAMPLE_METHODS = ("mean", "mode", "nearest")
+
+
+def _compression_scope(spec: Union[str, None]):
+    """``compression(spec)``, or a no-op for None (keep the active codec)."""
+    return _nullcontext() if spec is None else _compression(spec)
+
+
+def _check_downsample(method: str) -> str:
+    if method not in _DOWNSAMPLE_METHODS:
+        raise ValueError(
+            f"downsample must be one of {_DOWNSAMPLE_METHODS}, got {method!r}"
+        )
+    return method
+
+
+def _downsample(
+    region: np.ndarray, strides: tuple[int, ...], method: str
+) -> np.ndarray:
+    """Downsample *region* by *strides*: decimate, or exact block mean.
+
+    The output has ``ceil(n / stride)`` voxels per axis either way. A block
+    cut short by the array edge is averaged over the voxels it has, not
+    padded, so edge pixels are not biased.
+
+    Parameters
+    ----------
+    region : np.ndarray
+        Source region, starting on a block boundary.
+    strides : tuple of int
+        Per-axis factor (1 = untouched).
+    method : str
+        ``"nearest"`` (every *stride*-th voxel), ``"mean"`` (block average,
+        rounded back to an integer dtype; for images) or ``"mode"`` (the
+        most frequent non-zero id in the block; for labels -- an object
+        survives a coarser level as long as it wins some block, where
+        ``"nearest"`` drops anything its sampled voxel misses).
+
+    Returns
+    -------
+    np.ndarray
+        The downsampled region, in *region*'s dtype.
+    """
+    if method == "nearest":
+        return region[tuple(slice(None, None, st) for st in strides)]
+    if method == "mode":
+        return _block_mode(region, strides)
+    if all(n % st == 0 for n, st in zip(region.shape, strides)):
+        return _block_mean_whole(region, strides)
+    out = region
+    for ax, st in enumerate(strides):
+        if st == 1:
+            continue
+        n = out.shape[ax]
+        starts = np.arange(0, n, st)
+        out = np.add.reduceat(out, starts, axis=ax, dtype=np.float64)
+        counts = np.minimum(st, n - starts).astype(np.float64)
+        shape = [1] * out.ndim
+        shape[ax] = -1
+        out = out / counts.reshape(shape)
+    if out is region:
+        return region
+    if np.issubdtype(region.dtype, np.integer):
+        info = np.iinfo(region.dtype)
+        out = np.clip(np.rint(out), info.min, info.max)
+    return out.astype(region.dtype)
+
+
+def _block_views(region: np.ndarray, strides: tuple[int, ...]) -> list:
+    """One strided view per position inside a block (4 for a 2x2 block).
+
+    ``views[k][i]`` is the k-th voxel of output voxel i's block. Plain
+    slicing, no copy: summing or comparing these is far cheaper than
+    reducing over the small block axes of a reshaped array.
+    """
+    return [
+        region[tuple(slice(o, None, st) for o, st in zip(offs, strides))]
+        for offs in _iproduct(*[range(st) for st in strides])
+    ]
+
+
+def _block_mean_whole(
+    region: np.ndarray, strides: tuple[int, ...]
+) -> np.ndarray:
+    """Block mean when every axis is a whole number of blocks.
+
+    The common case -- every chunk but the image's last. Integers are summed
+    exactly and rounded half-to-even, as ``np.rint`` of the float mean
+    would; a power-of-two block (2x2) divides by shifting.
+    """
+    views = _block_views(region, strides)
+    count = len(views)
+    if not np.issubdtype(region.dtype, np.integer):
+        total_f = np.zeros(views[0].shape, dtype=np.float64)
+        for v in views:
+            total_f += v
+        return (total_f / count).astype(region.dtype)
+    # The narrowest accumulator that cannot overflow: 16-bit data summed over
+    # a block of up to 2**15 voxels fits 32 bits, halving memory traffic.
+    small = region.dtype.itemsize <= 2 and count <= 2**15
+    acc = np.int32 if small else np.int64
+    total = np.zeros(views[0].shape, dtype=acc)
+    for v in views:
+        total += v
+    if count & (count - 1) == 0:  # power of two: floor-divide by shifting
+        shift = count.bit_length() - 1
+        q, r = total >> shift, total & (count - 1)
+    else:
+        q, r = np.divmod(total, count)
+    # Round half to even: up past the midpoint, and at it only from odd q.
+    q += (2 * r > count) | ((2 * r == count) & (q % 2 == 1))
+    return q.astype(region.dtype)
+
+
+def _block_mode(region: np.ndarray, strides: tuple[int, ...]) -> np.ndarray:
+    """Most frequent non-zero value per block; 0 only for an empty block.
+
+    Ties go to the first voxel in block order, so the result is
+    deterministic. Edge blocks are padded with background, which never wins.
+    """
+    pads = [(0, (-n) % st) for n, st in zip(region.shape, strides)]
+    padded = np.pad(region, pads) if any(p for _, p in pads) else region
+    cols = _block_views(padded, strides)
+    if len(cols) == 1:
+        return cols[0].copy()
+    # How often each voxel's value occurs in its block, counted pairwise
+    # (k*(k-1)/2 compares; 6 for a 2x2 block). Background scores 0, so any
+    # object present outvotes it.
+    vote_t = np.uint8 if len(cols) < 256 else np.uint32
+    votes = [np.ones(cols[0].shape, dtype=vote_t) for _ in cols]
+    for i in range(len(cols)):
+        for j in range(i + 1, len(cols)):
+            same = cols[i] == cols[j]
+            votes[i] += same
+            votes[j] += same
+    out = cols[0]
+    best = votes[0] * (cols[0] != 0)
+    for i in range(1, len(cols)):
+        score = votes[i] * (cols[i] != 0)
+        # np.where, not a boolean-mask assignment: ~25% faster here.
+        out = np.where(score > best, cols[i], out)
+        best = np.maximum(best, score)
+    return np.ascontiguousarray(out)
 
 
 def _stream_strided_level(
@@ -589,11 +753,12 @@ def _stream_strided_level(
     n_workers: int = 4,
     label: str = "level",
     progress: bool = True,
+    method: str = "nearest",
 ) -> None:
-    """Write *dst* as the strided subsample of *src*, one chunk at a time.
+    """Write *dst* as the downsampled *src*, one chunk at a time.
 
-    Labels are downsampled by plain decimation, which needs no halo, so each
-    output chunk depends only on the source region that maps onto it. Peak
+    Neither decimation nor a block mean needs a halo, so each output chunk
+    depends only on the source region that maps onto it. Peak
     memory is therefore ``n_workers x (one source region + its subsample)``
     however large the image is -- unlike a dask ``rechunk``, whose threaded
     scheduler holds intermediates with no backpressure.
@@ -603,13 +768,14 @@ def _stream_strided_level(
     src, dst : zarr.Array
         Source level and the (already created) destination level.
     strides : tuple of int
-        Per-axis decimation step.
+        Per-axis downsampling factor.
+    method : str
+        ``"nearest"`` or ``"mean"``; see :func:`_downsample`.
     n_workers : int
         Threads used for the copy. zarr's codecs release the GIL, so threads
         are enough and avoid pickling a worker payload.
     """
     grid = [-(-s // c) for s, c in zip(dst.shape, dst.chunks)]
-    take = tuple(slice(None, None, st) for st in strides)
 
     def _one(idx: tuple[int, ...]) -> None:
         out_sl = tuple(
@@ -620,7 +786,7 @@ def _stream_strided_level(
             slice(o.start * st, min(o.stop * st, s))
             for o, st, s in zip(out_sl, strides, src.shape)
         )
-        dst[out_sl] = np.asarray(src[src_sl])[take]
+        dst[out_sl] = _downsample(np.asarray(src[src_sl]), strides, method)
 
     indices = list(_iproduct(*[range(g) for g in grid]))
     total = len(indices)
@@ -752,18 +918,22 @@ def _to_zarr_level(
     sh = _shard_for(shard, inner, arr.shape, arr.dtype, fmt)
     ctx = _progress_ctx(progress, f"{Path(group_path).name}/{component}")
     if not sh:
+        # Created here rather than by da.to_zarr, whose array-creation
+        # keywords changed across dask releases (zarr.create before
+        # create_array), so the pinned codec reaches every supported dask.
+        # Regular chunks make every block exactly one zarr chunk, so blocks
+        # never share a chunk and need no lock.
+        if any(len(set(c[:-1])) > 1 or c[-1] > c[0] for c in arr.chunks):
+            arr = arr.rechunk(arr.chunksize)
+        z = _create_level_array(
+            _open_group(group_path),
+            component,
+            arr.shape,
+            arr.chunksize,
+            arr.dtype,
+        )
         with ctx:
-            da.to_zarr(
-                arr,
-                group_path,
-                component=component,
-                overwrite=True,
-                **(
-                    {"zarr_format": _group_zarr_format(group_path)}
-                    if _ZARR_V3
-                    else {}
-                ),
-            )
+            arr.store(z, lock=False, compute=True)  # type: ignore[call-arg]
         return
     grp = _open_group(group_path)
     if component in grp:
@@ -774,6 +944,7 @@ def _to_zarr_level(
         chunks=inner,
         shards=sh,
         dtype=arr.dtype,
+        **zarr_compressor_kwargs(fmt),
     )
     # Rechunking to the shard size is the one place this module hands work to
     # dask's scheduler, and dask defaults to one thread per *machine* core --
@@ -795,7 +966,10 @@ def _to_zarr_level(
         shard_nbytes / 1024**2,
     )
     with ctx, dask.config.set(scheduler="threads", num_workers=n_workers):
-        arr.rechunk(sh).store(z, lock=True, compute=True)
+        # No lock: every block is exactly one shard (rechunked to the shard
+        # grid from the origin), so no two tasks touch the same file. A lock
+        # would serialise the whole write, compression included.
+        arr.rechunk(sh).store(z, lock=False, compute=True)
 
 
 def reshard_level(
@@ -840,6 +1014,11 @@ def reshard_level(
     target = f"{group_path}/{component}"
     if not shard:
         return target
+    if is_remote(group_path):
+        raise ValueError(
+            f"reshard_level swaps directories by rename, which a remote store "
+            f"({group_path}) cannot do; reshard a local copy instead"
+        )
     if _group_zarr_format(group_path) == 2:
         logger.warning(
             "%s is a zarr v2 store (NGFF %s), which has no sharding codec; "
@@ -858,9 +1037,15 @@ def reshard_level(
     src = da.from_zarr(str(group_path), component=component)
     _to_zarr_level(src, str(group_path), tmp, shard, progress)
 
+    # Swap by renames only, deleting the original last: removing it first
+    # left a window in which a crash or a scheduler kill lost the level
+    # outright. Now the data exists under one of the two names throughout.
     old, new = Path(group_path) / component, Path(group_path) / tmp
-    shutil.rmtree(old)
+    backup = Path(group_path) / f"{component}__pre_reshard"
+    shutil.rmtree(backup, ignore_errors=True)
+    old.rename(backup)
     new.rename(old)
+    shutil.rmtree(backup)
 
     grp = _open_group(group_path)
     grp[component].attrs.update(attrs)
@@ -913,7 +1098,9 @@ def _base_scale(axes: str, pixel_size: PixelSize) -> list[float]:
     return [float(pixel_size.get(a, 1.0)) for a in axes]
 
 
-def _dataset(name: str, scale: list[float]) -> dict:
+def _dataset(
+    name: str, scale: list[float], translation: "list[float] | None" = None
+) -> dict:
     """Build one NGFF ``multiscales`` dataset entry.
 
     Parameters
@@ -922,18 +1109,50 @@ def _dataset(name: str, scale: list[float]) -> dict:
         Component path of the level (e.g. ``"0"``).
     scale : list of float
         Per-axis scale (physical size × downsample factor).
+    translation : list of float, optional
+        Physical offset of the level's first voxel centre. Omitted when all
+        zero, which keeps the metadata of a decimated pyramid unchanged.
 
     Returns
     -------
     dict
         A dataset dict with its ``path`` and ``coordinateTransformations``.
     """
-    return {
-        "path": name,
-        "coordinateTransformations": [
-            {"type": "scale", "scale": [float(s) for s in scale]}
-        ],
-    }
+    transforms: list[dict] = [
+        {"type": "scale", "scale": [float(s) for s in scale]}
+    ]
+    if translation is not None and any(t != 0 for t in translation):
+        transforms.append(
+            {
+                "type": "translation",
+                "translation": [float(t) for t in translation],
+            }
+        )
+    return {"path": name, "coordinateTransformations": transforms}
+
+
+def _level_translation(
+    base_scale: list[float],
+    base_translation: "list[float] | None",
+    strides: tuple[int, ...],
+    level: int,
+    downsample: str,
+) -> list[float]:
+    """Where level *level*'s first voxel centre sits, physically.
+
+    A decimated level keeps voxel 0 of the level below, so it inherits the
+    base offset. A block method's (mean, mode) first voxel summarises the
+    first ``f`` voxels (``f = stride**level``), so its centre is ``(f - 1) / 2``
+    base voxels further in; without that offset, labels segmented at an
+    averaged level would sit up to half a coarse voxel off the image.
+    """
+    base_t = list(base_translation or [0.0] * len(base_scale))
+    if downsample == "nearest":
+        return base_t
+    return [
+        t + (st**level - 1) / 2 * sc
+        for t, st, sc in zip(base_t, strides, base_scale)
+    ]
 
 
 def _write_pyramid(
@@ -949,6 +1168,8 @@ def _write_pyramid(
     write_base: bool = True,
     shard: ShardSpec = False,
     progress: bool = True,
+    downsample: str = "nearest",
+    base_translation: "list[float] | None" = None,
 ) -> list[dict]:
     """Write pyramid levels into *group_path* and return NGFF datasets.
 
@@ -982,6 +1203,12 @@ def _write_pyramid(
         Sharding request (see :func:`_shard_for`).
     progress : bool
         Show a per-level progress bar.
+    downsample : str
+        ``"mean"`` (images) or ``"nearest"`` (labels); see
+        :func:`_downsample`.
+    base_translation : list of float, optional
+        Level-0 physical offset per axis (e.g. labels segmented from a
+        coarser, averaged image level). Carried to every level.
 
     Returns
     -------
@@ -1000,7 +1227,7 @@ def _write_pyramid(
         _to_zarr_level(
             arr.rechunk(base_chunks), group_path, base_name, shard, progress
         )
-    datasets = [_dataset(base_name, base_scale)]
+    datasets = [_dataset(base_name, base_scale, base_translation)]
 
     prev_name = base_name
     prev_shape = arr.shape
@@ -1014,7 +1241,28 @@ def _write_pyramid(
             # chunking may not line up with the source chunks -- both want the
             # dask path.
             src = da.from_zarr(group_path, component=prev_name)
-            nxt = src[tuple(slice(None, None, st) for st in strides)]
+            if downsample == "nearest":
+                nxt = src[tuple(slice(None, None, st) for st in strides)]
+            # mean and mode are both block reductions
+            else:
+                # Blocks must start on a stride boundary, so every chunk
+                # (but the last) is a whole number of strides.
+                src = src.rechunk(
+                    tuple(
+                        max(st, (c // st) * st)
+                        for c, st in zip(src.chunksize, strides)
+                    )
+                )
+                nxt = src.map_blocks(
+                    _downsample,
+                    strides,
+                    downsample,
+                    chunks=tuple(
+                        tuple(-(-c // st) for c in dim)
+                        for dim, st in zip(src.chunks, strides)
+                    ),
+                    dtype=src.dtype,
+                )
             nxt = nxt.rechunk(chunks or _default_chunks(nxt.shape, axes))
             _to_zarr_level(nxt, group_path, str(i), shard, progress)
             next_shape = nxt.shape
@@ -1051,9 +1299,13 @@ def _write_pyramid(
                 n_workers=cpu_allocation(),
                 label=f"{Path(group_path).name}/{i}",
                 progress=progress,
+                method=downsample,
             )
         scale = [base_scale[k] * (strides[k] ** i) for k in range(len(axes))]
-        datasets.append(_dataset(str(i), scale))
+        translation = _level_translation(
+            base_scale, base_translation, strides, i, downsample
+        )
+        datasets.append(_dataset(str(i), scale, translation))
         logger.info("pyramid level %d: shape=%s", i, next_shape)
         prev_name = str(i)
         prev_shape = next_shape
@@ -1098,8 +1350,8 @@ def _write_multiscales(
     write_ngff_attrs(_open_group(group_path), multiscales=[entry])
 
 
-def read_pixel_size(store: Union[str, Path]) -> PixelSize:
-    """Physical voxel size recorded in an OME-ZARR's level-0 metadata.
+def read_pixel_size(store: Union[str, Path], level: int = 0) -> PixelSize:
+    """Physical voxel size recorded in an OME-ZARR's metadata for *level*.
 
     The calibration the conversion carried over from the source file, as
     ``{"z": .., "y": .., "x": ..}`` in micrometers. Axes left at scale 1.0
@@ -1113,6 +1365,9 @@ def read_pixel_size(store: Union[str, Path]) -> PixelSize:
     ----------
     store : str or Path
         Path of the OME-ZARR group.
+    level : int, optional
+        Pyramid level (default 0, full resolution). Anything segmented or
+        measured at a coarser level must use that level's voxel size.
 
     Returns
     -------
@@ -1123,12 +1378,62 @@ def read_pixel_size(store: Union[str, Path]) -> PixelSize:
     --------
     >>> read_pixel_size("scan.zarr")  # doctest: +SKIP
     {'z': 0.2, 'y': 0.1, 'x': 0.1}
+    >>> read_pixel_size("scan.zarr", level=1)  # doctest: +SKIP
+    {'z': 0.2, 'y': 0.2, 'x': 0.2}
     """
-    return _read_zarr_calibration(store, "")
+    return _read_zarr_calibration(store, "", level=level)
 
 
-def _read_zarr_calibration(store: Union[str, Path], axes: str) -> PixelSize:
-    """Read level-0 spatial scale from an existing OME-ZARR, if any.
+def read_translation(store: Union[str, Path], level: int = 0) -> PixelSize:
+    """Physical offset of *level*'s first voxel centre, per spatial axis.
+
+    Zero (and so empty) for level 0 and for decimated levels; non-zero for a
+    block-averaged level, whose first voxel centre sits between the base
+    voxels it averages.
+
+    Parameters
+    ----------
+    store : str or Path
+        Path of the OME-ZARR group.
+    level : int, optional
+        Pyramid level (default 0).
+
+    Returns
+    -------
+    dict
+        ``{axis: offset}`` for spatial axes with a non-zero offset.
+    """
+    ms = _multiscale_meta(store)
+    if ms is None:
+        return {}
+    try:
+        ax = [a["name"] for a in ms["axes"]]
+        transforms = ms["datasets"][level]["coordinateTransformations"]
+    except (KeyError, IndexError, TypeError):
+        return {}
+    for t in transforms:
+        if t.get("type") == "translation":
+            return {
+                a: float(v)
+                for a, v in zip(ax, t["translation"])
+                if a in _SPATIAL_AXES and float(v) != 0.0
+            }
+    return {}
+
+
+def _multiscale_meta(store: Union[str, Path]) -> "dict | None":
+    try:
+        # open_group_any, not zarr.open_group: the store may be a .zip
+        # bundle, possibly with a group path after it.
+        return read_ngff_attr(open_group_any(store).attrs, "multiscales")[0]
+    except (KeyError, IndexError, TypeError):
+        return None
+
+
+def _read_zarr_calibration(
+    store: Union[str, Path], axes: str, level: int = 0
+) -> PixelSize:
+    """Read *level*'s spatial scale from an existing OME-ZARR, if any.
 
     Parameters
     ----------
@@ -1136,6 +1441,8 @@ def _read_zarr_calibration(store: Union[str, Path], axes: str) -> PixelSize:
         Path of the OME-ZARR group.
     axes : str
         One letter per axis (unused for parsing, kept for symmetry).
+    level : int, optional
+        Pyramid level whose dataset scale to read (default 0).
 
     Returns
     -------
@@ -1143,13 +1450,12 @@ def _read_zarr_calibration(store: Union[str, Path], axes: str) -> PixelSize:
         ``{axis: size}`` for spatial axes with a non-unit scale (empty if
         the store has no multiscales metadata).
     """
+    ms = _multiscale_meta(store)
+    if ms is None:
+        return {}
     try:
-        # open_group_any, not zarr.open_group: the store may be a .zip
-        # bundle, possibly with a group path after it.
-        root = open_group_any(store)
-        ms = read_ngff_attr(root.attrs, "multiscales")[0]
         ax = [a["name"] for a in ms["axes"]]
-        scale = ms["datasets"][0]["coordinateTransformations"][0]["scale"]
+        scale = ms["datasets"][level]["coordinateTransformations"][0]["scale"]
     except (KeyError, IndexError, TypeError):
         return {}
     return {
@@ -1683,6 +1989,8 @@ def to_ome_zarr(
     progress: bool = True,
     overwrite: bool = False,
     ngff_version: Union[str, None] = "auto",
+    compression: Union[str, None] = None,
+    downsample: str = "mean",
 ) -> str:
     """Write *source* as a pyramidal, calibrated OME-ZARR store.
 
@@ -1741,16 +2049,26 @@ def to_ome_zarr(
         instead of rebuilding the pyramid (faster, no recompute), keeping each
         level's native scale. Ignored for other inputs; falls back to a
         rebuild if the Imaris levels can't be read. Default ``False`` (rebuild,
-        for a consistent XY-only, nearest-neighbour NGFF pyramid).
+        for a consistent XY-only NGFF pyramid).
     overwrite : bool, optional
         Overwrite an existing store at *out_path*.
     ngff_version : str or None, optional
         NGFF version (and therefore zarr format) to write: ``"auto"``
-        (default) follows the installed zarr -- 0.5 on v3, 0.4 on v2 --
-        while ``"0.4"`` pins the older, zarr-v2 layout for tools that
+        (default) writes 0.5 (zarr v3), while ``"0.4"`` pins the older, zarr-v2 layout for tools that
         cannot read 0.5 yet. 0.4 has no sharding codec, so ``shard`` is
         ignored there. See :func:`ngff_version`.
+    downsample : {"mean", "mode", "nearest"}, optional
+        How the pyramid's X/Y levels are made from the one above: ``"mean"``
+        (default) block-averages, which is what an image wants;
+        ``"nearest"`` keeps every *downscale*-th pixel (what this wrote
+        before); ``"mode"`` takes each block's most frequent non-zero value,
+        which is what a label image wants.
 
+    compression : str, optional
+        Codec for the arrays written (``"zstd"``, ``"zstd:3"``, ``"blosc"``,
+        ``"blosc:lz4"``, ``"none"``, ...; see
+        :func:`patchworks.compression`). ``None`` (default) uses the active
+        setting, zstd level 1 unless changed.
     Returns
     -------
     str
@@ -1758,10 +2076,10 @@ def to_ome_zarr(
 
     Examples
     --------
-    >>> from patchworks.plugins.ome_zarr import to_ome_zarr
-    >>> to_ome_zarr("scan.ims", "scan.zarr", n_levels=4)
+    >>> from patchworks.plugins.ome_zarr import to_ome_zarr  # doctest: +SKIP
+    >>> to_ome_zarr("scan.ims", "scan.zarr", n_levels=4)  # doctest: +SKIP
     'scan.zarr'
-    >>> to_ome_zarr(
+    >>> to_ome_zarr(  # doctest: +SKIP
     ...     "ZT18_Male4_Left/*.tif",
     ...     "ZT18_Male4_Left.zarr",
     ...     sequence_pattern=r"_T(?P<T>\\d+)_Z(?P<Z>\\d+)_C(?P<C>\\d+)_V\\d+",
@@ -1769,7 +2087,7 @@ def to_ome_zarr(
     ... )  # doctest: +SKIP
     'ZT18_Male4_Left.zarr'
     """
-    with _writing_ngff(ngff_version):
+    with _writing_ngff(ngff_version), _compression_scope(compression):
         if downscale < 2:
             raise ValueError("downscale must be >= 2")
         if n_levels < 1:
@@ -1796,6 +2114,7 @@ def to_ome_zarr(
                     exc,
                 )
 
+        _check_downsample(downsample)
         arr, axes, detected = _to_dask(source, axes, scene, sequence_pattern)
         if len(axes) != arr.ndim:
             raise ValueError(
@@ -1818,6 +2137,7 @@ def to_ome_zarr(
                 base_scale=base_scale,
                 shard=shard,
                 progress=progress,
+                downsample=downsample,
             )
         _write_multiscales(
             out, axes, datasets, Path(out).stem, calibrated=bool(ps)
@@ -1837,6 +2157,9 @@ def add_pyramid(
     shard: ShardSpec = False,
     progress: bool = True,
     ngff_version: Union[str, None] = "auto",
+    compression: Union[str, None] = None,
+    downsample: Union[str, None] = None,
+    translation: Union[PixelSize, None] = None,
 ) -> str:
     """Add downsampled pyramid levels to an existing single-resolution zarr.
 
@@ -1872,11 +2195,23 @@ def add_pyramid(
         Show a per-level dask progress bar (default ``True``).
     ngff_version : str or None, optional
         NGFF version (and therefore zarr format) to write: ``"auto"``
-        (default) follows the installed zarr -- 0.5 on v3, 0.4 on v2 --
-        while ``"0.4"`` pins the older, zarr-v2 layout for tools that
+        (default) writes 0.5 (zarr v3), while ``"0.4"`` pins the older, zarr-v2 layout for tools that
         cannot read 0.5 yet. 0.4 has no sharding codec, so ``shard`` is
         ignored there. See :func:`ngff_version`.
+    downsample : {"mean", "mode", "nearest"} or None, optional
+        How each level is made from the one above (see :func:`to_ome_zarr`).
+        ``None`` (default) picks ``"mode"`` for an NGFF label image (an
+        ``image-label`` group, or one under ``labels/``) and ``"mean"``
+        otherwise.
+    translation : dict, optional
+        Physical offset ``{axis: offset}`` of the base level's first voxel.
+        ``None`` keeps whatever the store already records (zero if nothing).
 
+    compression : str, optional
+        Codec for the arrays written (``"zstd"``, ``"zstd:3"``, ``"blosc"``,
+        ``"blosc:lz4"``, ``"none"``, ...; see
+        :func:`patchworks.compression`). ``None`` (default) uses the active
+        setting, zstd level 1 unless changed.
     Returns
     -------
     str
@@ -1887,7 +2222,7 @@ def add_pyramid(
     >>> add_pyramid("scan.zarr", n_levels=4)  # doctest: +SKIP
     'scan.zarr'
     """
-    with _writing_ngff(ngff_version):
+    with _writing_ngff(ngff_version), _compression_scope(compression):
         if downscale < 2:
             raise ValueError("downscale must be >= 2")
         if n_levels < 1:
@@ -1895,6 +2230,13 @@ def add_pyramid(
 
         gp = str(group_path)
         root = zarr.open_group(gp, mode="r")
+        if downsample is None:
+            is_label = (
+                read_ngff_attr(root.attrs, "image-label") is not None
+                or "labels" in Path(gp).parts[:-1]
+            )
+            downsample = "mode" if is_label else "mean"
+        _check_downsample(downsample)
         multiscales = read_ngff_attr(root.attrs, "multiscales")
         if multiscales:
             base = multiscales[0]["datasets"][0]["path"]
@@ -1915,6 +2257,9 @@ def add_pyramid(
         else:
             ps = _read_zarr_calibration(gp, axes)
         base_scale = _base_scale(axes, ps)
+        if translation is None:
+            translation = read_translation(gp)
+        base_translation = [float(translation.get(a, 0.0)) for a in axes]
 
         datasets = _write_pyramid(
             base_arr,
@@ -1928,6 +2273,8 @@ def add_pyramid(
             write_base=False,
             shard=shard,
             progress=progress,
+            downsample=downsample,
+            base_translation=base_translation,
         )
         _write_multiscales(
             gp, axes, datasets, Path(gp).stem, calibrated=bool(ps)
@@ -1948,6 +2295,9 @@ def register_labels(
     progress: bool = True,
     n_objects: Union[int, None] = None,
     ngff_version: Union[str, None] = "auto",
+    compression: Union[str, None] = None,
+    level: int = 0,
+    provenance: Union[dict, None] = None,
 ) -> str:
     """Pyramidalise and register an existing ``labels/<name>/0`` base level.
 
@@ -1967,7 +2317,7 @@ def register_labels(
         One letter per axis. ``None`` → inferred from the label array.
     pixel_size : dict, tuple or None, optional
         Physical voxel size in micrometers. ``None`` → inherited from the
-        parent image's own calibration.
+        parent image's calibration at *level*.
     n_levels : int, optional
         Maximum number of pyramid levels including full resolution
         (default 5).
@@ -1979,6 +2329,11 @@ def register_labels(
         Sharding request (see :func:`to_ome_zarr`'s *shard*).
     progress : bool, optional
         Show a per-level dask progress bar (default ``True``).
+    level : int, optional
+        The image pyramid level the labels were segmented at (default 0).
+        Their voxel size and offset are that level's, not level 0's: taking
+        level 0's for labels made at level 1 draws them at half size,
+        drifting further off the image the further from the origin.
     n_objects : int or None, optional
         Exact non-background object count, if known (e.g. from
         :func:`patchworks.merge_tile_labels`'s ``return_count=True`` after
@@ -1991,11 +2346,18 @@ def register_labels(
         its own.
     ngff_version : str or None, optional
         NGFF version (and therefore zarr format) to write: ``"auto"``
-        (default) follows the installed zarr -- 0.5 on v3, 0.4 on v2 --
-        while ``"0.4"`` pins the older, zarr-v2 layout for tools that
+        (default) writes 0.5 (zarr v3), while ``"0.4"`` pins the older, zarr-v2 layout for tools that
         cannot read 0.5 yet. 0.4 has no sharding codec, so ``shard`` is
         ignored there. See :func:`ngff_version`.
 
+    compression : str, optional
+        Codec for the arrays written (``"zstd"``, ``"zstd:3"``, ``"blosc"``,
+        ``"blosc:lz4"``, ``"none"``, ...; see
+        :func:`patchworks.compression`). ``None`` (default) uses the active
+        setting, zstd level 1 unless changed.
+    provenance : dict, optional
+        How the labels were made (see :func:`patchworks.provenance`),
+        stored in the label group's attrs under ``"patchworks"``.
     Returns
     -------
     str
@@ -2006,13 +2368,13 @@ def register_labels(
     >>> register_labels("scan.zarr", "cells")  # doctest: +SKIP
     'scan.zarr/labels/cells'
     """
-    with _writing_ngff(ngff_version):
+    with _writing_ngff(ngff_version), _compression_scope(compression):
         store = str(image_store)
         group = f"{store}/labels/{name}"
         if not pixel_size:
             arr0 = da.from_zarr(group, component="0")
             lab_axes = axes or _default_axes(arr0.ndim)
-            pixel_size = _read_zarr_calibration(store, lab_axes)
+            pixel_size = _read_zarr_calibration(store, lab_axes, level=level)
         add_pyramid(
             group,
             base="0",
@@ -2023,6 +2385,10 @@ def register_labels(
             chunks=chunks,
             shard=shard,
             progress=progress,
+            # Majority vote, not a mean (averaging ids invents objects) and not
+            # decimation (which drops every object its sampled voxel misses).
+            downsample="mode",
+            translation=read_translation(store, level),
         )
         grp = _open_group(group)
         write_ngff_attrs(
@@ -2033,6 +2399,7 @@ def register_labels(
             # where a consumer can find them without knowing the layout.
             grp.attrs["n_objects"] = int(n_objects)
             grp.attrs["sequential_labels"] = True
+        write_provenance(grp, provenance)
 
         labels_grp = _open_group(f"{store}/labels")
         registered = list(read_ngff_attr(labels_grp.attrs, "labels", []) or [])
@@ -2057,6 +2424,9 @@ def write_labels(
     overwrite: bool = False,
     n_objects: Union[int, None] = None,
     ngff_version: Union[str, None] = "auto",
+    compression: Union[str, None] = None,
+    level: int = 0,
+    provenance: Union[dict, None] = None,
 ) -> str:
     """Store *labels* inside *image_store* under the NGFF ``labels/`` group.
 
@@ -2098,13 +2468,24 @@ def write_labels(
     n_objects : int or None, optional
         Exact non-background object count, if known — forwarded to
         :func:`register_labels`; see its docstring for what this enables.
+    level : int, optional
+        The image pyramid level *labels* were segmented at (default 0);
+        their calibration and offset are taken from that level. See
+        :func:`register_labels`.
     ngff_version : str or None, optional
         NGFF version (and therefore zarr format) to write: ``"auto"``
-        (default) follows the installed zarr -- 0.5 on v3, 0.4 on v2 --
-        while ``"0.4"`` pins the older, zarr-v2 layout for tools that
+        (default) writes 0.5 (zarr v3), while ``"0.4"`` pins the older, zarr-v2 layout for tools that
         cannot read 0.5 yet. 0.4 has no sharding codec, so ``shard`` is
         ignored there. See :func:`ngff_version`.
 
+    compression : str, optional
+        Codec for the arrays written (``"zstd"``, ``"zstd:3"``, ``"blosc"``,
+        ``"blosc:lz4"``, ``"none"``, ...; see
+        :func:`patchworks.compression`). ``None`` (default) uses the active
+        setting, zstd level 1 unless changed.
+    provenance : dict, optional
+        How the labels were made (see :func:`patchworks.provenance`),
+        stored in the label group's attrs under ``"patchworks"``.
     Returns
     -------
     str
@@ -2125,7 +2506,7 @@ def write_labels(
     ... )  # doctest: +SKIP
     'scan.zarr/labels/cells'
     """
-    with _writing_ngff(ngff_version):
+    with _writing_ngff(ngff_version), _compression_scope(compression):
         arr = labels if isinstance(labels, da.Array) else da.asarray(labels)
         if axes is None:
             axes = _default_axes(arr.ndim)
@@ -2155,4 +2536,6 @@ def write_labels(
             shard=shard,
             progress=progress,
             n_objects=n_objects,
+            level=level,
+            provenance=provenance,
         )

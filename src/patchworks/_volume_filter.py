@@ -19,10 +19,11 @@ from __future__ import annotations
 
 import logging
 import math
-from itertools import product as _iproduct
 
 import numpy as np
 import zarr
+
+from ._chunks import chunk_slices
 
 logger = logging.getLogger(__name__)
 
@@ -117,22 +118,6 @@ def max_voxels_for_volume(
     return math.floor(max_volume / voxel_volume(voxel_size))
 
 
-def _chunk_slices(shape, chunks):
-    """Every zarr chunk's index expression, in all dimensions.
-
-    Iterating actual chunk boundaries (rather than z-slabs) keeps each read
-    bounded to one chunk's worth of memory, whatever the array's shape.
-    """
-    n_per_dim = [(s + c - 1) // c for s, c in zip(shape, chunks)]
-    return [
-        tuple(
-            slice(i * c, min((i + 1) * c, s))
-            for i, c, s in zip(idx, chunks, shape)
-        )
-        for idx in _iproduct(*[range(n) for n in n_per_dim])
-    ]
-
-
 def filter_labels_by_size(
     store_path: str,
     component: str,
@@ -195,30 +180,39 @@ def filter_labels_by_size(
 
     root = zarr.open_group(store_path, mode="r+")
     z = root[component]
-    slices = _chunk_slices(z.shape, z.chunks)
+    slices = chunk_slices(z.shape, z.chunks)
 
-    counts: "dict[int, int]" = {}
+    # Per-chunk (id, count) arrays, summed once at the end: vectorised, where
+    # a per-object Python loop crawls on millions of objects.
+    chunk_ids, chunk_counts = [], []
     for sl in slices:
         ids, n = np.unique(np.asarray(z[sl]), return_counts=True)
-        for label_id, count in zip(ids.tolist(), n.tolist()):
-            if label_id == 0:
-                continue
-            counts[label_id] = counts.get(label_id, 0) + count
+        fg = ids != 0
+        chunk_ids.append(ids[fg].astype(np.int64))
+        chunk_counts.append(n[fg].astype(np.int64))
+    if chunk_ids:
+        all_ids = np.concatenate(chunk_ids)
+        all_counts = np.concatenate(chunk_counts)
+    else:
+        all_ids = all_counts = np.empty(0, dtype=np.int64)
+    ids, inverse = np.unique(all_ids, return_inverse=True)
+    totals = np.zeros(ids.size, dtype=np.int64)
+    np.add.at(totals, inverse, all_counts)
 
-    kept = sorted(
-        i
-        for i, c in counts.items()
-        if (min_voxels is None or c >= min_voxels)
-        and (max_voxels is None or c <= max_voxels)
-    )
-    n_kept = len(kept)
-    n_removed = len(counts) - n_kept
+    keep = np.ones(ids.size, dtype=bool)
+    if min_voxels is not None:
+        keep &= totals >= min_voxels
+    if max_voxels is not None:
+        keep &= totals <= max_voxels
+    kept = ids[keep]
+    n_kept = int(kept.size)
+    n_removed = int(ids.size) - n_kept
 
     # Sized to the largest id *seen*, not just the largest surviving one --
     # a removed object's id can still exceed every kept id and must stay
     # in bounds so the LUT gather below maps it to 0 rather than indexing
     # past the end.
-    max_label = max(counts) if counts else 0
+    max_label = int(ids[-1]) if ids.size else 0
     if max_label > _LUT_WARN_THRESHOLD:
         logger.warning(
             "filter_labels_by_size: max_label=%d -> LUT size ~%.0f MB.",
@@ -226,8 +220,8 @@ def filter_labels_by_size(
             max_label * 8 / 1024**2,
         )
     lut = np.zeros(max_label + 1, dtype=np.int64)
-    if kept:
-        lut[kept] = np.arange(1, n_kept + 1) if relabel else np.asarray(kept)
+    if n_kept:
+        lut[kept] = np.arange(1, n_kept + 1) if relabel else kept
 
     max_out = n_kept if relabel else max_label
     out_dtype = np.uint16 if max_out < np.iinfo(np.uint16).max else np.uint32
@@ -242,7 +236,7 @@ def filter_labels_by_size(
         "filter_labels_by_size: dropped %d/%d object(s) outside [%s] voxels, "
         "%d remain",
         n_removed,
-        len(counts),
+        ids.size,
         bounds,
         n_kept,
     )

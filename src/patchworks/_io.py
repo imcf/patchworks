@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import contextvars
 import logging
+import re
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Union
 
@@ -12,23 +15,98 @@ import zarr
 
 logger = logging.getLogger(__name__)
 
-_ZARR_V3 = int(zarr.__version__.split(".")[0]) >= 3
+
+# The codec every array patchworks creates is written with. A ContextVar, so
+# `with compression(...)` scopes it to one call without leaking into
+# concurrent writers; set_compression() changes the process default.
+_COMPRESSION: "contextvars.ContextVar[str]" = contextvars.ContextVar(
+    "patchworks_compression", default="zstd"
+)
+_BLOSC_CNAMES = ("zstd", "lz4", "lz4hc", "zlib", "blosclz")
 
 
-_ZARR_V3 = int(zarr.__version__.split(".")[0]) >= 3
+def parse_compression(spec: str) -> tuple[str, str | None, int | None]:
+    """Validate a compression spec and split it into its parts.
+
+    Accepted: ``"zstd"`` / ``"zstd:<level>"`` (default level 1),
+    ``"blosc"`` / ``"blosc:<cname>"`` / ``"blosc:<cname>:<level>"`` (default
+    ``zstd`` at level 5, byte-shuffled), and ``"none"``.
+
+    Returns
+    -------
+    tuple
+        ``(kind, cname, level)``.
+
+    Raises
+    ------
+    ValueError
+        For anything else.
+    """
+    parts = str(spec).strip().lower().split(":")
+    kind = parts[0]
+    try:
+        if kind == "none" and len(parts) == 1:
+            return "none", None, None
+        if kind == "zstd" and len(parts) <= 2:
+            return "zstd", None, int(parts[1]) if len(parts) == 2 else 1
+        if kind == "blosc" and len(parts) <= 3:
+            cname = parts[1] if len(parts) >= 2 else "zstd"
+            level = int(parts[2]) if len(parts) == 3 else 5
+            if cname in _BLOSC_CNAMES:
+                return "blosc", cname, level
+    except ValueError:
+        pass
+    raise ValueError(
+        f"unknown compression {spec!r}; use 'zstd', 'zstd:<level>', "
+        "'blosc', 'blosc:<cname>', 'blosc:<cname>:<level>' "
+        f"(cname one of {', '.join(_BLOSC_CNAMES)}), or 'none'"
+    )
+
+
+@contextmanager
+def compression(spec: str):
+    """Write every array created inside the block with *spec*.
+
+    Covers everything patchworks writes -- stage stores, merged labels,
+    pyramid levels -- which is how a whole ``tile_process`` or merge picks a
+    codec. See :func:`parse_compression` for the accepted specs.
+
+    Examples
+    --------
+    >>> from patchworks import compression, tile_process
+    >>> with compression("blosc:lz4"):  # doctest: +SKIP
+    ...     tile_process("image.zarr", fn)
+    """
+    parse_compression(spec)
+    token = _COMPRESSION.set(spec)
+    try:
+        yield
+    finally:
+        _COMPRESSION.reset(token)
+
+
+def set_compression(spec: str) -> None:
+    """Set the codec for every array written from now on (default ``zstd``).
+
+    Prefer :func:`compression` to scope it; this suits a script that writes
+    everything with one codec.
+    """
+    parse_compression(spec)
+    _COMPRESSION.set(spec)
 
 
 def zarr_compressor_kwargs(zarr_format: int = 3) -> dict:
     """Keyword arguments pinning the compression codec for a new array.
 
-    zstd is already zarr v3's default, but relying on a library default means
-    the stores patchworks writes change silently if that default ever moves.
-    Labels in particular are highly compressible, so this is worth stating.
+    The codec is the active :func:`compression` (zstd level 1 unless
+    changed). zstd is already zarr v3's default, but relying on a library
+    default means the stores patchworks writes change silently if that
+    default ever moves.
 
     The codec *object* depends on the format of the array being written, not
     on the installed zarr: zarr-python 3 can write a zarr-v2 array (which is
-    what NGFF 0.4 needs), and a v2 array rejects ``zarr.codecs.ZstdCodec`` --
-    it wants the numcodecs one.
+    what NGFF 0.4 needs), and a v2 array rejects ``zarr.codecs`` codecs --
+    it wants the numcodecs ones.
 
     Parameters
     ----------
@@ -38,21 +116,68 @@ def zarr_compressor_kwargs(zarr_format: int = 3) -> dict:
     Returns
     -------
     dict
-        ``compressors=``/``compressor=`` as that combination expects, or
-        empty if the codec cannot be built (then the default applies).
+        ``compressors=`` holding the codec that format expects (``None``
+        for ``"none"``).
     """
-    try:
-        if _ZARR_V3 and zarr_format != 2:
+    kind, cname, level = parse_compression(_COMPRESSION.get())
+    if kind == "none":
+        return {"compressors": None}
+    if zarr_format != 2:
+        if kind == "zstd":
             from zarr.codecs import ZstdCodec
 
-            return {"compressors": (ZstdCodec(level=1),)}
-        import numcodecs
+            return {"compressors": (ZstdCodec(level=level),)}
+        from zarr.codecs import BloscCodec
 
-        codec = numcodecs.Zstd(level=1)
-        return {"compressors": (codec,)} if _ZARR_V3 else {"compressor": codec}
-    except Exception:  # pragma: no cover - depends on the installed zarr
-        logger.debug("could not pin a compressor; using zarr's default")
-        return {}
+        return {
+            "compressors": (
+                BloscCodec(cname=cname, clevel=level, shuffle="shuffle"),
+            )
+        }
+    import numcodecs
+
+    if kind == "zstd":
+        return {"compressors": (numcodecs.Zstd(level=level),)}
+    return {
+        "compressors": (
+            numcodecs.Blosc(
+                cname=cname, clevel=level, shuffle=numcodecs.Blosc.SHUFFLE
+            ),
+        )
+    }
+
+
+_URL = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*://")
+
+
+def is_remote(path: Union[str, Path, None]) -> bool:
+    """Whether *path* is a URL (``s3://``, ``gs://``, ``https://``, ...).
+
+    zarr reads and writes those through fsspec, so a remote store works as
+    input (and as the labels' destination). What must never happen is
+    deriving a *local* scratch directory from one with ``os.path``: that
+    turns ``s3://bucket/x.zarr`` into a folder called ``s3:`` in the working
+    directory. ``file://`` counts as local.
+    """
+    text = str(path) if path is not None else ""
+    return bool(_URL.match(text)) and not text.startswith("file://")
+
+
+# A ".zip" path component: the archive name, then the end or a separator.
+# A bare substring test also matched directories such as "my.zipfiles/".
+_ZIP_PART = re.compile(r"^(.*?\.zip)(?=$|[/\\])(.*)$", re.IGNORECASE)
+
+
+def split_zip_path(path: Union[str, Path]) -> "tuple[str, str] | None":
+    """Split ``bundle.zip/inner/group`` into ``(archive, inner)``.
+
+    Returns None when no path component ends in ``.zip``.
+    """
+    m = _ZIP_PART.match(str(path))
+    if m is None:
+        return None
+    # Zarr keys always use "/", whatever the OS spelled the path with.
+    return m.group(1), m.group(2).replace("\\", "/").strip("/")
 
 
 def open_zarr_source(
@@ -83,16 +208,15 @@ def open_zarr_source(
     ValueError
         If a ``.zip`` does not hold exactly one top-level store.
     """
-    text = str(store_path)
-    if ".zip" not in text:
-        return text, ""
+    split = split_zip_path(store_path)
+    if split is None:
+        return str(store_path), ""
 
     import zipfile
 
     # The bundle may be addressed with a group path after it, e.g.
     # "scan.zarr.zip/labels/cells" -- callers build those by string-joining.
-    head, _, tail = text.partition(".zip")
-    archive_path = head + ".zip"
+    archive_path, inner = split
     with zipfile.ZipFile(archive_path) as archive:
         tops = {
             name.split("/", 1)[0] for name in archive.namelist() if "/" in name
@@ -104,7 +228,6 @@ def open_zarr_source(
             "`pixi run zip` always do."
         )
     prefix = tops.pop()
-    inner = tail.strip("/")
     if inner:
         prefix = f"{prefix}/{inner}"
     return zarr.storage.ZipStore(archive_path, mode="r"), prefix
@@ -167,8 +290,8 @@ def load_ome_zarr(
 
     Examples
     --------
-    >>> arr = load_ome_zarr("image.zarr", channel=0)
-    >>> arr.shape
+    >>> arr = load_ome_zarr("image.zarr", channel=0)  # doctest: +SKIP
+    >>> arr.shape  # doctest: +SKIP
     (128, 2048, 2048)
     """
     source, prefix = open_zarr_source(store_path)
@@ -253,29 +376,53 @@ def _select_channel(arr, channel: int, multiscale: dict, store_path):
 
 
 def _otsu_threshold(sample: np.ndarray) -> float:
-    """Otsu threshold of *sample*; falls back to 0 if degenerate.
+    """Otsu threshold of *sample*; falls back to 0 if empty.
 
     Operates on the full distribution including zeros — zeros are background
     pixels and must be included so Otsu can find the signal/background boundary.
 
+    A NumPy port of ``skimage.filters.threshold_otsu`` (same histogram: one
+    bin per integer value for integer data, 256 bins otherwise, and the same
+    between-class variance), so the empty-tile threshold does not quietly
+    degrade to 0 when scikit-image, which is not a dependency, is missing.
+
     Parameters
     ----------
     sample : np.ndarray
-        Flat intensity sample.
+        Intensity sample (any shape).
 
     Returns
     -------
     float
-        The Otsu threshold, or ``0.0`` when the sample is degenerate.
+        The Otsu threshold; the single value for a constant sample, ``0.0``
+        for an empty one.
     """
-    try:
-        from skimage.filters import threshold_otsu
-
-        return float(threshold_otsu(sample))
-    except Exception:
-        # Degenerate (all same value) → no threshold needed; return 0 so
-        # non-zero tiles are marked occupied.
+    sample = np.asarray(sample).ravel()
+    if sample.size == 0:
         return 0.0
+    if np.issubdtype(sample.dtype, np.floating):
+        sample = sample[np.isfinite(sample)]
+        if sample.size == 0:
+            return 0.0
+    lo, hi = sample.min(), sample.max()
+    if lo == hi:
+        return float(lo)
+
+    if np.issubdtype(sample.dtype, np.integer):
+        counts = np.bincount((sample.astype(np.int64) - int(lo)).ravel())
+        centers = np.arange(int(lo), int(hi) + 1, dtype=np.float64)
+    else:
+        counts, edges = np.histogram(sample, bins=256, range=(lo, hi))
+        centers = (edges[:-1] + edges[1:]) / 2
+
+    counts = counts.astype(np.float64)
+    weight1 = np.cumsum(counts)
+    weight2 = np.cumsum(counts[::-1])[::-1]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        mean1 = np.cumsum(counts * centers) / weight1
+        mean2 = (np.cumsum((counts * centers)[::-1]) / weight2[::-1])[::-1]
+        variance = weight1[:-1] * weight2[1:] * (mean1[:-1] - mean2[1:]) ** 2
+    return float(centers[np.nanargmax(variance)])
 
 
 def auto_empty_threshold(
@@ -302,12 +449,15 @@ def auto_empty_threshold(
     win = [min(w, 256) if i >= n - 2 else w for i, w in enumerate(win)]
     samples = []
     for frac in (0.33, 0.5, 0.66):
+        # Clamp each window inside the array: an axis just longer than the
+        # window gave a negative start, which Python reads from the end --
+        # an empty or truncated sample instead of a full one.
         sl = tuple(
-            slice(
-                int(s * frac) - w // 2 if s > w else 0,
-                (int(s * frac) - w // 2 if s > w else 0) + w,
+            slice(start, start + w)
+            for start, w in (
+                (min(max(0, int(s * frac) - w // 2), s - w), w)
+                for s, w in zip(image.shape, win)
             )
-            for s, w in zip(image.shape, win)
         )
         samples.append(np.asarray(image[sl]).ravel())
     sample = np.concatenate(samples)
@@ -357,16 +507,16 @@ def estimate_empty_tiles(
 
     Examples
     --------
-    >>> info = estimate_empty_tiles("image.zarr", (120, 697, 697))
-    >>> print(f"{info['empty_fraction']:.0%} of tiles are background")
-    >>> labels = tile_process("image.zarr", fn, tile_shape=(120, 697, 697),
+    >>> info = estimate_empty_tiles("image.zarr", (120, 697, 697))  # doctest: +SKIP
+    >>> print(f"{info['empty_fraction']:.0%} of tiles are background")  # doctest: +SKIP
+    >>> labels = tile_process("image.zarr", fn, tile_shape=(120, 697, 697),  # doctest: +SKIP
     ...                       skip_empty=True, empty_threshold=info["threshold"])
     """
     n_spatial = len(tile_shape)
 
     z_src: Any = None
     if isinstance(image, (str, Path)):
-        _root = zarr.open_group(str(image), mode="r")
+        _root = open_group_any(image)
         _rattr = dict(_root.attrs)
         _rms = _rattr.get("multiscales") or _rattr.get("ome", {}).get(
             "multiscales"

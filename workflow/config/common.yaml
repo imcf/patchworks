@@ -46,6 +46,12 @@ tiles_per_job: 4
 # --- merge ---
 sequential_labels: true
 merge_workers: null
+stitch: "touch" # or "iou": join across seams only where both tiles agree
+# Codec for everything written: "zstd" (level 1), "zstd:3" (~10% smaller raw
+# images, slower writes), "blosc" / "blosc:lz4" (for older Java-based
+# OME-Zarr viewers that lack zstd), or "none".
+compression: "zstd"
+iou_threshold: 0.5
 
 # --- notifications (optional) ---
 # Leave empty for no email. Per-job mail is sent by SLURM itself for the long

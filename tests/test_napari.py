@@ -352,3 +352,21 @@ def test_bundle_name_need_not_match_the_store(tmp_path, stub_napari):
         "cyto_labels",
         "cilia_labels",
     ]
+
+
+def test_resolve_image_reads_other_formats_and_picks_the_channel(monkeypatch):
+    """A non-zarr file goes through bioio; that path crashed on unpacking."""
+    import dask.array as da
+    import numpy as np
+
+    from patchworks.plugins import napari as napari_plugin
+    from patchworks.plugins import ome_zarr
+
+    cyx = da.from_array(np.arange(2 * 4 * 4).reshape(2, 4, 4))
+    monkeypatch.setattr(
+        ome_zarr, "_open_bioio", lambda path, scene: (cyx, "cyx", {})
+    )
+    every = napari_plugin._resolve_image("scan.czi", None)
+    assert every.shape == (2, 4, 4)
+    second = napari_plugin._resolve_image("scan.czi", 1)
+    np.testing.assert_array_equal(second, cyx[1])

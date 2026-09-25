@@ -2,7 +2,7 @@
 
 ## Installation
 
-patchworks can be installed from PyPI on all operating systems, for Python ≥ 3.9.
+patchworks can be installed from PyPI on all operating systems, for Python ≥ 3.11.
 
 !!! tip "Virtual environment (recommended)"
     We recommend creating a dedicated environment:

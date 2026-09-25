@@ -61,7 +61,9 @@ tile_process("image.zarr", fn, write_to="labels.zarr")
 ```
 
 The temp stage store is deleted after a successful merge (pass
-`keep_stage=True` to keep it for debugging or resuming).
+`keep_stage=True` to keep it for debugging; its path is logged). It is
+removed even when a run fails, and each run gets a uniquely named stage store,
+so runs sharing an output directory never overwrite each other.
 
 ---
 

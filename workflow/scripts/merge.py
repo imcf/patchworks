@@ -15,7 +15,9 @@ from patchworks import (
     capped_output_chunks,
     cpu_allocation,
     merge_tile_labels,
+    provenance,
     safe_worker_count,
+    set_compression,
 )
 from patchworks._chunks import _get_available_memory
 from patchworks._volume_filter import (
@@ -29,9 +31,11 @@ from patchworks.plugins.ome_zarr import (
     reshard_level,
 )
 
-from _pw import load_tiles_json, stage_path, start_log
+from _pw import halo_path, load_tiles_json, stage_path, start_log
 
 start_log(snakemake.log[0])  # noqa: F821
+# Codec for every array this step creates (config `compression:`).
+set_compression(snakemake.config.get("compression", "zstd"))  # noqa: F821
 cfg = snakemake.config  # noqa: F821
 work_dir = cfg["work_dir"]
 label_name = cfg.get("label_name", "labels")
@@ -107,7 +111,16 @@ _, n_objects = merge_tile_labels(
     progress=True,
     return_count=True,
     label_counts=label_counts,
+    # stitch: iou joins labels across a seam only where both tiles' views of
+    # the overlap agree, so touching cells stay apart.
+    halo_dir=(
+        halo_path(work_dir, label_name)
+        if cfg.get("stitch", "touch") == "iou"
+        else None
+    ),
+    iou_threshold=float(cfg.get("iou_threshold", 0.5)),
 )
+shutil.rmtree(halo_path(work_dir, label_name), ignore_errors=True)
 
 # Global, exact volume filter -- runs once on the fully merged array so an
 # object's size is never judged from just the fragment one tile happened to
@@ -115,7 +128,9 @@ _, n_objects = merge_tile_labels(
 min_volume = cfg.get("min_volume")
 max_volume = cfg.get("max_volume")
 if min_volume or max_volume:
-    voxel_size = read_pixel_size(image_store)
+    # The labels are at the segmented level's resolution, so voxel counts
+    # must be converted with that level's voxel size.
+    voxel_size = read_pixel_size(image_store, level=int(cfg.get("level", 0)))
     if not voxel_size:
         raise RuntimeError(
             f"min_volume/max_volume filtering needs calibration in "
@@ -200,9 +215,36 @@ if shard_labels:
     spec = (cfg.get("shard") or True) if shard_labels is True else shard_labels
     reshard_level(label_group, "0", shard=spec, progress=True)
 
+# How these labels were made, stored with them (read_provenance()).
+_SETTINGS = (
+    "input",
+    "channel",
+    "nuclei_channel",
+    "level",
+    "method",
+    "cellpose",
+    "custom",
+    "dilate",
+    "min_volume",
+    "max_volume",
+    "stitch",
+    "iou_threshold",
+    "sequential_labels",
+    "compression",
+    "skip_empty",
+    "empty_threshold",
+)
+record = provenance(
+    label_name=label_name,
+    tile_shape=manifest["tile_shape"],
+    overlap=manifest["overlap"],
+    **{k: cfg.get(k) for k in _SETTINGS if k in cfg},
+)
+
 group = register_labels(
     image_store,
     label_name,
+    provenance=record,
     n_levels=int(cfg.get("pyramid_levels", 5)),
     downscale=int(cfg.get("pyramid_downscale", 2)),
     progress=True,
@@ -213,6 +255,9 @@ group = register_labels(
     # `shard_labels` pass above for the reason given there.
     shard=cfg.get("shard", False),
     ngff_version=cfg.get("ngff_version", "auto"),
+    # Segmented at `level`: calibrate (and offset) the labels as that level,
+    # or they are drawn shrunk towards the origin of the image.
+    level=int(cfg.get("level", 0)),
 )
 
 if not in_place:
@@ -227,5 +272,27 @@ if not in_place:
     # is why the label counts above are read by path, not from snakemake.input.
     shutil.rmtree(stage_path(work_dir, label_name), ignore_errors=True)
     Path(f"{stage_path(work_dir, label_name)}.done").unlink(missing_ok=True)
+# Did the tiling leave marks? Compares how often objects end exactly on a
+# seam against planes inside the tiles; cheap (a sample of thin slabs) and
+# written next to the run for later comparison between configs.
+if cfg.get("seam_report", True):
+    from patchworks import seam_report
+
+    report = seam_report(
+        group,
+        manifest["tile_shape"],
+        max_faces=int(cfg.get("seam_report_faces", 64)),
+    )
+    Path(work_dir, label_name, "seams.json").write_text(
+        json.dumps(report, indent=2)
+    )
+    for ax, row in report["axes"].items():
+        interior = row["interior_rate"]
+        print(
+            f"[patchworks] seams axis {ax}: {100 * row['seam_rate']:.1f}% of "
+            f"labels end on a seam vs "
+            f"{'n/a' if interior is None else f'{100 * interior:.1f}%'} "
+            "inside tiles"
+        )
 print(f"[patchworks] labels written to {group}")
 open(snakemake.output[0], "w").close()  # noqa: F821

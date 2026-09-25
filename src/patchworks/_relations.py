@@ -26,14 +26,31 @@ def _as_dask(
     return source
 
 
-def _chunk_pairs(a_block: np.ndarray, b_block: np.ndarray) -> np.ndarray:
-    """Non-background ``(a_id, b_id) -> voxel count`` rows for one chunk pair."""
-    mask = (a_block > 0) & (b_block > 0)
+def _chunk_pairs(
+    a_block: np.ndarray, b_block: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """Overlap rows and *a*-label sizes for one chunk pair.
+
+    Returns
+    -------
+    tuple of np.ndarray
+        ``(pairs, sizes)``: ``(a_id, b_id, voxels)`` rows where both are
+        non-background, and ``(a_id, voxels)`` rows counting *every* voxel of
+        each *a* label -- including those over *b*'s background, which the
+        overlap fraction has to be taken against.
+    """
+    a_fg = a_block > 0
+    if not a_fg.any():
+        empty = np.empty((0, 3), dtype=np.int64)
+        return empty, np.empty((0, 2), dtype=np.int64)
+    a_ids, a_counts = np.unique(a_block[a_fg], return_counts=True)
+    sizes = np.stack([a_ids, a_counts], axis=1).astype(np.int64)
+    mask = a_fg & (b_block > 0)
     if not mask.any():
-        return np.empty((0, 3), dtype=np.int64)
+        return np.empty((0, 3), dtype=np.int64), sizes
     pairs = np.stack([a_block[mask], b_block[mask]], axis=1).astype(np.int64)
     uniq, counts = np.unique(pairs, axis=0, return_counts=True)
-    return np.concatenate([uniq, counts[:, None]], axis=1)
+    return np.concatenate([uniq, counts[:, None]], axis=1), sizes
 
 
 def label_relations(
@@ -73,8 +90,9 @@ def label_relations(
         ``{a_label: {"match": b_label, "overlap_voxels": int,
         "overlap_fraction": float}}`` — one entry per *a* label that touches
         at least one non-background *b* voxel. ``overlap_fraction`` is the
-        matched voxel count over *a* label's total voxel count (1.0 = fully
-        contained). Labels in *a* with zero overlap are omitted.
+        matched voxel count over *a* label's total voxel count, background
+        included (1.0 = fully contained). Labels in *a* with zero overlap are
+        omitted. On a tie the lowest *b* id wins.
 
     Examples
     --------
@@ -107,7 +125,7 @@ def label_relations(
         nw,
     )
 
-    def _one(flat_idx: int) -> np.ndarray:
+    def _one(flat_idx: int) -> tuple[np.ndarray, np.ndarray]:
         idx = np.unravel_index(flat_idx, n_blocks)
         return _chunk_pairs(
             np.asarray(a.blocks[idx]), np.asarray(b.blocks[idx])
@@ -130,44 +148,47 @@ def label_relations(
                 log_progress("label_relations", done, total, started)
                 last = now
 
-    rows = [p for p in parts if p.size]
+    rows = [p for p, _ in parts if p.size]
     if not rows:
         return {}
     all_pairs = np.concatenate(rows, axis=0)
 
     # Merge duplicate (a_id, b_id) rows across chunks (a label can span
-    # several chunks) by sorting on a combined key and summing runs.
-    key = all_pairs[:, 0] * (int(all_pairs[:, 1].max()) + 1) + all_pairs[:, 1]
-    order = np.argsort(key, kind="stable")
-    all_pairs, key = all_pairs[order], key[order]
-    starts = np.concatenate([[0], np.flatnonzero(np.diff(key)) + 1])
-    merged_counts = np.add.reduceat(all_pairs[:, 2], starts)
-    merged = np.stack(
-        [all_pairs[starts, 0], all_pairs[starts, 1], merged_counts], axis=1
-    )
+    # several chunks) with one sort on both columns and summing runs.
+    order = np.lexsort((all_pairs[:, 1], all_pairs[:, 0]))
+    all_pairs = all_pairs[order]
+    new_run = np.any(np.diff(all_pairs[:, :2], axis=0) != 0, axis=1)
+    starts = np.concatenate([[0], np.flatnonzero(new_run) + 1])
+    a_ids = all_pairs[starts, 0]
+    b_ids = all_pairs[starts, 1]
+    counts = np.add.reduceat(all_pairs[:, 2], starts)
 
-    a_totals: dict[int, int] = {}
-    for a_id, _, count in merged:
-        a_id = int(a_id)
-        a_totals[a_id] = a_totals.get(a_id, 0) + int(count)
+    # Best match per a: sort by a, then count descending, then b ascending
+    # (ties go to the lowest b id), and keep each a's first row.
+    order = np.lexsort((b_ids, -counts, a_ids))
+    a_ids, b_ids, counts = a_ids[order], b_ids[order], counts[order]
+    first = np.concatenate([[True], a_ids[1:] != a_ids[:-1]])
+    a_ids, b_ids, counts = a_ids[first], b_ids[first], counts[first]
 
-    best: dict[int, tuple[int, int]] = {}
-    for a_id, b_id, count in merged:
-        a_id, b_id, count = int(a_id), int(b_id), int(count)
-        cur = best.get(a_id)
-        if cur is None or count > cur[1]:
-            best[a_id] = (b_id, count)
+    # Every voxel of each a label, summed over the chunks it spans.
+    sizes = np.concatenate([s for _, s in parts if s.size], axis=0)
+    size_ids, inverse = np.unique(sizes[:, 0], return_inverse=True)
+    totals = np.zeros(size_ids.size, dtype=np.int64)
+    np.add.at(totals, inverse, sizes[:, 1])
+    a_totals = totals[np.searchsorted(size_ids, a_ids)]
 
     logger.info(
         "label_relations: %d a-labels matched across %d chunks",
-        len(best),
+        a_ids.size,
         total,
     )
     return {
-        a_id: {
-            "match": b_id,
-            "overlap_voxels": count,
-            "overlap_fraction": count / a_totals[a_id],
+        int(a_id): {
+            "match": int(b_id),
+            "overlap_voxels": int(count),
+            "overlap_fraction": float(count) / float(a_total),
         }
-        for a_id, (b_id, count) in best.items()
+        for a_id, b_id, count, a_total in zip(
+            a_ids.tolist(), b_ids.tolist(), counts.tolist(), a_totals.tolist()
+        )
     }

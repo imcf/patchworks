@@ -33,3 +33,37 @@ jobs:
         uses: DavidAnson/markdownlint-cli2-action@v20
         with:
           globs: "**/*.md"
+
+  docs:
+    # The deploy workflow only runs on main; catch a broken reference or a
+    # docstring mkdocstrings cannot render before it gets there.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install docs dependencies
+        run: pip install "mkdocs-material>=9.0" "mkdocstrings[python]>=0.24" .
+
+      - name: mkdocs build --strict
+        run: mkdocs build --strict
+
+  mypy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: pip install -e ".[dev]"
+
+      - name: mypy (config in pyproject.toml)
+        run: mypy

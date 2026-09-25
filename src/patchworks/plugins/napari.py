@@ -13,13 +13,13 @@ napari is an optional, GUI-heavy dependency. Install it with
 
 Usage
 -----
->>> from patchworks import tile_process
->>> from patchworks.plugins.napari import view_in_napari
+>>> from patchworks import tile_process  # doctest: +SKIP
+>>> from patchworks.plugins.napari import view_in_napari  # doctest: +SKIP
 >>>
 >>> # labels are written into scan.zarr/labels/ by default …
->>> tile_process("scan.zarr", fn)
+>>> tile_process("scan.zarr", fn)  # doctest: +SKIP
 >>> # … so the viewer finds and overlays them with no labels= argument:
->>> view_in_napari("scan.zarr")
+>>> view_in_napari("scan.zarr")  # doctest: +SKIP
 """
 
 from __future__ import annotations
@@ -76,8 +76,10 @@ def _is_zarr(src: Any) -> bool:
     """
     if not isinstance(src, (str, Path)):
         return False
-    text = str(src)
-    return text.endswith(".zarr") or ".zip" in text
+    from .._io import split_zip_path
+
+    text = str(src).rstrip("/\\")
+    return text.endswith(".zarr") or split_zip_path(text) is not None
 
 
 def _has_multiscales(path: Union[str, Path]) -> bool:
@@ -147,9 +149,28 @@ def _resolve_image(
         # Any other file format → bioio (reuse the conversion plugin's reader).
         from .ome_zarr import _open_bioio
 
-        arr, _ = _open_bioio(str(source), 0)
+        # _open_bioio returns (array, axes, pixel size); unpacking two
+        # crashed every non-zarr file, and channel= was never applied.
+        arr, axes, _ = _open_bioio(str(source), 0)
+        if channel is not None and "c" in axes:
+            arr = arr[(slice(None),) * axes.index("c") + (channel,)]
         return arr
     return source
+
+
+def _pyramid_translate(
+    path: Union[str, Path], ndim: int
+) -> "list[float] | None":
+    """Level-0 physical offset, e.g. of labels segmented at a coarser level.
+
+    Returns None when there is none, leaving napari's default of 0.
+    """
+    from .ome_zarr import _default_axes, read_translation
+
+    offset = read_translation(str(path))
+    if not offset:
+        return None
+    return [float(offset.get(a, 0.0)) for a in _default_axes(ndim)]
 
 
 def _pyramid_calibration(
@@ -404,6 +425,11 @@ def view_in_napari(
             name=labels_name,
             multiscale=isinstance(lab, list),
             scale=lab_scale,
+            translate=(
+                _pyramid_translate(labels, lab_ndim)
+                if _is_zarr(labels)
+                else None
+            ),
             units=lab_units,
             metadata=metadata,
             **label_kwargs,
@@ -446,6 +472,7 @@ def view_in_napari(
                     name=name,
                     multiscale=True,
                     scale=lab_scale,
+                    translate=_pyramid_translate(store, lab[0].ndim),
                     units=lab_units,
                     metadata=_label_hint(store),
                     **label_kwargs,
