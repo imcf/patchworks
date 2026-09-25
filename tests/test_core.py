@@ -843,7 +843,8 @@ def test_compression_applies_to_everything_written(tmp_path):
     codec = zarr.open_group(str(tmp_path / "o.zarr"), mode="r")[
         "labels"
     ].compressors[0]
-    assert type(codec).__name__ == "BloscCodec" and codec.cname.value == "lz4"
+    cname = getattr(codec.cname, "value", codec.cname)  # enum or str by version
+    assert type(codec).__name__ == "BloscCodec" and cname == "lz4"
 
     out = to_ome_zarr(
         _make_image((2, 32, 32)),
