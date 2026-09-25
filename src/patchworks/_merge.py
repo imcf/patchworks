@@ -53,12 +53,10 @@ _MERGE_COUNT = "patchworks_n_objects"
 # LUT is memory-mapped from disk so it is shared read-only across all workers
 # (OS page cache, no per-process copy). Passing the LUT directly via pickle
 # would deserialize N separate copies — e.g. 4 workers × 800 MB = 3.2 GB wasted.
+# The two arrays are opened once per worker, not once per chunk.
 _merge_lut: "np.ndarray | None" = None
-_merge_lut_path: "str | None" = None
-_merge_staged_path: "str | None" = None
-_merge_staged_comp: "str | None" = None
-_merge_out_path: "str | None" = None
-_merge_out_comp: "str | None" = None
+_merge_src: "zarr.Array | None" = None
+_merge_dst: "zarr.Array | None" = None
 
 
 def _init_worker(lut_path, staged_path, staged_comp, out_path, out_comp):
@@ -81,16 +79,22 @@ def _init_worker(lut_path, staged_path, staged_comp, out_path, out_comp):
     -------
     None
     """
-    global _merge_lut, _merge_lut_path, _merge_staged_path, _merge_staged_comp
-    global _merge_out_path, _merge_out_comp
-    _merge_lut = np.load(
-        lut_path, mmap_mode="r"
-    )  # shared read-only via OS page cache
-    _merge_lut_path = lut_path
-    _merge_staged_path = staged_path
-    _merge_staged_comp = staged_comp
-    _merge_out_path = out_path
-    _merge_out_comp = out_comp
+    global _merge_lut, _merge_src, _merge_dst
+    # Shared read-only via the OS page cache.
+    _merge_lut = np.load(lut_path, mmap_mode="r")
+    _merge_src = zarr.open_group(staged_path, mode="r")[staged_comp]
+    _merge_dst = zarr.open_group(out_path, mode="r+")[out_comp]
+
+
+def _reset_worker() -> None:
+    """Drop the worker state after an in-process (single-worker) relabel.
+
+    Otherwise the calling process keeps the LUT memory-mapped after the
+    merge returns: on Linux its disk space is not freed although the file is
+    deleted, and on Windows the temp directory cannot be removed at all.
+    """
+    global _merge_lut, _merge_src, _merge_dst
+    _merge_lut = _merge_src = _merge_dst = None
 
 
 def _relabel_chunk_worker(task: tuple) -> None:
@@ -109,8 +113,7 @@ def _relabel_chunk_worker(task: tuple) -> None:
     None
     """
     chunk_slice, offset = task
-    src = zarr.open_group(_merge_staged_path, mode="r")[_merge_staged_comp]
-    dst = zarr.open_group(_merge_out_path, mode="r+")[_merge_out_comp]
+    src, dst = _merge_src, _merge_dst
     block = np.asarray(src[chunk_slice])
     nz = block > 0
     if not nz.any():
@@ -839,8 +842,11 @@ def zarr_native_merge(
             it: Any = track(
                 tasks, "relabel chunks", n_chunks, enabled=show_progress
             )
-            for task in it:
-                _relabel_chunk_worker(task)
+            try:
+                for task in it:
+                    _relabel_chunk_worker(task)
+            finally:
+                _reset_worker()
         else:
             with _pool_context().Pool(
                 processes=n_w,

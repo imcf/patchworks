@@ -582,3 +582,20 @@ def test_merge_pool_does_not_rerun_an_unguarded_script(tmp_path):
     )
     assert run.returncode == 0, run.stderr
     assert run.stdout.split() == ["TOP-LEVEL", "MERGED"]
+
+
+def test_single_worker_merge_releases_the_lut(tmp_path):
+    """An in-process relabel must not keep the (deleted) LUT mapped."""
+    import zarr
+
+    from patchworks import _merge
+    from patchworks._merge import zarr_native_merge
+
+    sp = str(tmp_path / "stage.zarr")
+    a = zarr.open_group(sp, mode="w").create_array(
+        "staged", shape=(2, 4, 4), chunks=(1, 4, 4), dtype="int32"
+    )
+    a[:] = 1
+    zarr_native_merge(sp, "staged", str(tmp_path / "o.zarr"), "l", n_workers=1)
+    assert _merge._merge_lut is None
+    assert _merge._merge_src is None and _merge._merge_dst is None
