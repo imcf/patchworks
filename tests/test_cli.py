@@ -55,3 +55,13 @@ def test_segment_rejects_incomplete_methods(tmp_path, blobs):
         main(["segment", store, "--method", "custom"])
     with pytest.raises(SystemExit):
         main(["segment", store, "--channel", "red"])
+
+
+def test_segment_overlap_auto(tmp_path, blobs, capsys):
+    store = to_ome_zarr(blobs, tmp_path / "a.zarr", axes="zyx", n_levels=1)
+    args = ["segment", store, "--tile-shape", "2,32,32", "--overlap", "auto"]
+    assert main(args) == 0
+    found = json.loads(capsys.readouterr().err.strip().splitlines()[-1])
+    assert found["overlap"] is not None
+    with pytest.raises(SystemExit, match="tile-shape"):
+        main(["segment", store, "--overlap", "auto"])

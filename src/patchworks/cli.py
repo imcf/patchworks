@@ -54,7 +54,9 @@ def _channel(text: str) -> int | None:
         ) from None
 
 
-def _overlap(text: str) -> int | tuple[int, ...]:
+def _overlap(text: str) -> int | tuple[int, ...] | str:
+    if text == "auto":
+        return text
     values = _ints(text)
     return values[0] if len(values) == 1 else values
 
@@ -144,6 +146,19 @@ def _cmd_segment(args: argparse.Namespace) -> int:
     tile_shape: Any = args.tile_shape
     if tile_shape not in (None, "auto"):
         tile_shape = _ints(tile_shape)
+    if args.overlap == "auto":
+        if not isinstance(tile_shape, tuple):
+            raise SystemExit("--overlap auto needs an explicit --tile-shape")
+        from ._autotune import suggest_overlap
+
+        found = suggest_overlap(image, fn, tile_shape, stitch=args.stitch)
+        print(json.dumps(found), file=sys.stderr)
+        if found["overlap"] is None:
+            raise SystemExit(
+                "no candidate overlap reproduced the untiled result; pass "
+                "--overlap explicitly (see the scores above)"
+            )
+        args.overlap = found["overlap"]
     if args.plan:
         plan = tile_process(
             args.image,
@@ -288,7 +303,11 @@ def build_parser() -> argparse.ArgumentParser:
         help='z,y,x or "auto" (default); "none" keeps the store chunks',
     )
     p.add_argument(
-        "--overlap", type=_overlap, default=16, help="halo, N or z,y,x"
+        "--overlap",
+        type=_overlap,
+        default=16,
+        help='halo: N, z,y,x, or "auto" (smallest that matches an untiled '
+        "run on a central crop; needs --tile-shape)",
     )
     p.add_argument("--gpu", action="store_true")
     p.add_argument(

@@ -29,6 +29,7 @@ With Cellpose:
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 
+from ._autotune import object_f1, suggest_overlap
 from ._chunks import (
     auto_overlap,
     auto_tile_shape,
@@ -97,6 +98,8 @@ __all__ = [
     "relabel_sequential_zarr",
     "label_relations",
     "seam_report",
+    "suggest_overlap",
+    "object_f1",
     "provenance",
     "read_provenance",
     "normalize_overlap",

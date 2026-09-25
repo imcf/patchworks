@@ -160,6 +160,26 @@ try `stitch="iou"`. `worst_seams` lists the faces to look at in the viewer.
 The cluster workflow runs it after every merge and writes
 `<work_dir>/<label_name>/seams.json` (`seam_report: false` turns it off).
 
+## Choosing the overlap from the data
+
+The halo exists so that tiling does not change the result — and that is
+testable. [`suggest_overlap`](../api/seams.md) segments a crop spanning 2×2
+tiles once *without* tiling, then tiled at increasing overlaps, and returns
+the smallest overlap whose result matches the untiled one (object-level F1
+≥ 0.99):
+
+```python
+from patchworks import load_ome_zarr, suggest_overlap
+
+image = load_ome_zarr("scan.zarr", channel=0)
+suggest_overlap(image, fn, tile_shape=(16, 512, 512))
+# {'overlap': 16, 'scores': {0: 0.91, 4: 0.95, 8: 0.97, 16: 0.995}, ...}
+```
+
+Pass `region=` to test a crop with typical objects (an empty one agrees at
+any overlap). On the command line: `patchworks segment ... --tile-shape
+16,512,512 --overlap auto`.
+
 ## Resuming an interrupted run
 
 `tile_process(..., resume=True)` stages into a store named after the run's
