@@ -395,6 +395,13 @@ def validate_config(cfg) -> None:
                 f"{value!r}"
             )
 
+    try:
+        from patchworks._io import parse_compression
+
+        parse_compression(cfg.get("compression", "zstd"))
+    except ValueError as exc:
+        problems.append(str(exc))
+
     stitch = cfg.get("stitch", "touch")
     if stitch not in ("touch", "iou"):
         problems.append(f'stitch must be "touch" or "iou"; got {stitch!r}')

@@ -822,3 +822,63 @@ def test_tile_process_rejects_an_unknown_stitch():
     arr = da.from_array(_make_image((1, 16, 16)), chunks=(1, 16, 16))
     with pytest.raises(ValueError, match="stitch"):
         tile_process(arr, _label_fn, stitch="glue")
+
+
+def test_compression_applies_to_everything_written(tmp_path):
+    import dask.array as da
+    import pytest
+    import zarr
+
+    from patchworks import compression, tile_process
+    from patchworks.plugins.ome_zarr import to_ome_zarr
+
+    arr = da.from_array(_make_image((2, 32, 32)), chunks=(1, 32, 32))
+    with compression("blosc:lz4"):
+        tile_process(arr, _label_fn, write_to=tmp_path / "o.zarr")
+    codec = zarr.open_group(str(tmp_path / "o.zarr"), mode="r")[
+        "labels"
+    ].compressors[0]
+    assert type(codec).__name__ == "BloscCodec" and codec.cname.value == "lz4"
+
+    out = to_ome_zarr(
+        _make_image((2, 32, 32)),
+        tmp_path / "img.zarr",
+        axes="zyx",
+        n_levels=2,
+        compression="zstd:3",
+    )
+    for level in ("0", "1"):
+        c = zarr.open_group(str(out), mode="r")[level].compressors[0]
+        assert type(c).__name__ == "ZstdCodec" and c.level == 3
+    # ... and the setting does not leak out of the call.
+    tile_process(arr, _label_fn, write_to=tmp_path / "d.zarr")
+    c = zarr.open_group(str(tmp_path / "d.zarr"), mode="r")["labels"]
+    assert c.compressors[0].level == 1
+
+    with pytest.raises(ValueError, match="unknown compression"):
+        compression("gzip").__enter__()
+
+
+def test_compression_none_and_zarr_v2(tmp_path):
+    import zarr
+
+    from patchworks.plugins.ome_zarr import to_ome_zarr
+
+    out = to_ome_zarr(
+        _make_image((2, 16, 16)),
+        tmp_path / "n.zarr",
+        axes="zyx",
+        n_levels=1,
+        compression="none",
+    )
+    assert zarr.open_group(str(out), mode="r")["0"].compressors == ()
+    v2 = to_ome_zarr(
+        _make_image((2, 16, 16)),
+        tmp_path / "v2.zarr",
+        axes="zyx",
+        n_levels=1,
+        compression="blosc",
+        ngff_version="0.4",
+    )
+    c = zarr.open_group(str(v2), mode="r")["0"].compressors[0]
+    assert type(c).__name__ == "Blosc"

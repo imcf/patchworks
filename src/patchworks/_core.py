@@ -453,7 +453,10 @@ def tile_process(
         ``.zarr`` store, labels are written back into that store under the NGFF
         ``labels/<output_component>/`` group with an auto pyramid, so the image
         and its segmentation live in one file. When None and *image* is an
-        array, an auto-temp store is used.
+        array, an auto-temp store is used. Every array written uses the
+        active :func:`patchworks.compression` codec (zstd level 1 unless
+        changed); wrap the call in ``with compression("blosc"):`` to pick
+        another.
     output_component:
         Label name. The array inside ``write_to``, or the NGFF label image name
         under ``labels/`` when writing into the input store. Default

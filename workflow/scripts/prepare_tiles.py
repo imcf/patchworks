@@ -9,6 +9,7 @@ import numpy as np
 import zarr
 
 from patchworks import (
+    set_compression,
     auto_empty_threshold,
     auto_tile_shape,
     auto_tile_shape_cellpose,
@@ -33,6 +34,8 @@ from _pw import (
 LABEL_CHUNK_CAP = (16, 1024, 1024)
 
 start_log(snakemake.log[0])  # noqa: F821
+# Codec for every array this step creates (config `compression:`).
+set_compression(snakemake.config.get("compression", "zstd"))  # noqa: F821
 cfg = snakemake.config  # noqa: F821
 work_dir = cfg["work_dir"]
 label_name = cfg.get("label_name", "labels")

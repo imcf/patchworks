@@ -44,7 +44,13 @@ from ._distributed import (
     spatial_tiles,
     stage_tile,
 )
-from ._io import auto_empty_threshold, estimate_empty_tiles, load_ome_zarr
+from ._io import (
+    auto_empty_threshold,
+    compression,
+    estimate_empty_tiles,
+    load_ome_zarr,
+    set_compression,
+)
 from ._merge import capped_output_chunks, merge_tile_labels
 from ._occupancy import (
     block_for_tile,
@@ -79,6 +85,8 @@ __all__ = [
     "load_ome_zarr",
     "estimate_empty_tiles",
     "auto_empty_threshold",
+    "compression",
+    "set_compression",
     "block_for_tile",
     "build_occupancy_map",
     "occupancy_path",

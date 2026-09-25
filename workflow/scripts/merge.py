@@ -16,6 +16,7 @@ from patchworks import (
     cpu_allocation,
     merge_tile_labels,
     safe_worker_count,
+    set_compression,
 )
 from patchworks._chunks import _get_available_memory
 from patchworks._volume_filter import (
@@ -32,6 +33,8 @@ from patchworks.plugins.ome_zarr import (
 from _pw import halo_path, load_tiles_json, stage_path, start_log
 
 start_log(snakemake.log[0])  # noqa: F821
+# Codec for every array this step creates (config `compression:`).
+set_compression(snakemake.config.get("compression", "zstd"))  # noqa: F821
 cfg = snakemake.config  # noqa: F821
 work_dir = cfg["work_dir"]
 label_name = cfg.get("label_name", "labels")

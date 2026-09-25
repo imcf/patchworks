@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import contextvars
 import logging
 import re
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Union
 
@@ -14,17 +16,97 @@ import zarr
 logger = logging.getLogger(__name__)
 
 
+# The codec every array patchworks creates is written with. A ContextVar, so
+# `with compression(...)` scopes it to one call without leaking into
+# concurrent writers; set_compression() changes the process default.
+_COMPRESSION: "contextvars.ContextVar[str]" = contextvars.ContextVar(
+    "patchworks_compression", default="zstd"
+)
+_BLOSC_CNAMES = ("zstd", "lz4", "lz4hc", "zlib", "blosclz")
+
+
+def parse_compression(spec: str) -> tuple[str, str | None, int | None]:
+    """Validate a compression spec and split it into its parts.
+
+    Accepted: ``"zstd"`` / ``"zstd:<level>"`` (default level 1),
+    ``"blosc"`` / ``"blosc:<cname>"`` / ``"blosc:<cname>:<level>"`` (default
+    ``zstd`` at level 5, byte-shuffled), and ``"none"``.
+
+    Returns
+    -------
+    tuple
+        ``(kind, cname, level)``.
+
+    Raises
+    ------
+    ValueError
+        For anything else.
+    """
+    parts = str(spec).strip().lower().split(":")
+    kind = parts[0]
+    try:
+        if kind == "none" and len(parts) == 1:
+            return "none", None, None
+        if kind == "zstd" and len(parts) <= 2:
+            return "zstd", None, int(parts[1]) if len(parts) == 2 else 1
+        if kind == "blosc" and len(parts) <= 3:
+            cname = parts[1] if len(parts) >= 2 else "zstd"
+            level = int(parts[2]) if len(parts) == 3 else 5
+            if cname in _BLOSC_CNAMES:
+                return "blosc", cname, level
+    except ValueError:
+        pass
+    raise ValueError(
+        f"unknown compression {spec!r}; use 'zstd', 'zstd:<level>', "
+        "'blosc', 'blosc:<cname>', 'blosc:<cname>:<level>' "
+        f"(cname one of {', '.join(_BLOSC_CNAMES)}), or 'none'"
+    )
+
+
+@contextmanager
+def compression(spec: str):
+    """Write every array created inside the block with *spec*.
+
+    Covers everything patchworks writes -- stage stores, merged labels,
+    pyramid levels -- which is how a whole ``tile_process`` or merge picks a
+    codec. See :func:`parse_compression` for the accepted specs.
+
+    Examples
+    --------
+    >>> from patchworks import compression, tile_process
+    >>> with compression("blosc:lz4"):  # doctest: +SKIP
+    ...     tile_process("image.zarr", fn)
+    """
+    parse_compression(spec)
+    token = _COMPRESSION.set(spec)
+    try:
+        yield
+    finally:
+        _COMPRESSION.reset(token)
+
+
+def set_compression(spec: str) -> None:
+    """Set the codec for every array written from now on (default ``zstd``).
+
+    Prefer :func:`compression` to scope it; this suits a script that writes
+    everything with one codec.
+    """
+    parse_compression(spec)
+    _COMPRESSION.set(spec)
+
+
 def zarr_compressor_kwargs(zarr_format: int = 3) -> dict:
     """Keyword arguments pinning the compression codec for a new array.
 
-    zstd is already zarr v3's default, but relying on a library default means
-    the stores patchworks writes change silently if that default ever moves.
-    Labels in particular are highly compressible, so this is worth stating.
+    The codec is the active :func:`compression` (zstd level 1 unless
+    changed). zstd is already zarr v3's default, but relying on a library
+    default means the stores patchworks writes change silently if that
+    default ever moves.
 
     The codec *object* depends on the format of the array being written, not
     on the installed zarr: zarr-python 3 can write a zarr-v2 array (which is
-    what NGFF 0.4 needs), and a v2 array rejects ``zarr.codecs.ZstdCodec`` --
-    it wants the numcodecs one.
+    what NGFF 0.4 needs), and a v2 array rejects ``zarr.codecs`` codecs --
+    it wants the numcodecs ones.
 
     Parameters
     ----------
@@ -34,15 +116,35 @@ def zarr_compressor_kwargs(zarr_format: int = 3) -> dict:
     Returns
     -------
     dict
-        ``compressors=`` holding the codec that format expects.
+        ``compressors=`` holding the codec that format expects (``None``
+        for ``"none"``).
     """
+    kind, cname, level = parse_compression(_COMPRESSION.get())
+    if kind == "none":
+        return {"compressors": None}
     if zarr_format != 2:
-        from zarr.codecs import ZstdCodec
+        if kind == "zstd":
+            from zarr.codecs import ZstdCodec
 
-        return {"compressors": (ZstdCodec(level=1),)}
+            return {"compressors": (ZstdCodec(level=level),)}
+        from zarr.codecs import BloscCodec
+
+        return {
+            "compressors": (
+                BloscCodec(cname=cname, clevel=level, shuffle="shuffle"),
+            )
+        }
     import numcodecs
 
-    return {"compressors": (numcodecs.Zstd(level=1),)}
+    if kind == "zstd":
+        return {"compressors": (numcodecs.Zstd(level=level),)}
+    return {
+        "compressors": (
+            numcodecs.Blosc(
+                cname=cname, clevel=level, shuffle=numcodecs.Blosc.SHUFFLE
+            ),
+        )
+    }
 
 
 # A ".zip" path component: the archive name, then the end or a separator.

@@ -86,3 +86,24 @@ extra read-back of the staged data.
     with no per-voxel Python loop, and the pipeline is I/O-bound — so `numba`,
     `cupy`, `arrow` and `xarray` bring essentially nothing. The real levers are
     tile size, concurrency (above) and zarr chunking.
+
+## Compression
+
+Every array patchworks writes uses one codec, zstd level 1 by default. Change
+it for one call with `with compression(...)`, per writer with
+`to_ome_zarr(..., compression=...)` / `write_labels(..., compression=...)`, or
+for a pipeline run with the `compression:` config key.
+
+Measured on scikit-image's `cells3d` (real fluorescence) and a watershed
+segmentation of it — ratio and write speed:
+
+| Codec | Image (uint16) | Labels (int32) |
+| --- | --- | --- |
+| `zstd` (default) | 1.24× · 630 MB/s | **64.9×** · 1962 MB/s |
+| `zstd:3` | **1.37×** · 381 MB/s | 64.9× · 2107 MB/s |
+| `blosc` (zstd, shuffle) | 1.25× · 535 MB/s | 44.4× · 1439 MB/s |
+| `blosc:lz4` | 1.00× · 621 MB/s | 21.1× · 2048 MB/s |
+
+Blosc buys nothing here and costs a lot on labels; reach for it only when a
+reader needs it (some older Java-based OME-Zarr viewers lack zstd).
+`zstd:3` is worth it for raw images when disk matters more than write time.

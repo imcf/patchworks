@@ -72,6 +72,7 @@ from .._progress import (
     PROGRESS_INTERVAL_S as _PROGRESS_INTERVAL_S,
 )
 from .._progress import dask_progress, log_progress
+from .._io import compression as _compression
 from .._io import load_ome_zarr, open_group_any, zarr_compressor_kwargs
 
 logger = logging.getLogger(__name__)
@@ -575,6 +576,11 @@ def _create_level_array(
 
 DownsampleMethod = str  # "mean" or "nearest"
 _DOWNSAMPLE_METHODS = ("mean", "mode", "nearest")
+
+
+def _compression_scope(spec: Union[str, None]):
+    """``compression(spec)``, or a no-op for None (keep the active codec)."""
+    return _nullcontext() if spec is None else _compression(spec)
 
 
 def _check_downsample(method: str) -> str:
@@ -1914,6 +1920,7 @@ def to_ome_zarr(
     progress: bool = True,
     overwrite: bool = False,
     ngff_version: Union[str, None] = "auto",
+    compression: Union[str, None] = None,
     downsample: str = "mean",
 ) -> str:
     """Write *source* as a pyramidal, calibrated OME-ZARR store.
@@ -1988,6 +1995,11 @@ def to_ome_zarr(
         before); ``"mode"`` takes each block's most frequent non-zero value,
         which is what a label image wants.
 
+    compression : str, optional
+        Codec for the arrays written (``"zstd"``, ``"zstd:3"``, ``"blosc"``,
+        ``"blosc:lz4"``, ``"none"``, ...; see
+        :func:`patchworks.compression`). ``None`` (default) uses the active
+        setting, zstd level 1 unless changed.
     Returns
     -------
     str
@@ -2006,7 +2018,7 @@ def to_ome_zarr(
     ... )  # doctest: +SKIP
     'ZT18_Male4_Left.zarr'
     """
-    with _writing_ngff(ngff_version):
+    with _writing_ngff(ngff_version), _compression_scope(compression):
         if downscale < 2:
             raise ValueError("downscale must be >= 2")
         if n_levels < 1:
@@ -2076,6 +2088,7 @@ def add_pyramid(
     shard: ShardSpec = False,
     progress: bool = True,
     ngff_version: Union[str, None] = "auto",
+    compression: Union[str, None] = None,
     downsample: Union[str, None] = None,
     translation: Union[PixelSize, None] = None,
 ) -> str:
@@ -2125,6 +2138,11 @@ def add_pyramid(
         Physical offset ``{axis: offset}`` of the base level's first voxel.
         ``None`` keeps whatever the store already records (zero if nothing).
 
+    compression : str, optional
+        Codec for the arrays written (``"zstd"``, ``"zstd:3"``, ``"blosc"``,
+        ``"blosc:lz4"``, ``"none"``, ...; see
+        :func:`patchworks.compression`). ``None`` (default) uses the active
+        setting, zstd level 1 unless changed.
     Returns
     -------
     str
@@ -2135,7 +2153,7 @@ def add_pyramid(
     >>> add_pyramid("scan.zarr", n_levels=4)  # doctest: +SKIP
     'scan.zarr'
     """
-    with _writing_ngff(ngff_version):
+    with _writing_ngff(ngff_version), _compression_scope(compression):
         if downscale < 2:
             raise ValueError("downscale must be >= 2")
         if n_levels < 1:
@@ -2208,6 +2226,7 @@ def register_labels(
     progress: bool = True,
     n_objects: Union[int, None] = None,
     ngff_version: Union[str, None] = "auto",
+    compression: Union[str, None] = None,
     level: int = 0,
 ) -> str:
     """Pyramidalise and register an existing ``labels/<name>/0`` base level.
@@ -2261,6 +2280,11 @@ def register_labels(
         cannot read 0.5 yet. 0.4 has no sharding codec, so ``shard`` is
         ignored there. See :func:`ngff_version`.
 
+    compression : str, optional
+        Codec for the arrays written (``"zstd"``, ``"zstd:3"``, ``"blosc"``,
+        ``"blosc:lz4"``, ``"none"``, ...; see
+        :func:`patchworks.compression`). ``None`` (default) uses the active
+        setting, zstd level 1 unless changed.
     Returns
     -------
     str
@@ -2271,7 +2295,7 @@ def register_labels(
     >>> register_labels("scan.zarr", "cells")  # doctest: +SKIP
     'scan.zarr/labels/cells'
     """
-    with _writing_ngff(ngff_version):
+    with _writing_ngff(ngff_version), _compression_scope(compression):
         store = str(image_store)
         group = f"{store}/labels/{name}"
         if not pixel_size:
@@ -2326,6 +2350,7 @@ def write_labels(
     overwrite: bool = False,
     n_objects: Union[int, None] = None,
     ngff_version: Union[str, None] = "auto",
+    compression: Union[str, None] = None,
     level: int = 0,
 ) -> str:
     """Store *labels* inside *image_store* under the NGFF ``labels/`` group.
@@ -2378,6 +2403,11 @@ def write_labels(
         cannot read 0.5 yet. 0.4 has no sharding codec, so ``shard`` is
         ignored there. See :func:`ngff_version`.
 
+    compression : str, optional
+        Codec for the arrays written (``"zstd"``, ``"zstd:3"``, ``"blosc"``,
+        ``"blosc:lz4"``, ``"none"``, ...; see
+        :func:`patchworks.compression`). ``None`` (default) uses the active
+        setting, zstd level 1 unless changed.
     Returns
     -------
     str
@@ -2398,7 +2428,7 @@ def write_labels(
     ... )  # doctest: +SKIP
     'scan.zarr/labels/cells'
     """
-    with _writing_ngff(ngff_version):
+    with _writing_ngff(ngff_version), _compression_scope(compression):
         arr = labels if isinstance(labels, da.Array) else da.asarray(labels)
         if axes is None:
             axes = _default_axes(arr.ndim)
