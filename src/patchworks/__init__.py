@@ -58,7 +58,7 @@ from ._occupancy import (
     occupancy_path,
     tile_occupancy,
 )
-from ._postprocess import dilate_labels
+from ._postprocess import dilate_labels, fill_holes, open_labels
 from ._provenance import provenance, read_provenance
 from ._relabel import relabel_sequential_array, relabel_sequential_zarr
 from ._relations import label_relations
@@ -104,6 +104,8 @@ __all__ = [
     "create_stage",
     "stage_tile",
     "dilate_labels",
+    "fill_holes",
+    "open_labels",
     "filter_labels_by_size",
     "min_voxels_for_volume",
     "max_voxels_for_volume",

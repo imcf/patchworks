@@ -532,6 +532,17 @@ def build_fn(cfg):
     """
     fn = _build_method_fn(cfg)
 
+    # Post-processing, in order: fill holes, cut spurs, then grow.
+    holes = cfg.get("fill_holes")
+    if holes:
+        from patchworks import fill_holes
+
+        fn = fill_holes(fn, per_plane=holes == "per_plane")
+    if cfg.get("open_radius"):
+        from patchworks import open_labels
+
+        fn = open_labels(fn, radius=int(cfg["open_radius"]))
+
     dilate = cfg.get("dilate")
     if dilate:
         from patchworks import dilate_labels

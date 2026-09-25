@@ -262,3 +262,17 @@ def test_validate_config_checks_stitch_and_iou_threshold():
         validate_config({"method": "threshold", "stitch": "glue"})
     with pytest.raises(ValueError, match="iou_threshold"):
         validate_config({"method": "threshold", "iou_threshold": 0})
+
+
+def test_build_fn_applies_fill_holes_and_opening():
+    import numpy as np
+    from _pw import build_fn
+
+    tile = np.zeros((1, 12, 12), "uint16")
+    tile[0, 2:9, 2:9] = 1000
+    tile[0, 5, 5] = 0  # a hole the threshold leaves
+    fn = build_fn(
+        {"method": "threshold", "fill_holes": "per_plane", "open_radius": 1}
+    )
+    out = fn(tile)
+    assert out[0, 5, 5] == out[0, 3, 3] != 0
