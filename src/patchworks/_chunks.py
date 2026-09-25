@@ -158,10 +158,13 @@ def _get_available_memory() -> int:
 
     try:
         import psutil
-
-        limits.append(int(psutil.virtual_memory().available))
-    except Exception:
-        pass
+    except ImportError:
+        logger.debug("psutil not installed; free RAM is not considered")
+    else:
+        try:
+            limits.append(int(psutil.virtual_memory().available))
+        except Exception:  # e.g. an unreadable /proc in a sandbox
+            logger.debug("psutil could not read free RAM", exc_info=True)
 
     if not limits:
         return 8 * 1024**3

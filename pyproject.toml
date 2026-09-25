@@ -19,23 +19,28 @@ keywords = [
     "bioimage",
 ]
 classifiers = [
-    "Development Status :: 5 - Production/Stable",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering :: Image Processing",
 ]
 
-requires-python = ">=3.9"
+# zarr-python 3 (itself Python >= 3.11) is required: NGFF 0.5 stores,
+# sharding and the create_array API have no zarr-2 equivalent. It still
+# writes NGFF 0.4 (zarr-v2 format) stores when asked to.
+requires-python = ">=3.11"
 dependencies = [
     "dask[array]>=2023.1.0",
-    "numpy>=1.24",
-    "zarr>=2.14",
+    "numpy>=1.25",
+    "zarr>=3",
     "scipy>=1.9",
+    # Free RAM bounds worker counts and auto tile sizes; without it a
+    # workstation (no SLURM, no cgroup limit) falls back to a blind 8 GiB.
+    "psutil",
 ]
 
 [project.optional-dependencies]
@@ -98,6 +103,9 @@ napari = [
 workflow = ["snakemake>=8", "snakemake-executor-plugin-slurm", "openpyxl"]
 # jsonschema validates what we write against the vendored official
 # OME-NGFF schemas (tests/ngff_schemas/); without it that one test skips.
+# openpyxl -> tests/test_run_multi.py checks the relations workbook.
+# ruff is pinned to the version CI lints with (.github/workflows/lint.yml),
+# so a local `ruff check` agrees with CI.
 dev = [
     "pytest",
     "pytest-cov",
@@ -105,6 +113,8 @@ dev = [
     "psutil",
     "tqdm",
     "jsonschema>=4.18",
+    "openpyxl",
+    "ruff==0.15.18",
 ]
 docs = ["mkdocs-material>=9.0", "mkdocstrings[python]>=0.24"]
 all = [
@@ -129,3 +139,4 @@ testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 80
+target-version = "py311"

@@ -83,20 +83,15 @@ def test_ngff_layout_matches_the_zarr_version(tmp_path):
     """
     import json
 
-    from patchworks.plugins.ome_zarr import _ZARR_V3
-
     out = tmp_path / "layout.zarr"
     to_ome_zarr(np.zeros((4, 8, 8), "uint16"), out, axes="zyx", n_levels=2)
     write_labels(out, np.ones((4, 8, 8), "int32"), name="cells", n_objects=1)
 
     root = json.load(open(out / "zarr.json"))["attributes"]
-    if _ZARR_V3:
-        assert "ome" in root, "v3 must nest NGFF keys under 'ome'"
-        assert root["ome"]["version"] == "0.5"
-        assert "multiscales" in root["ome"]
-        assert "multiscales" not in root, "0.4 layout must not linger"
-    else:
-        assert root["multiscales"][0]["version"] == "0.4"
+    assert "ome" in root, "v3 must nest NGFF keys under 'ome'"
+    assert root["ome"]["version"] == "0.5"
+    assert "multiscales" in root["ome"]
+    assert "multiscales" not in root, "0.4 layout must not linger"
 
     # Both label keys land in the same place, written at different times.
     lg = zarr.open_group(f"{out}/labels/cells", mode="r")
@@ -652,19 +647,16 @@ def test_many_chunks_suggests_sharding(caplog):
 
 def test_ngff_version_auto_matches_the_installed_zarr(tmp_path):
     """The default must keep writing exactly what it wrote before."""
-    from patchworks.plugins.ome_zarr import _ZARR_V3, ngff_version
+    from patchworks.plugins.ome_zarr import ngff_version
 
-    assert ngff_version() == ("0.5" if _ZARR_V3 else "0.4")
+    assert ngff_version() == "0.5"
 
     a = np.arange(2 * 32 * 32, dtype="uint16").reshape(2, 32, 32)
     out = to_ome_zarr(
         a, tmp_path / "a.zarr", axes="zyx", n_levels=1, chunks=(2, 16, 16)
     )
     attrs = dict(zarr.open_group(str(out), mode="r").attrs)
-    if _ZARR_V3:
-        assert attrs["ome"]["version"] == "0.5"
-    else:
-        assert attrs["multiscales"][0]["version"] == "0.4"
+    assert attrs["ome"]["version"] == "0.5"
 
 
 @pytest.mark.parametrize("version", ["0.4", "0.5"])
@@ -675,11 +667,6 @@ def test_ngff_version_pins_the_layout_and_the_zarr_format(tmp_path, version):
     the v3 revision and nests them under ``ome``. A store written half one
     way and half the other is one no reader can open.
     """
-    from patchworks.plugins.ome_zarr import _ZARR_V3
-
-    if version == "0.5" and not _ZARR_V3:
-        pytest.skip("0.5 needs zarr v3")
-
     a = np.arange(4 * 32 * 32, dtype="uint16").reshape(4, 32, 32)
     labels = np.zeros((4, 32, 32), dtype="uint32")
     labels[1:3, 4:12, 4:12] = 9
@@ -723,10 +710,7 @@ def test_existing_store_format_beats_the_requested_version(tmp_path):
     it would write v3 label arrays into a v2 store -- half a store each way,
     readable as neither.
     """
-    from patchworks.plugins.ome_zarr import _ZARR_V3, register_labels
-
-    if not _ZARR_V3:
-        pytest.skip("needs zarr v3 installed to have a choice to get wrong")
+    from patchworks.plugins.ome_zarr import register_labels
 
     a = np.zeros((4, 32, 32), dtype="uint16")
     out = to_ome_zarr(
@@ -756,10 +740,7 @@ def test_existing_store_format_beats_the_requested_version(tmp_path):
 
 def test_sharding_is_refused_on_a_zarr_v2_store(tmp_path, caplog):
     """Zarr v2 has no sharding codec -- say so instead of raising."""
-    from patchworks.plugins.ome_zarr import _ZARR_V3, reshard_level
-
-    if not _ZARR_V3:
-        pytest.skip("needs zarr v3 installed")
+    from patchworks.plugins.ome_zarr import reshard_level
 
     a = np.arange(4 * 32 * 32, dtype="uint16").reshape(4, 32, 32)
     out = to_ome_zarr(
@@ -803,10 +784,7 @@ def test_unsupported_ngff_versions_are_refused(tmp_path):
 
 def test_ngff_pin_does_not_leak_out_of_the_write(tmp_path):
     """The pin is per-call: a later default write must not inherit it."""
-    from patchworks.plugins.ome_zarr import _ZARR_V3, ngff_version
-
-    if not _ZARR_V3:
-        pytest.skip("needs zarr v3 installed")
+    from patchworks.plugins.ome_zarr import ngff_version
 
     a = np.zeros((2, 16, 16), dtype="uint16")
     to_ome_zarr(
@@ -863,11 +841,6 @@ def test_output_conforms_to_the_official_ngff_schemas(tmp_path, version):
     store is described cannot quietly stop being OME-ZARR.
     """
     pytest.importorskip("jsonschema")
-    from patchworks.plugins.ome_zarr import _ZARR_V3
-
-    if version == "0.5" and not _ZARR_V3:
-        pytest.skip("0.5 needs zarr v3")
-
     image = np.arange(4 * 64 * 64, dtype="uint16").reshape(4, 64, 64)
     labels = np.zeros((4, 64, 64), dtype="uint32")
     labels[1:3, 10:30, 10:30] = 7
@@ -914,11 +887,6 @@ def test_sharded_write_bounds_its_dask_pool(tmp_path):
     (~512 MB by default) inside whatever cgroup the job was granted -- the
     same class of OOM that made convert.py pin its scheduler.
     """
-    from patchworks.plugins.ome_zarr import _ZARR_V3
-
-    if not _ZARR_V3:
-        pytest.skip("sharding needs zarr v3")
-
     seen = {}
     import dask
 

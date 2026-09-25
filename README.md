@@ -318,12 +318,12 @@ Full docs, guides and tutorials: **<https://imcf.one/patchworks/>**
 
 ## Requirements
 
-- Python ≥ 3.9
-- dask[array], numpy, zarr, scipy
+- Python ≥ 3.11
+- dask[array], numpy, zarr ≥ 3, scipy, psutil (RAM-aware tile and worker
+  sizing)
 
 Optional:
 
-- `psutil` — accurate RAM sizing for `tile_shape="auto"`
 - `nvidia-ml-py` — accurate GPU VRAM sizing
 - `tqdm` — progress bars
 - `cellpose` — Cellpose plugin, v3 or v4 (`patchworks[cellpose]`);

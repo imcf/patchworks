@@ -220,7 +220,6 @@ def _default_chunks(
 
 ShardSpec = Union[bool, tuple[int, ...]]
 _SHARD_TARGET_BYTES = 512 * 1024**2  # aim for ~512 MB shards
-_ZARR_V3 = int(zarr.__version__.split(".")[0]) >= 3
 # NGFF 0.4 is defined over zarr v2 and puts its keys at the top level of
 # .zattrs; 0.5 is the zarr-v3 revision and nests them under an "ome" key with
 # the version there. Writing v3 data with 0.4's layout matches neither, so the
@@ -245,9 +244,9 @@ _ngff_target: "contextvars.ContextVar[Union[str, None]]" = (
 def _resolve_ngff_version(requested: Union[str, None] = None) -> str:
     """Validate an NGFF version request and resolve ``"auto"``.
 
-    ``"auto"`` (the default) picks the version matching the installed zarr:
-    0.5 on zarr v3, 0.4 on v2. An explicit version is honoured instead --
-    including 0.4 on a zarr-v3 install, which writes a zarr-v2 store.
+    ``"auto"`` (the default) picks 0.5, the version defined over the zarr v3
+    that patchworks requires. An explicit version is honoured instead --
+    including 0.4, which writes a zarr-v2 store.
 
     Parameters
     ----------
@@ -265,7 +264,7 @@ def _resolve_ngff_version(requested: Union[str, None] = None) -> str:
         For an unknown version, or for one patchworks cannot yet write.
     """
     if requested in (None, "auto"):
-        return _NGFF_VERSION_V3 if _ZARR_V3 else _NGFF_VERSION
+        return _NGFF_VERSION_V3
     requested = str(requested)
     if requested in _NGFF_UNSUPPORTED:
         raise ValueError(
@@ -281,12 +280,6 @@ def _resolve_ngff_version(requested: Union[str, None] = None) -> str:
         raise ValueError(
             f'unknown ngff_version {requested!r}; expected "auto" or one '
             f"of {known}"
-        )
-    if _NGFF_ZARR_FORMAT[requested] == 3 and not _ZARR_V3:
-        raise ValueError(
-            f"NGFF {requested} is defined over zarr v3, but zarr "
-            f"{zarr.__version__} is installed; upgrade zarr or use "
-            f'ngff_version "{_NGFF_VERSION}"'
         )
     return requested
 
@@ -314,8 +307,6 @@ def _group_zarr_format(group_or_path) -> int:
     ``register_labels``) than the image was. ``ngff_version`` therefore
     decides the format only when there is no store yet.
     """
-    if not _ZARR_V3:
-        return 2
     try:
         if isinstance(group_or_path, (str, Path)):
             grp = zarr.open_group(str(group_or_path), mode="r")
@@ -352,7 +343,7 @@ def _open_group(path, mode: str = "a") -> "zarr.Group":
     """
     path = str(path)
     kwargs = {}
-    if _ZARR_V3 and not zarr.storage.LocalStore(path).root.exists():
+    if not zarr.storage.LocalStore(path).root.exists():
         kwargs["zarr_format"] = _zarr_format()
     return zarr.open_group(path, mode=mode, **kwargs)
 
@@ -573,12 +564,8 @@ def _create_level_array(
     if name in group:
         del group[name]
     kwargs = zarr_compressor_kwargs(_group_zarr_format(group))
-    if _ZARR_V3:
-        return group.create_array(
-            name, shape=shape, chunks=chunks, dtype=dtype, **kwargs
-        )
-    return group.zeros(
-        name, shape=shape, chunks=chunks, dtype=dtype, overwrite=True, **kwargs
+    return group.create_array(
+        name, shape=shape, chunks=chunks, dtype=dtype, **kwargs
     )
 
 
@@ -758,11 +745,7 @@ def _to_zarr_level(
                 group_path,
                 component=component,
                 overwrite=True,
-                **(
-                    {"zarr_format": _group_zarr_format(group_path)}
-                    if _ZARR_V3
-                    else {}
-                ),
+                zarr_format=fmt,
             )
         return
     grp = _open_group(group_path)

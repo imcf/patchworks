@@ -12,11 +12,6 @@ import zarr
 
 logger = logging.getLogger(__name__)
 
-_ZARR_V3 = int(zarr.__version__.split(".")[0]) >= 3
-
-
-_ZARR_V3 = int(zarr.__version__.split(".")[0]) >= 3
-
 
 def zarr_compressor_kwargs(zarr_format: int = 3) -> dict:
     """Keyword arguments pinning the compression codec for a new array.
@@ -38,21 +33,15 @@ def zarr_compressor_kwargs(zarr_format: int = 3) -> dict:
     Returns
     -------
     dict
-        ``compressors=``/``compressor=`` as that combination expects, or
-        empty if the codec cannot be built (then the default applies).
+        ``compressors=`` holding the codec that format expects.
     """
-    try:
-        if _ZARR_V3 and zarr_format != 2:
-            from zarr.codecs import ZstdCodec
+    if zarr_format != 2:
+        from zarr.codecs import ZstdCodec
 
-            return {"compressors": (ZstdCodec(level=1),)}
-        import numcodecs
+        return {"compressors": (ZstdCodec(level=1),)}
+    import numcodecs
 
-        codec = numcodecs.Zstd(level=1)
-        return {"compressors": (codec,)} if _ZARR_V3 else {"compressor": codec}
-    except Exception:  # pragma: no cover - depends on the installed zarr
-        logger.debug("could not pin a compressor; using zarr's default")
-        return {}
+    return {"compressors": (numcodecs.Zstd(level=1),)}
 
 
 def open_zarr_source(
@@ -253,29 +242,53 @@ def _select_channel(arr, channel: int, multiscale: dict, store_path):
 
 
 def _otsu_threshold(sample: np.ndarray) -> float:
-    """Otsu threshold of *sample*; falls back to 0 if degenerate.
+    """Otsu threshold of *sample*; falls back to 0 if empty.
 
     Operates on the full distribution including zeros — zeros are background
     pixels and must be included so Otsu can find the signal/background boundary.
 
+    A NumPy port of ``skimage.filters.threshold_otsu`` (same histogram: one
+    bin per integer value for integer data, 256 bins otherwise, and the same
+    between-class variance), so the empty-tile threshold does not quietly
+    degrade to 0 when scikit-image, which is not a dependency, is missing.
+
     Parameters
     ----------
     sample : np.ndarray
-        Flat intensity sample.
+        Intensity sample (any shape).
 
     Returns
     -------
     float
-        The Otsu threshold, or ``0.0`` when the sample is degenerate.
+        The Otsu threshold; the single value for a constant sample, ``0.0``
+        for an empty one.
     """
-    try:
-        from skimage.filters import threshold_otsu
-
-        return float(threshold_otsu(sample))
-    except Exception:
-        # Degenerate (all same value) → no threshold needed; return 0 so
-        # non-zero tiles are marked occupied.
+    sample = np.asarray(sample).ravel()
+    if sample.size == 0:
         return 0.0
+    if np.issubdtype(sample.dtype, np.floating):
+        sample = sample[np.isfinite(sample)]
+        if sample.size == 0:
+            return 0.0
+    lo, hi = sample.min(), sample.max()
+    if lo == hi:
+        return float(lo)
+
+    if np.issubdtype(sample.dtype, np.integer):
+        counts = np.bincount((sample.astype(np.int64) - int(lo)).ravel())
+        centers = np.arange(int(lo), int(hi) + 1, dtype=np.float64)
+    else:
+        counts, edges = np.histogram(sample, bins=256, range=(lo, hi))
+        centers = (edges[:-1] + edges[1:]) / 2
+
+    counts = counts.astype(np.float64)
+    weight1 = np.cumsum(counts)
+    weight2 = np.cumsum(counts[::-1])[::-1]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        mean1 = np.cumsum(counts * centers) / weight1
+        mean2 = (np.cumsum((counts * centers)[::-1]) / weight2[::-1])[::-1]
+        variance = weight1[:-1] * weight2[1:] * (mean1[:-1] - mean2[1:]) ** 2
+    return float(centers[np.nanargmax(variance)])
 
 
 def auto_empty_threshold(
