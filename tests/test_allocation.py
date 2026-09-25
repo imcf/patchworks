@@ -6,7 +6,11 @@ against the machine is how a job walks into an OOM kill, so these are the
 checks that would have caught it.
 """
 
+import sys
+import types
+
 import numpy as np
+import pytest
 
 from patchworks import (
     auto_tile_shape_cellpose,
@@ -16,6 +20,19 @@ from patchworks import (
 from patchworks._chunks import _get_available_memory
 
 GIB = 1024**3
+
+
+@pytest.fixture(autouse=True)
+def _plenty_of_free_ram(monkeypatch):
+    """Report 1 TiB of free RAM, so only the limits under test can bind.
+
+    Without this every expected value depends on the test machine: a runner
+    with less free RAM than a test's SLURM grant gets the machine's figure.
+    """
+    fake = types.SimpleNamespace(
+        virtual_memory=lambda: types.SimpleNamespace(available=1024 * GIB)
+    )
+    monkeypatch.setitem(sys.modules, "psutil", fake)
 
 
 def test_cpu_allocation_prefers_slurm(monkeypatch):

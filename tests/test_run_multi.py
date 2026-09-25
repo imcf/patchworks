@@ -763,7 +763,7 @@ def test_uncreatable_work_dir_is_refused(monkeypatch, tmp_path, capsys):
     assert "not creatable" in capsys.readouterr().err
 
 
-def test_iso_export_command_preserves_a_zarr_tree():
+def test_iso_export_command_preserves_a_zarr_tree(monkeypatch):
     """The .iso has to be readable on Windows, not just on Linux.
 
     A zarr store nests deeper than ISO-9660's 8 levels, so without `-D` the
@@ -780,6 +780,13 @@ def test_iso_export_command_preserves_a_zarr_tree():
     )
     export_iso = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(export_iso)
+    # The flags are what is under test, not whether this machine happens to
+    # have an ISO builder installed.
+    monkeypatch.setattr(
+        export_iso,
+        "find_builder",
+        lambda: ("/usr/bin/xorriso", ["-as", "mkisofs"]),
+    )
 
     cmd = export_iso.build_command(
         _Path("/data/image.zarr"), _Path("/out/image.zarr.iso")
