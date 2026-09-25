@@ -15,6 +15,7 @@ from patchworks import (
     capped_output_chunks,
     cpu_allocation,
     merge_tile_labels,
+    provenance,
     safe_worker_count,
     set_compression,
 )
@@ -214,9 +215,36 @@ if shard_labels:
     spec = (cfg.get("shard") or True) if shard_labels is True else shard_labels
     reshard_level(label_group, "0", shard=spec, progress=True)
 
+# How these labels were made, stored with them (read_provenance()).
+_SETTINGS = (
+    "input",
+    "channel",
+    "nuclei_channel",
+    "level",
+    "method",
+    "cellpose",
+    "custom",
+    "dilate",
+    "min_volume",
+    "max_volume",
+    "stitch",
+    "iou_threshold",
+    "sequential_labels",
+    "compression",
+    "skip_empty",
+    "empty_threshold",
+)
+record = provenance(
+    label_name=label_name,
+    tile_shape=manifest["tile_shape"],
+    overlap=manifest["overlap"],
+    **{k: cfg.get(k) for k in _SETTINGS if k in cfg},
+)
+
 group = register_labels(
     image_store,
     label_name,
+    provenance=record,
     n_levels=int(cfg.get("pyramid_levels", 5)),
     downscale=int(cfg.get("pyramid_downscale", 2)),
     progress=True,

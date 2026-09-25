@@ -59,6 +59,7 @@ from ._occupancy import (
     tile_occupancy,
 )
 from ._postprocess import dilate_labels
+from ._provenance import provenance, read_provenance
 from ._relabel import relabel_sequential_array, relabel_sequential_zarr
 from ._relations import label_relations
 from ._seams import seam_report
@@ -96,6 +97,8 @@ __all__ = [
     "relabel_sequential_zarr",
     "label_relations",
     "seam_report",
+    "provenance",
+    "read_provenance",
     "normalize_overlap",
     "spatial_tiles",
     "create_stage",

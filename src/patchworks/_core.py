@@ -16,10 +16,12 @@ from typing import Any, Callable, Union
 
 import dask.array as da
 import numpy as np
+import zarr
 
 from ._chunks import auto_tile_shape, cpu_allocation, safe_worker_count
 from ._cluster import _client_is_in_process, _distributed_client
-from ._io import auto_empty_threshold, is_remote, load_ome_zarr
+from ._io import _COMPRESSION, auto_empty_threshold, is_remote, load_ome_zarr
+from ._provenance import provenance, write_provenance
 from ._merge import _remove_scratch, _scratch_store, zarr_native_merge
 
 logger = logging.getLogger(__name__)
@@ -901,8 +903,26 @@ def tile_process(
             _remove_scratch(stage_cleanup)
             _remove_scratch(halo_dir)
 
+    record = provenance(
+        input=image_source_path or f"<dask array {image.name}>",
+        fn=_fn_key(fn),
+        tile_shape=tuple(image.chunksize),
+        overlap=[_depth[ax] for ax in range(image.ndim)],
+        stitch=stitch,
+        iou_threshold=iou_threshold if stitch == "iou" else None,
+        channel=channel,
+        level=level,
+        skip_empty=skip_empty,
+        empty_threshold=_skip_thr,
+        sequential_labels=sequential_labels,
+        compression=_COMPRESSION.get(),
+    )
     merged = da.from_zarr(_merge_out, component=output_component)
     if not _into_input:
+        # write_to: the record rides on the labels array itself.
+        write_provenance(
+            zarr.open_group(_merge_out, mode="r+")[output_component], record
+        )
         # Lazy dask array backed by the merge store. Never loads the full
         # volume into RAM. Caller can .compute() if it fits.
         return merged
@@ -923,6 +943,7 @@ def tile_process(
             overwrite=True,
             # Segmented at `level`, so calibrated as that level, not level 0.
             level=level,
+            provenance=record,
         )
     finally:
         _remove_scratch(_merge_cleanup)

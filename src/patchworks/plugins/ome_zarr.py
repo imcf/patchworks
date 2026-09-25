@@ -73,6 +73,7 @@ from .._progress import (
 )
 from .._progress import dask_progress, log_progress
 from .._io import compression as _compression
+from .._provenance import write_provenance
 from .._io import (
     is_remote,
     load_ome_zarr,
@@ -2258,6 +2259,7 @@ def register_labels(
     ngff_version: Union[str, None] = "auto",
     compression: Union[str, None] = None,
     level: int = 0,
+    provenance: Union[dict, None] = None,
 ) -> str:
     """Pyramidalise and register an existing ``labels/<name>/0`` base level.
 
@@ -2315,6 +2317,9 @@ def register_labels(
         ``"blosc:lz4"``, ``"none"``, ...; see
         :func:`patchworks.compression`). ``None`` (default) uses the active
         setting, zstd level 1 unless changed.
+    provenance : dict, optional
+        How the labels were made (see :func:`patchworks.provenance`),
+        stored in the label group's attrs under ``"patchworks"``.
     Returns
     -------
     str
@@ -2356,6 +2361,7 @@ def register_labels(
             # where a consumer can find them without knowing the layout.
             grp.attrs["n_objects"] = int(n_objects)
             grp.attrs["sequential_labels"] = True
+        write_provenance(grp, provenance)
 
         labels_grp = _open_group(f"{store}/labels")
         registered = list(read_ngff_attr(labels_grp.attrs, "labels", []) or [])
@@ -2382,6 +2388,7 @@ def write_labels(
     ngff_version: Union[str, None] = "auto",
     compression: Union[str, None] = None,
     level: int = 0,
+    provenance: Union[dict, None] = None,
 ) -> str:
     """Store *labels* inside *image_store* under the NGFF ``labels/`` group.
 
@@ -2438,6 +2445,9 @@ def write_labels(
         ``"blosc:lz4"``, ``"none"``, ...; see
         :func:`patchworks.compression`). ``None`` (default) uses the active
         setting, zstd level 1 unless changed.
+    provenance : dict, optional
+        How the labels were made (see :func:`patchworks.provenance`),
+        stored in the label group's attrs under ``"patchworks"``.
     Returns
     -------
     str
@@ -2489,4 +2499,5 @@ def write_labels(
             progress=progress,
             n_objects=n_objects,
             level=level,
+            provenance=provenance,
         )

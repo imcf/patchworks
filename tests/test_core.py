@@ -888,3 +888,33 @@ def test_compression_none_and_zarr_v2(tmp_path):
     )
     c = zarr.open_group(str(v2), mode="r")["0"].compressors[0]
     assert type(c).__name__ == "Blosc"
+
+
+def test_labels_record_how_they_were_made(tmp_path):
+    import dask.array as da
+
+    from patchworks import read_provenance, tile_process
+    from patchworks.plugins.ome_zarr import to_ome_zarr
+
+    store = to_ome_zarr(
+        _make_image((2, 32, 32)), tmp_path / "a.zarr", axes="zyx", n_levels=1
+    )
+    tile_process(
+        store,
+        _label_fn,
+        tile_shape=(1, 32, 32),
+        overlap=2,
+        stitch="iou",
+        progress=False,
+    )
+    rec = read_provenance(f"{store}/labels/labels")
+    assert rec["settings"]["stitch"] == "iou"
+    assert rec["settings"]["tile_shape"] == [1, 32, 32]
+    assert rec["settings"]["fn"].endswith("_label_fn")
+    assert rec["settings"]["input"] == store
+    assert "patchworks" in rec["versions"] and rec["created"]
+
+    arr = da.from_array(_make_image((2, 32, 32)), chunks=(1, 32, 32))
+    tile_process(arr, _label_fn, write_to=tmp_path / "o.zarr", progress=False)
+    rec = read_provenance(tmp_path / "o.zarr", component="labels")
+    assert rec["settings"]["stitch"] == "touch"
