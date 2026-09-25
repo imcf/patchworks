@@ -780,7 +780,10 @@ def _to_zarr_level(
         shard_nbytes / 1024**2,
     )
     with ctx, dask.config.set(scheduler="threads", num_workers=n_workers):
-        arr.rechunk(sh).store(z, lock=True, compute=True)
+        # No lock: every block is exactly one shard (rechunked to the shard
+        # grid from the origin), so no two tasks touch the same file. A lock
+        # would serialise the whole write, compression included.
+        arr.rechunk(sh).store(z, lock=False, compute=True)
 
 
 def reshard_level(
