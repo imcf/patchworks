@@ -1049,3 +1049,26 @@ def test_label_pyramid_keeps_objects_nearest_would_drop(tmp_path):
     grp = zarr.open_group(f"{store}/labels/dots", mode="r")
     for level in ("1", "2"):
         assert set(np.unique(grp[level][:])) - {0} == set(range(1, 17))
+
+
+@pytest.mark.parametrize("dtype", ["uint8", "uint16", "int16", "float32"])
+def test_fast_block_mean_matches_the_general_path(dtype):
+    """The whole-block fast path rounds exactly like the general one."""
+    from patchworks.plugins.ome_zarr import _downsample
+
+    rng = np.random.default_rng(3)
+    hi = 200 if dtype in ("uint8", "int16") else 60000
+    a = rng.integers(0, hi, (3, 16, 24)).astype(dtype)
+    if dtype == "int16":
+        a -= 100
+    fast = _downsample(a, (1, 2, 2), "mean")
+    general = np.rint(a.astype(float).reshape(3, 8, 2, 12, 2).mean((2, 4)))
+    if dtype != "float32":
+        np.testing.assert_array_equal(fast, general.astype(dtype))
+    else:
+        np.testing.assert_allclose(fast, a.reshape(3, 8, 2, 12, 2).mean((2, 4)))
+    # Every .5 tie: 0,1 -> 0; 1,2 -> 2; 2,3 -> 2 (half to even).
+    ties = np.array([[[0, 1, 1, 2, 2, 3]]], dtype="uint8")
+    np.testing.assert_array_equal(
+        _downsample(ties, (1, 1, 2), "mean"), [[[0, 2, 2]]]
+    )

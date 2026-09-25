@@ -44,12 +44,18 @@ def _staged(tmp, shape=(8, 1024, 1024), tile=(8, 256, 256), n=4000):
     arr = zarr.open_group(path, mode="w").create_array(
         "staged", shape=shape, chunks=tile, dtype="int32"
     )
-    from patchworks._chunks import chunk_slices
-    from patchworks._relabel import relabel_sequential_array
+    import itertools
 
+    # Only public API and plain numpy here: the base branch of a comparison
+    # may predate any internal helper.
     counts = []
-    for sl in chunk_slices(shape, tile):
-        block = relabel_sequential_array(lab[sl]).astype("int32")
+    grid = [range(0, n, t) for n, t in zip(shape, tile)]
+    for starts in itertools.product(*grid):
+        sl = tuple(slice(o, o + t) for o, t in zip(starts, tile))
+        ids = np.unique(lab[sl])
+        lut = np.zeros(int(ids.max()) + 1, dtype="int32")
+        lut[ids[ids > 0]] = np.arange(1, int((ids > 0).sum()) + 1)
+        block = lut[lab[sl]]
         arr[sl] = block
         counts.append(int(block.max()))
     return path, counts
