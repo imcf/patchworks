@@ -364,6 +364,22 @@ def _create_zarr_label_array(
     )
 
 
+def _label_dtype(dtype, max_label: int) -> np.dtype:
+    """*dtype*, or the narrowest wider signed int that holds *max_label*.
+
+    Ids are renumbered to a global range, so a store that was fine per tile
+    (Cellpose's uint16 masks, say) overflows once all tiles are summed --
+    and a silent wrap-around gives unrelated objects the same id.
+    """
+    dtype = np.dtype(dtype)
+    if np.issubdtype(dtype, np.integer) and max_label <= np.iinfo(dtype).max:
+        return dtype
+    for wider in (np.int32, np.int64):
+        if max_label <= np.iinfo(wider).max:
+            return np.dtype(wider)
+    raise OverflowError(f"{max_label} labels do not fit in int64")
+
+
 def _make_globally_unique(arr, shape: tuple, chunk_shape: tuple) -> int:
     """Renumber per-chunk local labels to a globally unique, compact range.
 
@@ -390,6 +406,7 @@ def _make_globally_unique(arr, shape: tuple, chunk_shape: tuple) -> int:
         cross-boundary merge fuses touching pairs).
     """
     n_per_dim = [(s + c - 1) // c for s, c in zip(shape, chunk_shape)]
+    limit = np.iinfo(arr.dtype).max
     base = 0
     for idx in _iproduct(*[range(n) for n in n_per_dim]):
         sl = tuple(
@@ -401,6 +418,12 @@ def _make_globally_unique(arr, shape: tuple, chunk_shape: tuple) -> int:
         uniq = uniq[uniq > 0]
         if uniq.size == 0:
             continue
+        if base + uniq.size > limit:
+            raise OverflowError(
+                f"more than {limit} objects across tiles do not fit the "
+                f"staged {arr.dtype} labels, which are renumbered in place; "
+                "stage the labels as int32 (or wider)"
+            )
         lut = np.zeros(int(uniq[-1]) + 1, dtype=np.int64)
         lut[uniq] = np.arange(1, uniq.size + 1) + base
         arr[sl] = lut[block].astype(arr.dtype)
@@ -734,6 +757,12 @@ def zarr_native_merge(
     # each worker owns a disjoint, chunk-aligned region.
     in_place = (staged_path, staged_component) == (out_path, out_component)
     if in_place:
+        if _label_dtype(arr.dtype, max_label) != arr.dtype:
+            raise OverflowError(
+                f"{max_label} labels do not fit {out_path}/{out_component}'s "
+                f"{arr.dtype}, and an in-place merge cannot widen it; stage "
+                "the labels as int32 (or wider)"
+            )
         if output_chunks is not None and tuple(output_chunks) != tuple(
             chunk_shape
         ):
@@ -782,11 +811,16 @@ def zarr_native_merge(
             )
     if not in_place:
         # Match the staged dtype: ids are already compact (dense by
-        # construction, and compacted again above when sequential), so nothing
-        # needs a wider one. Creating this in place would delete the very
-        # array we are about to read.
+        # construction, and compacted again above when sequential), so a
+        # wider one is only needed when the global total outgrows it -- which
+        # per-tile counts on a narrow store can. Creating this in place would
+        # delete the very array we are about to read.
         _create_zarr_label_array(
-            out_root, out_component, shape, out_chunks, dtype=arr.dtype
+            out_root,
+            out_component,
+            shape,
+            out_chunks,
+            dtype=_label_dtype(arr.dtype, max_label),
         )
 
     # Row-major, matching spatial_tiles' order -- so chunk i is tile i and the
@@ -921,7 +955,11 @@ def merge_tile_labels(
     ----------
     labeled:
         Per-tile label array. Either a dask array or a path to a zarr store
-        that contains per-tile labels in ``input_component``.
+        that contains per-tile labels in ``input_component``. A store is
+        **modified**: unless ``label_counts`` is given, its per-tile ids are
+        renumbered to a global range in place before the merge (the
+        segmentation is unchanged, the ids are not). Copy it first if the
+        original ids matter.
     write_to:
         Output zarr store path. When None, an auto-temp store is used.
     input_component:
@@ -968,7 +1006,9 @@ def merge_tile_labels(
     Returns
     -------
     da.Array
-        Merged label array (int32) backed by ``write_to``. Or, when
+        Merged label array backed by ``write_to``: the staged dtype (int32
+        or wider for a dask input), widened if the global object count
+        outgrows it. Or, when
         ``return_count=True``, a ``(labels, n_objects)`` tuple —
         ``n_objects`` is ``None`` unless ``sequential_labels=True``.
 
@@ -1017,6 +1057,10 @@ def merge_tile_labels(
             labeled = da.overlap.trim_overlap(
                 labeled, depth=overlap, boundary="none"
             )
+        # The staged ids are renumbered to a global range in place, so a
+        # narrow per-tile dtype (Cellpose's uint16) would overflow.
+        if labeled.dtype.itemsize < 4:
+            labeled = labeled.astype(np.int32)
 
         stage_path, stage_cleanup = _scratch_store(stage_dir, "stage")
 

@@ -599,3 +599,69 @@ def test_single_worker_merge_releases_the_lut(tmp_path):
     zarr_native_merge(sp, "staged", str(tmp_path / "o.zarr"), "l", n_workers=1)
     assert _merge._merge_lut is None
     assert _merge._merge_src is None and _merge._merge_dst is None
+
+
+def test_merge_does_not_wrap_narrow_label_dtypes(tmp_path):
+    """400 objects in uint8 tiles must stay 400 objects, not wrap to 255.
+
+    Per-tile masks are often narrow (Cellpose returns uint16); the global
+    renumbering sums every tile, so the merge must widen, not overflow.
+    """
+    import dask.array as da
+
+    from patchworks import merge_tile_labels
+
+    tile = np.zeros((16, 16), "uint8")
+    ys, xs = np.divmod(np.arange(0, 256, 2)[:100], 16)
+    tile[ys, xs] = np.arange(1, 101)
+    lab = da.from_array(np.block([[tile, tile], [tile, tile]]), chunks=16)
+
+    out = merge_tile_labels(lab, write_to=tmp_path / "o.zarr").compute()
+    assert len(np.unique(out)) - 1 == 400
+
+
+def test_merge_widens_the_output_for_counted_narrow_stores(tmp_path):
+    """With label_counts the store is not rewritten; the output widens."""
+    import zarr
+
+    from patchworks._merge import zarr_native_merge
+
+    sp = str(tmp_path / "s.zarr")
+    a = zarr.open_group(sp, mode="w").create_array(
+        "staged", shape=(2, 16, 16), chunks=(1, 16, 16), dtype="uint8"
+    )
+    # 128 single-pixel objects per tile on disjoint pixels (even vs odd), so
+    # nothing touches across the boundary: 256 objects, one more than uint8.
+    flat = np.zeros((2, 256), "uint8")
+    flat[0, 0::2] = np.arange(1, 129)
+    flat[1, 1::2] = np.arange(1, 129)
+    a[:] = flat.reshape(2, 16, 16)
+    zarr_native_merge(
+        sp,
+        "staged",
+        str(tmp_path / "o.zarr"),
+        "l",
+        n_workers=1,
+        label_counts=[128, 128],
+    )
+    out = zarr.open_group(str(tmp_path / "o.zarr"), mode="r")["l"]
+    assert np.dtype(out.dtype).itemsize >= 4
+    assert len(np.unique(np.asarray(out[:]))) - 1 == 256
+
+
+def test_in_place_merge_refuses_to_overflow(tmp_path):
+    import pytest
+    import zarr
+
+    from patchworks._merge import zarr_native_merge
+
+    sp = str(tmp_path / "s.zarr")
+    a = zarr.open_group(sp, mode="w").create_array(
+        "staged", shape=(2, 16, 16), chunks=(1, 16, 16), dtype="uint8"
+    )
+    tile = (np.arange(256).reshape(16, 16) % 200).astype("uint8")
+    a[:] = np.stack([tile, tile])
+    with pytest.raises(OverflowError):
+        zarr_native_merge(
+            sp, "staged", sp, "staged", n_workers=1, label_counts=[199, 199]
+        )
