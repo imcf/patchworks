@@ -1,0 +1,32 @@
+# Known clusters, offered as presets in the launcher's sidebar. Each user
+# still logs in with their own username/password -- this file only fills in
+# what is the same for everyone on a cluster.
+#
+# Fields:
+#   host                   SSH hostname (required)
+#   port                   SSH port (default 22)
+#   host_key_fingerprints  the server's host-key fingerprints, one per key
+#                          type it may present, as "SHA256:...". Get them
+#                          with:   ssh-keyscan <host> | ssh-keygen -lf -
+#                          (or ask the cluster's admins). Without them the
+#                          launcher refuses to connect, unless a user who
+#                          runs the app themselves explicitly allows an
+#                          unverified key.
+#   workflow_dir_hint      example path shown for the workflow directory
+#   setup_cmd              shell line run before snakemake (activate the
+#                          environment that has snakemake + patchworks)
+#   controller_time / controller_mem / controller_partition /
+#   controller_qos / controller_account
+#                          defaults for the small SLURM job that runs the
+#                          Snakemake controller
+
+scicore:
+  # TODO: confirm the login-node hostname and fill in the fingerprints with
+  # sciCORE before relying on this preset.
+  host: "login.scicore.unibas.ch"
+  port: 22
+  host_key_fingerprints: []
+  workflow_dir_hint: "/scicore/home/<group>/<user>/patchworks/workflow"
+  setup_cmd: 'eval "$(pixi shell-hook)"'
+  controller_time: "3-00:00:00"
+  controller_mem: "4G"
