@@ -12,7 +12,7 @@ import threading
 import time
 from contextlib import nullcontext as _nullcontext
 from pathlib import Path
-from typing import Any, Callable, Union
+from typing import Any, Callable, Sequence, Union
 
 import dask.array as da
 import numpy as np
@@ -179,6 +179,7 @@ def _stage_tiles(
     halo_dir: str | None,
     checkpoint: str | None,
     progress: bool,
+    devices: list[str] | None = None,
 ) -> dict[int, int]:
     """Run *fn* tile by tile into a stage store, via :func:`stage_tile`.
 
@@ -186,6 +187,9 @@ def _stage_tiles(
     fused dask pass trims away) and ``resume=True`` (it records each
     finished tile, so a rerun skips it). Returns every tile's label count,
     which also spares the merge its renumbering pass.
+
+    With several *devices*, tiles are shared out to one worker process per
+    GPU instead of threads (see :func:`_stage_on_gpus`).
     """
     import dask
     from concurrent.futures import ThreadPoolExecutor
@@ -207,6 +211,22 @@ def _stage_tiles(
     todo = [i for i in range(n_tiles) if i not in done]
     lock = threading.Lock()
 
+    def record(index: int, n: int) -> None:
+        with lock:
+            done[index] = n
+            if checkpoint is not None:
+                _write_json_atomic(checkpoint, done)
+
+    if devices is not None and len(devices) > 1:
+        results = _stage_on_gpus(
+            devices, image, fn, stage_path, tile, overlap, halo_dir, todo
+        )
+        for index, n in track(
+            results, "stage tiles", len(todo), enabled=progress
+        ):
+            record(index, n)
+        return done
+
     def one(index: int) -> None:
         n = stage_tile(
             image,
@@ -217,10 +237,7 @@ def _stage_tiles(
             overlap=overlap,
             halo_dir=halo_dir,
         )
-        with lock:
-            done[index] = n
-            if checkpoint is not None:
-                _write_json_atomic(checkpoint, done)
+        record(index, n)
 
     # Each thread reads its own tile synchronously: the parallelism is here,
     # not in a dask pool nested under every thread.
@@ -243,6 +260,115 @@ def _stage_tiles(
                 ):
                     pass
     return done
+
+
+# What each GPU worker process needs; set in the parent right before the
+# fork, so nothing (a closure-wrapped fn, a dask array) has to be pickled.
+_gpu_job: dict[str, Any] = {}
+
+
+def _gpu_worker_init(device_queue: Any) -> None:
+    """Pin this worker process to one GPU before anything touches CUDA.
+
+    ``CUDA_VISIBLE_DEVICES`` is read when CUDA initialises, which happens on
+    a worker's first GPU call -- after this -- so torch, cupy or anything
+    else in *fn* sees exactly one device, as device 0.
+    """
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(device_queue.get())
+
+
+def _gpu_stage_one(index: int) -> tuple[int, int]:
+    import dask
+
+    from ._distributed import stage_tile
+
+    job = _gpu_job
+    with dask.config.set(scheduler="synchronous"):
+        n = stage_tile(
+            job["image"],
+            job["fn"],
+            job["stage_path"],
+            index,
+            tile_shape=job["tile"],
+            overlap=job["overlap"],
+            halo_dir=job["halo_dir"],
+        )
+    return index, n
+
+
+def _stage_on_gpus(
+    devices: list[str],
+    image: da.Array,
+    fn: Callable[[np.ndarray], np.ndarray],
+    stage_path: str,
+    tile: tuple[int, ...],
+    overlap: list[int],
+    halo_dir: str | None,
+    todo: list[int],
+):
+    """Stage *todo* with one worker process per GPU in *devices*.
+
+    Processes, not threads: a CUDA device choice is per-process for most
+    frameworks, and a model cached per process (Cellpose's) would otherwise
+    be shared across devices. Forked (Linux), so *fn* may be any callable,
+    closures included, and needs no ``__main__`` guard. Yields
+    ``(index, label_count)`` as tiles finish, in any order.
+    """
+    import multiprocessing as mp
+    import sys
+
+    if not sys.platform.startswith("linux"):
+        raise RuntimeError(
+            "several GPUs in one tile_process run needs Linux (workers are "
+            "forked); use one GPU, or the Snakemake workflow, elsewhere"
+        )
+    ctx = mp.get_context("fork")
+    queue = ctx.Queue()
+    for d in devices:
+        queue.put(d)
+    _gpu_job.update(
+        image=image,
+        fn=fn,
+        stage_path=stage_path,
+        tile=tile,
+        overlap=overlap,
+        halo_dir=halo_dir,
+    )
+    logger.info(
+        "staging on %d GPU(s): %s, one worker process each",
+        len(devices),
+        ", ".join(devices),
+    )
+    try:
+        with ctx.Pool(
+            len(devices), initializer=_gpu_worker_init, initargs=(queue,)
+        ) as pool:
+            yield from pool.imap_unordered(_gpu_stage_one, todo)
+    finally:
+        _gpu_job.clear()
+
+
+def _resolve_gpus(gpus: Any) -> list[str] | None:
+    """Device ids to use for ``gpus=``: an int (the first N visible) or ids.
+
+    Ids are what ``CUDA_VISIBLE_DEVICES`` holds (indices or ``GPU-``/``MIG-``
+    UUIDs); with it set, ``gpus=2`` means its first two entries.
+    """
+    if gpus is None:
+        return None
+    if isinstance(gpus, int):
+        visible = os.environ.get("CUDA_VISIBLE_DEVICES", "").strip()
+        pool = (
+            [v.strip() for v in visible.split(",") if v.strip()]
+            if visible
+            else [str(i) for i in range(gpus)]
+        )
+        if gpus > len(pool):
+            raise ValueError(
+                f"gpus={gpus} but only {len(pool)} visible: {pool}"
+            )
+        return pool[:gpus]
+    return [str(g) for g in gpus]
 
 
 def _stage_fused(
@@ -391,6 +517,7 @@ def tile_process(
     stitch: str = "touch",
     iou_threshold: float = 0.5,
     resume: bool = False,
+    gpus: "int | Sequence[int | str] | None" = None,
 ) -> da.Array:
     """Apply *fn* to every tile of *image* and merge labels globally.
 
@@ -517,6 +644,12 @@ def tile_process(
         succeeds, and kept when it fails. ``stitch="iou"`` and ``resume``
         stage tile by tile in threads rather than through dask, so an
         active distributed client is not used for staging.
+    gpus:
+        Segment on several GPUs at once: an int (the first N devices, of
+        ``CUDA_VISIBLE_DEVICES`` if set) or a list of device ids. Each GPU
+        gets its own worker process, pinned to it before CUDA starts, and
+        tiles are handed out as workers free up. Linux only. Stages tile by
+        tile like ``stitch="iou"``; combine freely with it and ``resume``.
 
     Returns
     -------
@@ -585,7 +718,8 @@ def tile_process(
 
     if stitch not in ("touch", "iou"):
         raise ValueError(f"stitch must be 'touch' or 'iou', got {stitch!r}")
-    per_tile = stitch == "iou" or resume
+    devices = _resolve_gpus(gpus)
+    per_tile = stitch == "iou" or resume or bool(devices and len(devices) > 1)
 
     # Load + tile
     image_source_path = None if isinstance(image, da.Array) else str(image)
@@ -844,6 +978,7 @@ def tile_process(
                 halo_dir,
                 checkpoint,
                 progress,
+                devices=devices,
             )
         else:
             _stage_fused(

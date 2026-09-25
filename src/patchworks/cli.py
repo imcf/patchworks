@@ -161,6 +161,7 @@ def _cmd_segment(args: argparse.Namespace) -> int:
             stitch=args.stitch,
             iou_threshold=args.iou_threshold,
             resume=args.resume,
+            gpus=args.gpus,
         )
     print(args.output or f"{args.image}/labels/{args.name}")
     return 0
@@ -272,6 +273,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--overlap", type=_overlap, default=16, help="halo, N or z,y,x"
     )
     p.add_argument("--gpu", action="store_true")
+    p.add_argument(
+        "--gpus",
+        type=int,
+        help="segment on the first N GPUs at once (one process each)",
+    )
     p.add_argument("--workers", type=int, help="staging/merge workers")
     p.add_argument(
         "--output",

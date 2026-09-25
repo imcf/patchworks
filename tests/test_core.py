@@ -918,3 +918,68 @@ def test_labels_record_how_they_were_made(tmp_path):
     tile_process(arr, _label_fn, write_to=tmp_path / "o.zarr", progress=False)
     rec = read_provenance(tmp_path / "o.zarr", component="labels")
     assert rec["settings"]["stitch"] == "touch"
+
+
+@__import__("pytest").mark.skipif(
+    not __import__("sys").platform.startswith("linux"),
+    reason="multi-GPU workers are forked (Linux only)",
+)
+def test_gpus_pin_one_worker_process_per_device(tmp_path, monkeypatch):
+    """Each GPU worker sees exactly its own device, and all are used."""
+    import os
+
+    import dask.array as da
+
+    from patchworks import tile_process
+
+    seen = tmp_path / "seen"
+    seen.mkdir()
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "3,5,7")
+
+    def recording(tile):
+        import time
+
+        dev = os.environ["CUDA_VISIBLE_DEVICES"]
+        (seen / f"{os.getpid()}").write_text(dev)
+        time.sleep(0.05)  # long enough that both workers get tiles
+        return _label_fn(tile)
+
+    arr = da.from_array(_make_image((8, 32, 32)), chunks=(1, 32, 32))
+    multi = tile_process(
+        arr,
+        recording,
+        overlap=0,
+        gpus=2,
+        use_gpu=True,
+        write_to=tmp_path / "m.zarr",
+        progress=False,
+    ).compute()
+    devices = {p.read_text() for p in seen.iterdir()}
+    assert devices == {"3", "5"}
+    assert all("," not in d for d in devices)  # one device per process
+    assert os.environ["CUDA_VISIBLE_DEVICES"] == "3,5,7"  # parent untouched
+
+    single = tile_process(
+        arr,
+        _label_fn,
+        overlap=0,
+        write_to=tmp_path / "s.zarr",
+        progress=False,
+    ).compute()
+    assert ((multi > 0) == (single > 0)).all()
+    assert len(np.unique(multi)) == len(np.unique(single))
+
+
+def test_resolve_gpus(monkeypatch):
+    import pytest
+
+    from patchworks._core import _resolve_gpus
+
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    assert _resolve_gpus(None) is None
+    assert _resolve_gpus(2) == ["0", "1"]
+    assert _resolve_gpus([1, "GPU-abc"]) == ["1", "GPU-abc"]
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "4,6")
+    assert _resolve_gpus(2) == ["4", "6"]
+    with pytest.raises(ValueError, match="visible"):
+        _resolve_gpus(3)
