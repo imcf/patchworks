@@ -91,3 +91,39 @@ def test_visible_device_index_follows_cuda_visible_devices(monkeypatch):
 
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "GPU-abc123")
     assert visible_device_index() == 0  # UUID form resolves separately
+
+
+def test_oom_backoff_releases_the_failed_calls_memory(monkeypatch):
+    """Nothing the failed call allocated may survive into the backoff.
+
+    Releasing inside the except block kept the exception -- and through its
+    traceback the failed frame's locals, i.e. its device buffers -- alive
+    while caches were freed and the retry slept.
+    """
+    import weakref
+
+    from patchworks import _gpu
+
+    class OutOfMemoryError(Exception):
+        pass
+
+    class Buffer:
+        pass
+
+    refs, alive = [], []
+
+    def call():
+        buf = Buffer()  # noqa: F841 - held by the frame, like a tensor
+        refs.append(weakref.ref(buf))
+        if len(refs) == 1:
+            raise OutOfMemoryError("CUDA out of memory")
+        return "ok"
+
+    monkeypatch.setattr(_gpu.time, "sleep", lambda s: alive.append(refs[0]()))
+    assert (
+        _gpu.retry_on_oom(
+            call, on_release=lambda: alive.append(refs[0]()), backoff=0
+        )
+        == "ok"
+    )
+    assert alive == [None, None]

@@ -104,23 +104,31 @@ def retry_on_oom(
         except Exception as exc:
             if not enabled or not is_oom(exc):
                 raise
-            if on_release is not None:
-                on_release()
-            free_gpu_caches()
             if attempt == retries:
+                if on_release is not None:
+                    on_release()
+                free_gpu_caches()
                 logger.error(
                     "GPU OOM persisted after %d retries; giving up.", retries
                 )
                 raise
-            wait = backoff * (attempt + 1)
-            logger.warning(
-                "GPU OOM (likely contention on a shared device); released "
-                "caches, retrying in %ds (attempt %d/%d).",
-                wait,
-                attempt + 1,
-                retries,
-            )
-            time.sleep(wait)
+        # Released *outside* the except block. Inside it the exception is
+        # alive, and its traceback holds the failed call's frames -- whose
+        # locals are the very device buffers it had allocated -- so freeing
+        # caches there released nothing and the backoff waited with that
+        # memory still pinned.
+        if on_release is not None:
+            on_release()
+        free_gpu_caches()
+        wait = backoff * (attempt + 1)
+        logger.warning(
+            "GPU OOM (likely contention on a shared device); released "
+            "caches, retrying in %ds (attempt %d/%d).",
+            wait,
+            attempt + 1,
+            retries,
+        )
+        time.sleep(wait)
 
 
 def visible_device_index() -> int:
