@@ -71,3 +71,40 @@ jobs:
 
       - name: pytest
         run: pytest -q
+
+  benchmarks:
+    # Head vs base on the same runner, reported in the job summary with a
+    # warning per case >25% slower. Never fails the build: shared runners
+    # are too noisy for a hard gate.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Benchmark the pull request
+        run: |
+          cp -r benchmarks "$RUNNER_TEMP/bench"
+          pip install -e .
+          python "$RUNNER_TEMP/bench/bench.py" "$RUNNER_TEMP/head.json"
+
+      - name: Benchmark the base branch
+        run: |
+          git worktree add "$RUNNER_TEMP/base" "origin/${{ github.base_ref }}"
+          python -m venv "$RUNNER_TEMP/venv-base"
+          "$RUNNER_TEMP/venv-base/bin/pip" install "$RUNNER_TEMP/base"
+          "$RUNNER_TEMP/venv-base/bin/python" "$RUNNER_TEMP/bench/bench.py" \
+            "$RUNNER_TEMP/base.json"
+
+      - name: Compare
+        run: |
+          python "$RUNNER_TEMP/bench/compare.py" \
+            "$RUNNER_TEMP/base.json" "$RUNNER_TEMP/head.json" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
