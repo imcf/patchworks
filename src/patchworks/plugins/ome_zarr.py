@@ -73,7 +73,12 @@ from .._progress import (
 )
 from .._progress import dask_progress, log_progress
 from .._io import compression as _compression
-from .._io import load_ome_zarr, open_group_any, zarr_compressor_kwargs
+from .._io import (
+    is_remote,
+    load_ome_zarr,
+    open_group_any,
+    zarr_compressor_kwargs,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -348,9 +353,29 @@ def _open_group(path, mode: str = "a") -> "zarr.Group":
     """
     path = str(path)
     kwargs = {}
-    if not zarr.storage.LocalStore(path).root.exists():
+    if not _store_exists(path):
         kwargs["zarr_format"] = _zarr_format()
     return zarr.open_group(path, mode=mode, **kwargs)
+
+
+def _store_exists(path: str) -> bool:
+    """Whether a zarr group already exists at *path* (local or a URL).
+
+    A local check on a URL always says no, which would re-open an existing
+    remote NGFF 0.4 (zarr v2) store as v3.
+    """
+    if not is_remote(path):
+        return zarr.storage.LocalStore(path).root.exists()
+    try:
+        zarr.open_group(path, mode="r")
+    except (
+        FileNotFoundError,
+        KeyError,
+        ValueError,
+        zarr.errors.GroupNotFoundError,
+    ):
+        return False
+    return True
 
 
 @contextmanager
@@ -950,6 +975,11 @@ def reshard_level(
     target = f"{group_path}/{component}"
     if not shard:
         return target
+    if is_remote(group_path):
+        raise ValueError(
+            f"reshard_level swaps directories by rename, which a remote store "
+            f"({group_path}) cannot do; reshard a local copy instead"
+        )
     if _group_zarr_format(group_path) == 2:
         logger.warning(
             "%s is a zarr v2 store (NGFF %s), which has no sharding codec; "

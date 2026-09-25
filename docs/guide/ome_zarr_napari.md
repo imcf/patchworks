@@ -272,3 +272,22 @@ view_in_napari("scan.zarr")  # labels auto-loaded from scan.zarr/labels/
 Plugging in a different segmentation method is just swapping `fn` — any
 callable taking a tile and returning an integer label array works (see the
 Cellpose and StarDist examples).
+
+## Remote stores (S3, GCS, HTTP)
+
+Any fsspec URL works wherever a store path does — `s3://bucket/scan.zarr`,
+`gs://…`, `https://…` — for reading, segmenting and writing labels back into
+the store (`pip install "patchworks[remote]"` for the S3/GCS/HTTP backends;
+credentials come from the usual AWS/GCP environment variables or config
+files):
+
+```python
+tile_process("s3://bucket/scan.zarr", fn, tile_shape=(16, 1024, 1024))
+view_in_napari("https://example.org/data/scan.zarr")
+```
+
+Scratch data (the stage store, the merge's lookup table) always stays on local
+disk — in the system temp directory, or `stage_dir=` — so only the final
+labels travel. `reshard_level` needs a local store: it swaps directories by
+renaming, which object stores cannot do.
+

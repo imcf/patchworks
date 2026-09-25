@@ -19,7 +19,7 @@ import numpy as np
 
 from ._chunks import auto_tile_shape, cpu_allocation, safe_worker_count
 from ._cluster import _client_is_in_process, _distributed_client
-from ._io import auto_empty_threshold, load_ome_zarr
+from ._io import auto_empty_threshold, is_remote, load_ome_zarr
 from ._merge import _remove_scratch, _scratch_store, zarr_native_merge
 
 logger = logging.getLogger(__name__)
@@ -592,9 +592,11 @@ def tile_process(
     # output, so a long run leaves a tailable record without notebook setup.
     if log_file:
         if log_file is True:
-            if write_to is not None:
+            if write_to is not None and not is_remote(write_to):
                 _ldir = os.path.dirname(os.path.abspath(str(write_to)))
-            elif image_source_path is not None:
+            elif image_source_path is not None and not is_remote(
+                image_source_path
+            ):
                 _ldir = os.path.dirname(os.path.abspath(image_source_path))
             else:
                 _ldir = os.getcwd()
@@ -766,12 +768,15 @@ def tile_process(
     # merge scans the labels directly on disk.
     if stage_dir is not None:
         base: str | None = str(stage_dir)
-    elif write_to is not None:
+    elif write_to is not None and not is_remote(write_to):
         base = os.path.dirname(os.path.abspath(str(write_to)))
-    elif image_source_path is not None:
+    elif image_source_path is not None and not is_remote(image_source_path):
         base = os.path.dirname(os.path.abspath(image_source_path))
     else:
-        base = None  # a fresh system temp dir
+        # A fresh system temp dir -- also for a remote input or output:
+        # scratch data stays local, and os.path on a URL would invent a
+        # directory named after the URL scheme.
+        base = None
     halo_dir: str | None = None
     checkpoint: str | None = None
     if resume:

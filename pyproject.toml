@@ -60,6 +60,9 @@ cellpose4 = ["cellpose>=4"]
 # cupy-cuda12x), install it separately to match your CUDA version.
 dog = ["pycudadecon"]
 gpu = ["nvidia-ml-py"]
+# remote reads/writes s3://, gs:// and https:// stores through fsspec
+# (credentials come from the usual AWS/GCP environment or config files).
+remote = ["fsspec[http,s3,gcs]"]
 # distributed backs make_local_cluster and the live dashboard tile_process
 # opens for single-GPU runs (it falls back to threads without it).
 distributed = ["dask[distributed,diagnostics]"]

@@ -36,7 +36,7 @@ import numpy as np
 import zarr
 
 from ._chunks import chunk_slices, cpu_allocation
-from ._io import zarr_compressor_kwargs
+from ._io import is_remote, zarr_compressor_kwargs
 from ._progress import track
 
 logger = logging.getLogger(__name__)
@@ -800,7 +800,7 @@ def _lut_scratch_dir(lut_nbytes: int, fallback: str) -> str:
         roomy = shutil.disk_usage(tmp).free > 2 * lut_nbytes + 64 * 1024**2
     except OSError:
         roomy = False
-    if roomy:
+    if roomy or is_remote(fallback):
         return tempfile.mkdtemp(prefix="pws_lut_")
     parent = os.path.dirname(os.path.abspath(fallback))
     logger.info(

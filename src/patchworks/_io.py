@@ -147,6 +147,22 @@ def zarr_compressor_kwargs(zarr_format: int = 3) -> dict:
     }
 
 
+_URL = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*://")
+
+
+def is_remote(path: Union[str, Path, None]) -> bool:
+    """Whether *path* is a URL (``s3://``, ``gs://``, ``https://``, ...).
+
+    zarr reads and writes those through fsspec, so a remote store works as
+    input (and as the labels' destination). What must never happen is
+    deriving a *local* scratch directory from one with ``os.path``: that
+    turns ``s3://bucket/x.zarr`` into a folder called ``s3:`` in the working
+    directory. ``file://`` counts as local.
+    """
+    text = str(path) if path is not None else ""
+    return bool(_URL.match(text)) and not text.startswith("file://")
+
+
 # A ".zip" path component: the archive name, then the end or a separator.
 # A bare substring test also matched directories such as "my.zipfiles/".
 _ZIP_PART = re.compile(r"^(.*?\.zip)(?=$|[/\\])(.*)$", re.IGNORECASE)
