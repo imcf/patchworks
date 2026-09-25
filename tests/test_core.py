@@ -665,3 +665,23 @@ def test_in_place_merge_refuses_to_overflow(tmp_path):
         zarr_native_merge(
             sp, "staged", sp, "staged", n_workers=1, label_counts=[199, 199]
         )
+
+
+def test_relabel_sequential_keeps_every_object_without_background(tmp_path):
+    """No 0 in the data must not turn the smallest object into background."""
+    import zarr
+
+    from patchworks import relabel_sequential_array, relabel_sequential_zarr
+
+    np.testing.assert_array_equal(
+        relabel_sequential_array(np.array([5, 5, 7])), [1, 1, 2]
+    )
+    assert relabel_sequential_array(np.array([], "int32")).size == 0
+
+    sp = str(tmp_path / "l.zarr")
+    z = zarr.open_group(sp, mode="w").create_array(
+        "labels", shape=(2, 2), chunks=(1, 2), dtype="int32"
+    )
+    z[:] = [[5, 5], [9, 7]]
+    assert relabel_sequential_zarr(sp) == 3
+    np.testing.assert_array_equal(z[:], [[1, 1], [3, 2]])

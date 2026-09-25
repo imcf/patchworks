@@ -14,6 +14,32 @@ logger = logging.getLogger(__name__)
 _LUT_WARN_THRESHOLD = 100_000_000  # warn when max_label > 100 M (LUT > 800 MB)
 
 
+def _sequential_lut(ids: np.ndarray) -> tuple[np.ndarray, int]:
+    """LUT mapping the sorted distinct *ids* onto ``1..N`` (0 stays 0).
+
+    Numbering from 1 whether or not 0 is among *ids*: counting from 0
+    whenever background happened to be absent turned the smallest object
+    into background.
+
+    Parameters
+    ----------
+    ids : np.ndarray
+        Sorted distinct label ids.
+
+    Returns
+    -------
+    tuple
+        ``(lut, n)`` -- the lookup table and the object count ``N``.
+    """
+    if ids.size and ids[0] < 0:
+        raise ValueError(f"labels must be non-negative, found {int(ids[0])}")
+    objects = ids[ids > 0]
+    max_label = int(ids[-1]) if ids.size else 0
+    lut = np.zeros(max_label + 1, dtype=np.int64)
+    lut[objects] = np.arange(1, objects.size + 1)
+    return lut, int(objects.size)
+
+
 def relabel_sequential_array(labels: np.ndarray) -> np.ndarray:
     """Remap *labels* to a contiguous ``0, 1, … N`` range.
 
@@ -36,7 +62,7 @@ def relabel_sequential_array(labels: np.ndarray) -> np.ndarray:
     array([0, 2, 2, 1], dtype=uint16)
     """
     uniq = np.unique(labels)
-    max_label = int(uniq[-1])
+    max_label = int(uniq[-1]) if uniq.size else 0
     if max_label > _LUT_WARN_THRESHOLD:
         logger.warning(
             "relabel_sequential_array: max_label=%d → LUT size ~%.0f MB. "
@@ -44,10 +70,8 @@ def relabel_sequential_array(labels: np.ndarray) -> np.ndarray:
             max_label,
             max_label * 8 / 1024**2,
         )
-    lut = np.zeros(max_label + 1, dtype=np.int64)
-    lut[uniq] = np.arange(uniq.size)
+    lut, n = _sequential_lut(uniq)
     out = lut[labels]
-    n = uniq.size - 1 if uniq[0] == 0 else uniq.size
     dtype = np.uint16 if n < np.iinfo(np.uint16).max else np.uint32
     return out.astype(dtype)
 
@@ -110,16 +134,14 @@ def relabel_sequential_zarr(store_path: str, component: str = "labels") -> int:
     for sl in chunk_slices:
         uniq.update(np.unique(np.asarray(z[sl])).tolist())
     sorted_ids = np.array(sorted(uniq), dtype=np.int64)
-    max_label = int(sorted_ids[-1])
+    max_label = int(sorted_ids[-1]) if sorted_ids.size else 0
     if max_label > _LUT_WARN_THRESHOLD:
         logger.warning(
             "relabel_sequential_zarr: max_label=%d → LUT size ~%.0f MB.",
             max_label,
             max_label * 8 / 1024**2,
         )
-    lut = np.zeros(max_label + 1, dtype=np.int64)
-    lut[sorted_ids] = np.arange(sorted_ids.size)
-    n = sorted_ids.size - 1 if sorted_ids[0] == 0 else sorted_ids.size
+    lut, n = _sequential_lut(sorted_ids)
     # Use same dtype logic as relabel_sequential_array so output never overflows.
     out_dtype = np.uint16 if n < np.iinfo(np.uint16).max else np.uint32
     for sl in chunk_slices:
