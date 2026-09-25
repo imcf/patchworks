@@ -971,3 +971,46 @@ def test_nearest_downsampling_can_still_be_asked_for(tmp_path):
     np.testing.assert_array_equal(lvl1, img[:, ::2, ::2])
     with pytest.raises(ValueError, match="downsample"):
         to_ome_zarr(img, tmp_path / "b.zarr", axes="zyx", downsample="max")
+
+
+def _physical_centroid(mask, scale, translation):
+    idx = np.argwhere(mask).mean(axis=0)
+    return idx * np.asarray(scale) + np.asarray(translation)
+
+
+def test_labels_segmented_at_a_coarser_level_land_on_the_image(tmp_path):
+    """Labels made at level 1 must carry level 1's geometry, not level 0's.
+
+    They used to inherit level 0's voxel size, so a level-1 segmentation was
+    drawn at half size, drifting off the image away from the origin -- a
+    "shift" that grows across the field of view.
+    """
+
+    from patchworks import tile_process
+    from patchworks.plugins.ome_zarr import read_pixel_size, read_translation
+
+    img = np.zeros((4, 128, 128), "uint16")
+    img[1:3, 90:100, 70:84] = 1000  # far from the origin, so drift shows
+    store = to_ome_zarr(
+        img,
+        tmp_path / "a.zarr",
+        axes="zyx",
+        n_levels=3,
+        pixel_size={"z": 0.5, "y": 0.2, "x": 0.2},
+    )
+    assert read_pixel_size(store, level=1) == {"z": 0.5, "y": 0.4, "x": 0.4}
+    assert read_translation(store, level=1) == {"y": 0.1, "x": 0.1}
+
+    def seg(tile):
+        return (tile > 500).astype("int32")
+
+    tile_process(store, seg, level=1, channel=None, overlap=0, progress=False)
+    group = f"{store}/labels/labels"
+    assert read_pixel_size(group) == read_pixel_size(store, level=1)
+
+    lab = np.asarray(zarr.open_group(group, mode="r")["0"][:])
+    lab_scale = [read_pixel_size(group)[a] for a in "zyx"]
+    lab_t = [read_translation(group).get(a, 0.0) for a in "zyx"]
+    got = _physical_centroid(lab > 0, lab_scale, lab_t)
+    want = _physical_centroid(img > 0, [0.5, 0.2, 0.2], [0, 0, 0])
+    np.testing.assert_allclose(got, want, atol=1e-6)

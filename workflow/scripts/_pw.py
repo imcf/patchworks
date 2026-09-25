@@ -228,7 +228,8 @@ def _with_voxel_size(fn, kwargs, cfg):
     from patchworks.plugins.ome_zarr import read_pixel_size
 
     store = str(Path(cfg["work_dir"]) / "image.zarr")
-    calibration = read_pixel_size(store)
+    # The tiles fn sees come from `level`, so their voxels are that level's.
+    calibration = read_pixel_size(store, level=int(cfg.get("level", 0)))
     if not calibration:
         logging.getLogger(__name__).warning(
             "%s takes voxel_size but %s carries no calibration; set the "

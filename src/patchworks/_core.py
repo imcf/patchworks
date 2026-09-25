@@ -698,6 +698,8 @@ def tile_process(
             downscale=pyramid_downscale,
             progress=progress,
             overwrite=True,
+            # Segmented at `level`, so calibrated as that level, not level 0.
+            level=level,
         )
     finally:
         _remove_scratch(_merge_cleanup)

@@ -154,6 +154,21 @@ def _resolve_image(
     return source
 
 
+def _pyramid_translate(
+    path: Union[str, Path], ndim: int
+) -> "list[float] | None":
+    """Level-0 physical offset, e.g. of labels segmented at a coarser level.
+
+    Returns None when there is none, leaving napari's default of 0.
+    """
+    from .ome_zarr import _default_axes, read_translation
+
+    offset = read_translation(str(path))
+    if not offset:
+        return None
+    return [float(offset.get(a, 0.0)) for a in _default_axes(ndim)]
+
+
 def _pyramid_calibration(
     path: Union[str, Path], ndim: int
 ) -> tuple[list[float], list[str]] | tuple[None, None]:
@@ -406,6 +421,11 @@ def view_in_napari(
             name=labels_name,
             multiscale=isinstance(lab, list),
             scale=lab_scale,
+            translate=(
+                _pyramid_translate(labels, lab_ndim)
+                if _is_zarr(labels)
+                else None
+            ),
             units=lab_units,
             metadata=metadata,
             **label_kwargs,
@@ -448,6 +468,7 @@ def view_in_napari(
                     name=name,
                     multiscale=True,
                     scale=lab_scale,
+                    translate=_pyramid_translate(store, lab[0].ndim),
                     units=lab_units,
                     metadata=_label_hint(store),
                     **label_kwargs,

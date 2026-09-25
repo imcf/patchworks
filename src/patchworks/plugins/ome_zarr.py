@@ -977,7 +977,9 @@ def _base_scale(axes: str, pixel_size: PixelSize) -> list[float]:
     return [float(pixel_size.get(a, 1.0)) for a in axes]
 
 
-def _dataset(name: str, scale: list[float]) -> dict:
+def _dataset(
+    name: str, scale: list[float], translation: "list[float] | None" = None
+) -> dict:
     """Build one NGFF ``multiscales`` dataset entry.
 
     Parameters
@@ -986,18 +988,50 @@ def _dataset(name: str, scale: list[float]) -> dict:
         Component path of the level (e.g. ``"0"``).
     scale : list of float
         Per-axis scale (physical size × downsample factor).
+    translation : list of float, optional
+        Physical offset of the level's first voxel centre. Omitted when all
+        zero, which keeps the metadata of a decimated pyramid unchanged.
 
     Returns
     -------
     dict
         A dataset dict with its ``path`` and ``coordinateTransformations``.
     """
-    return {
-        "path": name,
-        "coordinateTransformations": [
-            {"type": "scale", "scale": [float(s) for s in scale]}
-        ],
-    }
+    transforms: list[dict] = [
+        {"type": "scale", "scale": [float(s) for s in scale]}
+    ]
+    if translation is not None and any(t != 0 for t in translation):
+        transforms.append(
+            {
+                "type": "translation",
+                "translation": [float(t) for t in translation],
+            }
+        )
+    return {"path": name, "coordinateTransformations": transforms}
+
+
+def _level_translation(
+    base_scale: list[float],
+    base_translation: "list[float] | None",
+    strides: tuple[int, ...],
+    level: int,
+    downsample: str,
+) -> list[float]:
+    """Where level *level*'s first voxel centre sits, physically.
+
+    A decimated level keeps voxel 0 of the level below, so it inherits the
+    base offset. A block mean's first voxel is the average of the first
+    ``f`` voxels (``f = stride**level``), so its centre is ``(f - 1) / 2``
+    base voxels further in; without that offset, labels segmented at an
+    averaged level would sit up to half a coarse voxel off the image.
+    """
+    base_t = list(base_translation or [0.0] * len(base_scale))
+    if downsample != "mean":
+        return base_t
+    return [
+        t + (st**level - 1) / 2 * sc
+        for t, st, sc in zip(base_t, strides, base_scale)
+    ]
 
 
 def _write_pyramid(
@@ -1014,6 +1048,7 @@ def _write_pyramid(
     shard: ShardSpec = False,
     progress: bool = True,
     downsample: str = "nearest",
+    base_translation: "list[float] | None" = None,
 ) -> list[dict]:
     """Write pyramid levels into *group_path* and return NGFF datasets.
 
@@ -1050,6 +1085,9 @@ def _write_pyramid(
     downsample : str
         ``"mean"`` (images) or ``"nearest"`` (labels); see
         :func:`_downsample`.
+    base_translation : list of float, optional
+        Level-0 physical offset per axis (e.g. labels segmented from a
+        coarser, averaged image level). Carried to every level.
 
     Returns
     -------
@@ -1068,7 +1106,7 @@ def _write_pyramid(
         _to_zarr_level(
             arr.rechunk(base_chunks), group_path, base_name, shard, progress
         )
-    datasets = [_dataset(base_name, base_scale)]
+    datasets = [_dataset(base_name, base_scale, base_translation)]
 
     prev_name = base_name
     prev_shape = arr.shape
@@ -1142,7 +1180,10 @@ def _write_pyramid(
                 method=downsample,
             )
         scale = [base_scale[k] * (strides[k] ** i) for k in range(len(axes))]
-        datasets.append(_dataset(str(i), scale))
+        translation = _level_translation(
+            base_scale, base_translation, strides, i, downsample
+        )
+        datasets.append(_dataset(str(i), scale, translation))
         logger.info("pyramid level %d: shape=%s", i, next_shape)
         prev_name = str(i)
         prev_shape = next_shape
@@ -1187,8 +1228,8 @@ def _write_multiscales(
     write_ngff_attrs(_open_group(group_path), multiscales=[entry])
 
 
-def read_pixel_size(store: Union[str, Path]) -> PixelSize:
-    """Physical voxel size recorded in an OME-ZARR's level-0 metadata.
+def read_pixel_size(store: Union[str, Path], level: int = 0) -> PixelSize:
+    """Physical voxel size recorded in an OME-ZARR's metadata for *level*.
 
     The calibration the conversion carried over from the source file, as
     ``{"z": .., "y": .., "x": ..}`` in micrometers. Axes left at scale 1.0
@@ -1202,6 +1243,9 @@ def read_pixel_size(store: Union[str, Path]) -> PixelSize:
     ----------
     store : str or Path
         Path of the OME-ZARR group.
+    level : int, optional
+        Pyramid level (default 0, full resolution). Anything segmented or
+        measured at a coarser level must use that level's voxel size.
 
     Returns
     -------
@@ -1212,12 +1256,62 @@ def read_pixel_size(store: Union[str, Path]) -> PixelSize:
     --------
     >>> read_pixel_size("scan.zarr")  # doctest: +SKIP
     {'z': 0.2, 'y': 0.1, 'x': 0.1}
+    >>> read_pixel_size("scan.zarr", level=1)  # doctest: +SKIP
+    {'z': 0.2, 'y': 0.2, 'x': 0.2}
     """
-    return _read_zarr_calibration(store, "")
+    return _read_zarr_calibration(store, "", level=level)
 
 
-def _read_zarr_calibration(store: Union[str, Path], axes: str) -> PixelSize:
-    """Read level-0 spatial scale from an existing OME-ZARR, if any.
+def read_translation(store: Union[str, Path], level: int = 0) -> PixelSize:
+    """Physical offset of *level*'s first voxel centre, per spatial axis.
+
+    Zero (and so empty) for level 0 and for decimated levels; non-zero for a
+    block-averaged level, whose first voxel centre sits between the base
+    voxels it averages.
+
+    Parameters
+    ----------
+    store : str or Path
+        Path of the OME-ZARR group.
+    level : int, optional
+        Pyramid level (default 0).
+
+    Returns
+    -------
+    dict
+        ``{axis: offset}`` for spatial axes with a non-zero offset.
+    """
+    ms = _multiscale_meta(store)
+    if ms is None:
+        return {}
+    try:
+        ax = [a["name"] for a in ms["axes"]]
+        transforms = ms["datasets"][level]["coordinateTransformations"]
+    except (KeyError, IndexError, TypeError):
+        return {}
+    for t in transforms:
+        if t.get("type") == "translation":
+            return {
+                a: float(v)
+                for a, v in zip(ax, t["translation"])
+                if a in _SPATIAL_AXES and float(v) != 0.0
+            }
+    return {}
+
+
+def _multiscale_meta(store: Union[str, Path]) -> "dict | None":
+    try:
+        # open_group_any, not zarr.open_group: the store may be a .zip
+        # bundle, possibly with a group path after it.
+        return read_ngff_attr(open_group_any(store).attrs, "multiscales")[0]
+    except (KeyError, IndexError, TypeError):
+        return None
+
+
+def _read_zarr_calibration(
+    store: Union[str, Path], axes: str, level: int = 0
+) -> PixelSize:
+    """Read *level*'s spatial scale from an existing OME-ZARR, if any.
 
     Parameters
     ----------
@@ -1225,6 +1319,8 @@ def _read_zarr_calibration(store: Union[str, Path], axes: str) -> PixelSize:
         Path of the OME-ZARR group.
     axes : str
         One letter per axis (unused for parsing, kept for symmetry).
+    level : int, optional
+        Pyramid level whose dataset scale to read (default 0).
 
     Returns
     -------
@@ -1232,13 +1328,12 @@ def _read_zarr_calibration(store: Union[str, Path], axes: str) -> PixelSize:
         ``{axis: size}`` for spatial axes with a non-unit scale (empty if
         the store has no multiscales metadata).
     """
+    ms = _multiscale_meta(store)
+    if ms is None:
+        return {}
     try:
-        # open_group_any, not zarr.open_group: the store may be a .zip
-        # bundle, possibly with a group path after it.
-        root = open_group_any(store)
-        ms = read_ngff_attr(root.attrs, "multiscales")[0]
         ax = [a["name"] for a in ms["axes"]]
-        scale = ms["datasets"][0]["coordinateTransformations"][0]["scale"]
+        scale = ms["datasets"][level]["coordinateTransformations"][0]["scale"]
     except (KeyError, IndexError, TypeError):
         return {}
     return {
@@ -1934,6 +2029,7 @@ def add_pyramid(
     progress: bool = True,
     ngff_version: Union[str, None] = "auto",
     downsample: Union[str, None] = None,
+    translation: Union[PixelSize, None] = None,
 ) -> str:
     """Add downsampled pyramid levels to an existing single-resolution zarr.
 
@@ -1977,6 +2073,9 @@ def add_pyramid(
         ``None`` (default) picks ``"nearest"`` for an NGFF label image (an
         ``image-label`` group, or one under ``labels/``) and ``"mean"``
         otherwise.
+    translation : dict, optional
+        Physical offset ``{axis: offset}`` of the base level's first voxel.
+        ``None`` keeps whatever the store already records (zero if nothing).
 
     Returns
     -------
@@ -2023,6 +2122,9 @@ def add_pyramid(
         else:
             ps = _read_zarr_calibration(gp, axes)
         base_scale = _base_scale(axes, ps)
+        if translation is None:
+            translation = read_translation(gp)
+        base_translation = [float(translation.get(a, 0.0)) for a in axes]
 
         datasets = _write_pyramid(
             base_arr,
@@ -2037,6 +2139,7 @@ def add_pyramid(
             shard=shard,
             progress=progress,
             downsample=downsample,
+            base_translation=base_translation,
         )
         _write_multiscales(
             gp, axes, datasets, Path(gp).stem, calibrated=bool(ps)
@@ -2057,6 +2160,7 @@ def register_labels(
     progress: bool = True,
     n_objects: Union[int, None] = None,
     ngff_version: Union[str, None] = "auto",
+    level: int = 0,
 ) -> str:
     """Pyramidalise and register an existing ``labels/<name>/0`` base level.
 
@@ -2076,7 +2180,7 @@ def register_labels(
         One letter per axis. ``None`` → inferred from the label array.
     pixel_size : dict, tuple or None, optional
         Physical voxel size in micrometers. ``None`` → inherited from the
-        parent image's own calibration.
+        parent image's calibration at *level*.
     n_levels : int, optional
         Maximum number of pyramid levels including full resolution
         (default 5).
@@ -2088,6 +2192,11 @@ def register_labels(
         Sharding request (see :func:`to_ome_zarr`'s *shard*).
     progress : bool, optional
         Show a per-level dask progress bar (default ``True``).
+    level : int, optional
+        The image pyramid level the labels were segmented at (default 0).
+        Their voxel size and offset are that level's, not level 0's: taking
+        level 0's for labels made at level 1 draws them at half size,
+        drifting further off the image the further from the origin.
     n_objects : int or None, optional
         Exact non-background object count, if known (e.g. from
         :func:`patchworks.merge_tile_labels`'s ``return_count=True`` after
@@ -2120,7 +2229,7 @@ def register_labels(
         if not pixel_size:
             arr0 = da.from_zarr(group, component="0")
             lab_axes = axes or _default_axes(arr0.ndim)
-            pixel_size = _read_zarr_calibration(store, lab_axes)
+            pixel_size = _read_zarr_calibration(store, lab_axes, level=level)
         add_pyramid(
             group,
             base="0",
@@ -2132,6 +2241,7 @@ def register_labels(
             shard=shard,
             progress=progress,
             downsample="nearest",  # averaging ids invents objects
+            translation=read_translation(store, level),
         )
         grp = _open_group(group)
         write_ngff_attrs(
@@ -2166,6 +2276,7 @@ def write_labels(
     overwrite: bool = False,
     n_objects: Union[int, None] = None,
     ngff_version: Union[str, None] = "auto",
+    level: int = 0,
 ) -> str:
     """Store *labels* inside *image_store* under the NGFF ``labels/`` group.
 
@@ -2207,6 +2318,10 @@ def write_labels(
     n_objects : int or None, optional
         Exact non-background object count, if known — forwarded to
         :func:`register_labels`; see its docstring for what this enables.
+    level : int, optional
+        The image pyramid level *labels* were segmented at (default 0);
+        their calibration and offset are taken from that level. See
+        :func:`register_labels`.
     ngff_version : str or None, optional
         NGFF version (and therefore zarr format) to write: ``"auto"``
         (default) writes 0.5 (zarr v3), while ``"0.4"`` pins the older, zarr-v2 layout for tools that
@@ -2263,4 +2378,5 @@ def write_labels(
             shard=shard,
             progress=progress,
             n_objects=n_objects,
+            level=level,
         )

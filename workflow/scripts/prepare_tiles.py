@@ -59,7 +59,10 @@ if ts == "auto":
             from patchworks.plugins.ome_zarr import read_pixel_size
 
             anisotropy = cellpose_anisotropy(
-                read_pixel_size(str(Path(work_dir) / "image.zarr"))
+                read_pixel_size(
+                    str(Path(work_dir) / "image.zarr"),
+                    level=int(cfg.get("level", 0)),
+                )
             )
         sizer = partial(
             auto_tile_shape_cellpose,

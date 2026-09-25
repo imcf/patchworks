@@ -115,7 +115,9 @@ _, n_objects = merge_tile_labels(
 min_volume = cfg.get("min_volume")
 max_volume = cfg.get("max_volume")
 if min_volume or max_volume:
-    voxel_size = read_pixel_size(image_store)
+    # The labels are at the segmented level's resolution, so voxel counts
+    # must be converted with that level's voxel size.
+    voxel_size = read_pixel_size(image_store, level=int(cfg.get("level", 0)))
     if not voxel_size:
         raise RuntimeError(
             f"min_volume/max_volume filtering needs calibration in "
@@ -213,6 +215,9 @@ group = register_labels(
     # `shard_labels` pass above for the reason given there.
     shard=cfg.get("shard", False),
     ngff_version=cfg.get("ngff_version", "auto"),
+    # Segmented at `level`: calibrate (and offset) the labels as that level,
+    # or they are drawn shrunk towards the origin of the image.
+    level=int(cfg.get("level", 0)),
 )
 
 if not in_place:
