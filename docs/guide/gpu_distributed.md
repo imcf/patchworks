@@ -127,4 +127,3 @@ tile_process("scan.zarr", fn, tile_shape=(16, 1024, 1024), use_gpu=True, gpus=4)
 command line: `patchworks segment ... --gpu --gpus 4`. Workers are forked, so
 this is Linux only. The Snakemake workflow spreads tiles over GPUs as separate
 SLURM jobs instead.
-
