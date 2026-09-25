@@ -5,6 +5,11 @@ that can be days. The bundled Snakemake workflow instead submits **one GPU job
 per tile**, so with *N* GPUs the segmentation is ~*N*× faster. This page walks
 through running it from scratch.
 
+!!! tip "Prefer a form to YAML?"
+    The [web launcher](launcher.md) builds the config, submits the run and
+    follows it from a browser, for single and multi-segmentation runs alike.
+    Everything on this page still applies to what it starts.
+
 ```text
 convert ──▶ prepare (checkpoint) ──▶ segment {tile}  ──▶ merge
                                      one GPU SLURM job per tile

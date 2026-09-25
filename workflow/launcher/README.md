@@ -7,6 +7,9 @@ relations (`scripts/run_multi.py`). Pick a cluster preset from
 `clusters.yaml` or type in a host, then log in with your own
 username and password.
 
+For the full walkthrough, see the documentation page *Web launcher
+(Streamlit)* (`docs/guide/launcher.md`).
+
 ## Run it
 
 ```bash
