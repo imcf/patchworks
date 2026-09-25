@@ -1,0 +1,2144 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+      
+        <link rel="prev" href="../snakemake/">
+      
+      
+        <link rel="next" href="../cli/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/logo.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Web launcher (Streamlit) - patchworks</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="deep-orange" data-md-color-accent="orange">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#web-launcher-streamlit" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="patchworks" class="md-header__button md-logo" aria-label="patchworks" data-md-component="logo">
+      
+  <img src="../../assets/logo.png" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            patchworks
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Web launcher (Streamlit)
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="deep-orange" data-md-color-accent="orange"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="deep-orange" data-md-color-accent="orange"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="Share" aria-label="Share" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/imcf/patchworks" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    imcf/patchworks
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+  
+
+<nav class="md-nav md-nav--primary md-nav--integrated" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="patchworks" class="md-nav__button md-logo" aria-label="patchworks" data-md-component="logo">
+      
+  <img src="../../assets/logo.png" alt="logo">
+
+    </a>
+    patchworks
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/imcf/patchworks" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    imcf/patchworks
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting_started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    User Guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    User Guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tiling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tiling strategy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../merging/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Merging labels
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../skip_empty/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Empty tile skipping
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../gpu_distributed/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GPU & distributed
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../performance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Performance & memory
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../custom_segmentation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Custom segmentation function
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../label_relations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Relating labels across segmentations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../measurements/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Measurements
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ome_zarr_napari/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    OME-ZARR & napari
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../snakemake/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cluster workflow (Snakemake)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Web launcher (Streamlit)
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Web launcher (Streamlit)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#before-you-start" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Before you start
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#start-the-app" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Start the app
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#1-connect" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Connect
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-configure-the-run-config-tab" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Configure the run (Config tab)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2. Configure the run (Config tab)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#shared-settings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Shared settings
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#per-segmentation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Per segmentation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#relations-multi-only" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Relations (multi only)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-the-form-checks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What the form checks
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-launch-launch-tab" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Launch (Launch tab)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-follow-the-run-jobs-tab" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Follow the run (Jobs tab)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#files-the-launcher-writes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Files the launcher writes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#troubleshooting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Troubleshooting
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../cli/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Command line
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../pitfalls/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pitfalls
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Examples
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Examples
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../examples/cellpose_2d/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cellpose 2-D
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../examples/cellpose_3d/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cellpose 3-D
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../examples/stardist/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    StarDist
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../examples/dog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Difference of Gaussians
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../examples/custom/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Custom function
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../examples/standalone_merge/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Standalone merge
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    API Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/tile_process/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    tile_process
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/merge_tile_labels/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    merge_tile_labels
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/postprocess/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    dilate_labels
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/volume_filter/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Volume filtering
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/chunks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tile sizing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/io/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    I/O helpers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/relabel/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Relabelling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/seams/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Seam report
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/provenance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Provenance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/cluster/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cluster helpers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_11" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_11" id="__nav_5_11_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Plugins
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_5_11_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5_11">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Plugins
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/plugins/cellpose/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cellpose
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/plugins/dog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Difference of Gaussians
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/plugins/ome_zarr/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    OME-ZARR conversion
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/plugins/napari/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    napari viewer
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="web-launcher-streamlit">Web launcher (Streamlit)</h1>
+<p>The <a href="../snakemake/">cluster workflow</a> is driven by YAML files and shell
+commands. The launcher is a small web app that does the same through a
+form. It:</p>
+<ul>
+<li>logs in to the cluster over SSH</li>
+<li>builds the config for you</li>
+<li>uploads the config and starts the run</li>
+<li>shows the run's progress</li>
+</ul>
+<p>It does nothing the command line can't do. It is there so people who don't
+live in a terminal can run a segmentation, and so nobody starts a run with
+a typo in a YAML key.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>your browser ──▶ launcher (Streamlit) ──SSH──▶ cluster login node
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>                                                 ├─ uploads config/launcher_*.yaml
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>                                                 └─ sbatch controller job ─▶ snakemake / run_multi.py
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>                                                                             ─▶ one SLURM job per tile
+</code></pre></div>
+<h2 id="before-you-start">Before you start</h2>
+<p>Set this up once per cluster:</p>
+<ol>
+<li><strong>Install the workflow on the cluster</strong>, as in steps 1–2 of the
+   <a href="../snakemake/#1-get-the-workflow">cluster workflow</a>. You need a
+   <code>patchworks/workflow</code> directory with an environment that has Snakemake
+   and patchworks. The launcher runs what is already there; it installs
+   nothing.</li>
+<li><strong>Adapt <code>workflow/profile/slurm/config.yaml</code></strong> to your cluster's
+   partitions and GPUs, as for a command-line run.</li>
+<li>
+<p><strong>Pin the cluster's host key</strong> in <code>workflow/launcher/clusters.yaml</code>.
+   This lets the launcher check that it is talking to the real cluster
+   before it sends your password:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>ssh-keyscan<span class="w"> </span>login.example.org<span class="w"> </span><span class="p">|</span><span class="w"> </span>ssh-keygen<span class="w"> </span>-lf<span class="w"> </span>-
+</code></pre></div>
+<p>Put each <code>SHA256:…</code> value you get in <code>host_key_fingerprints:</code> of the
+cluster's entry, together with the defaults you want to offer:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nt">mycluster</span><span class="p">:</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">host</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">login.example.org</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span><span class="nt">host_key_fingerprints</span><span class="p">:</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">"SHA256:abc…"</span><span class="w">        </span><span class="c1"># ed25519</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">"SHA256:def…"</span><span class="w">        </span><span class="c1"># ecdsa / rsa, if the server offers them</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">  </span><span class="nt">workflow_dir_hint</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/home/&lt;user&gt;/patchworks/workflow</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">  </span><span class="nt">setup_cmd</span><span class="p">:</span><span class="w"> </span><span class="s">'eval</span><span class="nv"> </span><span class="s">"$(pixi</span><span class="nv"> </span><span class="s">shell-hook)"'</span><span class="w">   </span><span class="c1"># or: module load …; conda activate …</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">  </span><span class="nt">controller_time</span><span class="p">:</span><span class="w"> </span><span class="s">"3-00:00:00"</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="w">  </span><span class="nt">controller_mem</span><span class="p">:</span><span class="w"> </span><span class="s">"4G"</span>
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="w">  </span><span class="nt">controller_partition</span><span class="p">:</span><span class="w"> </span><span class="s">""</span><span class="w">                 </span><span class="c1"># blank = cluster default</span>
+</code></pre></div>
+<p><code>setup_cmd</code> runs in the workflow directory before every command. It
+must make <code>snakemake</code>, <code>patchworks</code> and <code>sbatch</code> available there.</p>
+</li>
+</ol>
+<h2 id="start-the-app">Start the app</h2>
+<p>On your own machine, or on a server inside your institute's network:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nb">cd</span><span class="w"> </span>patchworks/workflow/launcher
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>pip<span class="w"> </span>install<span class="w"> </span>-r<span class="w"> </span>requirements.txt<span class="w">      </span><span class="c1"># streamlit, paramiko, pyyaml</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>streamlit<span class="w"> </span>run<span class="w"> </span>app.py
+</code></pre></div>
+<p>The app opens at <a href="http://localhost:8501">http://localhost:8501</a>. To offer it to a team, run it
+on an internal server (<code>streamlit run app.py --server.address 0.0.0.0</code>),
+behind your usual reverse proxy or VPN. Everyone logs in with their own
+cluster account, and sessions are isolated per browser.</p>
+<div class="admonition warning">
+<p class="admonition-title">Don't host it publicly</p>
+<p>The login form takes real cluster passwords. Don't deploy it on a
+public service such as Streamlit Community Cloud. Keep it where only
+the people it is for can reach it.</p>
+</div>
+<h2 id="1-connect">1. Connect</h2>
+<p>In the sidebar:</p>
+<ol>
+<li>Pick a <strong>preset</strong>, or <em>Custom</em> and type the host and port.</li>
+<li>Enter your <strong>username</strong> and <strong>password</strong> and press <strong>Connect</strong>. The app
+   compares the server's host key with the pinned fingerprints and refuses
+   to connect if none match. A host with no pinned fingerprint is refused
+   as well, unless you tick <em>allow an unverified host key</em>. Only tick that
+   when you run the app yourself, on your own machine. The password is used
+   only to open the connection. It isn't stored, and the form clears it
+   straight away.</li>
+<li>Enter the <strong>workflow directory on the cluster</strong>, e.g.
+   <code>/home/&lt;user&gt;/patchworks/workflow</code>.</li>
+<li>Check the <strong>environment setup</strong> line, which comes pre-filled from the
+   preset.</li>
+</ol>
+<h2 id="2-configure-the-run-config-tab">2. Configure the run (Config tab)</h2>
+<p>First choose what to run:</p>
+<ul>
+<li><strong>One segmentation</strong>: one label image, run with <code>snakemake</code>.</li>
+<li><strong>Several segmentations + relations (multi)</strong>: for example nuclei, cells
+  and cilia on the same image, followed by the tables relating them. This
+  runs with <code>scripts/run_multi.py</code>, the command-line counterpart
+  described in <a href="../snakemake/#one-command-multiple-segmentations-relations">One command: multiple segmentations +
+  relations</a>.</li>
+</ul>
+<h3 id="shared-settings">Shared settings</h3>
+<p>These apply to every segmentation in the run:</p>
+<table>
+<thead>
+<tr>
+<th>Section</th>
+<th>Settings</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Input / output</td>
+<td><code>input</code> (a file on the cluster), <code>work_dir</code> (where everything is written)</td>
+</tr>
+<tr>
+<td>Conversion</td>
+<td>pyramid levels and chunking of the converted image, <code>compression</code>, <code>reuse_pyramid</code>, <code>shard</code>, <code>ngff_version</code></td>
+</tr>
+<tr>
+<td>Tiling</td>
+<td><code>level</code>, <code>tile_shape</code> (or <code>auto</code>), tiles per job, GPU memory, <code>skip_empty</code></td>
+</tr>
+<tr>
+<td>Merge and label pyramid</td>
+<td><code>stitch</code> (<code>touch</code> or <code>iou</code>), label pyramid, <code>sequential_labels</code>, <code>shard_labels</code>, <code>seam_report</code>, <code>merge_workers</code></td>
+</tr>
+<tr>
+<td>Notifications</td>
+<td><code>notify_email</code></td>
+</tr>
+</tbody>
+</table>
+<p>The settings mean the same as in the <a href="../snakemake/#3-configure-the-run">config
+reference</a>.</p>
+<h3 id="per-segmentation">Per segmentation</h3>
+<ul>
+<li><strong><code>label_name</code></strong>: the name of the label image, under
+  <code>image.zarr/labels/&lt;label_name&gt;</code>. It must be unique within a run.</li>
+<li><strong><code>channel</code></strong>, and optionally <strong><code>nuclei_channel</code></strong>: the second channel
+  given to Cellpose.</li>
+<li><strong><code>overlap</code></strong>: the halo around each tile. Use a single number, or
+  <code>[z, y, x]</code>.</li>
+<li><strong>Post-processing</strong>: <code>fill_holes</code> (off, 3-D, or per plane);
+  <code>open_radius</code>, which removes thin spurs (leave it at 0 for cilia);
+  <code>dilate</code>; <code>min_volume</code> / <code>max_volume</code>, in µm³.</li>
+</ul>
+<p>The <strong><code>method</code></strong> is one of:</p>
+<table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Settings</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>cellpose</strong></td>
+<td>Model, diameter (0 = estimate), 3-D, GPU. Other Cellpose arguments go in <em>extra cellpose kwargs</em> as YAML, e.g. <code>flow_threshold: 0.4</code>.</td>
+</tr>
+<tr>
+<td><strong>dog</strong></td>
+<td>Difference of Gaussians; see the <a href="../../examples/dog/">DoG example</a>. <code>sigma_units: um</code> gives the same physical blur along z and x/y. Filling in a <strong>PSF path</strong> turns on deconvolution first, which asks for wavelength, NA and immersion index. Leave <code>dup_rev_z</code> on <em>auto</em>: it mirrors thin tiles in z to avoid wrap-around ghosts that shift objects along z.</td>
+</tr>
+<tr>
+<td><strong>threshold</strong></td>
+<td>Otsu. Useful for a quick test.</td>
+</tr>
+<tr>
+<td><strong>custom</strong></td>
+<td>Your own function: give its module, function and keyword arguments. See <a href="../snakemake/#make-it-importable-on-the-cluster">Make it importable on the cluster</a>.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="relations-multi-only">Relations (multi only)</h3>
+<p>Each row of the <strong>Relations</strong> table relates every object of <code>a</code> to the
+<code>b</code> object it overlaps most. The result is written as an Excel workbook
+in <code>work_dir</code>. For example:</p>
+<table>
+<thead>
+<tr>
+<th>a</th>
+<th>b</th>
+<th>output (.xlsx)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>nuclei_labels</td>
+<td>cyto_labels</td>
+<td>nuclei_in_cells.xlsx</td>
+</tr>
+<tr>
+<td>cilia_labels</td>
+<td>cyto_labels</td>
+<td>cilia_in_cells.xlsx</td>
+</tr>
+</tbody>
+</table>
+<p>Add rows with the <strong>+</strong> under the table. <strong>Relate and bundle jobs (SLURM)</strong>
+sets the partition, memory, CPUs, time and QOS of the relate jobs; blank
+or 0 means the defaults. It can also pack the finished store into one
+<code>.zip</code> or <code>.iso</code> for download.</p>
+<h3 id="what-the-form-checks">What the form checks</h3>
+<p>As you type, the app shows:</p>
+<ul>
+<li>errors in the settings, using the same validation the workflow runs;</li>
+<li>for a multi run, whatever <code>run_multi.py</code> would refuse: duplicate label
+  names; segmentations that differ in <code>work_dir</code>, <code>input</code>, <code>tile_shape</code>,
+  <code>level</code> or conversion settings; relations naming an unknown label, or
+  relating a label to itself; outputs that aren't <code>.xlsx</code> or that repeat;</li>
+<li>
+<p>an <strong>Effective config</strong> panel for each segmentation. This is exactly
+  what Snakemake will run with: the generated file overlaid on the
+  cluster's <code>config/config.yaml</code>.</p>
+<p>A warning lists any key that comes from the cluster file rather than
+the form. Some of these differ from what you expect, such as a
+leftover <code>cellpose.flow_threshold</code>. Remove those keys from the
+cluster's <code>config/config.yaml</code>, or add them to <em>extra cellpose
+kwargs</em>.</p>
+</li>
+</ul>
+<h2 id="3-launch-launch-tab">3. Launch (Launch tab)</h2>
+<p><strong>Plan (tiles, memory, size -- no segmentation)</strong> runs <code>patchworks segment
+--plan</code>. It reports the number of tiles, the empty tiles, the memory per
+tile and the output size, without segmenting anything. It needs the
+converted image, so it only works once the workflow has converted the
+input at least once. For a multi run, pick the segmentation under <strong>plan
+for</strong>.</p>
+<p>Then choose a <strong>run mode</strong> and press <strong>Launch</strong>:</p>
+<table>
+<thead>
+<tr>
+<th>Mode</th>
+<th>What happens</th>
+<th>Use it for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Dry run</strong></td>
+<td><code>snakemake -n</code> (multi: <code>run_multi.py -n</code>). The output is shown right away.</td>
+<td>Always first: it catches missing files and bad paths.</td>
+</tr>
+<tr>
+<td><strong>Submit — controller as a SLURM job (recommended)</strong></td>
+<td>A small 1-CPU job runs Snakemake (or <code>run_multi.py</code>). That job submits one GPU job per batch of tiles and waits for them.</td>
+<td>Real runs.</td>
+</tr>
+<tr>
+<td><strong>Submit — controller on the login node</strong></td>
+<td>The controller runs detached (<code>setsid nohup</code>) on the login node.</td>
+<td>Short runs, or clusters that forbid jobs submitting jobs.</td>
+</tr>
+</tbody>
+</table>
+<p>The controller job's <strong>time</strong> must cover the whole run, from conversion
+to merge, plus the relations for a multi run. Its <strong>mem</strong>, <strong>partition</strong>,
+<strong>qos</strong> and <strong>account</strong> come from the preset. Set <strong>time</strong> generously: if
+the controller dies, Snakemake stops submitting new tiles, although jobs
+already queued finish.</p>
+<p>Nothing depends on your browser after launching. You can close the tab.</p>
+<div class="admonition tip">
+<p class="admonition-title">Resuming</p>
+<p>Launching the same settings again resumes the run: Snakemake skips the
+tiles that are already done. Change <code>work_dir</code> to start fresh.</p>
+</div>
+<h2 id="4-follow-the-run-jobs-tab">4. Follow the run (Jobs tab)</h2>
+<p>Every launch is recorded on the cluster, in
+<code>&lt;workflow dir&gt;/.streamlit_launcher_logs/jobs.jsonl</code>. The Jobs tab lists
+these jobs even after a reload or from another computer, as long as the
+same workflow directory is used. Pick a job to see:</p>
+<ul>
+<li>its SLURM state (<code>PENDING</code> / <code>RUNNING</code> / <code>DONE</code>) or, for a login-node
+  run, whether the process is alive;</li>
+<li>the last 300 lines of its log. Toggle <strong>auto-refresh every 15 s</strong> to
+  follow it.</li>
+</ul>
+<p>The per-tile GPU jobs show up in <code>squeue -u $USER</code> as usual. Their own logs
+are under <code>work_dir</code>; see <a href="../snakemake/#6-monitor">Monitor</a>.</p>
+<h2 id="files-the-launcher-writes">Files the launcher writes</h2>
+<table>
+<thead>
+<tr>
+<th>Path (on the cluster)</th>
+<th>Content</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>&lt;workflow dir&gt;/config/launcher_&lt;label&gt;_&lt;time&gt;.yaml</code></td>
+<td>a single run's complete config</td>
+</tr>
+<tr>
+<td><code>&lt;workflow dir&gt;/config/launcher_multi_&lt;time&gt;/seg_&lt;label&gt;.yaml</code></td>
+<td>one complete config per segmentation of a multi run</td>
+</tr>
+<tr>
+<td><code>&lt;workflow dir&gt;/config/launcher_multi_&lt;time&gt;/multi.yaml</code></td>
+<td>the segmentations and relations of a multi run</td>
+</tr>
+<tr>
+<td><code>&lt;workflow dir&gt;/.streamlit_launcher_logs/&lt;name&gt;.log</code></td>
+<td>the controller's log</td>
+</tr>
+<tr>
+<td><code>&lt;workflow dir&gt;/.streamlit_launcher_logs/&lt;name&gt;.sbatch</code></td>
+<td>the controller job script</td>
+</tr>
+<tr>
+<td><code>&lt;workflow dir&gt;/.streamlit_launcher_logs/jobs.jsonl</code></td>
+<td>the job registry</td>
+</tr>
+</tbody>
+</table>
+<p>The configs are ordinary workflow configs. You can re-run one from a
+terminal with <code>snakemake --configfile config/launcher_….yaml
+--workflow-profile profile/slurm</code>, or <code>python scripts/run_multi.py --config
+config/launcher_multi_…/multi.yaml --profile profile/slurm</code>. That makes
+the launcher a convenient way to write a correct config even if you run
+it by hand.</p>
+<h2 id="troubleshooting">Troubleshooting</h2>
+<table>
+<thead>
+<tr>
+<th>Symptom</th>
+<th>Cause / fix</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><em>host key … matches none of the pinned fingerprints</em></td>
+<td>The fingerprint in <code>clusters.yaml</code> is wrong, or the server's key changed. Check with the admins before updating it.</td>
+</tr>
+<tr>
+<td><em>no pinned fingerprint</em></td>
+<td>Add <code>host_key_fingerprints</code> to the preset, as described in <a href="#before-you-start">Before you start</a>.</td>
+</tr>
+<tr>
+<td>Connection fails although the password is right</td>
+<td>The cluster requires 2FA or key-only login. The launcher only supports password login.</td>
+</tr>
+<tr>
+<td><code>sbatch: command not found</code> or <code>snakemake: command not found</code></td>
+<td>The <strong>environment setup</strong> line doesn't set up the environment. Test it in an SSH session: <code>cd &lt;workflow dir&gt; &amp;&amp; &lt;setup line&gt; &amp;&amp; which snakemake sbatch</code>.</td>
+</tr>
+<tr>
+<td><em>plan failed -- it needs the converted image</em></td>
+<td>Launch once (or run <code>convert</code>) first. The plan reads the converted store.</td>
+</tr>
+<tr>
+<td>Job shows <code>DONE</code> right away</td>
+<td>The controller failed at startup. The log in the Jobs tab shows why, often a bad path in <code>input</code> or <code>work_dir</code>.</td>
+</tr>
+<tr>
+<td>Settings you didn't set show up in the run</td>
+<td>See the <strong>Effective config</strong> warning in the Config tab. They come from the cluster's <code>config/config.yaml</code>.</td>
+</tr>
+</tbody>
+</table>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../snakemake/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Cluster workflow (Snakemake)">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Cluster workflow (Snakemake)
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../cli/" class="md-footer__link md-footer__link--next" aria-label="Next: Command line">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                Command line
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      Copyright &copy; 2025 IMCF Basel
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["content.code.annotate", "content.code.copy", "content.tabs.link", "navigation.expand", "navigation.sections", "navigation.top", "navigation.footer", "toc.integrate", "search.highlight", "search.share"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>
