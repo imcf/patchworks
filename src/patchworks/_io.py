@@ -315,12 +315,15 @@ def auto_empty_threshold(
     win = [min(w, 256) if i >= n - 2 else w for i, w in enumerate(win)]
     samples = []
     for frac in (0.33, 0.5, 0.66):
+        # Clamp each window inside the array: an axis just longer than the
+        # window gave a negative start, which Python reads from the end --
+        # an empty or truncated sample instead of a full one.
         sl = tuple(
-            slice(
-                int(s * frac) - w // 2 if s > w else 0,
-                (int(s * frac) - w // 2 if s > w else 0) + w,
+            slice(start, start + w)
+            for start, w in (
+                (min(max(0, int(s * frac) - w // 2), s - w), w)
+                for s, w in zip(image.shape, win)
             )
-            for s, w in zip(image.shape, win)
         )
         samples.append(np.asarray(image[sl]).ravel())
     sample = np.concatenate(samples)

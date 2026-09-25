@@ -699,3 +699,17 @@ def test_tile_process_names_a_function_returning_the_wrong_shape(tmp_path):
     arr = da.from_array(_make_image((2, 64, 64)), chunks=(1, 64, 64))
     with pytest.raises(ValueError, match="cropping_fn.*returned shape"):
         tile_process(arr, cropping_fn, write_to=tmp_path / "o.zarr")
+
+
+def test_auto_empty_threshold_samples_full_windows(monkeypatch):
+    """Every sample window is full-size, even on an axis just over 64."""
+    import dask.array as da
+
+    from patchworks import _io
+
+    seen = []
+    monkeypatch.setattr(
+        _io, "_otsu_threshold", lambda s: seen.append(s.size) or 0.0
+    )
+    _io.auto_empty_threshold(da.zeros((4, 70, 300), dtype="uint16"), 0, 0)
+    assert seen == [3 * 4 * 64 * 64]
