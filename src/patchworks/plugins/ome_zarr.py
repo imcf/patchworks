@@ -746,6 +746,7 @@ def _to_zarr_level(
                 component=component,
                 overwrite=True,
                 zarr_format=fmt,
+                **zarr_compressor_kwargs(fmt),
             )
         return
     grp = _open_group(group_path)
@@ -757,6 +758,7 @@ def _to_zarr_level(
         chunks=inner,
         shards=sh,
         dtype=arr.dtype,
+        **zarr_compressor_kwargs(fmt),
     )
     # Rechunking to the shard size is the one place this module hands work to
     # dask's scheduler, and dask defaults to one thread per *machine* core --
