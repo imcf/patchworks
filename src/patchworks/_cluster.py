@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-from ._chunks import cpu_allocation
+from ._chunks import _get_available_memory, cpu_allocation
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +57,7 @@ def make_local_cluster(
     use_gpu: bool = False,
     n_workers: int | None = None,
     threads_per_worker: int = 1,
-    memory_limit: str | None = None,
+    memory_limit: str | int | None = "auto",
     **cluster_kwargs,
 ):
     """Create a process-based Dask cluster for tiled processing.
@@ -78,7 +78,13 @@ def make_local_cluster(
     threads_per_worker:
         Keep at 1 so a GIL-holding tile function doesn't block heartbeats.
     memory_limit:
-        Per-worker memory cap (e.g. ``"8GB"``).
+        Per-worker memory cap (e.g. ``"8GB"``). ``"auto"`` (default) splits
+        the memory this job may use (SLURM, cgroup and free RAM, see
+        ``safe_worker_count``) evenly across the workers. A limit is what
+        lets a worker spill, pause and restart before the OOM killer ends the
+        whole job; ``None`` disables it and all of that with it. (Not
+        distributed's own ``"auto"``, which scales by threads per core: one
+        single-threaded GPU worker on a 32-core node would get 1/32 of it.)
     **cluster_kwargs:
         Extra arguments forwarded to ``dask.distributed.LocalCluster``.
 
@@ -97,6 +103,8 @@ def make_local_cluster(
 
     if n_workers is None:
         n_workers = 1 if use_gpu else min(8, cpu_allocation())
+    if memory_limit == "auto":
+        memory_limit = max(1, _get_available_memory() // n_workers)
 
     cluster = LocalCluster(
         processes=True,

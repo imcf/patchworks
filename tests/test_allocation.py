@@ -275,3 +275,37 @@ def test_cpu_quota_caps_the_allocation(monkeypatch, tmp_path):
 
     assert _chunks._cgroup_cpu_limit() == 3
     assert _chunks.cpu_allocation() == 3
+
+
+def test_local_cluster_splits_the_job_memory_across_workers(monkeypatch):
+    """Each worker gets its share of the job's memory, not None (no limit)."""
+    # distributed needs the real psutil, not this module's stand-in; the
+    # memory figure is patched below instead.
+    monkeypatch.delitem(sys.modules, "psutil")
+    pytest.importorskip("distributed")
+    import distributed
+
+    from patchworks import _cluster
+
+    seen = {}
+
+    class _FakeCluster:
+        def __init__(self, **kwargs):
+            seen.update(kwargs)
+
+    class _FakeClient:
+        dashboard_link = ""
+
+        def __init__(self, cluster):
+            pass
+
+    monkeypatch.setattr(distributed, "LocalCluster", _FakeCluster)
+    monkeypatch.setattr(distributed, "Client", _FakeClient)
+    monkeypatch.setattr(_cluster, "_get_available_memory", lambda: 12 * GIB)
+
+    _cluster.make_local_cluster(n_workers=3)
+    assert seen["memory_limit"] == 4 * GIB
+    _cluster.make_local_cluster(use_gpu=True)
+    assert seen["memory_limit"] == 12 * GIB
+    _cluster.make_local_cluster(n_workers=2, memory_limit="8GB")
+    assert seen["memory_limit"] == "8GB"

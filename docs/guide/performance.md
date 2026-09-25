@@ -36,7 +36,8 @@ through. The URL is logged at the start of staging:
 INFO:patchworks._core:Dask dashboard for this run: http://127.0.0.1:8787/status
 ```
 
-This needs `distributed` (and `bokeh` for the UI) installed; if they are
+This needs `distributed` (and `bokeh` for the UI) installed —
+`pip install "patchworks[distributed]"` brings both; if they are
 missing, patchworks logs a warning and falls back to the threaded scheduler
 (no dashboard, same result). A cluster you start yourself
 (`make_local_cluster`) is used as-is instead.

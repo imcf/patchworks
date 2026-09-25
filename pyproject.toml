@@ -60,6 +60,9 @@ cellpose4 = ["cellpose>=4"]
 # cupy-cuda12x), install it separately to match your CUDA version.
 dog = ["pycudadecon"]
 gpu = ["nvidia-ml-py"]
+# distributed backs make_local_cluster and the live dashboard tile_process
+# opens for single-GPU runs (it falls back to threads without it).
+distributed = ["dask[distributed,diagnostics]"]
 # bioio enables converting any image format (CZI, LIF, ND2, OME-TIFF, …) to
 # OME-ZARR. Ships the common native readers (faster than going through Java)
 # plus bioio-bioformats, the Bio-Formats catch-all reader (needs a JVM).
@@ -124,7 +127,7 @@ dev = [
 ]
 docs = ["mkdocs-material>=9.0", "mkdocstrings[python]>=0.24"]
 all = [
-    "patchworks[io,gpu,bioio,imaris,napari]",
+    "patchworks[io,gpu,distributed,bioio,imaris,napari]",
     "psutil",
     "tqdm",
     "scikit-image",

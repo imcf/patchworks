@@ -44,6 +44,7 @@ Optional extras:
 
 ```bash
 pip install "patchworks[gpu]"       # GPU VRAM querying (nvidia-ml-py)
+pip install "patchworks[distributed]" # Dask cluster + live dashboard
 pip install "patchworks[cellpose]"  # Cellpose plugin (>=3.0, v3 or v4)
 pip install "patchworks[cellpose3]" # Cellpose plugin, pinned to v3.x
 pip install "patchworks[cellpose4]" # Cellpose plugin, pinned to v4+
