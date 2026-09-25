@@ -22,11 +22,15 @@ ImageJ/resolution tags — and written into the NGFF ``coordinateTransformations
 so the µm/pixel sizing is preserved. Pass ``pixel_size=`` to override or to
 supply it for bare arrays.
 
-Downsampling uses strided (nearest-neighbour) subsampling — the correct,
-label-preserving choice — and only on **X and Y**; ``z`` (and channel/time)
-stay at full resolution. Every level is built by reading the *previous level
+Downsampling is only on **X and Y**; ``z`` (and channel/time) stay at full
+resolution. Images are **block-averaged** (each output pixel is the mean of
+the ``downscale x downscale`` block it covers), which keeps overview levels
+free of the aliasing and shot-noise speckle that plain decimation gives a
+fluorescence image. Labels are **decimated** (nearest-neighbour), the
+label-preserving choice: averaging ids would invent objects that never
+existed. Every level is built by reading the *previous level
 back from disk*, so the pyramid never materialises a whole volume in RAM.
-Because decimation needs no halo, levels are written zarr-natively: each
+Because neither method needs a halo, levels are written zarr-natively: each
 level's chunks are chosen as ``ceil(src_chunk / stride)`` so one task reads
 exactly one source chunk and writes exactly one output chunk, making peak
 memory ``n_workers × one chunk`` by construction. Explicit ``chunks=`` or
@@ -569,6 +573,63 @@ def _create_level_array(
     )
 
 
+DownsampleMethod = str  # "mean" or "nearest"
+_DOWNSAMPLE_METHODS = ("mean", "nearest")
+
+
+def _check_downsample(method: str) -> str:
+    if method not in _DOWNSAMPLE_METHODS:
+        raise ValueError(
+            f"downsample must be one of {_DOWNSAMPLE_METHODS}, got {method!r}"
+        )
+    return method
+
+
+def _downsample(
+    region: np.ndarray, strides: tuple[int, ...], method: str
+) -> np.ndarray:
+    """Downsample *region* by *strides*: decimate, or exact block mean.
+
+    The output has ``ceil(n / stride)`` voxels per axis either way. A block
+    cut short by the array edge is averaged over the voxels it has, not
+    padded, so edge pixels are not biased.
+
+    Parameters
+    ----------
+    region : np.ndarray
+        Source region, starting on a block boundary.
+    strides : tuple of int
+        Per-axis factor (1 = untouched).
+    method : str
+        ``"nearest"`` (every *stride*-th voxel; for labels) or ``"mean"``
+        (block average, rounded back to an integer dtype; for images).
+
+    Returns
+    -------
+    np.ndarray
+        The downsampled region, in *region*'s dtype.
+    """
+    if method == "nearest":
+        return region[tuple(slice(None, None, st) for st in strides)]
+    out = region
+    for ax, st in enumerate(strides):
+        if st == 1:
+            continue
+        n = out.shape[ax]
+        starts = np.arange(0, n, st)
+        out = np.add.reduceat(out, starts, axis=ax, dtype=np.float64)
+        counts = np.minimum(st, n - starts).astype(np.float64)
+        shape = [1] * out.ndim
+        shape[ax] = -1
+        out = out / counts.reshape(shape)
+    if out is region:
+        return region
+    if np.issubdtype(region.dtype, np.integer):
+        info = np.iinfo(region.dtype)
+        out = np.clip(np.rint(out), info.min, info.max)
+    return out.astype(region.dtype)
+
+
 def _stream_strided_level(
     src: "zarr.Array",
     dst: "zarr.Array",
@@ -576,11 +637,12 @@ def _stream_strided_level(
     n_workers: int = 4,
     label: str = "level",
     progress: bool = True,
+    method: str = "nearest",
 ) -> None:
-    """Write *dst* as the strided subsample of *src*, one chunk at a time.
+    """Write *dst* as the downsampled *src*, one chunk at a time.
 
-    Labels are downsampled by plain decimation, which needs no halo, so each
-    output chunk depends only on the source region that maps onto it. Peak
+    Neither decimation nor a block mean needs a halo, so each output chunk
+    depends only on the source region that maps onto it. Peak
     memory is therefore ``n_workers x (one source region + its subsample)``
     however large the image is -- unlike a dask ``rechunk``, whose threaded
     scheduler holds intermediates with no backpressure.
@@ -590,13 +652,14 @@ def _stream_strided_level(
     src, dst : zarr.Array
         Source level and the (already created) destination level.
     strides : tuple of int
-        Per-axis decimation step.
+        Per-axis downsampling factor.
+    method : str
+        ``"nearest"`` or ``"mean"``; see :func:`_downsample`.
     n_workers : int
         Threads used for the copy. zarr's codecs release the GIL, so threads
         are enough and avoid pickling a worker payload.
     """
     grid = [-(-s // c) for s, c in zip(dst.shape, dst.chunks)]
-    take = tuple(slice(None, None, st) for st in strides)
 
     def _one(idx: tuple[int, ...]) -> None:
         out_sl = tuple(
@@ -607,7 +670,7 @@ def _stream_strided_level(
             slice(o.start * st, min(o.stop * st, s))
             for o, st, s in zip(out_sl, strides, src.shape)
         )
-        dst[out_sl] = np.asarray(src[src_sl])[take]
+        dst[out_sl] = _downsample(np.asarray(src[src_sl]), strides, method)
 
     indices = list(_iproduct(*[range(g) for g in grid]))
     total = len(indices)
@@ -950,6 +1013,7 @@ def _write_pyramid(
     write_base: bool = True,
     shard: ShardSpec = False,
     progress: bool = True,
+    downsample: str = "nearest",
 ) -> list[dict]:
     """Write pyramid levels into *group_path* and return NGFF datasets.
 
@@ -983,6 +1047,9 @@ def _write_pyramid(
         Sharding request (see :func:`_shard_for`).
     progress : bool
         Show a per-level progress bar.
+    downsample : str
+        ``"mean"`` (images) or ``"nearest"`` (labels); see
+        :func:`_downsample`.
 
     Returns
     -------
@@ -1015,7 +1082,27 @@ def _write_pyramid(
             # chunking may not line up with the source chunks -- both want the
             # dask path.
             src = da.from_zarr(group_path, component=prev_name)
-            nxt = src[tuple(slice(None, None, st) for st in strides)]
+            if downsample == "nearest":
+                nxt = src[tuple(slice(None, None, st) for st in strides)]
+            else:
+                # Blocks must start on a stride boundary, so every chunk
+                # (but the last) is a whole number of strides.
+                src = src.rechunk(
+                    tuple(
+                        max(st, (c // st) * st)
+                        for c, st in zip(src.chunksize, strides)
+                    )
+                )
+                nxt = src.map_blocks(
+                    _downsample,
+                    strides,
+                    downsample,
+                    chunks=tuple(
+                        tuple(-(-c // st) for c in dim)
+                        for dim, st in zip(src.chunks, strides)
+                    ),
+                    dtype=src.dtype,
+                )
             nxt = nxt.rechunk(chunks or _default_chunks(nxt.shape, axes))
             _to_zarr_level(nxt, group_path, str(i), shard, progress)
             next_shape = nxt.shape
@@ -1052,6 +1139,7 @@ def _write_pyramid(
                 n_workers=cpu_allocation(),
                 label=f"{Path(group_path).name}/{i}",
                 progress=progress,
+                method=downsample,
             )
         scale = [base_scale[k] * (strides[k] ** i) for k in range(len(axes))]
         datasets.append(_dataset(str(i), scale))
@@ -1684,6 +1772,7 @@ def to_ome_zarr(
     progress: bool = True,
     overwrite: bool = False,
     ngff_version: Union[str, None] = "auto",
+    downsample: str = "mean",
 ) -> str:
     """Write *source* as a pyramidal, calibrated OME-ZARR store.
 
@@ -1742,15 +1831,19 @@ def to_ome_zarr(
         instead of rebuilding the pyramid (faster, no recompute), keeping each
         level's native scale. Ignored for other inputs; falls back to a
         rebuild if the Imaris levels can't be read. Default ``False`` (rebuild,
-        for a consistent XY-only, nearest-neighbour NGFF pyramid).
+        for a consistent XY-only NGFF pyramid).
     overwrite : bool, optional
         Overwrite an existing store at *out_path*.
     ngff_version : str or None, optional
         NGFF version (and therefore zarr format) to write: ``"auto"``
-        (default) follows the installed zarr -- 0.5 on v3, 0.4 on v2 --
-        while ``"0.4"`` pins the older, zarr-v2 layout for tools that
+        (default) writes 0.5 (zarr v3), while ``"0.4"`` pins the older, zarr-v2 layout for tools that
         cannot read 0.5 yet. 0.4 has no sharding codec, so ``shard`` is
         ignored there. See :func:`ngff_version`.
+    downsample : {"mean", "nearest"}, optional
+        How the pyramid's X/Y levels are made from the one above: ``"mean"``
+        (default) block-averages, which is what an image wants;
+        ``"nearest"`` keeps every *downscale*-th pixel, which is what a label
+        image wants (and what this wrote before).
 
     Returns
     -------
@@ -1797,6 +1890,7 @@ def to_ome_zarr(
                     exc,
                 )
 
+        _check_downsample(downsample)
         arr, axes, detected = _to_dask(source, axes, scene, sequence_pattern)
         if len(axes) != arr.ndim:
             raise ValueError(
@@ -1819,6 +1913,7 @@ def to_ome_zarr(
                 base_scale=base_scale,
                 shard=shard,
                 progress=progress,
+                downsample=downsample,
             )
         _write_multiscales(
             out, axes, datasets, Path(out).stem, calibrated=bool(ps)
@@ -1838,6 +1933,7 @@ def add_pyramid(
     shard: ShardSpec = False,
     progress: bool = True,
     ngff_version: Union[str, None] = "auto",
+    downsample: Union[str, None] = None,
 ) -> str:
     """Add downsampled pyramid levels to an existing single-resolution zarr.
 
@@ -1873,10 +1969,14 @@ def add_pyramid(
         Show a per-level dask progress bar (default ``True``).
     ngff_version : str or None, optional
         NGFF version (and therefore zarr format) to write: ``"auto"``
-        (default) follows the installed zarr -- 0.5 on v3, 0.4 on v2 --
-        while ``"0.4"`` pins the older, zarr-v2 layout for tools that
+        (default) writes 0.5 (zarr v3), while ``"0.4"`` pins the older, zarr-v2 layout for tools that
         cannot read 0.5 yet. 0.4 has no sharding codec, so ``shard`` is
         ignored there. See :func:`ngff_version`.
+    downsample : {"mean", "nearest"} or None, optional
+        How each level is made from the one above (see :func:`to_ome_zarr`).
+        ``None`` (default) picks ``"nearest"`` for an NGFF label image (an
+        ``image-label`` group, or one under ``labels/``) and ``"mean"``
+        otherwise.
 
     Returns
     -------
@@ -1896,6 +1996,13 @@ def add_pyramid(
 
         gp = str(group_path)
         root = zarr.open_group(gp, mode="r")
+        if downsample is None:
+            is_label = (
+                read_ngff_attr(root.attrs, "image-label") is not None
+                or "labels" in Path(gp).parts[:-1]
+            )
+            downsample = "nearest" if is_label else "mean"
+        _check_downsample(downsample)
         multiscales = read_ngff_attr(root.attrs, "multiscales")
         if multiscales:
             base = multiscales[0]["datasets"][0]["path"]
@@ -1929,6 +2036,7 @@ def add_pyramid(
             write_base=False,
             shard=shard,
             progress=progress,
+            downsample=downsample,
         )
         _write_multiscales(
             gp, axes, datasets, Path(gp).stem, calibrated=bool(ps)
@@ -1992,8 +2100,7 @@ def register_labels(
         its own.
     ngff_version : str or None, optional
         NGFF version (and therefore zarr format) to write: ``"auto"``
-        (default) follows the installed zarr -- 0.5 on v3, 0.4 on v2 --
-        while ``"0.4"`` pins the older, zarr-v2 layout for tools that
+        (default) writes 0.5 (zarr v3), while ``"0.4"`` pins the older, zarr-v2 layout for tools that
         cannot read 0.5 yet. 0.4 has no sharding codec, so ``shard`` is
         ignored there. See :func:`ngff_version`.
 
@@ -2024,6 +2131,7 @@ def register_labels(
             chunks=chunks,
             shard=shard,
             progress=progress,
+            downsample="nearest",  # averaging ids invents objects
         )
         grp = _open_group(group)
         write_ngff_attrs(
@@ -2101,8 +2209,7 @@ def write_labels(
         :func:`register_labels`; see its docstring for what this enables.
     ngff_version : str or None, optional
         NGFF version (and therefore zarr format) to write: ``"auto"``
-        (default) follows the installed zarr -- 0.5 on v3, 0.4 on v2 --
-        while ``"0.4"`` pins the older, zarr-v2 layout for tools that
+        (default) writes 0.5 (zarr v3), while ``"0.4"`` pins the older, zarr-v2 layout for tools that
         cannot read 0.5 yet. 0.4 has no sharding codec, so ``shard`` is
         ignored there. See :func:`ngff_version`.
 

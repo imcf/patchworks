@@ -167,7 +167,7 @@ def test_imaris_without_reader(tmp_path):
 
 
 def test_pyramid_roundtrip(tmp_path):
-    """Levels are written, downsampled by striding, and read back intact."""
+    """Levels are written, block-averaged, and read back intact."""
     a = np.arange(8 * 8 * 8, dtype="int32").reshape(8, 8, 8)
     out = tmp_path / "vol.zarr"
 
@@ -181,9 +181,11 @@ def test_pyramid_roundtrip(tmp_path):
     assert l0.shape == (8, 8, 8)
     assert l1.shape == (8, 4, 4)
     assert l2.shape == (8, 2, 2)
-    # Full resolution is byte-identical; downsampling is nearest (label-safe).
+    # Full resolution is byte-identical; an image level is the 2x2 block mean
+    # (rounded half to even, as np.rint does).
     assert np.array_equal(np.asarray(l0), a)
-    assert np.array_equal(np.asarray(l1), a[:, ::2, ::2])
+    mean = a.reshape(8, 4, 2, 4, 2).mean(axis=(2, 4))
+    assert np.array_equal(np.asarray(l1), np.rint(mean).astype("int32"))
 
 
 def test_non_spatial_axis_not_downsampled(tmp_path):
@@ -297,7 +299,8 @@ def test_add_pyramid_to_flat_store(tmp_path):
     assert load_ome_zarr(store, channel=None, level=0).shape == (8, 8, 8)
     l1 = load_ome_zarr(store, channel=None, level=1)
     assert l1.shape == (8, 4, 4)  # Z preserved
-    assert np.array_equal(np.asarray(l1), base[:, ::2, ::2])
+    mean = base.reshape(8, 4, 2, 4, 2).mean(axis=(2, 4))
+    assert np.array_equal(np.asarray(l1), np.rint(mean).astype("int32"))
 
 
 def test_write_labels_into_store(tmp_path):
@@ -925,3 +928,46 @@ def test_sharded_write_bounds_its_dask_pool(tmp_path):
 
     assert seen["num_workers"] <= max(1, os.cpu_count() or 1)
     assert np.array_equal(np.asarray(zarr.open_array(f"{out}/0", mode="r")), a)
+
+
+def test_downsample_mean_is_an_exact_block_average():
+    """Partial edge blocks average what they have, and ints are rounded."""
+    from patchworks.plugins.ome_zarr import _downsample
+
+    a = np.array([[1, 3, 5], [3, 5, 8], [10, 10, 7]], dtype="uint16")
+    out = _downsample(a, (2, 2), "mean")
+    np.testing.assert_array_equal(out, [[3, 6], [10, 7]])
+    assert out.dtype == np.uint16
+    np.testing.assert_array_equal(
+        _downsample(a, (2, 2), "nearest"), [[1, 5], [10, 7]]
+    )
+
+
+@pytest.mark.parametrize("shard", [False, True])
+def test_image_pyramid_is_averaged_labels_are_not(tmp_path, shard):
+    """Images get block means (streamed or via dask); labels keep ids."""
+    rng = np.random.default_rng(1)
+    img = rng.integers(0, 4000, (2, 70, 90)).astype("uint16")
+    out = to_ome_zarr(
+        img, tmp_path / "a.zarr", axes="zyx", n_levels=3, shard=shard
+    )
+    lvl1 = np.asarray(zarr.open_group(str(out), mode="r")["1"][:])
+    expect = img.astype(float).reshape(2, 35, 2, 45, 2).mean(axis=(2, 4))
+    np.testing.assert_array_equal(lvl1, np.rint(expect).astype("uint16"))
+
+    labels = np.zeros((2, 70, 90), "int32")
+    labels[:, :, ::2] = 7  # averaging would invent 3s and 4s
+    write_labels(out, labels, name="cells", n_levels=2, shard=shard)
+    lab1 = np.asarray(zarr.open_group(f"{out}/labels/cells", mode="r")["1"][:])
+    assert set(np.unique(lab1)) <= {0, 7}
+
+
+def test_nearest_downsampling_can_still_be_asked_for(tmp_path):
+    img = np.arange(2 * 8 * 8, dtype="uint16").reshape(2, 8, 8)
+    out = to_ome_zarr(
+        img, tmp_path / "a.zarr", axes="zyx", n_levels=2, downsample="nearest"
+    )
+    lvl1 = zarr.open_group(str(out), mode="r")["1"][:]
+    np.testing.assert_array_equal(lvl1, img[:, ::2, ::2])
+    with pytest.raises(ValueError, match="downsample"):
+        to_ome_zarr(img, tmp_path / "b.zarr", axes="zyx", downsample="max")
