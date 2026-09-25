@@ -51,7 +51,7 @@ try:
     )
     _CELLPOSE_V4 = _CELLPOSE_VERSION[0] >= 4
 except ImportError:
-    _cellpose_models = None  # type: ignore[assignment]
+    _cellpose_models = None
     _CELLPOSE_VERSION = (0, 0)
     _CELLPOSE_V4 = False
 

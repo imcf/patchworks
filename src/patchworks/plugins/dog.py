@@ -437,7 +437,7 @@ def segment(tile: np.ndarray, **kwargs: Any) -> np.ndarray:
 # ``segment`` takes **kwargs, so its own signature accepts anything. Point at
 # the function that really validates them so the workflow can reject a typo'd
 # key in `prepare` instead of on a GPU node hours later.
-segment.patchworks_kwargs_target = dog_label_fn
+setattr(segment, "patchworks_kwargs_target", dog_label_fn)
 
 
 # Keep the lower-level name available for advanced users

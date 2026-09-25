@@ -49,7 +49,7 @@ def _attach_log_file(path: str) -> None:
             pkg.removeHandler(h)
             h.close()
     handler = logging.FileHandler(path)
-    handler._patchworks_auto = True  # tag so we can find/replace it later
+    setattr(handler, "_patchworks_auto", True)  # to find/replace it later
     handler.setLevel(logging.INFO)
     handler.setFormatter(
         logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -895,7 +895,9 @@ def tile_process(
             meta=_meta,
         )
     else:
-        labeled = image.map_blocks(active_fn, dtype=np.int32, meta=_meta)
+        labeled = image.map_blocks(  # type: ignore[call-arg]
+            active_fn, dtype=np.int32, meta=_meta
+        )
 
     _tile_nbytes = int(np.prod(labeled.chunksize)) * labeled.dtype.itemsize
 

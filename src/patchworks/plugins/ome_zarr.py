@@ -895,7 +895,7 @@ def _to_zarr_level(
             arr.dtype,
         )
         with ctx:
-            arr.store(z, lock=False, compute=True)
+            arr.store(z, lock=False, compute=True)  # type: ignore[call-arg]
         return
     grp = _open_group(group_path)
     if component in grp:

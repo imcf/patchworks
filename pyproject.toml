@@ -127,6 +127,7 @@ dev = [
     "jsonschema>=4.18",
     "openpyxl",
     "ruff==0.15.18",
+    "mypy>=1.10",
 ]
 docs = ["mkdocs-material>=9.0", "mkdocstrings[python]>=0.24"]
 all = [
@@ -151,6 +152,29 @@ packages = ["src/patchworks"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.11"
+files = ["src/patchworks"]
+ignore_missing_imports = true
+warn_unused_ignores = true
+# Enforced now: arity and unpacking, undefined names and attributes, calls
+# with wrong or missing arguments -- the classes that are real bugs here.
+# Off for now: numpy/zarr/dask typing noise (zarr attrs are loosely typed
+# JSON, dask's decorated methods confuse call checks, and variables such as
+# tile_process's `image` are narrowed from "path or array" by reassignment).
+# Tighten module by module by removing codes from this list.
+disable_error_code = [
+    "union-attr",
+    "arg-type",
+    "index",
+    "operator",
+    "call-overload",
+    "type-var",
+    "func-returns-value",
+    "assignment",
+    "return-value",
+]
 
 [tool.ruff]
 line-length = 80

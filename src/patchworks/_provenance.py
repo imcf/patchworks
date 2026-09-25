@@ -37,7 +37,7 @@ def provenance(**settings: Any) -> dict[str, Any]:
     >>> rec["settings"]["stitch"], "patchworks" in rec["versions"]
     ('iou', True)
     """
-    record = {
+    record: dict[str, Any] = {
         "created": _dt.datetime.now(_dt.timezone.utc).isoformat(
             timespec="seconds"
         ),
@@ -49,6 +49,7 @@ def provenance(**settings: Any) -> dict[str, Any]:
         "settings": settings,
     }
     record["versions"] = {k: v for k, v in record["versions"].items() if v}
+    # A JSON round trip turns anything unserialisable into its string form.
     return json.loads(json.dumps(record, default=str))
 
 
