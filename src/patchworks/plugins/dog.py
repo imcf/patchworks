@@ -233,6 +233,148 @@ def dog_label_fn(
     return partial(_run, dog_dict=cfg)
 
 
+# pycudadecon.decon's keywords, by the step they configure. The one-shot
+# decon() rebuilds the OTF and re-initialises cudaDecon on every call -- for
+# every tile -- so the plugin drives the steps itself and caches both.
+_OTF_KEYS = (
+    "dzpsf",
+    "dxpsf",
+    "wavelength",
+    "na",
+    "nimm",
+    "otf_bgrd",
+    "krmax",
+    "fixorigin",
+    "cleanup_otf",
+    "max_otf_size",
+    "skewed_decon",
+)
+_INIT_KEYS = (
+    "dzdata",
+    "dxdata",
+    "dzpsf",
+    "dxpsf",
+    "deskew",
+    "rotate",
+    "width",
+    "skewed_decon",
+)
+_RUN_KEYS = (
+    "background",
+    "n_iters",
+    "shift",
+    "napodize",
+    "nz_blend",
+    "pad_val",
+    "dup_rev_z",
+    "skewed_decon",
+)
+# Per process: cudaDecon keeps one global context, so one cached state.
+_decon_state: dict[str, Any] = {}
+
+
+def _drop_decon_state() -> None:
+    """Release cudaDecon's context and forget the cache (OOM, process end)."""
+    if _decon_state.get("ctx_key") is not None:
+        try:
+            import pycudadecon
+
+            pycudadecon.rl_cleanup()
+        except Exception:  # pragma: no cover - best effort on the way out
+            logger.debug("rl_cleanup failed", exc_info=True)
+    otf_dir = _decon_state.get("otf_dir")
+    _decon_state.clear()
+    if otf_dir:
+        import shutil
+
+        shutil.rmtree(otf_dir, ignore_errors=True)
+
+
+def _cached_decon(img: np.ndarray, kwargs: dict[str, Any]) -> np.ndarray:
+    """``pycudadecon.decon(img, **kwargs)``, with its setup cached per process.
+
+    The OTF is generated once per PSF + OTF settings, and cudaDecon is
+    initialised once per tile shape (edge tiles differ, and re-initialise).
+    A PSF given as an array, or any keyword the cache does not model, falls
+    back to the uncached one-shot call.
+    """
+    import os
+
+    import pycudadecon
+
+    known = {"psf", *_OTF_KEYS, *_INIT_KEYS, *_RUN_KEYS}
+    psf = kwargs.get("psf")
+    if not isinstance(psf, (str, os.PathLike)) or set(kwargs) - known:
+        return pycudadecon.decon(images=img, **kwargs)
+
+    otf_kw = {k: kwargs[k] for k in _OTF_KEYS if k in kwargs}
+    otf_key = (str(psf), repr(sorted(otf_kw.items())))
+    if _decon_state.get("otf_key") != otf_key:
+        import tempfile
+
+        _drop_decon_state()
+        otf_dir = tempfile.mkdtemp(prefix="pws_otf_")
+        path = os.path.join(otf_dir, "otf.tif")
+        pycudadecon.make_otf(str(psf), path, **otf_kw)
+        _decon_state.update(otf_key=otf_key, otf_path=path, otf_dir=otf_dir)
+        if not _decon_state.get("atexit"):
+            import atexit
+
+            atexit.register(_drop_decon_state)
+            _decon_state["atexit"] = True
+
+    init_kw = {k: kwargs[k] for k in _INIT_KEYS if k in kwargs}
+    ctx_key = (tuple(img.shape), otf_key, repr(sorted(init_kw.items())))
+    if _decon_state.get("ctx_key") != ctx_key:
+        if _decon_state.get("ctx_key") is not None:
+            pycudadecon.rl_cleanup()
+        pycudadecon.rl_init(img.shape, _decon_state["otf_path"], **init_kw)
+        _decon_state["ctx_key"] = ctx_key
+    return pycudadecon.rl_decon(
+        img, **{k: kwargs[k] for k in _RUN_KEYS if k in kwargs}
+    )
+
+
+def _axial_fwhm_um(wavelength_nm: float, na: float, n: float) -> float:
+    """Widefield axial FWHM, ``0.88 lambda / (n - sqrt(n^2 - NA^2))``."""
+    na = min(na, n * 0.999)
+    return 0.88 * (wavelength_nm / 1000) / (n - (n * n - na * na) ** 0.5)
+
+
+def _resolve_dup_rev_z(
+    kwargs: dict[str, Any], shape: tuple[int, ...]
+) -> dict[str, Any]:
+    """Decide ``dup_rev_z: "auto"`` for a tile of *shape*.
+
+    cudaDecon's FFTs wrap around in z, so on a tile only a few PSF lengths
+    deep, light from its top planes bleeds into its bottom ones (and back):
+    faint ghost copies of objects near either face. ``dup_rev_z`` mirrors
+    the stack in z first, which removes the wrap at twice the z-work. "auto"
+    turns it on when the tile is shallower than 4 axial FWHMs of the PSF
+    (estimated from wavelength, NA and immersion index -- the same values
+    the OTF is built from).
+    """
+    if kwargs.get("dup_rev_z") != "auto":
+        return kwargs
+    fwhm = _axial_fwhm_um(
+        float(kwargs.get("wavelength", 520)),
+        float(kwargs.get("na", 1.25)),
+        float(kwargs.get("nimm", 1.3)),
+    )
+    depth = shape[0] * float(kwargs.get("dzdata", 0.5))
+    on = depth < 4 * fwhm
+    key = (tuple(shape), on)
+    if _decon_state.get("dup_logged") != key:
+        logger.info(
+            "dup_rev_z auto: tile depth %.2f um vs axial FWHM %.2f um -> %s",
+            depth,
+            fwhm,
+            "mirroring in z (tile too shallow for the PSF)" if on else "off",
+        )
+        _decon_state["dup_logged"] = key
+    return {**kwargs, "dup_rev_z": on}
+
+
 def _physical_sigma(
     sigma: float | tuple[float, ...], voxel_size: dict[str, float]
 ) -> tuple[float, ...]:
@@ -284,6 +426,8 @@ def _run(block: np.ndarray, dog_dict: dict[str, Any]) -> np.ndarray:
     return retry_on_oom(
         lambda: _segment_once(block, dog_dict, use_gpu),
         enabled=gpu_involved,
+        # Give the co-tenant cudaDecon's buffers too, not just cupy's pool.
+        on_release=_drop_decon_state,
     )
 
 
@@ -355,15 +499,8 @@ def _segment_once(
 
     decon_kwargs = dog_dict["decon_kwargs"]
     if decon_kwargs is not None:
-        # ponytail: re-inits the GPU/OTF context on every tile via the
-        # one-shot decon() API. Ceiling: per-tile setup cost dominates on
-        # many small tiles. Upgrade: cache a pycudadecon.RLContext per
-        # worker process (see cellpose.py's _model_cache) if that shows up
-        # in the per-tile timing that tile_process logs.
-        from pycudadecon import decon
-
         before = img.shape
-        img = decon(images=img, **decon_kwargs)
+        img = _cached_decon(img, _resolve_dup_rev_z(decon_kwargs, img.shape))
         if img.shape != before:
             # cudaDecon returns a slightly smaller volume for some input
             # sizes (e.g. (14,1024,1024) -> (13,1020,1020) on an edge tile).

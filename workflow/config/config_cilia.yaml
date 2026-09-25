@@ -57,3 +57,8 @@ custom:
       wavelength: 525
       na: 1.4
       nimm: 1.515
+      # cudaDecon's FFTs wrap in z: on a shallow tile, light from the top
+      # planes bleeds into the bottom ones -- faint ghost copies near both
+      # faces. "auto" mirrors the stack in z (2x the z-work) whenever the
+      # tile is shallower than 4 axial FWHMs of this PSF; true/false force it.
+      # dup_rev_z: "auto"
