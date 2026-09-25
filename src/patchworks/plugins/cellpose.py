@@ -4,11 +4,11 @@ Requires cellpose >= 3.0 (compatible with v3 and v4).
 
 Usage
 -----
->>> from patchworks.plugins.cellpose import cellpose_fn
->>> from patchworks import tile_process
+>>> from patchworks.plugins.cellpose import cellpose_fn  # doctest: +SKIP
+>>> from patchworks import tile_process  # doctest: +SKIP
 >>>
->>> fn = cellpose_fn("cyto3", gpu=True, diameter=30)
->>> result = tile_process("image.zarr", fn, tile_shape=(1, 2048, 2048),
+>>> fn = cellpose_fn("cyto3", gpu=True, diameter=30)  # doctest: +SKIP
+>>> result = tile_process("image.zarr", fn, tile_shape=(1, 2048, 2048),  # doctest: +SKIP
 ...                       overlap=20, write_to="labels.zarr", progress=True)
 """
 
@@ -164,25 +164,25 @@ def cellpose_fn(
     --------
     Greyscale 2-D:
 
-    >>> fn = cellpose_fn("cyto3", gpu=True, diameter=30)
-    >>> result = tile_process("image.zarr", fn, tile_shape=(1, 2048, 2048), overlap=20)
+    >>> fn = cellpose_fn("cyto3", gpu=True, diameter=30)  # doctest: +SKIP
+    >>> result = tile_process("image.zarr", fn, tile_shape=(1, 2048, 2048), overlap=20)  # doctest: +SKIP
 
     Nuclear segmentation:
 
-    >>> fn = cellpose_fn("nuclei", diameter=15)
-    >>> result = tile_process("image.zarr", fn, channel=1)
+    >>> fn = cellpose_fn("nuclei", diameter=15)  # doctest: +SKIP
+    >>> result = tile_process("image.zarr", fn, channel=1)  # doctest: +SKIP
 
     3-D with an explicit anisotropy:
 
-    >>> fn = cellpose_fn("cyto3", gpu=True, do_3D=True, anisotropy=3.0, diameter=20)
-    >>> from functools import partial
-    >>> from patchworks import auto_tile_shape_cellpose, tile_process
-    >>> tile_fn = partial(auto_tile_shape_cellpose, do_3D=True, use_gpu=True, diameter=20)
-    >>> result = tile_process("image.zarr", fn, tile_shape=tile_fn, overlap=10)
+    >>> fn = cellpose_fn("cyto3", gpu=True, do_3D=True, anisotropy=3.0, diameter=20)  # doctest: +SKIP
+    >>> from functools import partial  # doctest: +SKIP
+    >>> from patchworks import auto_tile_shape_cellpose, tile_process  # doctest: +SKIP
+    >>> tile_fn = partial(auto_tile_shape_cellpose, do_3D=True, use_gpu=True, diameter=20)  # doctest: +SKIP
+    >>> result = tile_process("image.zarr", fn, tile_shape=tile_fn, overlap=10)  # doctest: +SKIP
 
     3-D with anisotropy derived from the image's own calibration:
 
-    >>> fn = cellpose_fn("cyto3", gpu=True, do_3D=True, diameter=20,
+    >>> fn = cellpose_fn("cyto3", gpu=True, do_3D=True, diameter=20,  # doctest: +SKIP
     ...                  voxel_size={"z": 0.24, "y": 0.10833, "x": 0.10833})
     """
     _require_cellpose()

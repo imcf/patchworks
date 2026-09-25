@@ -1244,19 +1244,19 @@ def merge_tile_labels(
     --------
     **From a dask array of per-tile labels:**
 
-    >>> import dask.array as da
-    >>> from patchworks import merge_tile_labels
+    >>> import dask.array as da  # doctest: +SKIP
+    >>> from patchworks import merge_tile_labels  # doctest: +SKIP
     >>>
     >>> # your own tiling + segmentation
-    >>> image = da.from_zarr("image.zarr").rechunk((1, 1024, 1024))
-    >>> labeled = image.map_blocks(my_segment_fn, dtype="int32",
+    >>> image = da.from_zarr("image.zarr").rechunk((1, 1024, 1024))  # doctest: +SKIP
+    >>> labeled = image.map_blocks(my_segment_fn, dtype="int32",  # doctest: +SKIP
     ...                            meta=np.empty((0,) * image.ndim, dtype="int32"))
     >>>
-    >>> merged = merge_tile_labels(labeled, write_to="labels.zarr", progress=True)
+    >>> merged = merge_tile_labels(labeled, write_to="labels.zarr", progress=True)  # doctest: +SKIP
 
     **From a pre-staged zarr store (your pipeline already wrote labels):**
 
-    >>> merged = merge_tile_labels(
+    >>> merged = merge_tile_labels(  # doctest: +SKIP
     ...     "my_staged_labels.zarr",
     ...     input_component="raw_labels",
     ...     write_to="merged_labels.zarr",
@@ -1266,7 +1266,7 @@ def merge_tile_labels(
     **Trim overlap halos before merging:**
 
     >>> # if labeled was computed with da.overlap.overlap(depth=20)
-    >>> merged = merge_tile_labels(labeled, write_to="labels.zarr", overlap=20)
+    >>> merged = merge_tile_labels(labeled, write_to="labels.zarr", overlap=20)  # doctest: +SKIP
     """
     import dask.array as da
 

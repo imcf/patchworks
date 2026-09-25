@@ -13,13 +13,13 @@ napari is an optional, GUI-heavy dependency. Install it with
 
 Usage
 -----
->>> from patchworks import tile_process
->>> from patchworks.plugins.napari import view_in_napari
+>>> from patchworks import tile_process  # doctest: +SKIP
+>>> from patchworks.plugins.napari import view_in_napari  # doctest: +SKIP
 >>>
 >>> # labels are written into scan.zarr/labels/ by default …
->>> tile_process("scan.zarr", fn)
+>>> tile_process("scan.zarr", fn)  # doctest: +SKIP
 >>> # … so the viewer finds and overlays them with no labels= argument:
->>> view_in_napari("scan.zarr")
+>>> view_in_napari("scan.zarr")  # doctest: +SKIP
 """
 
 from __future__ import annotations

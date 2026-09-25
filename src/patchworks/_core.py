@@ -528,20 +528,20 @@ def tile_process(
     --------
     **Any threshold function:**
 
-    >>> from skimage.filters import threshold_otsu
-    >>> from skimage.measure import label
+    >>> from skimage.filters import threshold_otsu  # doctest: +SKIP
+    >>> from skimage.measure import label  # doctest: +SKIP
     >>>
-    >>> def my_fn(tile):
+    >>> def my_fn(tile):  # doctest: +SKIP
     ...     return label(tile > threshold_otsu(tile)).astype("int32")
     >>>
-    >>> result = tile_process("image.zarr", my_fn, write_to="labels.zarr")
+    >>> result = tile_process("image.zarr", my_fn, write_to="labels.zarr")  # doctest: +SKIP
 
     **Cellpose (via the plugin):**
 
-    >>> from patchworks.plugins.cellpose import cellpose_fn
+    >>> from patchworks.plugins.cellpose import cellpose_fn  # doctest: +SKIP
     >>>
-    >>> fn = cellpose_fn("cyto3", gpu=True, diameter=30)
-    >>> result = tile_process(
+    >>> fn = cellpose_fn("cyto3", gpu=True, diameter=30)  # doctest: +SKIP
+    >>> result = tile_process(  # doctest: +SKIP
     ...     "image.zarr", fn,
     ...     tile_shape=(1, 2048, 2048),
     ...     overlap=20,
@@ -551,20 +551,20 @@ def tile_process(
 
     **StarDist:**
 
-    >>> from stardist.models import StarDist2D
-    >>> model = StarDist2D.from_pretrained("2D_versatile_fluo")
+    >>> from stardist.models import StarDist2D  # doctest: +SKIP
+    >>> model = StarDist2D.from_pretrained("2D_versatile_fluo")  # doctest: +SKIP
     >>>
-    >>> def stardist_fn(tile):
+    >>> def stardist_fn(tile):  # doctest: +SKIP
     ...     norm = tile.astype("float32") / tile.max()
     ...     labels, _ = model.predict_instances(norm)
     ...     return labels.astype("int32")
     >>>
-    >>> result = tile_process("image.zarr", stardist_fn,
+    >>> result = tile_process("image.zarr", stardist_fn,  # doctest: +SKIP
     ...                       tile_shape=(1, 1024, 1024), overlap=32)
 
     **Write directly to zarr (no RAM accumulation):**
 
-    >>> tile_process("image.zarr", fn, write_to="labels.zarr", progress=True)
+    >>> tile_process("image.zarr", fn, write_to="labels.zarr", progress=True)  # doctest: +SKIP
     """
     # In-process dask workers break the label merge. A GIL-holding fn starves
     # the worker heartbeat and the P2P barrier drops inputs →

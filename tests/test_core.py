@@ -543,6 +543,11 @@ def test_otsu_matches_scikit_image():
     assert _otsu_threshold(np.array([], "uint16")) == 0.0
 
 
+@__import__("pytest").mark.skipif(
+    not __import__("sys").platform.startswith("linux"),
+    reason="fork is only used (and safe) on Linux; macOS and Windows spawn, "
+    "which needs a __main__ guard by design",
+)
 def test_merge_pool_does_not_rerun_an_unguarded_script(tmp_path):
     """A script without a __main__ guard must still merge with >1 worker.
 

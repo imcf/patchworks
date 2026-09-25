@@ -83,11 +83,11 @@ def auto_overlap(
 
     Examples
     --------
-    >>> from patchworks import auto_overlap, tile_process
-    >>> from patchworks.plugins.cellpose import cellpose_fn
+    >>> from patchworks import auto_overlap, tile_process  # doctest: +SKIP
+    >>> from patchworks.plugins.cellpose import cellpose_fn  # doctest: +SKIP
     >>>
-    >>> fn = cellpose_fn("cyto3", gpu=True, diameter=30)
-    >>> result = tile_process("image.zarr", fn,
+    >>> fn = cellpose_fn("cyto3", gpu=True, diameter=30)  # doctest: +SKIP
+    >>> result = tile_process("image.zarr", fn,  # doctest: +SKIP
     ...                       tile_shape=(1, 2048, 2048),
     ...                       overlap=auto_overlap(30))
     >>> auto_overlap(15, voxel_size=(2.0, 0.1, 0.1))

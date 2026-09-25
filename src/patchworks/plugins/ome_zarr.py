@@ -42,8 +42,8 @@ and :func:`write_labels` (store a label image under the NGFF ``labels/`` group).
 
 Usage
 -----
->>> from patchworks.plugins.ome_zarr import to_ome_zarr
->>> to_ome_zarr("scan.ims", "scan.zarr")
+>>> from patchworks.plugins.ome_zarr import to_ome_zarr  # doctest: +SKIP
+>>> to_ome_zarr("scan.ims", "scan.zarr")  # doctest: +SKIP
 'scan.zarr'
 """
 
@@ -2007,10 +2007,10 @@ def to_ome_zarr(
 
     Examples
     --------
-    >>> from patchworks.plugins.ome_zarr import to_ome_zarr
-    >>> to_ome_zarr("scan.ims", "scan.zarr", n_levels=4)
+    >>> from patchworks.plugins.ome_zarr import to_ome_zarr  # doctest: +SKIP
+    >>> to_ome_zarr("scan.ims", "scan.zarr", n_levels=4)  # doctest: +SKIP
     'scan.zarr'
-    >>> to_ome_zarr(
+    >>> to_ome_zarr(  # doctest: +SKIP
     ...     "ZT18_Male4_Left/*.tif",
     ...     "ZT18_Male4_Left.zarr",
     ...     sequence_pattern=r"_T(?P<T>\\d+)_Z(?P<Z>\\d+)_C(?P<C>\\d+)_V\\d+",

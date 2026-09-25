@@ -6,23 +6,23 @@ components. CPU (scipy) or GPU (cupy) backed.
 
 Usage
 -----
->>> from patchworks.plugins.dog import dog_label_fn
->>> from patchworks import tile_process
+>>> from patchworks.plugins.dog import dog_label_fn  # doctest: +SKIP
+>>> from patchworks import tile_process  # doctest: +SKIP
 >>>
->>> fn = dog_label_fn(low_sigma=1.0, high_sigma=3.0, threshold=0.02)
->>> result = tile_process("image.zarr", fn, tile_shape=(1, 2048, 2048),
+>>> fn = dog_label_fn(low_sigma=1.0, high_sigma=3.0, threshold=0.02)  # doctest: +SKIP
+>>> result = tile_process("image.zarr", fn, tile_shape=(1, 2048, 2048),  # doctest: +SKIP
 ...                       overlap=8, write_to="labels.zarr", progress=True)
 
 With deconvolution first (widen ``overlap`` to cover the PSF support):
 
->>> fn = dog_label_fn(
+>>> fn = dog_label_fn(  # doctest: +SKIP
 ...     low_sigma=1.0, high_sigma=3.0, threshold=0.02,
 ...     decon_kwargs=dict(psf=psf, dxpsf=xy_scale, dxdata=xy_scale,
 ...                        dzpsf=z_scale, dzdata=z_scale,
 ...                        wavelength=wavelength, na=numerical_aperture,
 ...                        nimm=refractive_index),
 ... )
->>> result = tile_process("image.zarr", fn, tile_shape=(1, 2048, 2048), overlap=32)
+>>> result = tile_process("image.zarr", fn, tile_shape=(1, 2048, 2048), overlap=32)  # doctest: +SKIP
 
 For the Snakemake workflow's ``method: "custom"`` (see
 docs/guide/custom_segmentation.md), use the

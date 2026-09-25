@@ -9,20 +9,20 @@ consistent labels.
 
 Quick start
 -----------
->>> from patchworks import tile_process
+>>> from patchworks import tile_process  # doctest: +SKIP
 >>>
->>> def my_fn(tile):
+>>> def my_fn(tile):  # doctest: +SKIP
 ...     from skimage.filters import threshold_otsu
 ...     from skimage.measure import label
 ...     return label(tile > threshold_otsu(tile)).astype("int32")
 >>>
->>> result = tile_process("image.zarr", my_fn, write_to="labels.zarr")
+>>> result = tile_process("image.zarr", my_fn, write_to="labels.zarr")  # doctest: +SKIP
 
 With Cellpose:
 
->>> from patchworks.plugins.cellpose import cellpose_fn
->>> fn = cellpose_fn("cyto3", gpu=True, diameter=30)
->>> tile_process("image.zarr", fn, tile_shape=(1, 2048, 2048),
+>>> from patchworks.plugins.cellpose import cellpose_fn  # doctest: +SKIP
+>>> fn = cellpose_fn("cyto3", gpu=True, diameter=30)  # doctest: +SKIP
+>>> tile_process("image.zarr", fn, tile_shape=(1, 2048, 2048),  # doctest: +SKIP
 ...              overlap=20, write_to="labels.zarr", progress=True)
 """
 

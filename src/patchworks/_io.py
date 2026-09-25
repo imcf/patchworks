@@ -274,8 +274,8 @@ def load_ome_zarr(
 
     Examples
     --------
-    >>> arr = load_ome_zarr("image.zarr", channel=0)
-    >>> arr.shape
+    >>> arr = load_ome_zarr("image.zarr", channel=0)  # doctest: +SKIP
+    >>> arr.shape  # doctest: +SKIP
     (128, 2048, 2048)
     """
     source, prefix = open_zarr_source(store_path)
@@ -491,9 +491,9 @@ def estimate_empty_tiles(
 
     Examples
     --------
-    >>> info = estimate_empty_tiles("image.zarr", (120, 697, 697))
-    >>> print(f"{info['empty_fraction']:.0%} of tiles are background")
-    >>> labels = tile_process("image.zarr", fn, tile_shape=(120, 697, 697),
+    >>> info = estimate_empty_tiles("image.zarr", (120, 697, 697))  # doctest: +SKIP
+    >>> print(f"{info['empty_fraction']:.0%} of tiles are background")  # doctest: +SKIP
+    >>> labels = tile_process("image.zarr", fn, tile_shape=(120, 697, 697),  # doctest: +SKIP
     ...                       skip_empty=True, empty_threshold=info["threshold"])
     """
     n_spatial = len(tile_shape)

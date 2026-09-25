@@ -94,10 +94,10 @@ def make_local_cluster(
 
     Examples
     --------
-    >>> client, cluster = make_local_cluster(use_gpu=True)
-    >>> print("dashboard:", client.dashboard_link)
-    >>> result = tile_process("image.zarr", fn, write_to="labels.zarr")
-    >>> client.close(); cluster.close()
+    >>> client, cluster = make_local_cluster(use_gpu=True)  # doctest: +SKIP
+    >>> print("dashboard:", client.dashboard_link)  # doctest: +SKIP
+    >>> result = tile_process("image.zarr", fn, write_to="labels.zarr")  # doctest: +SKIP
+    >>> client.close(); cluster.close()  # doctest: +SKIP
     """
     from dask.distributed import Client, LocalCluster
 

@@ -28,6 +28,33 @@ jobs:
       - name: pytest
         run: pytest -q
 
+      - name: docstring examples
+        run: pytest -q --doctest-modules src
+
+  other-platforms:
+    # Not yet verified on macOS or Windows (no CI ran there before), so this
+    # job reports without failing the build; promote it into the matrix
+    # above once it is green.
+    runs-on: ${{ matrix.os }}
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: pip install -e ".[dev]"
+
+      - name: pytest
+        run: pytest -q
+
   minimum-versions:
     # The pyproject floors are only true if something runs on them.
     runs-on: ubuntu-latest

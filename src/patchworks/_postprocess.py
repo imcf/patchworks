@@ -7,12 +7,12 @@ labels.
 
 Usage
 -----
->>> from patchworks import tile_process, dilate_labels
->>> from patchworks.plugins.dog import dog_label_fn
+>>> from patchworks import tile_process, dilate_labels  # doctest: +SKIP
+>>> from patchworks.plugins.dog import dog_label_fn  # doctest: +SKIP
 >>>
->>> fn = dog_label_fn(low_sigma=1.0, high_sigma=3.0, threshold=0.02)
->>> fn = dilate_labels(fn, iterations=2)
->>> result = tile_process("image.zarr", fn, tile_shape=(1, 2048, 2048),
+>>> fn = dog_label_fn(low_sigma=1.0, high_sigma=3.0, threshold=0.02)  # doctest: +SKIP
+>>> fn = dilate_labels(fn, iterations=2)  # doctest: +SKIP
+>>> result = tile_process("image.zarr", fn, tile_shape=(1, 2048, 2048),  # doctest: +SKIP
 ...                       overlap=8, write_to="labels.zarr")
 """
 
