@@ -4,12 +4,44 @@ from __future__ import annotations
 
 import logging
 import os
+from itertools import product as _iproduct
 from pathlib import Path
 from typing import Any, Sequence, Union
 
 import numpy as np
 
 logger = logging.getLogger(__name__)
+
+
+def chunk_slices(
+    shape: Sequence[int], chunks: Sequence[int]
+) -> list[tuple[slice, ...]]:
+    """Every chunk's index expression, in all dimensions, row-major.
+
+    Iterating actual chunk boundaries (rather than z-slabs) keeps each read
+    bounded to one chunk's worth of memory, whatever the array's shape. The
+    row-major order matches ``spatial_tiles``, so chunk *i* is tile *i*.
+
+    Parameters
+    ----------
+    shape : sequence of int
+        Array shape.
+    chunks : sequence of int
+        Chunk shape.
+
+    Returns
+    -------
+    list of tuple of slice
+        One index expression per chunk; edge chunks are clipped to *shape*.
+    """
+    n_per_dim = [(s + c - 1) // c for s, c in zip(shape, chunks)]
+    return [
+        tuple(
+            slice(i * c, min((i + 1) * c, s))
+            for i, c, s in zip(idx, chunks, shape)
+        )
+        for idx in _iproduct(*[range(n) for n in n_per_dim])
+    ]
 
 
 def auto_overlap(

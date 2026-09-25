@@ -35,7 +35,7 @@ import dask.array as da
 import numpy as np
 import zarr
 
-from ._chunks import cpu_allocation
+from ._chunks import chunk_slices, cpu_allocation
 from ._io import zarr_compressor_kwargs
 from ._progress import track
 
@@ -405,14 +405,9 @@ def _make_globally_unique(arr, shape: tuple, chunk_shape: tuple) -> int:
         New maximum label (number of objects across all tiles, before the
         cross-boundary merge fuses touching pairs).
     """
-    n_per_dim = [(s + c - 1) // c for s, c in zip(shape, chunk_shape)]
     limit = np.iinfo(arr.dtype).max
     base = 0
-    for idx in _iproduct(*[range(n) for n in n_per_dim]):
-        sl = tuple(
-            slice(i * c, min((i + 1) * c, s))
-            for i, c, s in zip(idx, chunk_shape, shape)
-        )
+    for sl in chunk_slices(shape, chunk_shape):
         block = np.asarray(arr[sl])
         uniq = np.unique(block)
         uniq = uniq[uniq > 0]
@@ -825,19 +820,13 @@ def zarr_native_merge(
 
     # Row-major, matching spatial_tiles' order -- so chunk i is tile i and the
     # offsets line up with the per-tile counts.
-    chunk_slices = [
-        tuple(
-            slice(i * c, min((i + 1) * c, s))
-            for i, c, s in zip(idx, chunk_shape, shape)
-        )
-        for idx in _iproduct(*[range(n) for n in n_per_dim])
-    ]
+    slices = chunk_slices(shape, chunk_shape)
     # A chunk that wrote no labels is all background. Skipping it leaves the
     # output chunk unwritten, which zarr reads back as the fill value (0) and
     # never stores -- so an empty region costs neither I/O nor disk.
     tasks = [
         (sl, int(offsets[i]) if offsets is not None else 0)
-        for i, sl in enumerate(chunk_slices)
+        for i, sl in enumerate(slices)
         if has_labels is None or has_labels[i]
     ]
     if has_labels is not None and len(tasks) < n_chunks:

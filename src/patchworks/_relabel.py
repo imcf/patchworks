@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import logging
-from itertools import product as _iproduct
-
 import numpy as np
 import zarr
+
+from ._chunks import chunk_slices
 
 logger = logging.getLogger(__name__)
 
@@ -80,8 +80,8 @@ def relabel_sequential_zarr(store_path: str, component: str = "labels") -> int:
     """Relabel a written label zarr to contiguous ids, in place.
 
     Two-pass streaming algorithm — safe for arrays far larger than RAM.
-    Pass 1 collects unique ids (bounded memory: a Python ``set``, not the
-    voxels themselves). Pass 2 applies the lookup-table remap chunk by
+    Pass 1 collects each chunk's unique ids (memory bounded by the id count,
+    not the voxels themselves). Pass 2 applies the lookup-table remap chunk by
     chunk, writing back into the same store.
 
     Parameters
@@ -121,19 +121,16 @@ def relabel_sequential_zarr(store_path: str, component: str = "labels") -> int:
     # (step = z_chunks[0], slice z[i0:i0+step]) reads the full y/x extent per
     # step — for chunks like (120, 731, 731) that means (120, 37888, 27392)
     # = 464 GiB in one allocation (MemoryError).
-    n_per_dim = [(s + c - 1) // c for s, c in zip(z_shape, z_chunks)]
-    chunk_slices = [
-        tuple(
-            slice(i * c, min((i + 1) * c, s))
-            for i, c, s in zip(idx, z_chunks, z_shape)
-        )
-        for idx in _iproduct(*[range(n) for n in n_per_dim])
-    ]
+    slices = chunk_slices(z_shape, z_chunks)
 
-    uniq: set[int] = set()
-    for sl in chunk_slices:
-        uniq.update(np.unique(np.asarray(z[sl])).tolist())
-    sorted_ids = np.array(sorted(uniq), dtype=np.int64)
+    # Per-chunk unique arrays, merged by one np.unique -- no Python set of
+    # every id.
+    sorted_ids = np.unique(
+        np.concatenate(
+            [np.unique(np.asarray(z[sl])).astype(np.int64) for sl in slices]
+            or [np.empty(0, dtype=np.int64)]
+        )
+    )
     max_label = int(sorted_ids[-1]) if sorted_ids.size else 0
     if max_label > _LUT_WARN_THRESHOLD:
         logger.warning(
@@ -144,7 +141,7 @@ def relabel_sequential_zarr(store_path: str, component: str = "labels") -> int:
     lut, n = _sequential_lut(sorted_ids)
     # Use same dtype logic as relabel_sequential_array so output never overflows.
     out_dtype = np.uint16 if n < np.iinfo(np.uint16).max else np.uint32
-    for sl in chunk_slices:
+    for sl in slices:
         block = np.asarray(z[sl])
         z[sl] = lut[block].astype(out_dtype)
     logger.info("relabel_sequential_zarr: %d objects renumbered to 1..%d", n, n)
