@@ -55,6 +55,7 @@ from ._occupancy import (
 from ._postprocess import dilate_labels
 from ._relabel import relabel_sequential_array, relabel_sequential_zarr
 from ._relations import label_relations
+from ._seams import seam_report
 from ._volume_filter import (
     filter_labels_by_size,
     max_voxels_for_volume,
@@ -86,6 +87,7 @@ __all__ = [
     "relabel_sequential_array",
     "relabel_sequential_zarr",
     "label_relations",
+    "seam_report",
     "normalize_overlap",
     "spatial_tiles",
     "create_stage",

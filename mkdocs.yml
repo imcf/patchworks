@@ -62,6 +62,7 @@ nav:
   - Tile sizing: api/chunks.md
   - I/O helpers: api/io.md
   - Relabelling: api/relabel.md
+  - Seam report: api/seams.md
   - Cluster helpers: api/cluster.md
   - Plugins:
     - Cellpose: api/plugins/cellpose.md

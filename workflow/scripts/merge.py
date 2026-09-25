@@ -241,5 +241,27 @@ if not in_place:
     # is why the label counts above are read by path, not from snakemake.input.
     shutil.rmtree(stage_path(work_dir, label_name), ignore_errors=True)
     Path(f"{stage_path(work_dir, label_name)}.done").unlink(missing_ok=True)
+# Did the tiling leave marks? Compares how often objects end exactly on a
+# seam against planes inside the tiles; cheap (a sample of thin slabs) and
+# written next to the run for later comparison between configs.
+if cfg.get("seam_report", True):
+    from patchworks import seam_report
+
+    report = seam_report(
+        group,
+        manifest["tile_shape"],
+        max_faces=int(cfg.get("seam_report_faces", 64)),
+    )
+    Path(work_dir, label_name, "seams.json").write_text(
+        json.dumps(report, indent=2)
+    )
+    for ax, row in report["axes"].items():
+        interior = row["interior_rate"]
+        print(
+            f"[patchworks] seams axis {ax}: {100 * row['seam_rate']:.1f}% of "
+            f"labels end on a seam vs "
+            f"{'n/a' if interior is None else f'{100 * interior:.1f}%'} "
+            "inside tiles"
+        )
 print(f"[patchworks] labels written to {group}")
 open(snakemake.output[0], "w").close()  # noqa: F821

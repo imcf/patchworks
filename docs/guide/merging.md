@@ -137,6 +137,29 @@ rule for building 3-D objects out of 2-D planes. On the cluster, set
 With `merge_tile_labels`, pass the `halo_dir` that
 [`stage_tile`](../api/tile_process.md)`(..., halo_dir=...)` wrote.
 
+## Checking the seams
+
+A well-stitched result does not care where the tiles were. One that does
+shows it at the seams: objects ending abruptly on a tile boundary, because
+the tile on the other side decided differently or the pieces were not
+joined. [`seam_report`](../api/seams.md) measures exactly that, without
+ground truth: at each seam, the fraction of labels with nothing continuing
+on the other side, against the same fraction on planes halfway through the
+tiles, where nothing was stitched.
+
+```python
+from patchworks import seam_report
+
+report = seam_report("scan.zarr/labels/cells", tile_shape=(16, 1024, 1024))
+report["axes"][2]  # {'seam_rate': 0.04, 'interior_rate': 0.05, 'ratio': 0.8, ...}
+```
+
+A ratio near 1 means the seams are invisible. Well above it (a warning is
+logged past 2×), the tiling shows: raise `overlap` to about one object, or
+try `stitch="iou"`. `worst_seams` lists the faces to look at in the viewer.
+The cluster workflow runs it after every merge and writes
+`<work_dir>/<label_name>/seams.json` (`seam_report: false` turns it off).
+
 ## Resuming an interrupted run
 
 `tile_process(..., resume=True)` stages into a store named after the run's
