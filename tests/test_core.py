@@ -685,3 +685,17 @@ def test_relabel_sequential_keeps_every_object_without_background(tmp_path):
     z[:] = [[5, 5], [9, 7]]
     assert relabel_sequential_zarr(sp) == 3
     np.testing.assert_array_equal(z[:], [[1, 1], [3, 2]])
+
+
+def test_tile_process_names_a_function_returning_the_wrong_shape(tmp_path):
+    import dask.array as da
+    import pytest
+
+    from patchworks import tile_process
+
+    def cropping_fn(tile):
+        return np.zeros(tuple(s - 1 for s in tile.shape), "int32")
+
+    arr = da.from_array(_make_image((2, 64, 64)), chunks=(1, 64, 64))
+    with pytest.raises(ValueError, match="cropping_fn.*returned shape"):
+        tile_process(arr, cropping_fn, write_to=tmp_path / "o.zarr")

@@ -527,8 +527,17 @@ def tile_process(
             return np.zeros(block.shape, dtype=np.int32)
 
         t0 = time.perf_counter()
-        out = fn(block)
+        out = np.asarray(fn(block))
         dt = time.perf_counter() - t0
+        if out.shape != block.shape:
+            # Otherwise this surfaces deep in dask/zarr as a broadcast error
+            # that names neither fn nor the tile.
+            name = getattr(fn, "__name__", type(fn).__name__)
+            raise ValueError(
+                f"segmentation function {name!r} returned shape {out.shape} "
+                f"for a tile of shape {block.shape} (tile {loc}). It must "
+                "return one label per input voxel."
+            )
 
         with _progress_lock:
             _progress["done"] += 1
