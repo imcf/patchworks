@@ -846,9 +846,15 @@ def reshard_level(
     src = da.from_zarr(str(group_path), component=component)
     _to_zarr_level(src, str(group_path), tmp, shard, progress)
 
+    # Swap by renames only, deleting the original last: removing it first
+    # left a window in which a crash or a scheduler kill lost the level
+    # outright. Now the data exists under one of the two names throughout.
     old, new = Path(group_path) / component, Path(group_path) / tmp
-    shutil.rmtree(old)
+    backup = Path(group_path) / f"{component}__pre_reshard"
+    shutil.rmtree(backup, ignore_errors=True)
+    old.rename(backup)
     new.rename(old)
+    shutil.rmtree(backup)
 
     grp = _open_group(group_path)
     grp[component].attrs.update(attrs)
