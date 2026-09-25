@@ -35,7 +35,11 @@ def dilate_labels(
     Applies a single-pass grey dilation to whatever ``fn`` returns, before
     ``tile_process``/``stage_tile`` trim the overlap halo and merge across
     tile boundaries — so dilated labels still stitch correctly at tile
-    edges.
+    edges. Labels only grow into background: a voxel that already belongs
+    to an object keeps it, so touching objects do not eat into each other
+    (a bare max filter would let the higher id overwrite its neighbour).
+    Where two labels grow into the same background voxel, the higher id
+    takes it.
 
     Parameters
     ----------
@@ -92,10 +96,12 @@ def _run(
         import cupy as cp
         from cupyx.scipy.ndimage import grey_dilation
 
-        labels = cp.asnumpy(grey_dilation(cp.asarray(labels), size=size))
-    else:
-        from scipy.ndimage import grey_dilation
+        gpu = cp.asarray(labels)
+        grown = grey_dilation(gpu, size=size)
+        return cp.asnumpy(cp.where(gpu == 0, grown, gpu))
 
-        labels = grey_dilation(labels, size=size)
+    from scipy.ndimage import grey_dilation
 
-    return labels
+    labels = np.asarray(labels)
+    grown = grey_dilation(labels, size=size)
+    return np.where(labels == 0, grown, labels)

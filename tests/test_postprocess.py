@@ -39,3 +39,22 @@ def test_dilate_labels_picklable():
         iterations=2,
     )
     pickle.loads(pickle.dumps(fn))
+
+
+def test_dilate_labels_does_not_eat_a_touching_neighbour():
+    """Growth goes into background only; existing objects keep their voxels.
+
+    A bare max filter let the higher id overwrite its lower neighbour along
+    their shared edge, shrinking the neighbour instead of growing anything.
+    """
+    from patchworks import dilate_labels
+
+    labels = np.zeros((1, 8, 16), dtype="int32")
+    labels[0, 2:6, 2:8] = 3
+    labels[0, 2:6, 8:14] = 9  # touches 3 along x=7|8
+
+    dilated = dilate_labels(lambda t: labels, iterations=1)(labels)
+
+    assert ((labels == 3) <= (dilated == 3)).all()
+    assert ((labels == 9) <= (dilated == 9)).all()
+    assert (dilated > 0).sum() > (labels > 0).sum()
