@@ -426,3 +426,118 @@ def test_auto_tile_shape_charges_for_extra_channels():
 
     with pytest.raises(ValueError, match="n_channels"):
         auto_tile_shape(shape, dtype, n_channels=0)
+
+
+def test_stage_stores_never_collide(tmp_path):
+    """Two runs sharing a directory must each get their own stage store.
+
+    A fixed ``_pws_stage.zarr`` name let concurrent runs writing side by side
+    (``nuclei.zarr`` and ``cyto.zarr``) overwrite each other's tiles.
+    """
+    from patchworks._merge import _scratch_store
+
+    a, _ = _scratch_store(tmp_path, "stage")
+    b, _ = _scratch_store(tmp_path, "stage")
+    assert a != b
+    assert all(p.startswith(str(tmp_path)) for p in (a, b))
+
+
+def test_tile_process_leaves_no_scratch_behind(tmp_path):
+    """A successful run removes its stage store from the output directory."""
+    import dask.array as da
+
+    from patchworks import tile_process
+
+    arr = da.from_array(_make_image((2, 64, 64)), chunks=(1, 64, 64))
+    tile_process(arr, _label_fn, write_to=tmp_path / "out.zarr")
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["out.zarr"]
+
+
+def test_tile_process_cleans_up_when_fn_fails(tmp_path):
+    """A failing fn must not leave a stage store the size of the image."""
+    import dask.array as da
+    import pytest
+
+    from patchworks import tile_process
+
+    def boom(tile):
+        raise RuntimeError("segmentation failed")
+
+    arr = da.from_array(_make_image((2, 64, 64)), chunks=(1, 64, 64))
+    with pytest.raises(RuntimeError, match="segmentation failed"):
+        tile_process(arr, boom, write_to=tmp_path / "out.zarr", progress=False)
+    assert not [p for p in tmp_path.iterdir() if p.name.startswith("_pws_")]
+
+
+def test_tile_process_keep_stage_survives(tmp_path):
+    """keep_stage=True keeps the stage store (under a unique name)."""
+    import dask.array as da
+
+    from patchworks import tile_process
+
+    arr = da.from_array(_make_image((2, 64, 64)), chunks=(1, 64, 64))
+    tile_process(
+        arr,
+        _label_fn,
+        write_to=tmp_path / "out.zarr",
+        stage_dir=tmp_path / "stage",
+        keep_stage=True,
+        progress=False,
+    )
+    kept = list((tmp_path / "stage").iterdir())
+    assert len(kept) == 1 and kept[0].name.startswith("_pws_stage_")
+
+
+def test_tile_process_writes_no_log_file_by_default(tmp_path):
+    """A library call must not drop files next to the user's data."""
+    import dask.array as da
+
+    from patchworks import tile_process
+
+    arr = da.from_array(_make_image((2, 64, 64)), chunks=(1, 64, 64))
+    tile_process(arr, _label_fn, write_to=tmp_path / "out.zarr")
+    assert not (tmp_path / "patchworks.log").exists()
+
+
+def test_zarr_path_detection_tolerates_a_trailing_slash():
+    """``image.zarr/`` is still a store the labels go back into."""
+    from patchworks._core import _is_zarr_path
+
+    assert _is_zarr_path("/data/image.zarr")
+    assert _is_zarr_path("/data/image.zarr/")
+    assert not _is_zarr_path("/data/image.tif")
+
+
+def test_unknown_tile_shape_string_is_rejected():
+    import dask.array as da
+    import pytest
+
+    from patchworks import tile_process
+
+    arr = da.from_array(_make_image((2, 64, 64)), chunks=(1, 64, 64))
+    with pytest.raises(ValueError, match="Unknown tile_shape"):
+        tile_process(arr, _label_fn, tile_shape="big")
+
+
+def test_otsu_matches_scikit_image():
+    """The built-in Otsu is a faithful port, so skip_empty needs no skimage."""
+    import pytest
+
+    threshold_otsu = pytest.importorskip("skimage.filters").threshold_otsu
+    from patchworks._io import _otsu_threshold
+
+    rng = np.random.default_rng(0)
+    samples = [
+        rng.integers(0, 1000, 5000).astype("uint16"),
+        rng.integers(-500, 500, 3000).astype("int16"),
+        np.concatenate(
+            [rng.normal(10, 3, 3000), rng.normal(80, 10, 2000)]
+        ).astype("float32"),
+        np.concatenate(
+            [np.zeros(4000, "uint8"), rng.integers(50, 255, 1000, "uint8")]
+        ),
+        np.full(10, 7, "uint16"),
+    ]
+    for s in samples:
+        assert np.isclose(_otsu_threshold(s), threshold_otsu(s), atol=1e-3)
+    assert _otsu_threshold(np.array([], "uint16")) == 0.0

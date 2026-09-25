@@ -21,7 +21,9 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import tempfile
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from itertools import product as _iproduct
 from multiprocessing import Pool as _Pool
@@ -38,7 +40,6 @@ from ._progress import track
 
 logger = logging.getLogger(__name__)
 
-_ZARR_V3 = int(zarr.__version__.split(".")[0]) >= 3
 _LUT_WARN_THRESHOLD = 100_000_000  # warn when max_label > 100 M (LUT > 800 MB)
 
 # Attributes recording how far an in-place merge got. Needed because an
@@ -348,17 +349,14 @@ def _create_zarr_label_array(
     Returns
     -------
     zarr.Array
-        The newly created array (works on zarr v2 and v3).
+        The newly created array, in *group*'s own zarr format (a v3 codec
+        on a v2 array would be rejected).
     """
     if name in group:
         del group[name]
-    kwargs = zarr_compressor_kwargs()
-    if _ZARR_V3:
-        return group.create_array(
-            name, shape=shape, chunks=chunks, dtype=dtype, **kwargs
-        )
-    return group.zeros(
-        name, shape=shape, chunks=chunks, dtype=dtype, overwrite=True, **kwargs
+    kwargs = zarr_compressor_kwargs(group.metadata.zarr_format)
+    return group.create_array(
+        name, shape=shape, chunks=chunks, dtype=dtype, **kwargs
     )
 
 
@@ -515,6 +513,71 @@ def _offsets_from_counts(
     offsets = np.zeros(n_chunks, dtype=np.int64)
     np.cumsum(per_chunk[:-1], out=offsets[1:])
     return offsets
+
+
+def _scratch_store(base: Union[str, Path, None], name: str) -> tuple[str, str]:
+    """Path for a scratch zarr store, plus what to delete when done with it.
+
+    With a *base* directory the store gets a unique name inside it, so two
+    runs sharing a directory (two outputs side by side, or two label names
+    written into one image) can never overwrite each other's scratch data.
+    Without one, a fresh system temp directory holds it, and that directory is
+    what gets removed afterwards so no empty ``mkdtemp`` shells pile up.
+
+    Parameters
+    ----------
+    base : str, Path or None
+        Directory to create the store in, or None for a system temp dir.
+    name : str
+        Short label for the store (``"stage"``, ``"merge"``).
+
+    Returns
+    -------
+    tuple of str
+        ``(store_path, cleanup_path)`` -- pass *cleanup_path* to
+        :func:`_remove_scratch` once the store is no longer needed.
+    """
+    if base is None:
+        owned = tempfile.mkdtemp(prefix=f"pws_{name}_")
+        return os.path.join(owned, f"{name}.zarr"), owned
+    base = str(base)
+    os.makedirs(base, exist_ok=True)
+    path = os.path.join(base, f"_pws_{name}_{uuid.uuid4().hex[:12]}.zarr")
+    return path, path
+
+
+def _remove_scratch(cleanup_path: str | None) -> None:
+    """Delete a scratch store (or the temp dir holding it); never raises."""
+    if cleanup_path is None:
+        return
+    shutil.rmtree(cleanup_path, ignore_errors=True)
+    logger.info("Removed scratch store %s", cleanup_path)
+
+
+def _lut_scratch_dir(lut_nbytes: int, fallback: str) -> str:
+    """Create a temp directory with room for the merge LUT.
+
+    The system temp dir (``$TMPDIR``, which SLURM usually points at node-local
+    scratch) is preferred: it is local and fast to memory-map. On HPC nodes it
+    is also often small or RAM-backed, and a LUT runs to hundreds of MB, so
+    when it cannot hold the LUT with some headroom the directory is created
+    next to *fallback* (the output store) instead.
+    """
+    tmp = tempfile.gettempdir()
+    try:
+        roomy = shutil.disk_usage(tmp).free > 2 * lut_nbytes + 64 * 1024**2
+    except OSError:
+        roomy = False
+    if roomy:
+        return tempfile.mkdtemp(prefix="pws_lut_")
+    parent = os.path.dirname(os.path.abspath(fallback))
+    logger.info(
+        "Temp dir %s is short of space for a %.0f MB LUT; using %s",
+        tmp,
+        lut_nbytes / 1024**2,
+        parent,
+    )
+    return tempfile.mkdtemp(prefix="_pws_lut_", dir=parent)
 
 
 def zarr_native_merge(
@@ -738,7 +801,7 @@ def zarr_native_merge(
     # Save LUT to a temp .npy file so workers memory-map it (shared OS page cache).
     # Pickling the LUT array directly via multiprocessing initargs would
     # deserialize a full copy per worker — e.g. 4 workers × 800 MB = 3.2 GB.
-    _lut_dir = tempfile.mkdtemp(prefix="bb_lut_")
+    _lut_dir = _lut_scratch_dir(lut.nbytes, out_path)
     lut_path = os.path.join(_lut_dir, "lut.npy")
     np.save(lut_path, lut)
     del lut  # parent no longer needs it; workers load via mmap
@@ -780,8 +843,6 @@ def zarr_native_merge(
                 for _ in it:
                     pass
     finally:
-        import shutil
-
         shutil.rmtree(_lut_dir, ignore_errors=True)
 
     if in_place:
@@ -919,7 +980,7 @@ def merge_tile_labels(
     nw = n_workers if n_workers is not None else min(4, cpu_allocation())
 
     # -- Stage dask array to zarr if needed --
-    stage_path: str | None = None
+    stage_cleanup: str | None = None  # set only when we create the stage
     staged_component = "staged"
 
     if isinstance(labeled, (str, Path)):
@@ -932,59 +993,56 @@ def merge_tile_labels(
                 labeled, depth=overlap, boundary="none"
             )
 
-        _base = (
-            str(stage_dir)
-            if stage_dir is not None
-            else tempfile.mkdtemp(prefix="pws_stage_")
-        )
-        stage_path = os.path.join(_base, "_pws_stage.zarr")
+        stage_path, stage_cleanup = _scratch_store(stage_dir, "stage")
 
         import dask
 
         from ._progress import dask_progress
 
-        ctx = dask_progress("stage tiles", progress)
-        logger.info("Staging per-tile labels to %s …", stage_path)
-        with ctx:
-            dask.compute(
-                labeled.to_zarr(
-                    stage_path,
-                    component=staged_component,
-                    overwrite=True,
-                    compute=False,
+    try:
+        if stage_cleanup is not None:
+            ctx = dask_progress("stage tiles", progress)
+            logger.info("Staging per-tile labels to %s …", stage_path)
+            with ctx:
+                dask.compute(
+                    labeled.to_zarr(
+                        stage_path,
+                        component=staged_component,
+                        overwrite=True,
+                        compute=False,
+                    )
                 )
+
+        # -- Resolve output path --
+        if write_to is not None:
+            effective_out = str(write_to)
+        else:
+            effective_out, _ = _scratch_store(None, "merge")
+            logger.info(
+                "write_to not set — merged labels in auto-temp %s",
+                effective_out,
             )
 
-    # -- Resolve output path --
-    if write_to is not None:
-        effective_out = str(write_to)
-    else:
-        effective_out = os.path.join(
-            tempfile.mkdtemp(prefix="bb_merge_"), "merged.zarr"
+        # -- Merge (the sequential renumber rides along inside the LUT) --
+        n_objects = zarr_native_merge(
+            stage_path,
+            staged_component,
+            effective_out,
+            output_component,
+            n_workers=nw,
+            show_progress=progress,
+            label_counts=label_counts,
+            sequential=sequential_labels,
+            output_chunks=output_chunks,
         )
-        logger.info(
-            "write_to not set — merged labels in auto-temp %s", effective_out
-        )
-
-    # -- Merge (the sequential renumber rides along inside the same LUT) --
-    n_objects = zarr_native_merge(
-        stage_path,
-        staged_component,
-        effective_out,
-        output_component,
-        n_workers=nw,
-        show_progress=progress,
-        label_counts=label_counts,
-        sequential=sequential_labels,
-        output_chunks=output_chunks,
-    )
-
-    # -- Cleanup temp stage (only when we created it) --
-    if not isinstance(labeled, (str, Path)) and not keep_stage:
-        import shutil
-
-        shutil.rmtree(stage_path, ignore_errors=True)
-        logger.info("Removed stage store %s", stage_path)
+    finally:
+        # -- Cleanup temp stage (only when we created it), even on failure:
+        # a half-written stage is no use to a retry, which restages anyway.
+        if stage_cleanup is not None:
+            if keep_stage:
+                logger.info("Keeping stage store %s", stage_path)
+            else:
+                _remove_scratch(stage_cleanup)
 
     result = da.from_zarr(effective_out, component=output_component)
     return (result, n_objects) if return_count else result

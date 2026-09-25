@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
+import time
 from contextlib import nullcontext as _nullcontext
 from pathlib import Path
 from typing import Any, Callable, Union
@@ -14,7 +16,7 @@ import numpy as np
 from ._chunks import auto_tile_shape, cpu_allocation, safe_worker_count
 from ._cluster import _client_is_in_process, _distributed_client
 from ._io import auto_empty_threshold, load_ome_zarr
-from ._merge import zarr_native_merge
+from ._merge import _remove_scratch, _scratch_store, zarr_native_merge
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +51,85 @@ def _attach_log_file(path: str) -> None:
     pkg.addHandler(handler)
     if pkg.level == logging.NOTSET or pkg.level > logging.INFO:
         pkg.setLevel(logging.INFO)
+
+
+def _resolve_tile_shape(tile_shape, shape, dtype, use_gpu):
+    """Turn a ``tile_shape`` argument into a tuple (or None to keep chunks).
+
+    Parameters
+    ----------
+    tile_shape : tuple, callable, str or None
+        As accepted by :func:`tile_process`.
+    shape : tuple of int
+        Image shape.
+    dtype : data-type
+        Image dtype.
+    use_gpu : bool
+        Size ``"auto"`` tiles against GPU VRAM instead of RAM.
+
+    Returns
+    -------
+    tuple of int or None
+        The tile shape, or None when the existing chunks are kept.
+    """
+    if tile_shape is None:
+        return None
+    if callable(tile_shape):
+        return tuple(tile_shape(shape, dtype))
+    if isinstance(tile_shape, str):
+        if tile_shape != "auto":
+            raise ValueError(
+                f"Unknown tile_shape value: {tile_shape!r}. "
+                "Use 'auto', a tuple, or a callable."
+            )
+        return tuple(
+            auto_tile_shape(shape, dtype, use_gpu=use_gpu, verbose=True)
+        )
+    return tuple(tile_shape)
+
+
+def _is_zarr_path(path: str) -> bool:
+    """Whether *path* names a ``.zarr`` store (tolerating a trailing slash)."""
+    return path.rstrip("/\\").endswith(".zarr")
+
+
+def _start_dashboard_cluster() -> tuple[Any, Any]:
+    """Start a 1-worker / 1-thread in-process cluster for a single-GPU run.
+
+    It keeps GPU evals serial (no VRAM contention) while exposing a live Dask
+    dashboard for progress.
+
+    Returns
+    -------
+    tuple
+        ``(cluster, client)``, or ``(None, None)`` when ``distributed`` (or
+        its dashboard) is unavailable -- the threaded scheduler is used then.
+    """
+    try:
+        from dask.distributed import Client, LocalCluster
+
+        cluster = LocalCluster(
+            n_workers=1, threads_per_worker=1, processes=False
+        )
+    except Exception as exc:  # no distributed/bokeh → threaded fallback
+        logger.warning(
+            "Could not start a dashboard cluster (%s); "
+            "falling back to the threaded scheduler.",
+            exc,
+        )
+        return None, None
+    try:
+        client = Client(cluster)
+    except Exception as exc:
+        cluster.close()
+        logger.warning(
+            "Could not connect to the dashboard cluster (%s); "
+            "falling back to the threaded scheduler.",
+            exc,
+        )
+        return None, None
+    logger.info("Dask dashboard for this run: %s", client.dashboard_link)
+    return cluster, client
 
 
 def _read_amplification(
@@ -147,7 +228,7 @@ def tile_process(
     empty_threshold: float | None = None,
     stage_dir: Union[str, Path, None] = None,
     keep_stage: bool = False,
-    log_file: Union[str, Path, bool, None] = True,
+    log_file: Union[str, Path, bool, None] = None,
     verbose: bool = False,
 ) -> da.Array:
     """Apply *fn* to every tile of *image* and merge labels globally.
@@ -241,15 +322,18 @@ def tile_process(
         Where to put the temporary stage store. ``fn`` is always run once per
         tile to this store, then the merge reads it back from disk (running
         ``fn`` again is never needed). Default → next to ``write_to``, else next
-        to the input store, else a system temp directory.
+        to the input store, else a system temp directory. The store gets a
+        unique ``_pws_stage_<id>.zarr`` name, so concurrent runs sharing a
+        directory never overwrite each other's tiles.
     keep_stage:
-        Keep the temp stage store after merging (default: delete it). Useful
-        for debugging or resuming an interrupted run.
+        Keep the temp stage store after merging (default: delete it, also
+        when the run fails). Its path is logged. Useful for debugging.
     log_file:
         Where to tee the ``patchworks`` INFO log (including a per-tile
-        ``processing tile k/N`` counter). ``True`` (default) auto-writes
-        ``patchworks.log`` next to the output; a path writes there; ``False``/
-        ``None`` disables the file (logs still go to stderr).
+        ``tile k done`` counter and ETA). ``None``/``False`` (default) writes
+        no file -- configure :mod:`logging` as usual; ``True`` writes
+        ``patchworks.log`` next to the output; a path writes there. Asking
+        for a file also raises the ``patchworks`` logger to INFO.
     verbose:
         Log each tile's location and shape as it is processed.
 
@@ -341,18 +425,9 @@ def tile_process(
     if not isinstance(image, da.Array):
         _peek = load_ome_zarr(image, channel=channel, level=level)
         _native_chunks = _peek.chunksize  # on-disk zarr chunk shape
-        if callable(tile_shape):
-            _load_chunks = tuple(tile_shape(_peek.shape, _peek.dtype))
-        elif isinstance(tile_shape, str):
-            if tile_shape != "auto":
-                raise ValueError(
-                    f"Unknown tile_shape value: {tile_shape!r}. Use 'auto', a tuple, or a callable."
-                )
-            _load_chunks = auto_tile_shape(
-                _peek.shape, _peek.dtype, use_gpu=use_gpu, verbose=True
-            )
-        elif tile_shape is not None:
-            _load_chunks = tuple(tile_shape)
+        _load_chunks = _resolve_tile_shape(
+            tile_shape, _peek.shape, _peek.dtype, use_gpu
+        )
         tile_shape = None  # already handled at load time
         if _load_chunks is not None:
             logger.info("Loading zarr with target tiles %s", _load_chunks)
@@ -362,17 +437,9 @@ def tile_process(
         else:
             image = _peek
 
-    if callable(tile_shape):
-        tile_shape = tile_shape(image.shape, image.dtype)
-    elif isinstance(tile_shape, str):
-        if tile_shape != "auto":
-            raise ValueError(
-                f"Unknown tile_shape value: {tile_shape!r}. Use 'auto', a tuple, or a callable."
-            )
-        tile_shape = auto_tile_shape(
-            image.shape, image.dtype, use_gpu=use_gpu, verbose=True
-        )
-
+    tile_shape = _resolve_tile_shape(
+        tile_shape, image.shape, image.dtype, use_gpu
+    )
     if tile_shape is not None:
         image = image.rechunk(tile_shape)
         logger.info("Rechunked to %s", tile_shape)
@@ -430,9 +497,11 @@ def tile_process(
             _tile,
         )
 
-    # Tile counters + timing (GIL-safe enough for the threaded / in-process
-    # schedulers patchworks uses) so the log shows live "tile k/N + ETA".
+    # Tile counters + timing so the log shows live "tile k/N + ETA". The
+    # threaded scheduler runs tiles concurrently and ``+=`` is not atomic, so
+    # the counters are updated under a lock.
     _progress = {"done": 0, "seen": 0, "time": 0.0}
+    _progress_lock = threading.Lock()
 
     def active_fn(block, block_info=None):
         """Run *fn* on one tile, or return zeros for an empty tile.
@@ -449,10 +518,9 @@ def tile_process(
         np.ndarray
             Integer labels, or an all-zero tile when skipped.
         """
-        import time
-
         loc = block_info[0].get("chunk-location") if block_info else "?"
-        _progress["seen"] += 1
+        with _progress_lock:
+            _progress["seen"] += 1
         if skip_empty and block.size and block.max() <= _skip_thr:
             if verbose:
                 logger.debug("skip empty tile %s (max<=%s)", loc, _skip_thr)
@@ -462,10 +530,11 @@ def tile_process(
         out = fn(block)
         dt = time.perf_counter() - t0
 
-        _progress["done"] += 1
-        _progress["time"] += dt
-        done, seen = _progress["done"], _progress["seen"]
-        avg = _progress["time"] / done
+        with _progress_lock:
+            _progress["done"] += 1
+            _progress["time"] += dt
+            done, seen = _progress["done"], _progress["seen"]
+            avg = _progress["time"] / done
         # Extrapolate remaining non-empty tiles from the empty fraction seen.
         remaining_nonempty = max(0, n_tiles - seen) * (done / seen)
         eta_h = avg * remaining_nonempty / 3600
@@ -508,85 +577,19 @@ def tile_process(
     _tile_nbytes = int(np.prod(labeled.chunksize)) * labeled.dtype.itemsize
     _temp_cluster = None
     _temp_client = None
-    if _active is None and use_gpu:
-        # Single-GPU runs still get a live Dask dashboard: a 1-worker /
-        # 1-thread in-process cluster keeps GPU evals serial (no VRAM
-        # contention) while exposing the dashboard for progress.
-        try:
-            from dask.distributed import Client, LocalCluster
-
-            _temp_cluster = LocalCluster(
-                n_workers=1, threads_per_worker=1, processes=False
-            )
-            _temp_client = Client(_temp_cluster)
-            logger.info(
-                "Dask dashboard for this run: %s",
-                _temp_client.dashboard_link,
-            )
-        except Exception as exc:  # no distributed/bokeh → threaded fallback
-            logger.warning(
-                "Could not start a dashboard cluster (%s); "
-                "falling back to the threaded scheduler.",
-                exc,
-            )
-
-    if _distributed_client() is None:
-        _workers = (
-            max_workers
-            if max_workers is not None
-            else safe_worker_count(_tile_nbytes, use_gpu=use_gpu)
-        )
-        _workers = max(1, min(_workers, cpu_allocation()))
-        logger.info("Staging with %d worker thread(s)", _workers)
-        _sched_ctx: Any = _dask.config.set(
-            scheduler="threads", num_workers=_workers
-        )
-    else:
-        _sched_ctx = _nullcontext()
 
     # Stage: run fn once per tile to a temp zarr, then the zarr-native merge
     # reads concrete data from disk (fn is never re-run). Required because the
     # merge scans the labels directly on disk.
-    import tempfile
-
     if stage_dir is not None:
-        base = str(stage_dir)
+        base: str | None = str(stage_dir)
     elif write_to is not None:
         base = os.path.dirname(os.path.abspath(str(write_to)))
     elif image_source_path is not None:
         base = os.path.dirname(os.path.abspath(image_source_path))
     else:
-        base = tempfile.mkdtemp(prefix="pws_stage_")
-    stage_path = os.path.join(base, "_pws_stage.zarr")
-    logger.info("Staging tiles to %s …", stage_path)
-    with _sched_ctx:
-        _stage_to_zarr(labeled, stage_path, "staged", progress)
-    if _temp_client is not None:
-        _temp_client.close()
-        _temp_cluster.close()
-    labeled = da.from_zarr(stage_path, component="staged")
-
-    # NB: no post-staging skip-count pass here — counting skipped tiles by
-    # re-reading the whole staged store off disk would double the I/O of the
-    # entire run just for a log line. Use estimate_empty_tiles() up front for
-    # that figure instead.
-
-    def _cleanup_stage():
-        """Delete the temporary stage store unless ``keep_stage`` is set.
-
-        Returns
-        -------
-        None
-        """
-        if not keep_stage:
-            import shutil
-
-            shutil.rmtree(stage_path, ignore_errors=True)
-            logger.info("Removed stage store %s", stage_path)
-
-    # Merge runs in worker processes (each holds one chunk + an mmap'd LUT);
-    # size it to RAM/CPU like staging, capped so we don't spawn a process storm.
-    _nw = max_workers or max(1, min(safe_worker_count(_tile_nbytes), 8))
+        base = None  # a fresh system temp dir
+    stage_path, stage_cleanup = _scratch_store(base, "stage")
 
     # Default: input is a .zarr store and no explicit write_to → labels go back
     # *into* the input store under the NGFF labels/<name>/ group with an auto
@@ -594,31 +597,77 @@ def tile_process(
     _into_input = (
         write_to is None
         and image_source_path is not None
-        and image_source_path.endswith(".zarr")
+        and _is_zarr_path(image_source_path)
     )
+    _merge_cleanup: str | None = None
 
-    # The merge always writes its result to a concrete store first.
-    if write_to is not None:
-        _merge_out = str(write_to)
-    else:
-        _merge_out = os.path.join(
-            tempfile.mkdtemp(prefix="bb_merge_"), "merged.zarr"
+    # Everything from here on can fail halfway (fn raising, disk full, a
+    # killed worker). The dashboard cluster and the scratch stores are torn
+    # down whatever happens, so a failed run leaves no process or a stage
+    # the size of the whole image behind.
+    try:
+        try:
+            if _active is None and use_gpu:
+                _temp_cluster, _temp_client = _start_dashboard_cluster()
+
+            if _distributed_client() is None:
+                _workers = (
+                    max_workers
+                    if max_workers is not None
+                    else safe_worker_count(_tile_nbytes, use_gpu=use_gpu)
+                )
+                _workers = max(1, min(_workers, cpu_allocation()))
+                logger.info("Staging with %d worker thread(s)", _workers)
+                _sched_ctx: Any = _dask.config.set(
+                    scheduler="threads", num_workers=_workers
+                )
+            else:
+                _sched_ctx = _nullcontext()
+
+            logger.info("Staging tiles to %s …", stage_path)
+            with _sched_ctx:
+                _stage_to_zarr(labeled, stage_path, "staged", progress)
+        finally:
+            if _temp_client is not None:
+                _temp_client.close()
+                _temp_cluster.close()
+
+        # NB: no post-staging skip-count pass here — counting skipped tiles by
+        # re-reading the whole staged store off disk would double the I/O of
+        # the entire run just for a log line. Use estimate_empty_tiles() up
+        # front for that figure instead.
+
+        # Merge runs in worker processes (each holds one chunk + an mmap'd
+        # LUT); size it to RAM/CPU like staging, capped so we don't spawn a
+        # process storm.
+        _nw = max_workers or max(1, min(safe_worker_count(_tile_nbytes), 8))
+
+        # The merge always writes its result to a concrete store first.
+        if write_to is not None:
+            _merge_out = str(write_to)
+        else:
+            _merge_out, _merge_tmp = _scratch_store(None, "merge")
+            if _into_input:
+                _merge_cleanup = _merge_tmp
+
+        # sequential=True folds the contiguous renumbering into the merge's
+        # own LUT, so it costs a np.unique over the object count rather than
+        # the extra full read+write (plus a Python set of every id) that a
+        # separate relabel_sequential_zarr pass would.
+        zarr_native_merge(
+            stage_path,
+            "staged",
+            _merge_out,
+            output_component,
+            n_workers=_nw,
+            show_progress=progress,
+            sequential=sequential_labels,
         )
-
-    # sequential=True folds the contiguous renumbering into the merge's own
-    # LUT, so it costs a np.unique over the object count rather than the extra
-    # full read+write (plus a Python set of every id) that a separate
-    # relabel_sequential_zarr pass would.
-    zarr_native_merge(
-        stage_path,
-        "staged",
-        _merge_out,
-        output_component,
-        n_workers=_nw,
-        show_progress=progress,
-        sequential=sequential_labels,
-    )
-    _cleanup_stage()
+    finally:
+        if keep_stage:
+            logger.info("Keeping stage store %s", stage_path)
+        else:
+            _remove_scratch(stage_cleanup)
 
     merged = da.from_zarr(_merge_out, component=output_component)
     if not _into_input:
@@ -629,19 +678,19 @@ def tile_process(
     # Stream the merged labels into the input store as an NGFF label pyramid,
     # then drop the temporary merge store. write_labels uses da.to_zarr, so
     # this is chunk-streamed and OOM-safe.
-    import shutil
-
     from .plugins.ome_zarr import write_labels
 
-    label_group = write_labels(
-        image_source_path,
-        merged,
-        name=output_component,
-        n_levels=pyramid_levels,
-        downscale=pyramid_downscale,
-        progress=progress,
-        overwrite=True,
-    )
-    shutil.rmtree(os.path.dirname(_merge_out), ignore_errors=True)
+    try:
+        label_group = write_labels(
+            image_source_path,
+            merged,
+            name=output_component,
+            n_levels=pyramid_levels,
+            downscale=pyramid_downscale,
+            progress=progress,
+            overwrite=True,
+        )
+    finally:
+        _remove_scratch(_merge_cleanup)
     logger.info("labels stored in input OME-ZARR under %s", label_group)
     return da.from_zarr(label_group, component="0")
