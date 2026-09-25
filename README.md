@@ -319,7 +319,7 @@ Full docs, guides and tutorials: **<https://imcf.one/patchworks/>**
 ## Requirements
 
 - Python ≥ 3.11
-- dask[array], numpy, zarr ≥ 3, scipy, psutil (RAM-aware tile and worker
+- dask[array], numpy, zarr ≥ 3.1.3, scipy, psutil (RAM-aware tile and worker
   sizing)
 
 Optional:

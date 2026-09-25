@@ -27,3 +27,20 @@ jobs:
 
       - name: pytest
         run: pytest -q
+
+  minimum-versions:
+    # The pyproject floors are only true if something runs on them.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install at the declared minimums
+        run: pip install -e ".[dev]" -c .github/min-versions.txt
+
+      - name: pytest
+        run: pytest -q

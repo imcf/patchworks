@@ -33,12 +33,17 @@ classifiers = [
 # zarr-python 3 (itself Python >= 3.11) is required: NGFF 0.5 stores,
 # sharding and the create_array API have no zarr-2 equivalent. It still
 # writes NGFF 0.4 (zarr-v2 format) stores when asked to.
+# Floors are the oldest releases the suite passes on (CI's "minimum
+# versions" job holds them there): zarr < 3.0.3 hangs in the merge's
+# forked workers, < 3.1.3 rejects tifffile's store; zarr 3.1 needs numpy
+# 1.26; dask < 2024.10 fails 57 tests; scipy 1.11 is the first to build
+# against numpy 1.26 on 3.11.
 requires-python = ">=3.11"
 dependencies = [
-    "dask[array]>=2023.1.0",
-    "numpy>=1.25",
-    "zarr>=3",
-    "scipy>=1.9",
+    "dask[array]>=2024.10.0",
+    "numpy>=1.26",
+    "zarr>=3.1.3",
+    "scipy>=1.11",
     # Free RAM bounds worker counts and auto tile sizes; without it a
     # workstation (no SLURM, no cgroup limit) falls back to a blind 8 GiB.
     "psutil",

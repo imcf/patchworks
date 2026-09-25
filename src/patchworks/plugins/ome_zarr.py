@@ -739,15 +739,22 @@ def _to_zarr_level(
     sh = _shard_for(shard, inner, arr.shape, arr.dtype, fmt)
     ctx = _progress_ctx(progress, f"{Path(group_path).name}/{component}")
     if not sh:
+        # Created here rather than by da.to_zarr, whose array-creation
+        # keywords changed across dask releases (zarr.create before
+        # create_array), so the pinned codec reaches every supported dask.
+        # Regular chunks make every block exactly one zarr chunk, so blocks
+        # never share a chunk and need no lock.
+        if any(len(set(c[:-1])) > 1 or c[-1] > c[0] for c in arr.chunks):
+            arr = arr.rechunk(arr.chunksize)
+        z = _create_level_array(
+            _open_group(group_path),
+            component,
+            arr.shape,
+            arr.chunksize,
+            arr.dtype,
+        )
         with ctx:
-            da.to_zarr(
-                arr,
-                group_path,
-                component=component,
-                overwrite=True,
-                zarr_format=fmt,
-                **zarr_compressor_kwargs(fmt),
-            )
+            arr.store(z, lock=False, compute=True)
         return
     grp = _open_group(group_path)
     if component in grp:
