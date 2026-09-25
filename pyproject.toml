@@ -133,6 +133,9 @@ all = [
     "scikit-image",
 ]
 
+[project.scripts]
+patchworks = "patchworks.cli:main"
+
 [project.urls]
 Homepage = "https://github.com/imcf/patchworks"
 Issues = "https://github.com/imcf/patchworks/issues"

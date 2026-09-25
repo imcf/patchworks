@@ -186,6 +186,18 @@ from disk, so terabyte volumes convert in bounded RAM. See the
 
 ---
 
+## From the command line
+
+```bash
+patchworks convert scan.czi scan.zarr
+patchworks segment scan.zarr --method cellpose --model cyto3 --diameter 30 --gpu
+patchworks info scan.zarr
+patchworks view scan.zarr
+```
+
+See [Command line](https://imcf.one/patchworks/guide/cli/) for every method
+and flag.
+
 ## Common patterns
 
 ### Auto-size tiles from available memory
