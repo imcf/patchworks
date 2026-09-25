@@ -76,8 +76,10 @@ def _is_zarr(src: Any) -> bool:
     """
     if not isinstance(src, (str, Path)):
         return False
-    text = str(src)
-    return text.endswith(".zarr") or ".zip" in text
+    from .._io import split_zip_path
+
+    text = str(src).rstrip("/\\")
+    return text.endswith(".zarr") or split_zip_path(text) is not None
 
 
 def _has_multiscales(path: Union[str, Path]) -> bool:

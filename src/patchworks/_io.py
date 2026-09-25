@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 from typing import Any, Union
 
@@ -44,6 +45,23 @@ def zarr_compressor_kwargs(zarr_format: int = 3) -> dict:
     return {"compressors": (numcodecs.Zstd(level=1),)}
 
 
+# A ".zip" path component: the archive name, then the end or a separator.
+# A bare substring test also matched directories such as "my.zipfiles/".
+_ZIP_PART = re.compile(r"^(.*?\.zip)(?=$|[/\\])(.*)$", re.IGNORECASE)
+
+
+def split_zip_path(path: Union[str, Path]) -> "tuple[str, str] | None":
+    """Split ``bundle.zip/inner/group`` into ``(archive, inner)``.
+
+    Returns None when no path component ends in ``.zip``.
+    """
+    m = _ZIP_PART.match(str(path))
+    if m is None:
+        return None
+    # Zarr keys always use "/", whatever the OS spelled the path with.
+    return m.group(1), m.group(2).replace("\\", "/").strip("/")
+
+
 def open_zarr_source(
     store_path: Union[str, Path],
 ) -> tuple[Union[str, "zarr.storage.StoreLike"], str]:
@@ -72,16 +90,15 @@ def open_zarr_source(
     ValueError
         If a ``.zip`` does not hold exactly one top-level store.
     """
-    text = str(store_path)
-    if ".zip" not in text:
-        return text, ""
+    split = split_zip_path(store_path)
+    if split is None:
+        return str(store_path), ""
 
     import zipfile
 
     # The bundle may be addressed with a group path after it, e.g.
     # "scan.zarr.zip/labels/cells" -- callers build those by string-joining.
-    head, _, tail = text.partition(".zip")
-    archive_path = head + ".zip"
+    archive_path, inner = split
     with zipfile.ZipFile(archive_path) as archive:
         tops = {
             name.split("/", 1)[0] for name in archive.namelist() if "/" in name
@@ -93,7 +110,6 @@ def open_zarr_source(
             "`pixi run zip` always do."
         )
     prefix = tops.pop()
-    inner = tail.strip("/")
     if inner:
         prefix = f"{prefix}/{inner}"
     return zarr.storage.ZipStore(archive_path, mode="r"), prefix
@@ -382,7 +398,7 @@ def estimate_empty_tiles(
 
     z_src: Any = None
     if isinstance(image, (str, Path)):
-        _root = zarr.open_group(str(image), mode="r")
+        _root = open_group_any(image)
         _rattr = dict(_root.attrs)
         _rms = _rattr.get("multiscales") or _rattr.get("ome", {}).get(
             "multiscales"

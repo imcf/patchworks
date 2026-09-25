@@ -713,3 +713,25 @@ def test_auto_empty_threshold_samples_full_windows(monkeypatch):
     )
     _io.auto_empty_threshold(da.zeros((4, 70, 300), dtype="uint16"), 0, 0)
     assert seen == [3 * 4 * 64 * 64]
+
+
+def test_zip_bundles_are_recognised_by_path_component_only(tmp_path):
+    """A directory merely containing ".zip" in its name is not a bundle."""
+    from patchworks import load_ome_zarr
+    from patchworks._io import split_zip_path
+    from patchworks.plugins.ome_zarr import to_ome_zarr
+
+    assert split_zip_path("/d/my.zipfiles/a.zarr") is None
+    assert split_zip_path("/d/a.zarr.zip") == ("/d/a.zarr.zip", "")
+    assert split_zip_path("/d/a.zarr.zip/labels/c") == (
+        "/d/a.zarr.zip",
+        "labels/c",
+    )
+    assert split_zip_path("C:\\d\\a.ZIP\\labels\\c") == (
+        "C:\\d\\a.ZIP",
+        "labels/c",
+    )
+
+    store = tmp_path / "my.zipfiles" / "a.zarr"
+    to_ome_zarr(np.zeros((2, 16, 16), "uint16"), store, axes="zyx", n_levels=1)
+    assert load_ome_zarr(store).shape == (2, 16, 16)
