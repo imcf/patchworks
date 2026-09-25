@@ -290,4 +290,3 @@ Scratch data (the stage store, the merge's lookup table) always stays on local
 disk — in the system temp directory, or `stage_dir=` — so only the final
 labels travel. `reshard_level` needs a local store: it swaps directories by
 renaming, which object stores cannot do.
-
