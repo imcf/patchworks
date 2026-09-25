@@ -149,7 +149,11 @@ def _resolve_image(
         # Any other file format → bioio (reuse the conversion plugin's reader).
         from .ome_zarr import _open_bioio
 
-        arr, _ = _open_bioio(str(source), 0)
+        # _open_bioio returns (array, axes, pixel size); unpacking two
+        # crashed every non-zarr file, and channel= was never applied.
+        arr, axes, _ = _open_bioio(str(source), 0)
+        if channel is not None and "c" in axes:
+            arr = arr[(slice(None),) * axes.index("c") + (channel,)]
         return arr
     return source
 
