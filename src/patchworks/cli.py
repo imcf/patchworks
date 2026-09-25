@@ -144,6 +144,24 @@ def _cmd_segment(args: argparse.Namespace) -> int:
     tile_shape: Any = args.tile_shape
     if tile_shape not in (None, "auto"):
         tile_shape = _ints(tile_shape)
+    if args.plan:
+        plan = tile_process(
+            args.image,
+            fn,
+            tile_shape=tile_shape,
+            overlap=args.overlap,
+            channel=args.channel,
+            level=args.level,
+            use_gpu=args.gpu,
+            max_workers=args.workers,
+            skip_empty=args.skip_empty,
+            stitch=args.stitch,
+            gpus=args.gpus,
+            dry_run=True,
+            plan_sample=args.plan_sample,
+        )
+        print(json.dumps(plan, indent=2, default=str))
+        return 0
     with compression(args.compression or "zstd"):
         tile_process(
             args.image,
@@ -296,6 +314,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--resume", action="store_true", help="resumable if interrupted"
     )
     p.add_argument("--compression", help='"zstd" (default), "blosc", ...')
+    p.add_argument(
+        "--plan",
+        action="store_true",
+        help="only print what the run would do (tiles, memory, size)",
+    )
+    p.add_argument(
+        "--plan-sample",
+        type=int,
+        default=0,
+        help="with --plan, time the method on N real tiles for an ETA",
+    )
     g = p.add_argument_group("threshold / dog")
     g.add_argument(
         "--threshold",

@@ -371,6 +371,122 @@ def _resolve_gpus(gpus: Any) -> list[str] | None:
     return [str(g) for g in gpus]
 
 
+def _read_tile(
+    image: da.Array, index: int, tile: tuple[int, ...], overlap: list[int]
+) -> np.ndarray:
+    """Tile *index* with its halo, exactly as :func:`stage_tile` reads it."""
+    from ._distributed import normalize_overlap, spatial_tiles
+
+    sl = spatial_tiles(image.shape, tile)[index]
+    halo = normalize_overlap(overlap, len(sl), tile_shape=tile)
+    read = tuple(
+        slice(max(0, s.start - h), min(n, s.stop + h))
+        for s, n, h in zip(sl, image.shape, halo)
+    )
+    return np.asarray(image[read])
+
+
+def _plan(
+    image: da.Array,
+    fn: Callable[[np.ndarray], np.ndarray],
+    *,
+    overlap: list[int],
+    skip_empty: bool,
+    threshold: float | None,
+    use_gpu: bool,
+    max_workers: int | None,
+    devices: list[str] | None,
+    stitch: str,
+    sample: int,
+) -> dict[str, Any]:
+    """What a run would do, and roughly what it would cost, without it.
+
+    Counts tiles (and, with ``skip_empty``, which hold signal, from the
+    fast centre-window preview), sizes a tile's memory and the worker pool
+    exactly as the run would, and -- with *sample* > 0 -- times *fn* on that
+    many real tiles to extrapolate a duration. The first sampled tile also
+    pays any model load, so with two or more samples it is left out of the
+    average.
+    """
+    import time as _time
+
+    from ._distributed import spatial_tiles
+    from ._io import estimate_empty_tiles
+
+    tile = tuple(int(c) for c in image.chunksize)
+    n_tiles = len(spatial_tiles(image.shape, tile))
+    grid = [len(c) for c in image.chunks]
+    occupied = list(range(n_tiles))
+    if skip_empty:
+        info = estimate_empty_tiles(image, tile, threshold=threshold)
+        occupied = [int(i) for i in np.flatnonzero(info["occupancy"].ravel())]
+    halo_shape = tuple(
+        min(n, t + 2 * h) for n, t, h in zip(image.shape, tile, overlap)
+    )
+    tile_in = int(np.prod(halo_shape)) * image.dtype.itemsize
+    tile_out = int(np.prod(tile)) * 4
+    if devices and len(devices) > 1:
+        workers = len(devices)
+    else:
+        workers = (
+            max_workers
+            if max_workers is not None
+            else safe_worker_count(tile_out, use_gpu=use_gpu)
+        )
+        workers = max(1, min(workers, cpu_allocation()))
+    plan: dict[str, Any] = {
+        "shape": tuple(int(n) for n in image.shape),
+        "tile_shape": tile,
+        "grid": grid,
+        "overlap": list(overlap),
+        "tiles": n_tiles,
+        "tiles_with_signal": len(occupied),
+        "stitch": stitch,
+        "workers": workers,
+        "tile_read_bytes": tile_in,
+        "labels_bytes_uncompressed": int(np.prod(image.shape)) * 4,
+        "seconds_per_tile": None,
+        "estimated_seconds": None,
+    }
+    if sample > 0 and occupied:
+        pick = [
+            occupied[int(i)]
+            for i in np.linspace(
+                0, len(occupied) - 1, min(sample, len(occupied))
+            )
+        ]
+        times = []
+        for index in pick:
+            block = _read_tile(image, index, tile, overlap)
+            t0 = _time.perf_counter()
+            fn(block)
+            times.append(_time.perf_counter() - t0)
+        steady = times[1:] if len(times) > 1 else times
+        per_tile = float(np.mean(steady))
+        plan["seconds_per_tile"] = per_tile
+        plan["estimated_seconds"] = per_tile * len(occupied) / workers
+    gib = 1024**3
+    logger.info(
+        "plan: %d tiles of %s (grid %s, overlap %s), %d with signal; "
+        "%d worker(s), %.2f GiB read per tile, labels %.1f GiB uncompressed",
+        n_tiles,
+        tile,
+        grid,
+        list(overlap),
+        len(occupied),
+        workers,
+        tile_in / gib,
+        plan["labels_bytes_uncompressed"] / gib,
+    )
+    if plan["estimated_seconds"] is not None:
+        logger.info(
+            "plan: ~%.1fs per tile -> ~%.1f h of segmentation",
+            plan["seconds_per_tile"],
+            plan["estimated_seconds"] / 3600,
+        )
+    return plan
+
+
 def _stage_fused(
     labeled: da.Array,
     stage_path: str,
@@ -518,7 +634,9 @@ def tile_process(
     iou_threshold: float = 0.5,
     resume: bool = False,
     gpus: "int | Sequence[int | str] | None" = None,
-) -> da.Array:
+    dry_run: bool = False,
+    plan_sample: int = 0,
+) -> Any:
     """Apply *fn* to every tile of *image* and merge labels globally.
 
     The core workhorse of patchworks. ``fn`` can be any callable that takes a
@@ -644,6 +762,14 @@ def tile_process(
         succeeds, and kept when it fails. ``stitch="iou"`` and ``resume``
         stage tile by tile in threads rather than through dask, so an
         active distributed client is not used for staging.
+    dry_run:
+        Only plan: return a dict describing the run -- tile count and grid,
+        tiles with signal (``skip_empty``), workers, memory per tile, output
+        size -- without segmenting or writing anything. Check a tiling
+        before a job waits hours in a queue for it.
+    plan_sample:
+        With ``dry_run``, also time *fn* on this many real tiles (spread
+        over the image) and extrapolate ``estimated_seconds``.
     gpus:
         Segment on several GPUs at once: an int (the first N devices, of
         ``CUDA_VISIBLE_DEVICES`` if set) or a list of device ids. Each GPU
@@ -657,7 +783,8 @@ def tile_process(
         Globally relabeled array (int32) backed by the output zarr (the input
         store's ``labels/<name>/0`` by default, ``write_to`` when given, else an
         auto-temp zarr). Never loads the full volume into RAM. Call
-        ``.compute()`` yourself only if the result fits in RAM.
+        ``.compute()`` yourself only if the result fits in RAM. With
+        ``dry_run=True``, the plan dict instead.
 
     Examples
     --------
@@ -816,6 +943,20 @@ def tile_process(
             "typically ~10x faster, or segment a lower pyramid level.",
             n_tiles,
             _tile,
+        )
+
+    if dry_run:
+        return _plan(
+            image,
+            fn,
+            overlap=[_depth[ax] for ax in range(image.ndim)],
+            skip_empty=skip_empty,
+            threshold=_skip_thr,
+            use_gpu=use_gpu,
+            max_workers=max_workers,
+            devices=devices,
+            stitch=stitch,
+            sample=plan_sample,
         )
 
     # Tile counters + timing so the log shows live "tile k/N + ETA". The

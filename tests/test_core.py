@@ -983,3 +983,50 @@ def test_resolve_gpus(monkeypatch):
     assert _resolve_gpus(2) == ["4", "6"]
     with pytest.raises(ValueError, match="visible"):
         _resolve_gpus(3)
+
+
+def test_dry_run_plans_without_writing(tmp_path):
+    import dask.array as da
+
+    from patchworks import tile_process
+
+    img = np.zeros((4, 64, 64), "uint16")
+    img[:, 5:20, 5:20] = 1000  # signal in one corner tile only
+    arr = da.from_array(img, chunks=(4, 32, 32))
+    calls = []
+
+    def fn(tile):
+        calls.append(tile.shape)
+        return _label_fn(tile)
+
+    plan = tile_process(
+        arr,
+        fn,
+        overlap=4,
+        skip_empty=True,
+        empty_threshold=10,
+        write_to=tmp_path / "o.zarr",
+        dry_run=True,
+        plan_sample=2,
+    )
+    assert plan["tiles"] == 4 and plan["grid"] == [1, 2, 2]
+    assert plan["tiles_with_signal"] == 1
+    assert plan["labels_bytes_uncompressed"] == 4 * 64 * 64 * 4
+    assert plan["estimated_seconds"] is not None
+    assert calls == [(4, 36, 36)]  # the one tile with signal, halo included
+    assert list(tmp_path.iterdir()) == []  # nothing written
+
+
+def test_cli_plan(tmp_path, capsys):
+    import json
+
+    from patchworks.cli import main
+    from patchworks.plugins.ome_zarr import to_ome_zarr
+
+    store = to_ome_zarr(
+        _make_image((2, 64, 64)), tmp_path / "a.zarr", axes="zyx", n_levels=1
+    )
+    assert main(["segment", store, "--tile-shape", "2,32,32", "--plan"]) == 0
+    plan = json.loads(capsys.readouterr().out)
+    assert plan["tiles"] == 4
+    assert not (tmp_path / "a.zarr" / "labels").exists()

@@ -87,6 +87,23 @@ extra read-back of the staged data.
     `cupy`, `arrow` and `xarray` bring essentially nothing. The real levers are
     tile size, concurrency (above) and zarr chunking.
 
+## Planning a run before submitting it
+
+`dry_run=True` returns what a run would do without segmenting or writing
+anything: tile count and grid, how many tiles hold signal (with
+`skip_empty`), the worker pool, bytes read per tile, and the size of the
+labels. `plan_sample=N` also runs the method on N real tiles and
+extrapolates a duration — catch a tile shape that is too big, or a run that
+would outlast its SLURM time limit, before it waits in the queue.
+
+```python
+plan = tile_process("scan.zarr", fn, tile_shape=(16, 1024, 1024),
+                    skip_empty=True, dry_run=True, plan_sample=3)
+plan["tiles_with_signal"], plan["estimated_seconds"] / 3600
+```
+
+From the command line: `patchworks segment scan.zarr ... --plan --plan-sample 3`.
+
 ## Compression
 
 Every array patchworks writes uses one codec, zstd level 1 by default. Change
