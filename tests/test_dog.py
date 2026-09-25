@@ -1,6 +1,7 @@
 """Self-contained tests for the dog plugin. No frameworks, no fixtures."""
 
 import numpy as np
+import pytest
 
 
 def _make_blob_image(shape=(1, 64, 64)):
@@ -172,3 +173,27 @@ def test_stage_tile_rejects_a_shape_changing_function(tmp_path):
 
     with pytest.raises(ValueError, match="one label per input voxel"):
         stage_tile(image, crops, stage, 0, tile_shape=(4, 16, 16), overlap=2)
+
+
+def test_physical_sigmas_follow_the_calibration():
+    """sigma_units="um" blurs every axis by the same distance."""
+    from patchworks.plugins.dog import _fit_sigma, _physical_sigma
+
+    vox = {"z": 0.5, "y": 0.1, "x": 0.1}
+    assert _physical_sigma(0.3, vox) == pytest.approx((0.6, 3.0, 3.0))
+    assert _physical_sigma((0.2, 0.2), vox) == pytest.approx((2.0, 2.0))
+    assert _fit_sigma((0.6, 3.0, 3.0), 2) == (3.0, 3.0)
+
+
+def test_sigma_units_um_segments_like_the_equivalent_pixels():
+    from patchworks.plugins.dog import dog_label_fn
+
+    rng = np.random.default_rng(0)
+    img = rng.random((6, 40, 40)).astype("float32") * 0.01
+    img[2:4, 15:25, 15:25] += 1.0
+    vox = {"z": 0.5, "y": 0.1, "x": 0.1}
+    um = dog_label_fn(0.1, 0.3, 0.02, voxel_size=vox, sigma_units="um")(img)
+    px = dog_label_fn((0.2, 1.0, 1.0), (0.6, 3.0, 3.0), 0.02)(img)
+    np.testing.assert_array_equal(um, px)
+    with pytest.raises(ValueError, match="voxel_size"):
+        dog_label_fn(0.1, 0.3, 0.02, sigma_units="um")

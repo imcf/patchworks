@@ -103,6 +103,7 @@ def _build_fn(args: argparse.Namespace, image: Any) -> Callable:
             args.threshold,
             use_gpu=args.gpu,
             voxel_size=voxel or None,
+            sigma_units=args.sigma_units,
         )
     # custom: "module:function"
     module, _, name = args.fn.partition(":")
@@ -298,6 +299,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     g.add_argument("--low-sigma", type=_floats, default=(1.0,))
     g.add_argument("--high-sigma", type=_floats, default=(3.0,))
+    g.add_argument(
+        "--sigma-units",
+        choices=("px", "um"),
+        default="px",
+        help="sigmas in pixels, or micrometres (per axis, from the store)",
+    )
     g = p.add_argument_group("cellpose")
     g.add_argument("--model", default="cyto3")
     g.add_argument("--diameter", type=float)

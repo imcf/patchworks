@@ -146,14 +146,17 @@ def dog_label_fn(
     use_gpu: bool = False,
     decon_kwargs: dict[str, Any] | None = None,
     voxel_size: dict[str, float] | None = None,
+    sigma_units: str = "px",
 ) -> Callable[[np.ndarray], np.ndarray]:
     """Return a ready-to-use DoG labeler for ``tile_process``.
 
     Parameters
     ----------
     low_sigma, high_sigma:
-        Gaussian sigmas (pixels) for the narrow/wide blur.
-        ``dog = blur(low_sigma) - blur(high_sigma)``.
+        Gaussian sigmas for the narrow/wide blur, one number or one per axis.
+        ``dog = blur(low_sigma) - blur(high_sigma)``. In pixels by default,
+        which on an anisotropic stack blurs z far further (physically) than
+        x/y; see *sigma_units*.
     threshold:
         Binary threshold applied to the DoG image (``dog > threshold``).
     use_gpu:
@@ -178,12 +181,31 @@ def dog_label_fn(
         workflow passes the image's own calibration automatically; from the
         API, :func:`patchworks.plugins.ome_zarr.read_pixel_size` reads it from
         a store.
+    sigma_units:
+        ``"px"`` (default) or ``"um"``. With ``"um"`` the sigmas are
+        physical distances, converted per axis with *voxel_size* -- so a
+        cilium is blurred by the same distance along z as across it, however
+        coarse the z-step.
 
     Returns
     -------
     Callable[[ndarray], ndarray]
         Picklable function ready for ``tile_process``.
     """
+    if sigma_units not in ("px", "um"):
+        raise ValueError(
+            f'sigma_units must be "px" or "um", got {sigma_units!r}'
+        )
+    if sigma_units == "um":
+        if not voxel_size:
+            raise ValueError('sigma_units="um" needs voxel_size')
+        low_sigma = _physical_sigma(low_sigma, voxel_size)
+        high_sigma = _physical_sigma(high_sigma, voxel_size)
+        logger.info(
+            "DoG sigmas in pixels (z, y, x): low %s, high %s",
+            low_sigma,
+            high_sigma,
+        )
     if use_gpu:
         _require_cupy()
     if decon_kwargs is not None:
@@ -209,6 +231,33 @@ def dog_label_fn(
         "decon_kwargs": decon_kwargs,
     }
     return partial(_run, dog_dict=cfg)
+
+
+def _physical_sigma(
+    sigma: float | tuple[float, ...], voxel_size: dict[str, float]
+) -> tuple[float, ...]:
+    """Micrometre sigma(s) -> per-axis pixel sigmas, ordered (z, y, x).
+
+    A scalar applies to every axis; a 2-tuple is (y, x); a 3-tuple is
+    (z, y, x). An axis the calibration lacks falls back to 1 um per voxel.
+    """
+    axes = "zyx"
+    values = (
+        (float(sigma),) * 3
+        if np.isscalar(sigma)
+        else tuple(float(v) for v in sigma)
+    )
+    names = axes[-len(values) :]
+    return tuple(
+        v / float(voxel_size.get(a) or 1.0) for v, a in zip(values, names)
+    )
+
+
+def _fit_sigma(sigma: Any, ndim: int) -> Any:
+    """Trim a (z, y, x) sigma to a 2-D tile's (y, x)."""
+    if np.isscalar(sigma) or len(sigma) == ndim:
+        return sigma
+    return tuple(sigma)[-ndim:]
 
 
 def _run(block: np.ndarray, dog_dict: dict[str, Any]) -> np.ndarray:
@@ -334,8 +383,12 @@ def _segment_once(
 
     low_blur = high_blur = dog_image = mask = labels = None
     try:
-        low_blur = gaussian_filter(img, sigma=dog_dict["low_sigma"])
-        high_blur = gaussian_filter(img, sigma=dog_dict["high_sigma"])
+        low_blur = gaussian_filter(
+            img, sigma=_fit_sigma(dog_dict["low_sigma"], img.ndim)
+        )
+        high_blur = gaussian_filter(
+            img, sigma=_fit_sigma(dog_dict["high_sigma"], img.ndim)
+        )
         dog_image = low_blur - high_blur
         low_blur = high_blur = None  # peak is here; drop what's already used
         mask = dog_image > dog_dict["threshold"]
