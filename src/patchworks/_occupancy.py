@@ -160,7 +160,8 @@ def build_occupancy_map(
 ) -> str:
     """Max-pool every channel of an OME-ZARR level into a small summary array.
 
-    Reads the image once and writes ``<image_store>/occupancy/<level>``, an
+    Reads the image once and writes ``<image>.occupancy.zarr/<level>`` (a
+    sibling of the store, see :func:`occupancy_path`), an
     array of shape ``(n_channels, *ceil(spatial_shape / block))`` holding the
     maximum of each brick. Cheap to keep (~1/16384 of the image by default)
     and reusable by every config that segments this image.
@@ -190,7 +191,7 @@ def build_occupancy_map(
     Examples
     --------
     >>> build_occupancy_map("image.zarr")  # doctest: +SKIP
-    'image.zarr/occupancy/0'
+    'image.occupancy.zarr/0'
     """
     store = str(image_store)
     out_path = occupancy_path(store, level)
