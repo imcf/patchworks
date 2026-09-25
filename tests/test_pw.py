@@ -222,3 +222,31 @@ def test_validate_config_rejects_sharding_on_ngff_04():
         )
     # ...but 0.4 on its own is fine.
     validate_config({"method": "threshold", "ngff_version": "0.4"})
+
+
+def test_segment_progress_resumes_only_the_same_batch(tmp_path):
+    """A retried batch skips the tiles an earlier attempt already staged."""
+    import zarr
+
+    from _pw import (
+        load_segment_progress,
+        save_segment_progress,
+        segment_progress_path,
+    )
+
+    from patchworks import create_stage
+
+    stage = create_stage(tmp_path / "stage.zarr", (4, 8, 8), (1, 8, 8))
+    path = segment_progress_path(stage, 3)
+    assert load_segment_progress(path, [0, 1, 2], (1, 8, 8)) == {}
+
+    save_segment_progress(path, [0, 1, 2], (1, 8, 8), {0: 5, 1: 0})
+    assert load_segment_progress(path, [0, 1, 2], (1, 8, 8)) == {0: 5, 1: 0}
+    # A different batch layout or tile shape is stale, not resumable.
+    assert load_segment_progress(path, [0, 1], (1, 8, 8)) == {}
+    assert load_segment_progress(path, [0, 1, 2], (2, 8, 8)) == {}
+    # The checkpoint sits inside the store without confusing zarr ...
+    assert zarr.open_group(stage, mode="r")["staged"].shape == (4, 8, 8)
+    # ... and dies with it when prepare recreates the stage.
+    create_stage(stage, (4, 8, 8), (1, 8, 8))
+    assert load_segment_progress(path, [0, 1, 2], (1, 8, 8)) == {}

@@ -9,10 +9,19 @@ batch writes disjoint chunks of the stage store, so batches never collide.
 
 import json
 import time
+from pathlib import Path
 
 from patchworks import stage_tile
 
-from _pw import build_fn, load_tiles_json, open_image, start_log
+from _pw import (
+    build_fn,
+    load_segment_progress,
+    load_tiles_json,
+    open_image,
+    save_segment_progress,
+    segment_progress_path,
+    start_log,
+)
 
 start_log(snakemake.log[0])  # noqa: F821
 cfg = snakemake.config  # noqa: F821
@@ -37,9 +46,21 @@ stage = manifest["target_path"]
 component = manifest.get("target_component", "staged")
 tile_shape = tuple(manifest["tile_shape"])
 
-counts = {}
+# Resume a retried batch where the last attempt stopped, rather than
+# re-segmenting every tile: a job killed at its time limit on tile 49 of 50
+# would otherwise redo all 50 on each of the profile's retries.
+progress_file = segment_progress_path(stage, batch)
+counts = load_segment_progress(progress_file, indices, tile_shape)
+if counts:
+    print(
+        f"[patchworks] batch {batch}: resuming, {len(counts)}/{len(indices)} "
+        "tile(s) already staged by an earlier attempt",
+        flush=True,
+    )
 batch_started = time.monotonic()
 for n, index in enumerate(indices, 1):
+    if index in counts:
+        continue
     started = time.monotonic()
     counts[index] = stage_tile(
         image,
@@ -55,6 +76,7 @@ for n, index in enumerate(indices, 1):
     # The per-tile time is what `tiles_per_job` has to be sized from: a job's
     # wall time is roughly N x this, and it must stay inside the QOS ceiling.
     # The first tile in a batch also carries the model load, so it runs long.
+    save_segment_progress(progress_file, indices, tile_shape, counts)
     took = time.monotonic() - started
     print(
         f"[patchworks] tile {index} ({n}/{len(indices)}): "
@@ -68,6 +90,9 @@ for n, index in enumerate(indices, 1):
 # down instead of throwing them away.
 with open(snakemake.output[0], "w") as fh:  # noqa: F821
     json.dump({"batch": batch, "counts": counts}, fh)
+# The marker now carries the counts; the checkpoint must not linger inside
+# the label store (it would ship in an export).
+Path(progress_file).unlink(missing_ok=True)
 print(
     f"[patchworks] batch {batch}: {len(indices)} tile(s) done in "
     f"{(time.monotonic() - batch_started) / 60:.1f}m",

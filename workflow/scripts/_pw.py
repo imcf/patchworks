@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sys
 from functools import partial
 from pathlib import Path
@@ -137,6 +138,50 @@ def stage_path(work_dir, label_name):
         ``<work_dir>/<label_name>/stage.zarr``.
     """
     return str(Path(work_dir) / label_name / "stage.zarr")
+
+
+def segment_progress_path(target_path, batch):
+    """Per-tile checkpoint of one segment batch, kept *inside* the target.
+
+    Inside, so it lives and dies with the tiles it vouches for: ``prepare``
+    recreates the target (stage store or label group) from scratch, which
+    removes the checkpoint too. One kept anywhere else could outlive a wiped
+    store and have a retry skip tiles whose data no longer exists.
+    """
+    return Path(target_path) / f".patchworks_segment_{int(batch)}.json"
+
+
+def load_segment_progress(path, indices, tile_shape):
+    """Tile label counts already staged by an earlier attempt of this batch.
+
+    Returns an empty dict unless the checkpoint describes this exact batch
+    (same tiles, same tile shape): anything else is stale.
+    """
+    try:
+        saved = json.loads(Path(path).read_text())
+    except (OSError, ValueError):
+        return {}
+    if saved.get("indices") != list(indices) or saved.get("tile_shape") != list(
+        tile_shape
+    ):
+        return {}
+    return {int(k): int(v) for k, v in saved.get("counts", {}).items()}
+
+
+def save_segment_progress(path, indices, tile_shape, counts):
+    """Atomically record the tiles finished so far (write, then rename)."""
+    path = Path(path)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(
+        json.dumps(
+            {
+                "indices": list(indices),
+                "tile_shape": list(tile_shape),
+                "counts": {str(k): int(v) for k, v in counts.items()},
+            }
+        )
+    )
+    os.replace(tmp, path)
 
 
 def load_tiles_json(path):
