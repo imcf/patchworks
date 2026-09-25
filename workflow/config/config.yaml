@@ -80,6 +80,13 @@ cellpose:
 pyramid_levels: 5
 pyramid_downscale: 2
 sequential_labels: true # renumber merged labels to a contiguous 1..N range
+# How labels are joined across tile boundaries. "touch": any two labels that
+# touch there. "iou": only when both tiles' predictions of the overlap zone
+# agree (IoU >= iou_threshold), so two cells pressed together at a seam stay
+# two -- needs `overlap` > 0 to compare (2-D z-tiles fall back to the IoU of
+# adjacent planes, like Cellpose's stitch_threshold).
+stitch: "touch"
+iou_threshold: 0.5
 # `shard:` above can only reach the label pyramid's levels 1..N, because
 # level 0 is filled a chunk at a time by concurrent segment jobs and a shard
 # has to be written whole by one writer. Setting this rewrites level 0 sharded

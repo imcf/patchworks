@@ -250,3 +250,15 @@ def test_segment_progress_resumes_only_the_same_batch(tmp_path):
     # ... and dies with it when prepare recreates the stage.
     create_stage(stage, (4, 8, 8), (1, 8, 8))
     assert load_segment_progress(path, [0, 1, 2], (1, 8, 8)) == {}
+
+
+def test_validate_config_checks_stitch_and_iou_threshold():
+    import pytest
+    from _pw import validate_config
+
+    validate_config({"method": "threshold", "stitch": "iou"})
+    validate_config({"method": "threshold", "iou_threshold": 0.3})
+    with pytest.raises(ValueError, match="stitch"):
+        validate_config({"method": "threshold", "stitch": "glue"})
+    with pytest.raises(ValueError, match="iou_threshold"):
+        validate_config({"method": "threshold", "iou_threshold": 0})

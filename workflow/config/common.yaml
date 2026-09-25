@@ -46,6 +46,8 @@ tiles_per_job: 4
 # --- merge ---
 sequential_labels: true
 merge_workers: null
+stitch: "touch" # or "iou": join across seams only where both tiles agree
+iou_threshold: 0.5
 
 # --- notifications (optional) ---
 # Leave empty for no email. Per-job mail is sent by SLURM itself for the long

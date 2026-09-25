@@ -735,3 +735,90 @@ def test_zip_bundles_are_recognised_by_path_component_only(tmp_path):
     store = tmp_path / "my.zipfiles" / "a.zarr"
     to_ome_zarr(np.zeros((2, 16, 16), "uint16"), store, axes="zyx", n_levels=1)
     assert load_ome_zarr(store).shape == (2, 16, 16)
+
+
+def _two_touching_cells():
+    img = np.zeros((1, 16, 64), "uint16")
+    img[0, 4:12, 20:32] = 1  # cell A, ends at the x=32 seam
+    img[0, 4:12, 32:44] = 2  # cell B, touching it across the seam
+    img[0, 2:6, 50:60] = 1  # a third cell, far away
+    return img
+
+
+def _label_by_value(tile):
+    from skimage.measure import label
+
+    return label(tile, background=0, connectivity=1).astype("int32")
+
+
+def test_tile_process_iou_stitching_keeps_touching_cells_apart(tmp_path):
+    import dask.array as da
+
+    from patchworks import tile_process
+
+    arr = da.from_array(_two_touching_cells(), chunks=(1, 16, 32))
+    touch = tile_process(
+        arr, _label_by_value, overlap=6, write_to=tmp_path / "t.zarr"
+    ).compute()
+    iou = tile_process(
+        arr,
+        _label_by_value,
+        overlap=6,
+        stitch="iou",
+        write_to=tmp_path / "i.zarr",
+    ).compute()
+    assert len(np.unique(touch)) - 1 == 2  # A and B fused at the seam
+    assert len(np.unique(iou)) - 1 == 3
+    assert not [p for p in tmp_path.iterdir() if p.name.startswith("_pws_")]
+
+
+def test_tile_process_resumes_where_it_stopped(tmp_path):
+    """A failed resumable run keeps its tiles; the rerun only does the rest."""
+    import dask.array as da
+    import pytest
+
+    from patchworks import tile_process
+
+    img = _make_image((4, 32, 32))
+    arr = da.from_array(img, chunks=(1, 32, 32))
+    calls = {"n": 0, "fail_at": 3}
+
+    def flaky(tile):
+        calls["n"] += 1
+        if calls["n"] == calls["fail_at"]:
+            raise RuntimeError("job killed")
+        return _label_fn(tile)
+
+    kw = dict(
+        overlap=0,
+        write_to=tmp_path / "o.zarr",
+        resume=True,
+        max_workers=1,
+        progress=False,
+    )
+    with pytest.raises(RuntimeError, match="job killed"):
+        tile_process(arr, flaky, **kw)
+    kept = [p for p in tmp_path.iterdir() if p.name.startswith("_pws_resume")]
+    assert len(kept) == 1  # kept to resume from
+
+    calls.update(n=0, fail_at=-1)
+    resumed = tile_process(arr, flaky, **kw).compute()
+    assert calls["n"] == 2  # only the two tiles the first run never staged
+    assert not [p for p in tmp_path.iterdir() if p.name.startswith("_pws_")]
+
+    fresh = tile_process(
+        arr, _label_fn, overlap=0, write_to=tmp_path / "f.zarr"
+    ).compute()
+    assert len(np.unique(resumed)) == len(np.unique(fresh))
+    assert ((resumed > 0) == (fresh > 0)).all()
+
+
+def test_tile_process_rejects_an_unknown_stitch():
+    import dask.array as da
+    import pytest
+
+    from patchworks import tile_process
+
+    arr = da.from_array(_make_image((1, 16, 16)), chunks=(1, 16, 16))
+    with pytest.raises(ValueError, match="stitch"):
+        tile_process(arr, _label_fn, stitch="glue")

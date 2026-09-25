@@ -492,3 +492,113 @@ def test_cellpose_run_pairs_channels_and_shifts_z(monkeypatch):
     assert calls["kwargs"]["channel_axis"] is None
     if not cp._CELLPOSE_V4:
         assert calls["kwargs"]["channels"] == [0, 0]
+
+
+def _by_value(tile):
+    """One label per distinct non-zero value, like a model that tells two
+    touching cells apart."""
+    from skimage.measure import label
+
+    return label(tile, background=0, connectivity=1).astype("int32")
+
+
+def _stage_all(img, tile, overlap, stage, halo):
+    create_stage(stage, img.shape, tile)
+    counts = {}
+    for i in range(len(spatial_tiles(img.shape, tile))):
+        counts[i] = stage_tile(
+            img,
+            _by_value,
+            stage,
+            i,
+            tile_shape=tile,
+            overlap=overlap,
+            halo_dir=halo,
+        )
+    return counts
+
+
+def _n_objects(merged):
+    return len(np.unique(np.asarray(merged))) - 1
+
+
+def test_iou_stitching_keeps_touching_cells_apart(tmp_path):
+    """Two cells pressed together at a seam are two, not one.
+
+    Touching-label merging joins anything that touches across a tile
+    boundary; IoU stitching joins only what both tiles saw as one object.
+    """
+    img = np.zeros((8, 32), "uint16")
+    img[2:6, 10:16] = 1  # cell A, ends exactly at the x=16 seam
+    img[2:6, 16:22] = 2  # cell B, starts there: touching, different cell
+    stage, halo = str(tmp_path / "s.zarr"), tmp_path / "halo"
+    counts = _stage_all(img, (8, 16), 4, stage, halo)
+
+    touching = merge_tile_labels(
+        stage,
+        write_to=tmp_path / "t.zarr",
+        input_component="staged",
+        label_counts=counts,
+    )
+    assert _n_objects(touching) == 1  # the failure IoU stitching fixes
+
+    iou = merge_tile_labels(
+        stage,
+        write_to=tmp_path / "i.zarr",
+        input_component="staged",
+        halo_dir=halo,
+    )
+    assert _n_objects(iou) == 2
+
+
+def test_iou_stitching_still_joins_one_cell_across_seams(tmp_path):
+    img = np.zeros((32, 32), "uint16")
+    img[10:22, 12:20] = 1  # spans both the y=16 and x=16 seams
+    img[2:5, 2:5] = 1  # an unrelated cell in one tile
+    stage, halo = str(tmp_path / "s.zarr"), tmp_path / "halo"
+    _stage_all(img, (16, 16), 4, stage, halo)
+
+    merged = np.asarray(
+        merge_tile_labels(
+            stage,
+            write_to=tmp_path / "i.zarr",
+            input_component="staged",
+            halo_dir=halo,
+        )
+    )
+    assert _n_objects(merged) == 2
+    assert len(np.unique(merged[10:22, 12:20])) == 1
+
+
+def test_iou_stitching_without_halo_uses_slice_iou(tmp_path):
+    """2-D tiles stacked in z have no z-halo: adjacent planes are matched by
+    IoU (Cellpose's stitch_threshold rule) -- a big overlap joins, a sliver
+    of contact does not."""
+    img = np.zeros((2, 16, 16), "uint16")
+    img[0, 2:8, 2:8] = 1
+    img[1, 2:8, 3:9] = 1  # mostly the same footprint -> same object
+    img[0, 10:14, 10:14] = 1
+    img[1, 13:16, 13:16] = 1  # one-voxel contact -> different objects
+    stage, halo = str(tmp_path / "s.zarr"), tmp_path / "halo"
+    _stage_all(img, (1, 16, 16), [2, 2, 2], stage, halo)
+
+    merged = merge_tile_labels(
+        stage,
+        write_to=tmp_path / "i.zarr",
+        input_component="staged",
+        halo_dir=halo,
+    )
+    assert _n_objects(merged) == 3
+
+
+def test_iou_stitching_needs_the_tile_counts(tmp_path):
+    img = np.zeros((8, 16), "uint16")
+    stage = str(tmp_path / "s.zarr")
+    create_stage(stage, img.shape, (8, 8))
+    with pytest.raises(ValueError, match="label count"):
+        merge_tile_labels(
+            stage,
+            write_to=tmp_path / "i.zarr",
+            input_component="staged",
+            halo_dir=tmp_path / "missing",
+        )

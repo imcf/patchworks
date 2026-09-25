@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import functools
+import hashlib
+import json
 import logging
 import os
+import tempfile
 import threading
 import time
 from contextlib import nullcontext as _nullcontext
@@ -132,6 +136,158 @@ def _start_dashboard_cluster() -> tuple[Any, Any]:
     return cluster, client
 
 
+def _fn_key(fn: Any) -> Any:
+    """A stable description of *fn* for resume fingerprints.
+
+    Module + qualified name, plus a partial's bound arguments (plugins are
+    partials over a config dict, so a changed threshold changes the key).
+    Object addresses are left out: they differ between runs.
+    """
+    if isinstance(fn, functools.partial):
+        return [
+            _fn_key(fn.func),
+            repr(fn.args),
+            repr(sorted((fn.keywords or {}).items())),
+        ]
+    module = getattr(fn, "__module__", type(fn).__module__)
+    name = getattr(fn, "__qualname__", type(fn).__qualname__)
+    return f"{module}.{name}"
+
+
+def _run_fingerprint(**parts: Any) -> str:
+    """Short hash naming a resumable run's stage store."""
+    blob = json.dumps(parts, sort_keys=True, default=str).encode()
+    return hashlib.sha1(blob).hexdigest()[:12]
+
+
+def _write_json_atomic(path: str, payload: Any) -> None:
+    tmp = f"{path}.tmp"
+    with open(tmp, "w") as fh:
+        json.dump(payload, fh)
+    os.replace(tmp, path)
+
+
+def _stage_tiles(
+    image: da.Array,
+    fn: Callable[[np.ndarray], np.ndarray],
+    stage_path: str,
+    tile: tuple[int, ...],
+    overlap: list[int],
+    n_workers: int,
+    halo_dir: str | None,
+    checkpoint: str | None,
+    progress: bool,
+) -> dict[int, int]:
+    """Run *fn* tile by tile into a stage store, via :func:`stage_tile`.
+
+    The engine behind ``stitch="iou"`` (it keeps each tile's halo, which the
+    fused dask pass trims away) and ``resume=True`` (it records each
+    finished tile, so a rerun skips it). Returns every tile's label count,
+    which also spares the merge its renumbering pass.
+    """
+    import dask
+    from concurrent.futures import ThreadPoolExecutor
+
+    from ._distributed import create_stage, spatial_tiles, stage_tile
+    from ._progress import track
+
+    done: dict[int, int] = {}
+    if checkpoint is not None and os.path.exists(checkpoint):
+        with open(checkpoint) as fh:
+            done = {int(k): int(v) for k, v in json.load(fh).items()}
+    if not done:
+        create_stage(stage_path, image.shape, tile)
+    else:
+        logger.info(
+            "resuming: %d tile(s) already staged in %s", len(done), stage_path
+        )
+    n_tiles = len(spatial_tiles(image.shape, tile))
+    todo = [i for i in range(n_tiles) if i not in done]
+    lock = threading.Lock()
+
+    def one(index: int) -> None:
+        n = stage_tile(
+            image,
+            fn,
+            stage_path,
+            index,
+            tile_shape=tile,
+            overlap=overlap,
+            halo_dir=halo_dir,
+        )
+        with lock:
+            done[index] = n
+            if checkpoint is not None:
+                _write_json_atomic(checkpoint, done)
+
+    # Each thread reads its own tile synchronously: the parallelism is here,
+    # not in a dask pool nested under every thread.
+    with dask.config.set(scheduler="synchronous"):
+        if n_workers <= 1:
+            for _ in track(
+                (one(i) for i in todo),
+                "stage tiles",
+                len(todo),
+                enabled=progress,
+            ):
+                pass
+        else:
+            with ThreadPoolExecutor(max_workers=n_workers) as pool:
+                for _ in track(
+                    pool.map(one, todo),
+                    "stage tiles",
+                    len(todo),
+                    enabled=progress,
+                ):
+                    pass
+    return done
+
+
+def _stage_fused(
+    labeled: da.Array,
+    stage_path: str,
+    active_client: Any,
+    use_gpu: bool,
+    max_workers: int | None,
+    tile_nbytes: int,
+    progress: bool,
+) -> None:
+    """Stage *labeled* (the fused map_overlap graph) through dask.
+
+    Bounds concurrency to the machine so staging can neither OOM nor pin
+    every core -- GPU: one eval at a time; CPU: as many tiles as fit RAM,
+    leaving a core free. A distributed client manages its own concurrency.
+    """
+    import dask as _dask
+
+    temp_cluster = temp_client = None
+    try:
+        if active_client is None and use_gpu:
+            temp_cluster, temp_client = _start_dashboard_cluster()
+
+        if _distributed_client() is None:
+            workers = (
+                max_workers
+                if max_workers is not None
+                else safe_worker_count(tile_nbytes, use_gpu=use_gpu)
+            )
+            workers = max(1, min(workers, cpu_allocation()))
+            logger.info("Staging with %d worker thread(s)", workers)
+            sched_ctx: Any = _dask.config.set(
+                scheduler="threads", num_workers=workers
+            )
+        else:
+            sched_ctx = _nullcontext()
+
+        logger.info("Staging tiles to %s …", stage_path)
+        with sched_ctx:
+            _stage_to_zarr(labeled, stage_path, "staged", progress)
+    finally:
+        if temp_client is not None:
+            temp_client.close()
+            temp_cluster.close()
+
+
 def _read_amplification(
     native_chunks: tuple[int, ...], tile_shape: tuple[int, ...]
 ) -> float:
@@ -230,6 +386,9 @@ def tile_process(
     keep_stage: bool = False,
     log_file: Union[str, Path, bool, None] = None,
     verbose: bool = False,
+    stitch: str = "touch",
+    iou_threshold: float = 0.5,
+    resume: bool = False,
 ) -> da.Array:
     """Apply *fn* to every tile of *image* and merge labels globally.
 
@@ -336,6 +495,23 @@ def tile_process(
         for a file also raises the ``patchworks`` logger to INFO.
     verbose:
         Log each tile's location and shape as it is processed.
+    stitch:
+        How labels are joined across tile boundaries. ``"touch"`` (default)
+        joins any two labels that touch there. ``"iou"`` joins them only when
+        both tiles' predictions of the overlap zone agree (IoU >=
+        ``iou_threshold``), so two distinct cells pressed together at a seam
+        stay two; it needs ``overlap > 0`` to have a zone to compare (an axis
+        without one falls back to the IoU of the two boundary slices).
+    iou_threshold:
+        Minimum IoU for ``stitch="iou"`` (default 0.5).
+    resume:
+        Make an interrupted run resumable: tiles are staged into a store
+        named after this run's inputs (image, tiling, overlap, ``fn`` and its
+        bound arguments, output), with a record of finished tiles. Rerunning
+        the same call skips those tiles; the store is removed once the run
+        succeeds, and kept when it fails. ``stitch="iou"`` and ``resume``
+        stage tile by tile in threads rather than through dask, so an
+        active distributed client is not used for staging.
 
     Returns
     -------
@@ -401,6 +577,10 @@ def tile_process(
             "or drop the client to use the threaded scheduler "
             "(client.close(); cluster.close())."
         )
+
+    if stitch not in ("touch", "iou"):
+        raise ValueError(f"stitch must be 'touch' or 'iou', got {stitch!r}")
+    per_tile = stitch == "iou" or resume
 
     # Load + tile
     image_source_path = None if isinstance(image, da.Array) else str(image)
@@ -576,16 +756,7 @@ def tile_process(
     else:
         labeled = image.map_blocks(active_fn, dtype=np.int32, meta=_meta)
 
-    # Bound staging concurrency to the machine so it can neither OOM nor pin
-    # every core:
-    #   - GPU → 1 eval at a time (no VRAM contention),
-    #   - CPU → as many tiles as fit RAM, leaving one core free.
-    # A distributed client manages its own concurrency, so skip the override.
-    import dask as _dask
-
     _tile_nbytes = int(np.prod(labeled.chunksize)) * labeled.dtype.itemsize
-    _temp_cluster = None
-    _temp_client = None
 
     # Stage: run fn once per tile to a temp zarr, then the zarr-native merge
     # reads concrete data from disk (fn is never re-run). Required because the
@@ -598,7 +769,33 @@ def tile_process(
         base = os.path.dirname(os.path.abspath(image_source_path))
     else:
         base = None  # a fresh system temp dir
-    stage_path, stage_cleanup = _scratch_store(base, "stage")
+    halo_dir: str | None = None
+    checkpoint: str | None = None
+    if resume:
+        # Named after the run, so the same call finds it again -- not
+        # unique per call like a scratch store, which is the point.
+        fingerprint = _run_fingerprint(
+            source=image_source_path or image.name,
+            shape=image.shape,
+            tile=tuple(image.chunksize),
+            overlap=_depth,
+            fn=_fn_key(fn),
+            skip_empty=skip_empty,
+            threshold=_skip_thr,
+            out=[str(write_to), output_component],
+        )
+        root = base if base is not None else tempfile.gettempdir()
+        os.makedirs(root, exist_ok=True)
+        stage_path = os.path.join(root, f"_pws_resume_{fingerprint}.zarr")
+        stage_cleanup = stage_path
+        checkpoint = os.path.join(stage_path, ".patchworks_done.json")
+        logger.info("resumable stage store: %s", stage_path)
+    else:
+        stage_path, stage_cleanup = _scratch_store(base, "stage")
+    if stitch == "iou":
+        halo_dir = f"{stage_path}.halo"
+    label_counts: dict[int, int] | None = None
+    succeeded = False
 
     # Default: input is a .zarr store and no explicit write_to → labels go back
     # *into* the input store under the NGFF labels/<name>/ group with an auto
@@ -615,31 +812,39 @@ def tile_process(
     # down whatever happens, so a failed run leaves no process or a stage
     # the size of the whole image behind.
     try:
-        try:
-            if _active is None and use_gpu:
-                _temp_cluster, _temp_client = _start_dashboard_cluster()
-
-            if _distributed_client() is None:
-                _workers = (
-                    max_workers
-                    if max_workers is not None
-                    else safe_worker_count(_tile_nbytes, use_gpu=use_gpu)
-                )
-                _workers = max(1, min(_workers, cpu_allocation()))
-                logger.info("Staging with %d worker thread(s)", _workers)
-                _sched_ctx: Any = _dask.config.set(
-                    scheduler="threads", num_workers=_workers
-                )
-            else:
-                _sched_ctx = _nullcontext()
-
-            logger.info("Staging tiles to %s …", stage_path)
-            with _sched_ctx:
-                _stage_to_zarr(labeled, stage_path, "staged", progress)
-        finally:
-            if _temp_client is not None:
-                _temp_client.close()
-                _temp_cluster.close()
+        if per_tile:
+            _workers = (
+                max_workers
+                if max_workers is not None
+                else safe_worker_count(_tile_nbytes, use_gpu=use_gpu)
+            )
+            _workers = max(1, min(_workers, cpu_allocation()))
+            logger.info(
+                "Staging tile by tile with %d thread(s) to %s …",
+                _workers,
+                stage_path,
+            )
+            label_counts = _stage_tiles(
+                image,
+                active_fn,
+                stage_path,
+                tuple(image.chunksize),
+                [_depth[ax] for ax in range(image.ndim)],
+                _workers,
+                halo_dir,
+                checkpoint,
+                progress,
+            )
+        else:
+            _stage_fused(
+                labeled,
+                stage_path,
+                _active,
+                use_gpu,
+                max_workers,
+                _tile_nbytes,
+                progress,
+            )
 
         # NB: no post-staging skip-count pass here — counting skipped tiles by
         # re-reading the whole staged store off disk would double the I/O of
@@ -671,12 +876,22 @@ def tile_process(
             n_workers=_nw,
             show_progress=progress,
             sequential=sequential_labels,
+            label_counts=label_counts,
+            halo_dir=halo_dir,
+            iou_threshold=iou_threshold,
         )
+        succeeded = True
     finally:
         if keep_stage:
             logger.info("Keeping stage store %s", stage_path)
+        elif resume and not succeeded:
+            logger.info(
+                "Keeping stage store %s to resume from: rerun the same call",
+                stage_path,
+            )
         else:
             _remove_scratch(stage_cleanup)
+            _remove_scratch(halo_dir)
 
     merged = da.from_zarr(_merge_out, component=output_component)
     if not _into_input:

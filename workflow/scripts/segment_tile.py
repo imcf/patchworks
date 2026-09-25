@@ -15,6 +15,7 @@ from patchworks import stage_tile
 
 from _pw import (
     build_fn,
+    halo_path,
     load_segment_progress,
     load_tiles_json,
     open_image,
@@ -72,6 +73,12 @@ for n, index in enumerate(indices, 1):
         overlap=manifest["overlap"],
         component=component,
         channel_axis=0 if nuclei_channel is not None else None,
+        # stitch: iou keeps what fn predicted in the halo for the merge.
+        halo_dir=(
+            halo_path(work_dir, label_name)
+            if cfg.get("stitch", "touch") == "iou"
+            else None
+        ),
     )
     # The per-tile time is what `tiles_per_job` has to be sized from: a job's
     # wall time is roughly N x this, and it must stay inside the QOS ceiling.

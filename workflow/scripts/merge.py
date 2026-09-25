@@ -29,7 +29,7 @@ from patchworks.plugins.ome_zarr import (
     reshard_level,
 )
 
-from _pw import load_tiles_json, stage_path, start_log
+from _pw import halo_path, load_tiles_json, stage_path, start_log
 
 start_log(snakemake.log[0])  # noqa: F821
 cfg = snakemake.config  # noqa: F821
@@ -107,7 +107,16 @@ _, n_objects = merge_tile_labels(
     progress=True,
     return_count=True,
     label_counts=label_counts,
+    # stitch: iou joins labels across a seam only where both tiles' views of
+    # the overlap agree, so touching cells stay apart.
+    halo_dir=(
+        halo_path(work_dir, label_name)
+        if cfg.get("stitch", "touch") == "iou"
+        else None
+    ),
+    iou_threshold=float(cfg.get("iou_threshold", 0.5)),
 )
+shutil.rmtree(halo_path(work_dir, label_name), ignore_errors=True)
 
 # Global, exact volume filter -- runs once on the fully merged array so an
 # object's size is never judged from just the fragment one tile happened to

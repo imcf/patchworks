@@ -1,6 +1,7 @@
 """Snakemake script: plan tiles, create the empty stage store, list work."""
 
 import json
+import shutil
 from functools import partial
 from pathlib import Path
 
@@ -20,7 +21,13 @@ from patchworks import (
     tile_occupancy,
 )
 
-from _pw import open_image, stage_path, start_log, validate_config
+from _pw import (
+    halo_path,
+    open_image,
+    stage_path,
+    start_log,
+    validate_config,
+)
 
 # Chunking ceiling for the written labels, so a viewer can page them lazily.
 LABEL_CHUNK_CAP = (16, 1024, 1024)
@@ -193,6 +200,8 @@ else:
         "chunked for viewing"
     )
 create_stage(target_path, image.shape, tile_shape, component=target_component)
+# Halo strips from an earlier run describe tiles that no longer exist.
+shutil.rmtree(halo_path(work_dir, label_name), ignore_errors=True)
 
 Path(work_dir, label_name, "tiles.json").write_text(
     json.dumps(

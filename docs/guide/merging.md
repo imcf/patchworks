@@ -108,6 +108,44 @@ on the array itself, and refuses to guess on a re-run:
 Without that, a second pass would add each tile's offset to ids that are
 already global, which can land two unrelated objects on the same id.
 
+## IoU stitching: keeping touching cells apart
+
+Touching-label merging joins *any* two labels that touch across a tile
+boundary. That is right for one object cut in two by the seam, and wrong for
+two different cells pressed against each other exactly there: they become one
+object.
+
+`stitch="iou"` asks the tiles instead. Each tile already predicts labels in
+its halo, the strip it reads beyond its own edge; those predictions are kept
+(one small `.npz` per tile) rather than thrown away. Across every boundary,
+both tiles have then labelled the same overlap zone, and a pair of labels is
+joined only when their IoU over that zone reaches `iou_threshold` (default
+0.5) — when both tiles agree they saw the same object.
+
+```python
+tile_process(
+    "image.zarr", fn, tile_shape=(16, 1024, 1024), overlap=30, stitch="iou"
+)
+```
+
+It needs `overlap > 0`: without a halo there is no shared zone to compare.
+An axis with no halo — 2-D tiles one plane thick, stacked in z — falls back to
+the IoU of the two boundary slices, which is Cellpose's own `stitch_threshold`
+rule for building 3-D objects out of 2-D planes. On the cluster, set
+`stitch: "iou"` (and optionally `iou_threshold:`) in the config.
+
+With `merge_tile_labels`, pass the `halo_dir` that
+[`stage_tile`](../api/tile_process.md)`(..., halo_dir=...)` wrote.
+
+## Resuming an interrupted run
+
+`tile_process(..., resume=True)` stages into a store named after the run's
+inputs (image, tiling, overlap, `fn` and its bound arguments, output) and
+records each finished tile. If the run dies, the store is kept; rerunning the
+same call skips every tile already done. It is removed once the run succeeds.
+The pipeline does the same per SLURM batch, so a retried job continues from
+its last finished tile.
+
 ## Using the merge step standalone
 
 You can call the merge step directly on any existing label array or zarr:

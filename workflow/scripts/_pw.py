@@ -140,6 +140,15 @@ def stage_path(work_dir, label_name):
     return str(Path(work_dir) / label_name / "stage.zarr")
 
 
+def halo_path(work_dir, label_name):
+    """Where segment jobs keep halo strips for ``stitch: iou``.
+
+    Beside the label group, never inside it: the label group is what gets
+    exported, and these are scratch for the merge.
+    """
+    return str(Path(work_dir) / label_name / "halo")
+
+
 def segment_progress_path(target_path, batch):
     """Per-tile checkpoint of one segment batch, kept *inside* the target.
 
@@ -385,6 +394,13 @@ def validate_config(cfg) -> None:
                 f"list of positive integers (e.g. [16, 512, 512]); got "
                 f"{value!r}"
             )
+
+    stitch = cfg.get("stitch", "touch")
+    if stitch not in ("touch", "iou"):
+        problems.append(f'stitch must be "touch" or "iou"; got {stitch!r}')
+    thr = cfg.get("iou_threshold", 0.5)
+    if not isinstance(thr, (int, float)) or not 0 < thr <= 1:
+        problems.append(f"iou_threshold must be in (0, 1]; got {thr!r}")
 
     method = cfg.get("method", "cellpose")
     if method not in KNOWN_METHODS:

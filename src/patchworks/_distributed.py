@@ -167,6 +167,7 @@ def stage_tile(
     overlap: Overlap = 0,
     component: str = "staged",
     channel_axis: int | None = None,
+    halo_dir: Union[str, Path, None] = None,
 ) -> int:
     """Run *fn* on a single tile and write it into the shared stage store.
 
@@ -200,6 +201,13 @@ def stage_tile(
         returns one label per voxel with no channel axis (e.g. Cellpose fed a
         cytoplasm + nuclei pair returns a single label volume). ``None`` (the
         default) means *image* is already single-channel.
+    halo_dir : str or Path, optional
+        Also keep what *fn* predicted in the halo, for IoU stitching
+        (``merge_tile_labels(..., halo_dir=...)``): one ``<index>.npz`` per
+        tile holding, for each face with a halo, the strip beyond the tile
+        (keys ``"<axis>+"``/``"<axis>-"``), labelled with the same ``1..n``
+        ids as the staged core. An object seen only in the halo is 0 there:
+        it has no id in this tile. ``None`` (default) keeps nothing.
 
     Returns
     -------
@@ -258,8 +266,60 @@ def stage_tile(
     # dense 1..n first: trimming the halo can drop objects entirely, and the
     # merge's offset arithmetic needs each tile's ids to be exactly 1..n with
     # no gaps so that `offset[tile] + local` is globally unique AND compact.
+    if halo_dir is not None:
+        _save_halo(out, sel, trims, halo_dir, index)
     trimmed = relabel_sequential_array(trimmed)
     n_labels = int(trimmed.max())
     dst = zarr.open_group(str(stage_path), mode="r+")[component]
     dst[sl] = trimmed.astype(dst.dtype)
     return n_labels
+
+
+def _core_lut(core: np.ndarray, max_id: int) -> np.ndarray:
+    """LUT renumbering *core*'s ids to ``1..n`` (as ``relabel_sequential``);
+    ids absent from the core map to 0."""
+    ids = np.unique(core)
+    ids = ids[ids > 0]
+    lut = np.zeros(max(int(max_id), 0) + 1, dtype=np.int64)
+    lut[ids] = np.arange(1, ids.size + 1)
+    return lut
+
+
+def _save_halo(
+    out: np.ndarray,
+    sel: tuple[slice, ...],
+    trims: list[tuple[int, int]],
+    halo_dir: Union[str, Path],
+    index: int,
+) -> None:
+    """Write the halo strips of one tile's prediction to ``<index>.npz``.
+
+    Each strip spans the halo along its axis and the tile's *core* along the
+    others (corners are left out: a corner neighbour is reached through an
+    edge neighbour anyway). Ids follow the core's ``1..n`` numbering, so the
+    merge can offset them exactly like the staged tile.
+    """
+    out = np.asarray(out)
+    if out.size and out.min() < 0:
+        raise ValueError("labels must be non-negative")
+    lut = _core_lut(out[sel], int(out.max()) if out.size else 0)
+    strips: dict[str, np.ndarray] = {}
+    for ax, (left, right) in enumerate(trims):
+        for side, width in (("-", left), ("+", right)):
+            if not width:
+                continue
+            region = list(sel)
+            n = out.shape[ax]
+            region[ax] = slice(0, left) if side == "-" else slice(n - right, n)
+            strip = lut[out[tuple(region)]]
+            strips[f"{ax}{side}"] = strip.astype(np.int32, copy=False)
+    # The tile's label count rides along, so a merge can place its ids
+    # globally without renumbering the staged store.
+    strips["n"] = np.asarray(int(lut.max()))
+    halo_dir = Path(halo_dir)
+    halo_dir.mkdir(parents=True, exist_ok=True)
+    # Written then renamed, so a killed job never leaves a torn file.
+    tmp = halo_dir / f".{int(index)}.npz.tmp"
+    with open(tmp, "wb") as fh:
+        np.savez_compressed(fh, **strips)
+    tmp.replace(halo_dir / f"{int(index)}.npz")

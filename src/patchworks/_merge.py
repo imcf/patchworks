@@ -287,6 +287,198 @@ def _scan_touching_pairs(
     return np.unique(np.vstack(all_pairs), axis=0)
 
 
+def _pair_stats(a_ids: np.ndarray, b_ids: np.ndarray):
+    """Overlap counts of ``(a, b)`` pairs and each side's voxel counts.
+
+    Returns ``(pairs, inter, a_area, b_area)`` where *pairs* is ``(N, 2)``
+    and the areas are dicts ``{id: voxels}``, background excluded.
+    """
+    a = np.asarray(a_ids, dtype=np.int64).ravel()
+    b = np.asarray(b_ids, dtype=np.int64).ravel()
+    both = (a > 0) & (b > 0)
+    if both.any():
+        pairs, inter = np.unique(
+            np.stack([a[both], b[both]], axis=1), axis=0, return_counts=True
+        )
+    else:
+        pairs = np.empty((0, 2), dtype=np.int64)
+        inter = np.empty(0, dtype=np.int64)
+    a_u, a_n = np.unique(a[a > 0], return_counts=True)
+    b_u, b_n = np.unique(b[b > 0], return_counts=True)
+    return (
+        pairs,
+        inter,
+        dict(zip(a_u.tolist(), a_n.tolist())),
+        dict(zip(b_u.tolist(), b_n.tolist())),
+    )
+
+
+def _iou_face_pairs(
+    windows: list[tuple[np.ndarray, np.ndarray]], threshold: float
+) -> np.ndarray:
+    """Pairs whose IoU over the given (A view, B view) windows is enough.
+
+    Each window is two label arrays of one region, as seen by the tile on
+    either side. Intersections and areas are summed over all windows before
+    dividing, so the IoU is taken over the whole overlap zone.
+    """
+    inter: dict[tuple[int, int], int] = {}
+    a_area: dict[int, int] = {}
+    b_area: dict[int, int] = {}
+    for a_view, b_view in windows:
+        pairs, counts, aa, ba = _pair_stats(a_view, b_view)
+        for (ai, bi), c in zip(pairs.tolist(), counts.tolist()):
+            inter[(ai, bi)] = inter.get((ai, bi), 0) + c
+        for k, v in aa.items():
+            a_area[k] = a_area.get(k, 0) + v
+        for k, v in ba.items():
+            b_area[k] = b_area.get(k, 0) + v
+    keep = [
+        pair
+        for pair, c in inter.items()
+        if c / (a_area[pair[0]] + b_area[pair[1]] - c) >= threshold
+    ]
+    return np.asarray(keep, dtype=np.int64).reshape(-1, 2)
+
+
+def _load_halo(halo_dir: str, index: int) -> dict[str, np.ndarray]:
+    path = os.path.join(halo_dir, f"{int(index)}.npz")
+    if not os.path.exists(path):
+        return {}
+    with np.load(path) as npz:
+        return {k: npz[k] for k in npz.files if k != "n"}
+
+
+def _scan_iou_pairs(
+    zarr_path: str,
+    component: str,
+    chunk_shape: tuple[int, ...],
+    halo_dir: str,
+    label_offsets: np.ndarray,
+    threshold: float,
+    n_workers: int = 1,
+    progress: bool = False,
+) -> np.ndarray:
+    """IoU-matched label pairs across every chunk (= tile) boundary.
+
+    Touching-label merging joins *anything* that touches across a boundary,
+    so two distinct cells pressed against each other at a seam become one.
+    Here both tiles' predictions of the overlap zone are compared instead:
+    tile A's halo strip beyond the boundary against B's staged core there,
+    and B's halo strip against A's core on the other side. A pair is joined
+    only when its IoU over that zone reaches *threshold* -- i.e. when the two
+    tiles agree they saw the same object.
+
+    A boundary with no halo on either side (a one-voxel-thick axis, e.g. 2-D
+    tiles stacked in z) falls back to the IoU of the two boundary slices,
+    which is Cellpose's own ``stitch_threshold`` rule for 2-D -> 3-D.
+
+    Parameters
+    ----------
+    zarr_path, component : str
+        The staged store and array (tile-local ids, one chunk per tile).
+    chunk_shape : tuple of int
+        Chunk (= tile) shape.
+    halo_dir : str
+        Directory of ``<index>.npz`` halo files from
+        :func:`patchworks.stage_tile` (``halo_dir=``).
+    label_offsets : np.ndarray
+        Per-tile id offset (row-major), making ids global.
+    threshold : float
+        Minimum IoU to join a pair.
+    n_workers : int
+        Threads to scan with.
+    progress : bool
+        Log progress.
+
+    Returns
+    -------
+    np.ndarray
+        ``(N, 2)`` int64 array of global label pairs to join.
+    """
+    arr = zarr.open_group(zarr_path, mode="r")[component]
+    shape = arr.shape
+    grid = [(s + c - 1) // c for s, c in zip(shape, chunk_shape)]
+    slices = chunk_slices(shape, chunk_shape)
+
+    tasks = []
+    for ia in range(len(slices)):
+        ga = np.unravel_index(ia, grid)
+        for ax in range(arr.ndim):
+            if ga[ax] + 1 < grid[ax]:
+                gb = list(ga)
+                gb[ax] += 1
+                tasks.append((ia, int(np.ravel_multi_index(gb, grid)), ax))
+
+    def _one(task) -> np.ndarray:
+        ia, ib, ax = task
+        oa, ob = int(label_offsets[ia]), int(label_offsets[ib])
+        sa = slices[ia]
+        pos = sa[ax].stop
+
+        def glob(ids: np.ndarray, off: int) -> np.ndarray:
+            ids = np.asarray(ids, dtype=np.int64)
+            return np.where(ids > 0, ids + off, 0)
+
+        hi = _load_halo(halo_dir, ia).get(f"{ax}+")  # A's view beyond pos
+        lo = _load_halo(halo_dir, ib).get(f"{ax}-")  # B's view before pos
+        windows = []
+        if hi is not None:
+            region = list(sa)
+            region[ax] = slice(pos, pos + hi.shape[ax])
+            windows.append((glob(hi, oa), glob(arr[tuple(region)], ob)))
+        if lo is not None:
+            region = list(sa)
+            region[ax] = slice(pos - lo.shape[ax], pos)
+            windows.append((glob(arr[tuple(region)], oa), glob(lo, ob)))
+        if not windows:
+            # No halo either side: IoU of the two boundary slices.
+            region = list(sa)
+            region[ax] = slice(pos - 1, pos + 1)
+            slab = np.moveaxis(np.asarray(arr[tuple(region)]), ax, 0)
+            windows.append((glob(slab[0], oa), glob(slab[1], ob)))
+        return _iou_face_pairs(windows, threshold)
+
+    nw = max(1, min(n_workers, len(tasks)))
+    if nw <= 1:
+        results = list(
+            track(
+                (_one(t) for t in tasks),
+                "IoU boundaries",
+                len(tasks),
+                enabled=progress,
+            )
+        )
+    else:
+        with ThreadPoolExecutor(max_workers=nw) as pool:
+            results = list(
+                track(
+                    pool.map(_one, tasks),
+                    "IoU boundaries",
+                    len(tasks),
+                    enabled=progress,
+                )
+            )
+    found = [r for r in results if r.size]
+    if not found:
+        return np.empty((0, 2), dtype=np.int64)
+    return np.unique(np.vstack(found), axis=0)
+
+
+def _halo_counts(halo_dir: str, n_chunks: int) -> "list[int] | None":
+    """Per-tile label counts recorded in the halo files, if all are there."""
+    counts = []
+    for i in range(n_chunks):
+        path = os.path.join(halo_dir, f"{i}.npz")
+        if not os.path.exists(path):
+            return None
+        with np.load(path) as npz:
+            if "n" not in npz.files:
+                return None
+            counts.append(int(npz["n"]))
+    return counts
+
+
 def _build_relabel_lut(pairs: np.ndarray, max_label: int) -> np.ndarray:
     """Build a relabel LUT from touching pairs via connected components.
 
@@ -630,6 +822,8 @@ def zarr_native_merge(
     label_counts: "Mapping[int, int] | Sequence[int] | None" = None,
     sequential: bool = False,
     output_chunks: "Sequence[int] | None" = None,
+    halo_dir: "str | Path | None" = None,
+    iou_threshold: float = 0.5,
 ) -> "int | None":
     """Zarr-native label merge: boundary scan → scipy CC → parallel relabel.
 
@@ -671,6 +865,13 @@ def zarr_native_merge(
         Chunking for the merged store. Must divide the staged chunk shape, so
         each worker's write still covers whole chunks. ``None`` mirrors the
         staged chunking. Use :func:`capped_output_chunks` to derive it.
+    halo_dir : str or Path, optional
+        Halo strips saved by :func:`patchworks.stage_tile` (``halo_dir=``).
+        Given, labels are joined across a boundary only when the two tiles'
+        predictions of the overlap zone agree (IoU >= *iou_threshold*),
+        instead of whenever they touch. See :func:`_scan_iou_pairs`.
+    iou_threshold : float
+        Minimum IoU to join two labels in that mode (default 0.5).
 
     Returns
     -------
@@ -689,6 +890,16 @@ def zarr_native_merge(
     # unrelated objects apart. With per-tile counts that is a cumulative sum;
     # without them, fall back to streaming every chunk and renumbering it in
     # place -- correct, but a full read+write of the volume.
+    if halo_dir is not None and label_counts is None:
+        # IoU mode needs each tile's ids placed exactly as the halo files
+        # number them, i.e. by the counts the tiles recorded.
+        label_counts = _halo_counts(str(halo_dir), n_chunks)
+        if label_counts is None:
+            raise ValueError(
+                f"IoU stitching needs every tile's label count: pass "
+                f"label_counts, or a halo_dir holding one <index>.npz per "
+                f"tile ({halo_dir} does not)"
+            )
     if label_counts is not None:
         offsets = _offsets_from_counts(label_counts, n_chunks)
         counts_arr = (
@@ -714,16 +925,34 @@ def zarr_native_merge(
     )
 
     n_faces = len(_boundary_face_specs(shape, chunk_shape))
-    logger.info("zarr_native_merge: scanning %d boundary faces…", n_faces)
-    pairs = _scan_touching_pairs(
-        staged_path,
-        staged_component,
-        chunk_shape,
-        label_offsets=offsets,
-        n_workers=n_workers,
-        has_labels=has_labels,
-        progress=show_progress,
-    )
+    if halo_dir is not None:
+        logger.info(
+            "zarr_native_merge: IoU-matching across %d boundary faces "
+            "(threshold %.2f)…",
+            n_faces,
+            iou_threshold,
+        )
+        pairs = _scan_iou_pairs(
+            staged_path,
+            staged_component,
+            chunk_shape,
+            str(halo_dir),
+            offsets,
+            iou_threshold,
+            n_workers=n_workers,
+            progress=show_progress,
+        )
+    else:
+        logger.info("zarr_native_merge: scanning %d boundary faces…", n_faces)
+        pairs = _scan_touching_pairs(
+            staged_path,
+            staged_component,
+            chunk_shape,
+            label_offsets=offsets,
+            n_workers=n_workers,
+            has_labels=has_labels,
+            progress=show_progress,
+        )
     logger.info(
         "zarr_native_merge: %d touching pairs → building LUT", len(pairs)
     )
@@ -923,6 +1152,8 @@ def merge_tile_labels(
     return_count: bool = False,
     label_counts: "Mapping[int, int] | Sequence[int] | None" = None,
     output_chunks: "Sequence[int] | None" = None,
+    halo_dir: "str | Path | None" = None,
+    iou_threshold: float = 0.5,
 ) -> Union["da.Array", tuple["da.Array", Union[int, None]]]:
     """Merge per-tile labels into a globally consistent label array.
 
@@ -974,6 +1205,14 @@ def merge_tile_labels(
         Lets the merge write straight into a store you will keep (e.g. an
         OME-ZARR label group's level 0) instead of a scratch store that then
         has to be copied. See :func:`capped_output_chunks`.
+    halo_dir:
+        IoU stitching: the halo strips :func:`patchworks.stage_tile` saved
+        (its ``halo_dir=``). Labels are then joined across a tile boundary
+        only when both tiles' predictions of the overlap zone agree
+        (IoU >= ``iou_threshold``), so two cells pressed together at a seam
+        stay two. ``None`` (default) joins whatever touches.
+    iou_threshold:
+        Minimum IoU for that join (default 0.5).
     n_workers:
         Parallel workers for the relabel step. Default ``min(4, cpu_count)``.
     stage_dir:
@@ -1092,6 +1331,8 @@ def merge_tile_labels(
             label_counts=label_counts,
             sequential=sequential_labels,
             output_chunks=output_chunks,
+            halo_dir=halo_dir,
+            iou_threshold=iou_threshold,
         )
     finally:
         # -- Cleanup temp stage (only when we created it), even on failure:
