@@ -191,3 +191,87 @@ def test_auto_tile_shape_cellpose_budgets_for_the_diameter_rescale():
     # A diameter above 30 predicts a downsample; that must not *grow* the
     # tile, since this factor is a safety margin, not a measurement.
     assert auto_tile_shape_cellpose(**kwargs, diameter=60)[1] <= native[1]
+
+
+def _fake_cgroup(monkeypatch, tmp_path, proc_lines):
+    from patchworks import _chunks
+
+    root = tmp_path / "cgroup"
+    root.mkdir()
+    proc = tmp_path / "proc_cgroup"
+    proc.write_text("\n".join(proc_lines) + "\n")
+    monkeypatch.setattr(_chunks, "_CGROUP_ROOT", str(root))
+    monkeypatch.setattr(_chunks, "_PROC_CGROUP", str(proc))
+    return root
+
+
+def test_cgroup_v2_limit_on_the_jobs_own_cgroup(monkeypatch, tmp_path):
+    """SLURM on cgroup v2 caps the job's nested cgroup, not the mount root.
+
+    Reading only /sys/fs/cgroup/memory.max found nothing there, so the job's
+    ceiling was ignored and sizing fell back to the whole node's free RAM.
+    """
+    from patchworks._chunks import _cgroup_memory_limit
+
+    job = "system.slice/slurmstepd.scope/job_42/step_0"
+    root = _fake_cgroup(monkeypatch, tmp_path, [f"0::/{job}"])
+    leaf = root / job
+    leaf.mkdir(parents=True)
+    (leaf / "memory.max").write_text(f"{32 * GIB}\n")
+    # Page cache is reclaimable; only anon memory reduces the headroom.
+    (leaf / "memory.stat").write_text(f"anon {4 * GIB}\nfile {27 * GIB}\n")
+    (root / "system.slice" / "memory.max").write_text("max\n")
+
+    assert _cgroup_memory_limit() == 28 * GIB
+
+
+def test_cgroup_tightest_ancestor_wins(monkeypatch, tmp_path):
+    from patchworks._chunks import _cgroup_memory_limit
+
+    root = _fake_cgroup(monkeypatch, tmp_path, ["0::/a/b"])
+    (root / "a" / "b").mkdir(parents=True)
+    (root / "a" / "b" / "memory.max").write_text(f"{64 * GIB}\n")
+    (root / "a" / "memory.max").write_text(f"{16 * GIB}\n")
+
+    assert _cgroup_memory_limit() == 16 * GIB
+
+
+def test_cgroup_v1_nested_memory_limit(monkeypatch, tmp_path):
+    from patchworks._chunks import _cgroup_memory_limit
+
+    root = _fake_cgroup(monkeypatch, tmp_path, ["4:memory:/slurm/job_7"])
+    leaf = root / "memory" / "slurm" / "job_7"
+    leaf.mkdir(parents=True)
+    (leaf / "memory.limit_in_bytes").write_text(f"{8 * GIB}\n")
+    (leaf / "memory.stat").write_text(f"cache 1\ntotal_rss {GIB}\n")
+    (root / "memory" / "memory.limit_in_bytes").write_text(f"{2**63 - 4096}")
+
+    assert _cgroup_memory_limit() == 7 * GIB
+
+
+def test_no_cgroup_limit_is_none(monkeypatch, tmp_path):
+    from patchworks._chunks import _cgroup_memory_limit
+
+    root = _fake_cgroup(monkeypatch, tmp_path, ["0::/"])
+    (root / "memory.max").write_text("max\n")
+    assert _cgroup_memory_limit() is None
+
+
+def test_cpu_quota_caps_the_allocation(monkeypatch, tmp_path):
+    """docker --cpus=2.5 leaves every core in the affinity mask."""
+    from patchworks import _chunks
+
+    monkeypatch.delenv("SLURM_CPUS_PER_TASK", raising=False)
+    monkeypatch.delenv("SLURM_CPUS_ON_NODE", raising=False)
+    root = _fake_cgroup(monkeypatch, tmp_path, ["0::/ctr"])
+    (root / "ctr").mkdir()
+    (root / "ctr" / "cpu.max").write_text("250000 100000\n")
+    monkeypatch.setattr(
+        _chunks.os,
+        "sched_getaffinity",
+        lambda pid: set(range(64)),
+        raising=False,
+    )
+
+    assert _chunks._cgroup_cpu_limit() == 3
+    assert _chunks.cpu_allocation() == 3

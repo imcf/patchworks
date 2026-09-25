@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import os
 from itertools import product as _iproduct
 from pathlib import Path
@@ -125,35 +126,160 @@ def cpu_allocation() -> int:
         if value > 0:
             return value
     try:
-        return max(1, len(os.sched_getaffinity(0)))
+        n = max(1, len(os.sched_getaffinity(0)))
     except AttributeError:  # not POSIX
-        return max(1, os.cpu_count() or 1)
+        n = max(1, os.cpu_count() or 1)
+    quota = _cgroup_cpu_limit()
+    return min(n, quota) if quota is not None else n
+
+
+_CGROUP_ROOT = "/sys/fs/cgroup"
+_PROC_CGROUP = "/proc/self/cgroup"
+
+
+def _cgroup_dirs(controller: str) -> list[Path]:
+    """This process' cgroup directory for *controller*, then its ancestors.
+
+    The limit that gets a job OOM-killed sits on the job's *own* cgroup --
+    e.g. ``/sys/fs/cgroup/system.slice/slurmstepd.scope/job_42/...`` under
+    SLURM on cgroup v2 -- not on the mount root, which is all a container
+    with a cgroup namespace sees. ``/proc/self/cgroup`` names the directory;
+    every ancestor can cap it too, so all of them are returned, leaf first.
+
+    Parameters
+    ----------
+    controller : str
+        cgroup v1 controller name (``"memory"``, ``"cpu"``). cgroup v2 has a
+        single unified hierarchy and is always included.
+
+    Returns
+    -------
+    list of Path
+        Existing candidate directories, leaf first (v2 before v1).
+    """
+    try:
+        lines = Path(_PROC_CGROUP).read_text().splitlines()
+    except OSError:
+        lines = []
+    roots = []
+    for line in lines:
+        parts = line.split(":", 2)
+        if len(parts) != 3:
+            continue
+        hier, controllers, rel = parts
+        if hier == "0" and controllers == "":
+            # v2 is mounted at the root on a pure-v2 host, or at "unified"
+            # under a hybrid v1/v2 layout.
+            for base in (_CGROUP_ROOT, f"{_CGROUP_ROOT}/unified"):
+                roots.append((Path(base), rel))
+        elif controller in controllers.split(","):
+            roots.append((Path(_CGROUP_ROOT) / controllers, rel))
+
+    dirs: list[Path] = []
+    for base, rel in roots:
+        leaf = base / rel.lstrip("/")
+        chain = [leaf, *leaf.parents]
+        for d in chain:
+            if d.is_dir() and d not in dirs:
+                dirs.append(d)
+            if d == base:
+                break
+    # Fall back to the mount roots (no /proc, or paths outside the mount).
+    for d in (
+        Path(_CGROUP_ROOT),
+        Path(_CGROUP_ROOT) / controller,
+    ):
+        if d.is_dir() and d not in dirs:
+            dirs.append(d)
+    return dirs
+
+
+def _read_int(path: Path) -> "int | None":
+    try:
+        raw = path.read_text().strip()
+    except OSError:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None  # "max", or garbage
 
 
 def _cgroup_memory_limit() -> "int | None":
-    """Memory ceiling from the process' cgroup, if one applies.
+    """Memory this process' cgroups still allow it, if any limit applies.
 
     SLURM confines jobs with cgroups, so this is the limit that actually gets
     the process OOM-killed -- unlike the node-wide figure ``psutil`` reports.
+    Each level's headroom is its limit minus the anonymous memory already
+    charged to it (the limit alone overstates it by everything resident;
+    page cache is left out, being reclaimable); the tightest level wins.
+
+    Returns
+    -------
+    int or None
+        Remaining bytes under the tightest limit, or None when unlimited.
     """
-    for path in (
-        "/sys/fs/cgroup/memory.max",  # cgroup v2
-        "/sys/fs/cgroup/memory/memory.limit_in_bytes",  # cgroup v1
-    ):
+    best = None
+    for d in _cgroup_dirs("memory"):
+        for limit_file, anon_key in (
+            ("memory.max", "anon"),  # cgroup v2
+            ("memory.limit_in_bytes", "total_rss"),  # v1
+        ):
+            limit = _read_int(d / limit_file)
+            # v1 reports a sentinel near 2**63 when unlimited.
+            if limit is None or not 0 < limit < 2**62:
+                continue
+            room = max(1, limit - _cgroup_anon_bytes(d, anon_key))
+            best = room if best is None else min(best, room)
+    return best
+
+
+def _cgroup_anon_bytes(d: Path, key: str) -> int:
+    """Non-reclaimable (anonymous) memory charged to cgroup *d*.
+
+    Not ``memory.current``/``usage_in_bytes``: those include page cache,
+    which reading a large store fills up to the limit and which the kernel
+    drops on demand -- counting it would leave a job that has just staged
+    its tiles believing it has no room for a second merge worker.
+    """
+    try:
+        for line in (d / "memory.stat").read_text().splitlines():
+            name, _, value = line.partition(" ")
+            if name == key:
+                return int(value)
+    except (OSError, ValueError):
+        pass
+    return 0
+
+
+def _cgroup_cpu_limit() -> "int | None":
+    """CPU quota of this process' cgroups, rounded up to whole CPUs.
+
+    Containers (``docker --cpus``, Kubernetes limits) cap CPU with a quota,
+    not an affinity mask, so every core stays visible to
+    ``sched_getaffinity`` while only a few can actually be used.
+
+    Returns
+    -------
+    int or None
+        The tightest quota in CPUs, or None when unlimited.
+    """
+    best = None
+    for d in _cgroup_dirs("cpu"):
+        cpus = None
         try:
-            raw = Path(path).read_text().strip()
-        except OSError:
-            continue
-        if raw == "max":
-            continue
-        try:
-            value = int(raw)
-        except ValueError:
-            continue
-        # v1 reports a sentinel near 2**63 when unlimited.
-        if 0 < value < 2**62:
-            return value
-    return None
+            quota, period = (d / "cpu.max").read_text().split()[:2]  # v2
+            if quota != "max":
+                cpus = int(quota) / int(period)
+        except (OSError, ValueError):
+            quota_us = _read_int(d / "cpu.cfs_quota_us")  # v1
+            period_us = _read_int(d / "cpu.cfs_period_us")
+            if quota_us and quota_us > 0 and period_us:
+                cpus = quota_us / period_us
+        if cpus:
+            n = max(1, math.ceil(cpus))
+            best = n if best is None else min(best, n)
+    return best
 
 
 def _get_available_memory() -> int:
@@ -274,13 +400,17 @@ def _get_gpu_memory() -> int:
         from ._gpu import visible_device_index, visible_device_uuid
 
         pynvml.nvmlInit()
-        uuid = visible_device_uuid()
-        if uuid is not None:
-            handle = pynvml.nvmlDeviceGetHandleByUUID(uuid.encode())
-        else:
-            handle = pynvml.nvmlDeviceGetHandleByIndex(visible_device_index())
-        info = pynvml.nvmlDeviceGetMemoryInfo(handle)
-        pynvml.nvmlShutdown()
+        try:
+            uuid = visible_device_uuid()
+            if uuid is not None:
+                handle = pynvml.nvmlDeviceGetHandleByUUID(uuid.encode())
+            else:
+                handle = pynvml.nvmlDeviceGetHandleByIndex(
+                    visible_device_index()
+                )
+            info = pynvml.nvmlDeviceGetMemoryInfo(handle)
+        finally:
+            pynvml.nvmlShutdown()
         return int(int(info.free) * _GPU_HEADROOM)
     except Exception:
         logger.warning(
