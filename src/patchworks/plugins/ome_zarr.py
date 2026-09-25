@@ -574,7 +574,7 @@ def _create_level_array(
 
 
 DownsampleMethod = str  # "mean" or "nearest"
-_DOWNSAMPLE_METHODS = ("mean", "nearest")
+_DOWNSAMPLE_METHODS = ("mean", "mode", "nearest")
 
 
 def _check_downsample(method: str) -> str:
@@ -601,8 +601,11 @@ def _downsample(
     strides : tuple of int
         Per-axis factor (1 = untouched).
     method : str
-        ``"nearest"`` (every *stride*-th voxel; for labels) or ``"mean"``
-        (block average, rounded back to an integer dtype; for images).
+        ``"nearest"`` (every *stride*-th voxel), ``"mean"`` (block average,
+        rounded back to an integer dtype; for images) or ``"mode"`` (the
+        most frequent non-zero id in the block; for labels -- an object
+        survives a coarser level as long as it wins some block, where
+        ``"nearest"`` drops anything its sampled voxel misses).
 
     Returns
     -------
@@ -611,6 +614,8 @@ def _downsample(
     """
     if method == "nearest":
         return region[tuple(slice(None, None, st) for st in strides)]
+    if method == "mode":
+        return _block_mode(region, strides)
     out = region
     for ax, st in enumerate(strides):
         if st == 1:
@@ -628,6 +633,47 @@ def _downsample(
         info = np.iinfo(region.dtype)
         out = np.clip(np.rint(out), info.min, info.max)
     return out.astype(region.dtype)
+
+
+def _block_mode(region: np.ndarray, strides: tuple[int, ...]) -> np.ndarray:
+    """Most frequent non-zero value per block; 0 only for an empty block.
+
+    Ties go to the first voxel in block order, so the result is
+    deterministic. Edge blocks are padded with background, which never wins.
+    """
+    nd = region.ndim
+    pads = [(0, (-n) % st) for n, st in zip(region.shape, strides)]
+    padded = np.pad(region, pads) if any(p for _, p in pads) else region
+    out_shape = tuple(n // st for n, st in zip(padded.shape, strides))
+    split = []
+    for n, st in zip(padded.shape, strides):
+        split += [n // st, st]
+    blocks = padded.reshape(split).transpose(
+        list(range(0, 2 * nd, 2)) + list(range(1, 2 * nd, 2))
+    )
+    flat = blocks.reshape(-1, int(np.prod(strides)))
+    if flat.shape[1] == 1:
+        return flat.reshape(out_shape)
+    # How often each voxel's value occurs in its block, counted pairwise over
+    # columns (k*(k-1)/2 compares of 1-D arrays; 6 for a 2x2 block) -- far
+    # cheaper than broadcasting an (n, k, k) cube. Background scores 0, so
+    # any object present outvotes it.
+    k = flat.shape[1]
+    cols = [np.ascontiguousarray(flat[:, i]) for i in range(k)]
+    votes = [np.ones(flat.shape[0], dtype=np.uint16) for _ in range(k)]
+    for i in range(k):
+        for j in range(i + 1, k):
+            same = cols[i] == cols[j]
+            votes[i] += same
+            votes[j] += same
+    best = np.where(cols[0] != 0, votes[0], 0)
+    out = cols[0].copy()
+    for i in range(1, k):
+        score = np.where(cols[i] != 0, votes[i], 0)
+        better = score > best
+        out[better] = cols[i][better]
+        best = np.maximum(best, score)
+    return out.reshape(out_shape)
 
 
 def _stream_strided_level(
@@ -1020,13 +1066,13 @@ def _level_translation(
     """Where level *level*'s first voxel centre sits, physically.
 
     A decimated level keeps voxel 0 of the level below, so it inherits the
-    base offset. A block mean's first voxel is the average of the first
-    ``f`` voxels (``f = stride**level``), so its centre is ``(f - 1) / 2``
+    base offset. A block method's (mean, mode) first voxel summarises the
+    first ``f`` voxels (``f = stride**level``), so its centre is ``(f - 1) / 2``
     base voxels further in; without that offset, labels segmented at an
     averaged level would sit up to half a coarse voxel off the image.
     """
     base_t = list(base_translation or [0.0] * len(base_scale))
-    if downsample != "mean":
+    if downsample == "nearest":
         return base_t
     return [
         t + (st**level - 1) / 2 * sc
@@ -1122,6 +1168,7 @@ def _write_pyramid(
             src = da.from_zarr(group_path, component=prev_name)
             if downsample == "nearest":
                 nxt = src[tuple(slice(None, None, st) for st in strides)]
+            # mean and mode are both block reductions
             else:
                 # Blocks must start on a stride boundary, so every chunk
                 # (but the last) is a whole number of strides.
@@ -1934,11 +1981,12 @@ def to_ome_zarr(
         (default) writes 0.5 (zarr v3), while ``"0.4"`` pins the older, zarr-v2 layout for tools that
         cannot read 0.5 yet. 0.4 has no sharding codec, so ``shard`` is
         ignored there. See :func:`ngff_version`.
-    downsample : {"mean", "nearest"}, optional
+    downsample : {"mean", "mode", "nearest"}, optional
         How the pyramid's X/Y levels are made from the one above: ``"mean"``
         (default) block-averages, which is what an image wants;
-        ``"nearest"`` keeps every *downscale*-th pixel, which is what a label
-        image wants (and what this wrote before).
+        ``"nearest"`` keeps every *downscale*-th pixel (what this wrote
+        before); ``"mode"`` takes each block's most frequent non-zero value,
+        which is what a label image wants.
 
     Returns
     -------
@@ -2068,9 +2116,9 @@ def add_pyramid(
         (default) writes 0.5 (zarr v3), while ``"0.4"`` pins the older, zarr-v2 layout for tools that
         cannot read 0.5 yet. 0.4 has no sharding codec, so ``shard`` is
         ignored there. See :func:`ngff_version`.
-    downsample : {"mean", "nearest"} or None, optional
+    downsample : {"mean", "mode", "nearest"} or None, optional
         How each level is made from the one above (see :func:`to_ome_zarr`).
-        ``None`` (default) picks ``"nearest"`` for an NGFF label image (an
+        ``None`` (default) picks ``"mode"`` for an NGFF label image (an
         ``image-label`` group, or one under ``labels/``) and ``"mean"``
         otherwise.
     translation : dict, optional
@@ -2100,7 +2148,7 @@ def add_pyramid(
                 read_ngff_attr(root.attrs, "image-label") is not None
                 or "labels" in Path(gp).parts[:-1]
             )
-            downsample = "nearest" if is_label else "mean"
+            downsample = "mode" if is_label else "mean"
         _check_downsample(downsample)
         multiscales = read_ngff_attr(root.attrs, "multiscales")
         if multiscales:
@@ -2240,7 +2288,9 @@ def register_labels(
             chunks=chunks,
             shard=shard,
             progress=progress,
-            downsample="nearest",  # averaging ids invents objects
+            # Majority vote, not a mean (averaging ids invents objects) and not
+            # decimation (which drops every object its sampled voxel misses).
+            downsample="mode",
             translation=read_translation(store, level),
         )
         grp = _open_group(group)

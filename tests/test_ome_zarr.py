@@ -1014,3 +1014,38 @@ def test_labels_segmented_at_a_coarser_level_land_on_the_image(tmp_path):
     got = _physical_centroid(lab > 0, lab_scale, lab_t)
     want = _physical_centroid(img > 0, [0.5, 0.2, 0.2], [0, 0, 0])
     np.testing.assert_allclose(got, want, atol=1e-6)
+
+
+def test_block_mode_keeps_small_objects_and_ids():
+    """Majority vote: any object beats background, ties go to block order."""
+    from patchworks.plugins.ome_zarr import _downsample
+
+    a = np.array(
+        [
+            [0, 0, 5, 5, 0],
+            [0, 9, 5, 3, 0],
+            [0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 4],
+        ],
+        dtype="int32",
+    )
+    out = _downsample(a[None], (1, 2, 2), "mode")[0]
+    # 9 is one voxel in a background block: nearest would have dropped it.
+    np.testing.assert_array_equal(out, [[9, 5, 0], [0, 0, 4]])
+    assert _downsample(a[None], (1, 2, 2), "nearest")[0][0, 0] == 0
+
+
+def test_label_pyramid_keeps_objects_nearest_would_drop(tmp_path):
+    img = np.zeros((1, 64, 64), "uint16")
+    labels = np.zeros((1, 64, 64), "int32")
+    # 16 single-voxel objects, all on odd coordinates: decimation's sampled
+    # grid (even coordinates) misses every one of them.
+    ids = iter(range(1, 17))
+    for y in range(1, 64, 16):
+        for x in range(1, 64, 16):
+            labels[0, y, x] = next(ids)
+    store = to_ome_zarr(img, tmp_path / "a.zarr", axes="zyx", n_levels=1)
+    write_labels(store, labels, name="dots", n_levels=3)
+    grp = zarr.open_group(f"{store}/labels/dots", mode="r")
+    for level in ("1", "2"):
+        assert set(np.unique(grp[level][:])) - {0} == set(range(1, 17))
