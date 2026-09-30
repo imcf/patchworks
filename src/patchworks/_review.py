@@ -48,7 +48,11 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 REVIEW_KEY = "patchworks_review"
-ACTIONS = ("ok", "wrong", "parent", "merge")
+ACTIONS = ("ok", "wrong", "parent", "merge", "position")
+POSITIONS = ("apical", "basal", "lateral", "central")
+_AXES_SIGNS = {
+    f"{s}{a}": (a, 1.0 if s == "+" else -1.0) for s in "+-" for a in "zyx"
+}
 QUEUES = ("flagged", "random", "all")
 #: Excel's hard row limit, header included.
 EXCEL_MAX_ROWS = 1_048_576
@@ -58,14 +62,15 @@ RULES_KEY = "patchworks_review_rules"
 
 
 def write_rules(store: Union[str, Path], rules: Mapping[str, Any]) -> None:
-    """Store review rules for *store* (``expect``, ``min_overlap``), read by
+    """Store review rules for *store* (``expect``, ``min_overlap``,
+    ``position``), read by
     :class:`Review` when none are passed. The workflow writes the multi
     config's ``review:`` block here."""
-    unknown = set(rules) - {"expect", "min_overlap"}
+    unknown = set(rules) - {"expect", "min_overlap", "position"}
     if unknown:
         raise ValueError(
             f"unknown review rule(s) {sorted(unknown)}; expected expect, "
-            "min_overlap"
+            "min_overlap, position"
         )
     group = zarr.open_group(f"{str(store).rstrip('/')}/labels", mode="r+")
     group.attrs[RULES_KEY] = {k: v for k, v in rules.items() if v is not None}
@@ -160,6 +165,11 @@ class Review:
         Voxels of slack when matching two objects meeting at a tile seam.
     names : iterable of str, optional
         Only these label images (default: every one with a table).
+    position : mapping, optional
+        Classify objects by where they sit in their parent:
+        ``{"cilia_labels": {"parent": "cyto_labels", "apical":
+        "nuclei_labels"}}`` -- see :meth:`positions`. Falls back to the
+        store's recorded rules.
 
     Examples
     --------
@@ -177,6 +187,7 @@ class Review:
         min_overlap: float | Mapping[str, Mapping[str, float]] | None = None,
         seam_tolerance: int = 1,
         names: Iterable[str] | None = None,
+        position: Mapping[str, Mapping[str, Any]] | None = None,
     ) -> None:
         self.store = str(store).rstrip("/")
         self.seam_tolerance = int(seam_tolerance)
@@ -229,6 +240,15 @@ class Review:
             for child, rng in rules.items():
                 self.expect.setdefault(n, {})[child] = _range(rng)
         self._min_overlap = min_overlap
+        self.position: dict[str, dict[str, Any]] = {
+            k: dict(v) for k, v in (rules.get("position") or {}).items()
+        }
+        for child, rule in (position or {}).items():
+            self.position[child] = dict(rule)
+        for child, rule in list(self.position.items()):
+            if child not in self.tables or "parent" not in rule:
+                logger.warning("position rule for %s ignored: %s", child, rule)
+                del self.position[child]
         self.decisions: dict[str, dict[int, dict[str, Any]]] = {}
         self.seed: dict[str, int] = {}
         for n in self.names:
@@ -291,6 +311,7 @@ class Review:
         parent: str | None = None,
         parent_id: int | None = None,
         into: int | None = None,
+        position: str | None = None,
         queue: str = "flagged",
         reviewer: str | None = None,
     ) -> None:
@@ -302,7 +323,8 @@ class Review:
             ``ok``: correct as it is. ``wrong``: not a real object (dropped
             from the corrected tables). ``parent``: belongs to *parent_id*
             of label image *parent* (0 = to none). ``merge``: the same
-            object as *into*.
+            object as *into*. ``position``: its position class is
+            *position* (one of :data:`POSITIONS`), whatever was computed.
         queue : str
             The queue it was reviewed from; ``"random"`` decisions feed the
             error estimate.
@@ -338,6 +360,12 @@ class Review:
                 entry["parents"] = {**previous.get("parents", {}), parent: pid}
             else:
                 entry["parents"] = {parent: pid}
+        elif action == "position":
+            if name not in self.position:
+                raise ValueError(f"{name} has no position rule")
+            if position not in POSITIONS:
+                raise ValueError(f"position must be one of {POSITIONS}")
+            entry["position"] = position
         elif action == "merge":
             into = int(into or 0)
             if into == label or into not in self.tables[name].index:
@@ -367,7 +395,7 @@ class Review:
             seen, cur = {label}, label
             while True:
                 d = dec.get(cur)
-                if d is None or d["action"] in ("ok", "parent"):
+                if d is None or d["action"] in ("ok", "parent", "position"):
                     break
                 if d["action"] == "wrong":
                     cur = 0
@@ -429,7 +457,9 @@ class Review:
         merges; ``qc`` says ``ok``, ``fixed`` or ``""`` (not reviewed).
         Derived columns: ``n_<child>`` (children counted), ``length_um``,
         ``elongation``, ``axis_<a>`` (shape, see
-        :func:`~patchworks._tables.shape_columns`).
+        :func:`~patchworks._tables.shape_columns`) and, for label images
+        with a position rule, ``position`` and its measures (see
+        :meth:`positions`).
         """
         if name in self._cache:
             return self._cache[name]
@@ -447,8 +477,183 @@ class Review:
             df, meta.get("axes") or "", meta.get("pixel_size")
         ).items():
             df[col] = values
+        if name in self.position:
+            for col, values in self.positions(name, df).items():
+                df[col] = values
+        for child in self.children[name]:
+            if (
+                child in self.position
+                and self.position[child]["parent"] == name
+            ):
+                pos = self.effective(child)
+                table = (
+                    pos[pos[f"{name}_id"] != 0]
+                    .groupby([f"{name}_id", "position"])
+                    .size()
+                    .unstack(fill_value=0)
+                )
+                for cls in POSITIONS:
+                    counts = table[cls] if cls in table else None
+                    df[f"n_{child}_{cls}"] = (
+                        counts.reindex(df.index).fillna(0).astype(np.int64)
+                        if counts is not None
+                        else 0
+                    )
         self._cache[name] = df
         return df
+
+    def positions(
+        self, name: str, df: "pd.DataFrame | None" = None
+    ) -> dict[str, Any]:
+        """Where each object of *name* sits in its parent.
+
+        Per parent object, an apical axis: a fixed direction (``"+z"``:
+        apical is up the z axis), or pointing away from the parent's
+        children of another label image (``"nuclei_labels"``: away from
+        the nucleus, for epithelia whose nuclei sit basally), or towards
+        them (``"towards:<name>"``). Each object's **base** is its end
+        nearer the parent's centre (a cilium grows out from its base).
+
+        The class is the parent surface the base is nearest to -- top
+        (``apical``), bottom (``basal``) or side wall (``lateral``) --
+        each depth measured relative to the parent's size in that
+        direction; ``central`` when deeper than ``central_depth`` (default
+        0.5, i.e. half-way) from all three. The parent's shape is taken
+        from its moments (an equivalent cylinder), so this is a
+        classification, not a surface distance.
+
+        Returns columns ``position`` (the class; ``outside`` with no
+        parent; ``unknown`` when the axis cannot be told, e.g. no nucleus),
+        ``position_axial`` (-1 basal .. +1 apical, in half-heights of the
+        parent along its axis), ``position_radial`` (0 on the axis .. 1 at
+        the side) and ``angle_to_axis_deg`` (0: along the apical axis, 90:
+        across it). A reviewer's ``position`` decision overrides the class.
+        """
+        from ._tables import physical_centroids, physical_cov
+
+        rule = self.position[name]
+        parent = rule["parent"]
+        df = self._corrected(name) if df is None else df
+        n = len(df)
+        out: dict[str, Any] = {
+            "position": np.full(n, "unknown", dtype=object),
+            "position_axial": np.full(n, np.nan),
+            "position_radial": np.full(n, np.nan),
+            "angle_to_axis_deg": np.full(n, np.nan),
+        }
+        if parent not in self.parents[name] or not n:
+            return out
+        axes = self.meta[name].get("axes") or ""
+        size = self.meta[name].get("pixel_size")
+        pe = self._corrected(parent)
+        pid = df[f"{parent}_id"].to_numpy(dtype=np.int64)
+        spread = [f"cov_{a}{a}" for a in axes]
+        missing = [
+            t
+            for t, d in ((name, df), (parent, pe))
+            if not set(spread) <= set(d)
+        ]
+        if missing:
+            logger.warning(
+                "no spread (cov_*) columns in the table(s) of %s -- written "
+                "by an older patchworks; recompute them (patchworks tables "
+                "%s) to classify positions",
+                ", ".join(missing),
+                self.store,
+            )
+            out["position"][pid == 0] = "outside"
+            return out
+        out["position"][pid == 0] = "outside"
+        inside = np.flatnonzero(np.isin(pid, pe.index.to_numpy()))
+        if not inside.size:
+            return out
+        prow = pe.index.get_indexer(pid[inside])
+        centre = physical_centroids(pe, axes, size)[prow]
+        pcov = physical_cov(pe, axes, size)[prow]
+        axis = self._apical_axes(name, rule, pe, axes, size)[prow]
+
+        c = physical_centroids(df, axes, size)[inside]
+        w, v = np.linalg.eigh(physical_cov(df, axes, size)[inside])
+        main = v[:, :, -1]
+        half = np.sqrt(12 * np.clip(w[:, -1], 0, None)) / 2
+        ends = np.stack([c + half[:, None] * main, c - half[:, None] * main])
+        near = np.argmin(np.linalg.norm(ends - centre, axis=2), axis=0)
+        base = ends[near, np.arange(inside.size)]
+
+        rel = base - centre
+        along = np.einsum("ij,ij->i", rel, axis)
+        var_a = np.einsum("ij,ijk,ik->i", axis, pcov, axis)
+        axial = along / np.sqrt(3 * np.clip(var_a, 1e-12, None))
+        perp = rel - along[:, None] * axis
+        across = np.sqrt(
+            2 * np.clip(np.trace(pcov, axis1=1, axis2=2) - var_a, 1e-12, None)
+        )
+        radial = np.linalg.norm(perp, axis=1) / across
+        angle = np.degrees(
+            np.arccos(np.clip(np.abs(np.einsum("ij,ij->i", main, axis)), 0, 1))
+        )
+        # The surface the base is nearest to, each depth relative to the
+        # parent's size in that direction: top, bottom or side wall. Deeper
+        # than `central_depth` from all three: central.
+        depth = np.stack([1 - axial, 1 + axial, 1 - radial], 1)
+        cls = np.array(["apical", "basal", "lateral"], dtype=object)[
+            np.argmin(depth, axis=1)
+        ]
+        cls[depth.min(axis=1) > float(rule.get("central_depth", 0.5))] = (
+            "central"
+        )
+        known = np.isfinite(axis).all(axis=1)
+        cls[~known] = "unknown"
+        out["position"][inside] = cls
+        out["position_axial"][inside] = np.where(known, axial, np.nan)
+        out["position_radial"][inside] = np.where(known, radial, np.nan)
+        out["angle_to_axis_deg"][inside] = np.where(known, angle, np.nan)
+        for label, d in self.decisions[name].items():
+            if d["action"] == "position" and label in df.index:
+                out["position"][df.index.get_loc(label)] = d["position"]
+        return out
+
+    def _apical_axes(self, name, rule, pe, axes, size) -> np.ndarray:
+        """Unit apical direction per parent object (NaN: undetermined)."""
+        from ._tables import physical_centroids, physical_cov
+
+        spec = str(rule.get("apical", ""))
+        n = len(pe)
+        if spec in _AXES_SIGNS:
+            ax, sign = _AXES_SIGNS[spec]
+            if ax not in axes:
+                raise ValueError(f"apical {spec!r}: {name} has axes {axes!r}")
+            vec = np.zeros(len(axes))
+            vec[axes.index(ax)] = sign
+            return np.tile(vec, (n, 1))
+        towards = spec.startswith("towards:")
+        ref = spec.split(":", 1)[1] if towards else spec
+        parent = rule["parent"]
+        if ref not in self.tables or parent not in self.parents.get(ref, []):
+            raise ValueError(
+                f"apical {spec!r} for {name}: needs {ref!r} related to "
+                f"{parent!r} (its objects inside the parent objects), or a "
+                f"direction like '+z'"
+            )
+        re = self._corrected(ref)
+        re = re[re[f"{parent}_id"].isin(pe.index)]
+        weights = re["area_voxels"].to_numpy(dtype=float)
+        rc = physical_centroids(re, axes, size) * weights[:, None]
+        import pandas as pd
+
+        sums = pd.DataFrame(rc).groupby(re[f"{parent}_id"].to_numpy()).sum()
+        wsum = pd.Series(weights).groupby(re[f"{parent}_id"].to_numpy()).sum()
+        refc = (sums.div(wsum, axis=0)).reindex(pe.index).to_numpy()
+        centre = physical_centroids(pe, axes, size)
+        vec = centre - refc if not towards else refc - centre
+        norm = np.linalg.norm(vec, axis=1)
+        scale = np.sqrt(
+            np.trace(physical_cov(pe, axes, size), axis1=1, axis2=2)
+        )
+        with np.errstate(invalid="ignore", divide="ignore"):
+            vec = vec / norm[:, None]
+        vec[~(norm > 0.1 * scale)] = np.nan  # reference at the centre: no axis
+        return vec
 
     # -- flags and queues ----------------------------------------------------
 
@@ -557,6 +762,19 @@ class Review:
                 off,
                 (f"{k} {_nice(child)} (expected {want})" for k in n[off]),
                 2.0,
+            )
+        if name in self.position and "position" in eff:
+            rule = self.position[name]
+            unknown = (eff["position"] == "unknown").to_numpy()
+            ref = str(rule.get("apical", "")).removeprefix("towards:")
+            rule_(
+                unknown,
+                [
+                    f"position unclear: its {_nice(rule['parent'])} has no "
+                    f"{_nice(ref)} to orient it"
+                ]
+                * int(unknown.sum()),
+                1.2,
             )
         if len(eff) >= 20:
             logv = np.log(eff["area_voxels"].to_numpy(dtype=float))
@@ -718,7 +936,13 @@ class Review:
         object however it came up), so it stays unbiased.
         """
         dec = self.decisions[name]
-        wrong = {k for k, d in dec.items() if d["action"] != "ok"}
+        # A segmentation error: rejected, joined or re-parented. A position
+        # correction is a classification fix, counted on its own.
+        wrong = {
+            k
+            for k, d in dec.items()
+            if d["action"] in ("wrong", "merge", "parent")
+        }
         sample = 0
         errors = 0
         for label in self.random_order(name):
@@ -737,6 +961,9 @@ class Review:
             "wrong": sum(d["action"] == "wrong" for d in dec.values()),
             "fixed": sum(
                 d["action"] in ("parent", "merge") for d in dec.values()
+            ),
+            "position_fixed": sum(
+                d["action"] == "position" for d in dec.values()
             ),
             "sample": sample,
             "sample_errors": errors,
@@ -805,6 +1032,11 @@ class Review:
             }
         ).copy()
         a[f"{parent}_id"] = a[f"{parent}_id"].where(a[f"{parent}_id"] != 0)
+        if (
+            "position" in ce
+            and self.position.get(child, {}).get("parent") == parent
+        ):
+            a["position"] = ce["position"]
         a["qc"] = ce["qc"]
         a.index.name = f"{child}_id"
         grouped = ce[ce[f"{parent}_id"] != 0].groupby(f"{parent}_id")
@@ -819,6 +1051,10 @@ class Review:
             .fillna(0)
             .astype(np.int64)
         )
+        for cls in POSITIONS:
+            col = f"n_{child}_{cls}"
+            if col in pe:
+                b[f"{child}_{cls}"] = pe[col]
         b["qc"] = pe["qc"]
         b.index.name = f"{parent}_id"
         if max(len(a), len(b)) + 1 > EXCEL_MAX_ROWS:
