@@ -256,6 +256,103 @@ def _cmd_view(args: argparse.Namespace) -> int:
     return 0
 
 
+def _pair(text: str) -> tuple[str, str]:
+    """``child:parent`` -> ("child", "parent")."""
+    child, sep, parent = text.partition(":")
+    if not sep or not child or not parent:
+        raise argparse.ArgumentTypeError(f"expected CHILD:PARENT, got {text!r}")
+    return child, parent
+
+
+def _expect(text: str) -> tuple[str, str, tuple[int, int]]:
+    """``parent:child=1`` or ``parent:child=0-2`` -> (parent, child, range)."""
+    pair, sep, rng = text.partition("=")
+    parent, child = _pair(pair)
+    try:
+        lo, _, hi = rng.partition("-")
+        bounds = (int(lo), int(hi or lo))
+    except ValueError:
+        bounds = None
+    if not sep or bounds is None:
+        raise argparse.ArgumentTypeError(
+            f"expected PARENT:CHILD=N or PARENT:CHILD=MIN-MAX, got {text!r}"
+        )
+    return parent, child, bounds
+
+
+def _cmd_tables(args: argparse.Namespace) -> int:
+    from ._tables import compute_table, relate_tables
+    from .plugins.napari import _inner_label_names
+
+    names = args.names or _inner_label_names(args.store)
+    for name in names:
+        compute_table(
+            args.store, name, channels=args.channels, n_workers=args.workers
+        )
+    for child, parent in args.relate or ():
+        relate_tables(
+            args.store,
+            child,
+            parent,
+            max_distance_um=args.max_distance,
+            n_workers=args.workers,
+        )
+    print(f"tables written for: {', '.join(names)}")
+    return 0
+
+
+def _position(text: str) -> tuple[str, dict]:
+    """``child:parent=apical`` -> ("child", {"parent": ..., "apical": ...})."""
+    pair, sep, apical = text.partition("=")
+    child, parent = _pair(pair)
+    if not sep or not apical:
+        raise argparse.ArgumentTypeError(
+            f"expected CHILD:PARENT=APICAL (APICAL: +z, -z, ... or a label "
+            f"image to point away from), got {text!r}"
+        )
+    return child, {"parent": parent, "apical": apical}
+
+
+def _cmd_review(args: argparse.Namespace) -> int:
+    from ._review import Review
+
+    expect: dict = {}
+    for parent, child, bounds in args.expect or ():
+        expect.setdefault(parent, {})[child] = bounds
+    position = dict(args.position or ())
+    if not (args.export or args.write_labels or args.summary or args.workbooks):
+        from .plugins.review import review_in_napari
+
+        review_in_napari(
+            args.store,
+            expect=expect,
+            min_overlap=args.min_overlap,
+            position=position,
+        )
+        return 0
+    rv = Review(
+        args.store,
+        expect=expect,
+        min_overlap=args.min_overlap,
+        position=position,
+    )
+    if args.summary:
+        print(json.dumps({n: rv.summary(n) for n in rv.names}, indent=2))
+    if args.export:
+        for path in rv.export(args.export, args.format):
+            print(f"wrote {path}")
+    if args.workbooks:
+        from pathlib import Path
+
+        Path(args.workbooks).mkdir(parents=True, exist_ok=True)
+        for child, parent in rv.relations():
+            out = Path(args.workbooks) / f"{child}_to_{parent}.xlsx"
+            print(f"wrote {rv.relation_workbook(child, parent, out)}")
+    for name in args.write_labels or ():
+        print(f"wrote labels/{rv.write_reviewed_labels(name)}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     """The ``patchworks`` argument parser (exposed for tests and docs)."""
     parser = argparse.ArgumentParser(
@@ -384,6 +481,79 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--labels", help="label store (default: all in labels/)")
     p.add_argument("--channel", type=_channel, help="index (default: all)")
     p.set_defaults(func=_cmd_view)
+
+    p = sub.add_parser(
+        "tables", help="measure every object and relate label images"
+    )
+    p.add_argument("store")
+    p.add_argument(
+        "--names", nargs="+", help="label images (default: all in labels/)"
+    )
+    p.add_argument(
+        "--relate",
+        type=_pair,
+        nargs="+",
+        metavar="CHILD:PARENT",
+        help="add which PARENT object each CHILD object is in",
+    )
+    p.add_argument(
+        "--channels",
+        type=_ints,
+        help="image channels to add mean/std intensity for, e.g. 0,2",
+    )
+    p.add_argument(
+        "--max-distance",
+        type=float,
+        metavar="UM",
+        help="a CHILD touching no PARENT gets the nearest one within UM "
+        "micrometres",
+    )
+    p.add_argument("--workers", type=int, help="parallel reads")
+    p.set_defaults(func=_cmd_tables)
+
+    p = sub.add_parser(
+        "review", help="look at the likely mistakes in napari and fix them"
+    )
+    p.add_argument("store")
+    p.add_argument(
+        "--expect",
+        type=_expect,
+        nargs="+",
+        metavar="PARENT:CHILD=N[-M]",
+        help="expected children per parent, e.g. cyto_labels:nuclei_labels=1",
+    )
+    p.add_argument(
+        "--min-overlap",
+        type=float,
+        help="flag children less than this fraction inside (default 0.5)",
+    )
+    p.add_argument(
+        "--position",
+        type=_position,
+        nargs="+",
+        metavar="CHILD:PARENT=APICAL",
+        help="classify CHILD objects as apical/basal/lateral/central in "
+        "their PARENT; APICAL is a direction (+z) or a label image to point "
+        "away from, e.g. cilia_labels:cyto_labels=nuclei_labels",
+    )
+    p.add_argument("--summary", action="store_true", help="print counts")
+    p.add_argument("--export", metavar="DIR", help="write corrected tables")
+    p.add_argument(
+        "--format", choices=("csv", "xlsx", "parquet"), default="csv"
+    )
+    p.add_argument(
+        "--workbooks",
+        metavar="DIR",
+        help="write every relation workbook (<child>_to_<parent>.xlsx), "
+        "corrections applied",
+    )
+    p.add_argument(
+        "--write-labels",
+        nargs="+",
+        metavar="NAME",
+        help="write labels/<NAME>_reviewed with the corrections applied",
+    )
+    p.set_defaults(func=_cmd_review)
     return parser
 
 

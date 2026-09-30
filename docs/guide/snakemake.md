@@ -609,9 +609,14 @@ Everything is under `work_dir`:
 
 ```text
 results/
-  image.zarr/                 # converted, pyramidal OME-ZARR
-  image.zarr/labels/<name>/   # the segmentation (multi-scale, calibrated)
+  image.zarr/                       # converted, pyramidal OME-ZARR
+  image.zarr/labels/<name>/         # the segmentation (multi-scale, calibrated)
+  image.zarr/labels/<name>/table/   # one row per object (object_table: true)
 ```
+
+To look at the likely mistakes and correct them, on any machine with napari:
+`patchworks review /scratch/results/image.zarr` — see
+[Reviewing and correcting results](review.md).
 
 The labels live **inside** the image store. View image + labels together:
 
@@ -916,7 +921,9 @@ abort the others; you get a per-config status and a non-zero exit.
     that would exceed your cluster quota.
 
 Each `output:` is an Excel workbook (`openpyxl`, part of the `workflow`
-extra) with two sheets:
+extra), written from the [object tables](review.md#where-the-tables-come-from)
+with any review corrections applied, with two sheets (plus a `qc` column
+each):
 
 | Sheet | One row per | Columns |
 | --- | --- | --- |
@@ -942,6 +949,18 @@ difference-of-Gaussians detector), related both ways (`cilia_labels ->
 cyto_labels` and `cilia_labels -> nuclei_labels`) so you can use whichever
 fits a given dataset. See `config/config_cilia.yaml`. Its deconvolution step
 needs `pip install "patchworks[dog]"` in the segment jobs' environment.
+
+A `review:` block in `multi.yaml` states what `patchworks review` should
+flag: how many of each child a parent should hold, and how far inside it a
+child must be. It can also classify children by where they sit in their
+parent: apical, basal, lateral or central, see
+[Where a cilium sits](review.md#where-a-cilium-sits-apical-basal-lateral-central).
+A relation with `max_distance_um` gives a child touching no parent the
+nearest one. All of it is checked before anything runs, and stored with
+the results. See [Reviewing](review.md#what-gets-flagged).
+
+A sheet that would exceed Excel's 1,048,576 rows is written as a csv file
+instead (`<stem>_<name>.csv`), and the log says so.
 
 ## Email notifications
 

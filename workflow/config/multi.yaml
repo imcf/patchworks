@@ -42,6 +42,26 @@ segmentations:
 #   time: 180              # minutes, per pair; default: 180
 #   qos: "1day"            # default: your account's default QOS
 
+# What to flag for a look in `patchworks review image.zarr` (optional). Every
+# child less than `min_overlap` inside its parent, or in none, is always
+# flagged; `expect` adds how many of each child a parent should hold -- a
+# number, or [min, max]. Checked before anything runs.
+# review:
+#   expect:
+#     cyto_labels:
+#       nuclei_labels: 1
+#       cilia_labels: [0, 2]
+#   min_overlap: 0.5       # or per pair: {cilia_labels: {cyto_labels: 0.3}}
+#   # Classify each cilium as apical, basal, lateral or central in its cell:
+#   # the cell surface its base is nearest to. `apical` is a direction (+z:
+#   # apical is up the stack) or a label image to point away from (the
+#   # nuclei, for epithelia with basal nuclei; needs nuclei -> cyto below).
+#   position:
+#     cilia_labels:
+#       parent: cyto_labels
+#       apical: nuclei_labels   # or "+z", "-z", "towards:<label image>"
+#       central_depth: 0.5      # deeper than half-way from every surface
+
 # Pack the finished store into ONE file, as the last step, once every
 # segmentation and relation has succeeded. Off unless `format` is set.
 # A failed relation skips it: a bundle of a half-finished run would look
@@ -70,6 +90,9 @@ relations:
 - a: cilia_labels
   b: cyto_labels
   output: cilia_to_cell.xlsx
+  # A cilium touching no cell gets the nearest one within this distance
+  # (exact, in micrometres); the workbook gets a distance column.
+  # max_distance_um: 1.0
 - a: cilia_labels
   b: nuclei_labels
   output: cilia_to_nucleus.xlsx

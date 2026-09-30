@@ -65,3 +65,72 @@ def test_segment_overlap_auto(tmp_path, blobs, capsys):
     assert found["overlap"] is not None
     with pytest.raises(SystemExit, match="tile-shape"):
         main(["segment", store, "--overlap", "auto"])
+
+
+def test_cli_tables_and_review(tmp_path, capsys):
+    pytest.importorskip("pandas")
+    from test_tables import make_scene
+
+    store = make_scene(tmp_path / "c.zarr")
+    assert (
+        main(
+            [
+                "tables",
+                store,
+                "--relate",
+                "nuclei_labels:cyto_labels",
+                "cilia_labels:cyto_labels",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    args = [
+        "review",
+        store,
+        "--summary",
+        "--expect",
+        "cyto_labels:nuclei_labels=1",
+    ]
+    assert main(args) == 0
+    summary = json.loads(capsys.readouterr().out)
+    assert summary["cyto_labels"]["flagged"] == 2  # cells 1 and 4
+    out = tmp_path / "x"
+    assert main(["review", store, "--export", str(out), "--format", "csv"]) == 0
+    assert (out / "cyto_labels.csv").exists()
+    books = tmp_path / "books"
+    assert main(["review", store, "--workbooks", str(books)]) == 0
+    assert sorted(p.name for p in books.iterdir()) == [
+        "cilia_labels_to_cyto_labels.xlsx",
+        "nuclei_labels_to_cyto_labels.xlsx",
+    ]
+    with pytest.raises(SystemExit):
+        main(["review", store, "--expect", "cyto_labels=1"])
+
+
+def test_cli_position_and_distance(tmp_path, capsys):
+    pytest.importorskip("pandas")
+    from test_position import polarity_scene
+
+    store = polarity_scene(tmp_path / "p.zarr")
+    args = ["tables", store, "--names", "cilia_labels"]
+    args += ["--relate", "cilia_labels:cyto_labels", "--max-distance", "1"]
+    assert main(args) == 0
+    capsys.readouterr()
+    out = tmp_path / "t"
+    args = ["review", store, "--export", str(out)]
+    args += ["--position", "cilia_labels:cyto_labels=nuclei_labels"]
+    assert main(args) == 0
+    import pandas as pd
+
+    cilia = pd.read_csv(out / "cilia_labels.csv", index_col="label")
+    assert cilia["position"].tolist() == [
+        "apical",
+        "basal",
+        "lateral",
+        "central",
+        "unknown",
+    ]
+    assert "cyto_labels_distance_um" in cilia
+    with pytest.raises(SystemExit):
+        main(["review", store, "--position", "cilia_labels=+z"])

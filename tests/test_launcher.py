@@ -198,7 +198,12 @@ def _multi_files(tmp_path, relations=None):
     if relations is None:
         relations = [
             {"a": "nuclei_labels", "b": "cyto_labels", "output": "n_c.xlsx"},
-            {"a": "cilia_labels", "b": "cyto_labels", "output": "ci_c.xlsx"},
+            {
+                "a": "cilia_labels",
+                "b": "cyto_labels",
+                "output": "ci_c.xlsx",
+                "max_distance_um": 1.5,
+            },
         ]
     return core.build_multi(
         shared,
@@ -207,6 +212,18 @@ def _multi_files(tmp_path, relations=None):
         directory="/w/config/launcher/run1",
         relate={"partition": "rtx4090", "mem": "", "time": None},
         bundle={"format": ""},
+        review={
+            "expect": {
+                "cyto_labels": {"nuclei_labels": 1, "cilia_labels": [0, 2]}
+            },
+            "min_overlap": None,
+            "position": {
+                "cilia_labels": {
+                    "parent": "cyto_labels",
+                    "apical": "nuclei_labels",
+                }
+            },
+        },
     )
 
 
@@ -232,6 +249,14 @@ def test_build_multi_writes_what_run_multi_accepts(tmp_path):
     paths = [Path(p) for p in multi["segmentations"]]
     assert run_multi._validate_configs(paths, cfgs) == str(tmp_path / "run")
     assert core.multi_problems(files) == []
+    labels = [c["label_name"] for c in cfgs]
+    rules = run_multi._review_rules(multi, labels)
+    assert rules["expect"] == {
+        "cyto_labels": {"nuclei_labels": 1, "cilia_labels": [0, 2]}
+    }
+    assert rules["position"]["cilia_labels"]["apical"] == "nuclei_labels"
+    assert multi["relations"][1]["max_distance_um"] == 1.5
+    assert all(c["object_table"] is True for c in cfgs)
 
 
 def argparse_ns():

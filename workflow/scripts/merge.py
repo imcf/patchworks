@@ -294,5 +294,20 @@ if cfg.get("seam_report", True):
             f"{'n/a' if interior is None else f'{100 * interior:.1f}%'} "
             "inside tiles"
         )
+# One row per object (size, centroid, bounding box; intensities of
+# `table_channels`) inside the label group: what `patchworks review` and the
+# relation workbooks work from. One read of the labels.
+if cfg.get("object_table", True):
+    from patchworks._tables import compute_table
+
+    cols = compute_table(
+        image_store,
+        label_name,
+        channels=cfg.get("table_channels") or None,
+    )
+    print(
+        f"[patchworks] object table: {len(cols['label']):,} objects in "
+        f"{group}/table"
+    )
 print(f"[patchworks] labels written to {group}")
 open(snakemake.output[0], "w").close()  # noqa: F821

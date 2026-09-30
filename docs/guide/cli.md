@@ -19,7 +19,22 @@ patchworks seams scan.zarr/labels/labels --tile-shape 16,1024,1024
 
 # Look at the result (needs patchworks[napari])
 patchworks view scan.zarr
+
+# One row per object; which cell each nucleus is in
+patchworks tables scan.zarr --relate nuclei:cells
+
+# Look at the likely mistakes one by one and fix them (napari)
+patchworks review scan.zarr --expect cells:nuclei=1
 ```
+
+`patchworks review` without a window: `--summary` (counts and error
+estimate), `--export DIR --format csv|xlsx|parquet` (corrected tables),
+`--workbooks DIR` (relation workbooks), `--write-labels NAME` (a label image
+with the corrections applied). `--position CHILD:PARENT=APICAL` classifies
+children as apical/basal/lateral/central (APICAL: `+z`, or a label image to
+point away from, such as the nuclei); `patchworks tables --max-distance UM`
+gives a child touching no parent the nearest one. See
+[Reviewing and correcting results](review.md).
 
 ## Segmentation methods
 

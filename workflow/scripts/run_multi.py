@@ -454,6 +454,103 @@ _CONVERT_KEYS = (
 _PLACEHOLDER_PREFIX = "/path/to"
 
 
+def _review_rules(multi_cfg: dict, label_names: list[str]) -> dict:
+    """The ``review:`` block of the multi config, checked.
+
+    ``expect`` maps a parent label image to the number of each child it
+    should hold (``1`` or ``[min, max]``); ``min_overlap`` is the fraction
+    of a child that must be inside its parent (a number, or per
+    ``{child: {parent: value}}``); ``position`` classifies children by where
+    they sit in their parent (apical, basal, lateral, central). ``patchworks
+    review`` flags whatever breaks them. Relations may also carry
+    ``max_distance_um`` (the nearest parent for a child touching none).
+    """
+    block = multi_cfg.get("review") or {}
+    if not isinstance(block, dict):
+        sys.exit("[run_multi] ERROR: `review:` must be a mapping")
+    problems = []
+    unknown = set(block) - {"expect", "min_overlap", "position"}
+    if unknown:
+        problems.append(
+            f"unknown key(s) in `review:`: {', '.join(sorted(unknown))}; "
+            "expected expect, min_overlap, position"
+        )
+    for parent, children in (block.get("expect") or {}).items():
+        for name in [parent, *(children or {})]:
+            if name not in label_names:
+                problems.append(
+                    f"`review: expect:` names {name!r}, which is not a "
+                    f"segmentation's label_name ({', '.join(label_names)})"
+                )
+        for child, rng in (children or {}).items():
+            ok = isinstance(rng, int) or (
+                isinstance(rng, list)
+                and len(rng) == 2
+                and all(isinstance(v, int) for v in rng)
+                and rng[0] <= rng[1]
+            )
+            if not ok:
+                problems.append(
+                    f"`review: expect: {parent}: {child}:` must be a count "
+                    f"or [min, max]; got {rng!r}"
+                )
+    overlap = block.get("min_overlap")
+    if overlap is not None and not isinstance(overlap, (int, float, dict)):
+        problems.append("`review: min_overlap:` must be a number or a mapping")
+    pairs = {(r.get("a"), r.get("b")) for r in multi_cfg.get("relations") or []}
+    for rel in multi_cfg.get("relations") or []:
+        dist = rel.get("max_distance_um")
+        if dist is not None and (
+            isinstance(dist, bool)
+            or not isinstance(dist, (int, float))
+            or dist <= 0
+        ):
+            problems.append(
+                f"relation {rel.get('a')} -> {rel.get('b')}: max_distance_um "
+                f"must be a positive number of micrometres; got {dist!r}"
+            )
+    for child, rule in (block.get("position") or {}).items():
+        rule = rule or {}
+        parent = rule.get("parent")
+        apical = str(rule.get("apical", ""))
+        ref = apical.removeprefix("towards:")
+        if child not in label_names or parent not in label_names:
+            problems.append(
+                f"`review: position: {child}:` needs a segmentation's "
+                f"label_name and a `parent:` one ({', '.join(label_names)})"
+            )
+            continue
+        if (child, parent) not in pairs:
+            problems.append(
+                f"`review: position: {child}:` needs the relation "
+                f"{child} -> {parent} under `relations:`"
+            )
+        directions = {f"{s}{a}" for s in "+-" for a in "zyx"}
+        if apical not in directions:
+            if ref not in label_names:
+                problems.append(
+                    f"`review: position: {child}: apical:` must be a "
+                    f"direction like +z, or a label_name (away from its "
+                    f"objects, e.g. the nuclei); got {apical!r}"
+                )
+            elif (ref, parent) not in pairs:
+                problems.append(
+                    f"`review: position: {child}: apical: {apical}` needs "
+                    f"the relation {ref} -> {parent} under `relations:`"
+                )
+        unknown = set(rule) - {"parent", "apical", "central_depth"}
+        if unknown:
+            problems.append(
+                f"`review: position: {child}:` unknown key(s) "
+                f"{', '.join(sorted(unknown))}"
+            )
+    if problems:
+        for p in problems:
+            print(f"[run_multi] ERROR: {p}", file=sys.stderr)
+        sys.exit(1)
+    return block
+
+
 def _validate_configs(paths: list[Path], cfgs: list[dict]) -> str:
     """Check the cross-config invariants before anything is submitted.
 
@@ -789,6 +886,11 @@ def main() -> None:
         sys.exit(_test_email(seg_cfgs[0]))
 
     work_dir = _validate_configs(seg_config_paths, seg_cfgs)
+    # Checked now, not after hours of segmentation: a typo'd label name here
+    # would otherwise only surface once the relations start.
+    review_rules = _review_rules(
+        multi_cfg, [str(c.get("label_name")) for c in seg_cfgs]
+    )
     image_store = f"{work_dir}/image.zarr"
     # Shared by every config, hence keyed on the image and level, not on a
     # label_name. Levels are validated identical across configs below.
@@ -922,6 +1024,12 @@ def main() -> None:
                 "once everything is done"
             )
         return
+    if review_rules:
+        from patchworks._review import write_rules
+
+        # Once, here, before the concurrent relate jobs: `patchworks review`
+        # reads them from the store instead of being told again.
+        write_rules(image_store, review_rules)
     if not relations:
         # No relations to compute, but the store is finished, so the
         # bundling step still applies.

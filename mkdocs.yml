@@ -43,6 +43,7 @@ nav:
   - Performance & memory: guide/performance.md
   - Custom segmentation function: guide/custom_segmentation.md
   - Relating labels across segmentations: guide/label_relations.md
+  - Reviewing and correcting results: guide/review.md
   - Measurements: guide/measurements.md
   - OME-ZARR & napari: guide/ome_zarr_napari.md
   - Cluster workflow (Snakemake): guide/snakemake.md
@@ -65,6 +66,7 @@ nav:
   - I/O helpers: api/io.md
   - Relabelling: api/relabel.md
   - Seam report: api/seams.md
+  - Object tables and review: api/review.md
   - Provenance: api/provenance.md
   - Cluster helpers: api/cluster.md
   - Plugins:
