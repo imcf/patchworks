@@ -1,4 +1,4 @@
-"""Compute label_relations for configured pairs and write .xlsx.
+"""Relate configured label pairs: object tables, then an .xlsx per pair.
 
 Split out of run_multi.py so this step can be submitted as its own SLURM job
 instead of running in-process on the login node. It streams every chunk of
@@ -48,29 +48,6 @@ def _n_objects(image_store: str, name: str) -> str:
     return f"{int(n):,} objects" if n is not None else "object count unknown"
 
 
-def _label_ids(image_store: str, name: str) -> list[int]:
-    """Ids present in a label image, without scanning the volume.
-
-    The merge writes n_objects/sequential_labels into the label group's
-    attrs precisely so consumers don't have to re-derive the id set; the ids
-    are 1..n_objects by construction. Fall back to a full scan only for a
-    label group written before those attrs existed.
-    """
-    import dask.array as da
-    import zarr
-
-    attrs = dict(zarr.open_group(f"{image_store}/labels/{name}").attrs)
-    if attrs.get("sequential_labels") and attrs.get("n_objects") is not None:
-        return list(range(1, int(attrs["n_objects"]) + 1))
-    print(
-        f"[relate] {name}: no n_objects attr, falling back to a full scan "
-        "for its id set",
-        flush=True,
-    )
-    arr = da.from_zarr(image_store, component=f"labels/{name}/0")
-    return sorted(int(x) for x in da.unique(arr[arr > 0]).compute())
-
-
 def _relation_up_to_date(
     work_dir: str, a_name: str, b_name: str, out_path: Path
 ) -> bool:
@@ -97,6 +74,19 @@ def _relation_up_to_date(
     return True
 
 
+def _tables_ready(image_store: str, a_name: str, b_name: str) -> bool:
+    """Both tables current, and *a*'s already relating it to *b*."""
+    from patchworks._tables import has_table, is_stale, read_columns
+
+    groups = [f"{image_store}/labels/{n}" for n in (a_name, b_name)]
+    try:
+        if not all(has_table(g) and not is_stale(g) for g in groups):
+            return False
+        return f"{b_name}_id" in read_columns(groups[0], check=False)
+    except Exception:
+        return False
+
+
 def run_relations(
     work_dir: str, image_store: str, relations: list[dict]
 ) -> None:
@@ -121,9 +111,15 @@ def run_relations(
         ``relations:`` list.
     """
     import dask.array as da
-    import openpyxl
 
     from patchworks import label_relations
+    from patchworks._review import Review, review_updated
+    from patchworks._tables import (
+        compute_table,
+        has_table,
+        is_stale,
+        relate_tables,
+    )
 
     for rel in relations:
         a_name, b_name = rel["a"], rel["b"]
@@ -131,12 +127,28 @@ def run_relations(
             "output", f"{a_name}_to_{b_name}.xlsx"
         )
         if _relation_up_to_date(work_dir, a_name, b_name, out_path):
-            print(
-                f"[relate] {out_path} is already up to date with "
-                f"{a_name}/{b_name}; skipping",
-                flush=True,
+            reviewed = max(
+                review_updated(image_store, n) or 0 for n in (a_name, b_name)
             )
-            continue
+            if reviewed <= out_path.stat().st_mtime:
+                print(
+                    f"[relate] {out_path} is already up to date with "
+                    f"{a_name}/{b_name}; skipping",
+                    flush=True,
+                )
+                continue
+            if _tables_ready(image_store, a_name, b_name):
+                # Only review decisions changed: the overlaps are already in
+                # the tables, so rewrite the workbook without re-reading the
+                # labels.
+                written = Review(
+                    image_store, names=[a_name, b_name]
+                ).relation_workbook(a_name, b_name, out_path)
+                print(
+                    f"[relate] rewrote {written} with the review decisions",
+                    flush=True,
+                )
+                continue
         print(f"[relate] relating {a_name} -> {b_name} …", flush=True)
         started = time.monotonic()
         a = da.from_zarr(image_store, component=f"labels/{a_name}/0")
@@ -189,57 +201,23 @@ def run_relations(
             flush=True,
         )
 
-        # label_relations() only returns a-objects that touch a b-object.
-        # Pull the full id sets so unmatched a-objects (zero overlap) and
-        # b-objects with no matches at all still get a row -- otherwise
-        # they'd silently vanish instead of counting as zero.
-        a_ids = _label_ids(image_store, a_name)
-        b_ids = _label_ids(image_store, b_name)
-
-        per_b = {b_id: {"count": 0, "overlap_voxels": 0} for b_id in b_ids}
-        for m in table.values():
-            agg = per_b.get(m["match"])
-            if agg is not None:
-                agg["count"] += 1
-                agg["overlap_voxels"] += m["overlap_voxels"]
-
-        wb = openpyxl.Workbook()
-        ws_a = wb.active
-        ws_a.title = a_name[:31]  # Excel sheet-name length limit
-        ws_a.append(
-            [
-                f"{a_name}_id",
-                f"{b_name}_id",
-                "overlap_voxels",
-                "overlap_fraction",
-            ]
-        )
-        for a_id in a_ids:
-            m = table.get(a_id)
-            if m is None:
-                ws_a.append([a_id, None, 0, 0])  # no overlap -- still counted
-            else:
-                ws_a.append(
-                    [
-                        a_id,
-                        m["match"],
-                        m["overlap_voxels"],
-                        m["overlap_fraction"],
-                    ]
+        # The object tables carry every object -- unmatched ones included --
+        # and the review decisions; the workbook is written from them, so a
+        # correction made in `patchworks review` shows up in it.
+        for name in (a_name, b_name):
+            group = f"{image_store}/labels/{name}"
+            if not has_table(group) or is_stale(group):
+                print(
+                    f"[relate] measuring {name} for its object table",
+                    flush=True,
                 )
-
-        ws_b = wb.create_sheet(title=b_name[:31])
-        ws_b.append([f"{b_name}_id", f"{a_name}_count", "total_overlap_voxels"])
-        for b_id in b_ids:
-            agg = per_b[b_id]
-            ws_b.append([b_id, agg["count"], agg["overlap_voxels"]])
-
-        wb.save(out_path)
-        print(
-            f"[relate] wrote {out_path} "
-            f"({len(a_ids)} {a_name}, {len(b_ids)} {b_name})",
-            flush=True,
+                compute_table(image_store, name)
+        relate_tables(image_store, a_name, b_name, matches=table)
+        # Only these two tables: another relate job may be writing others.
+        written = Review(image_store, names=[a_name, b_name]).relation_workbook(
+            a_name, b_name, out_path
         )
+        print(f"[relate] wrote {written}", flush=True)
 
 
 def main() -> None:

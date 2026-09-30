@@ -42,6 +42,17 @@ segmentations:
 #   time: 180              # minutes, per pair; default: 180
 #   qos: "1day"            # default: your account's default QOS
 
+# What to flag for a look in `patchworks review image.zarr` (optional). Every
+# child less than `min_overlap` inside its parent, or in none, is always
+# flagged; `expect` adds how many of each child a parent should hold -- a
+# number, or [min, max]. Checked before anything runs.
+# review:
+#   expect:
+#     cyto_labels:
+#       nuclei_labels: 1
+#       cilia_labels: [0, 2]
+#   min_overlap: 0.5       # or per pair: {cilia_labels: {cyto_labels: 0.3}}
+
 # Pack the finished store into ONE file, as the last step, once every
 # segmentation and relation has succeeded. Off unless `format` is set.
 # A failed relation skips it: a bundle of a half-finished run would look

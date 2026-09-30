@@ -110,12 +110,13 @@ napari = [
     "pyqt6<6.10",
 ]
 # workflow runs the Snakemake pipeline (per-tile SLURM jobs across GPUs).
-# openpyxl -> scripts/run_multi.py writes label_relations() output as an
-# Excel workbook (per-object + per-container sheets), not a plain CSV.
+# pandas + openpyxl -> the relate step writes each relation as an Excel
+# workbook (per-object + per-container sheets) from the object tables.
 workflow = [
     "snakemake>=8",
     "snakemake-executor-plugin-slurm",
     "openpyxl",
+    "pandas>=2.0",
 ]
 # review: the object tables' corrected view and exports, without napari
 # (`patchworks review --summary/--export`). The napari panel needs [napari].

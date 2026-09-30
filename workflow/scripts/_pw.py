@@ -305,6 +305,19 @@ def validate_config(cfg) -> None:
     elif ts is not None and not all(isinstance(v, int) and v > 0 for v in ts):
         problems.append(f"tile_shape must be positive integers; got {ts!r}")
 
+    chans = cfg.get("table_channels")
+    if chans is not None and (
+        not isinstance(chans, list)
+        or not all(
+            isinstance(c, int) and not isinstance(c, bool) and c >= 0
+            for c in chans
+        )
+    ):
+        problems.append(
+            f"table_channels must be a list of channel indices like [0, 2]; "
+            f"got {chans!r}"
+        )
+
     nuc = cfg.get("nuclei_channel")
     if nuc is not None:
         if isinstance(nuc, bool) or not isinstance(nuc, int):

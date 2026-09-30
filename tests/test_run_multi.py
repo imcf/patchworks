@@ -279,7 +279,9 @@ def test_relate_script_has_the_real_bookkeeping():
     src = (_workflow_dir() / "scripts" / "relate.py").read_text()
     assert "def run_relations(" in src
     assert "label_relations" in src
-    assert "openpyxl" in src
+    # The workbook is written from the object tables (with every object,
+    # unmatched ones included, and the review decisions applied).
+    assert "relation_workbook" in src
 
 
 def test_view_script_loads_every_label_by_default():
@@ -1207,3 +1209,77 @@ def test_viewer_workspace_solves_everywhere():
     task = pixi["tasks"]["napari"]
     assert task == "python ../scripts/view.py"
     assert (manifest.parent / "../scripts/view.py").resolve().is_file()
+
+
+def test_review_block_is_checked_before_anything_runs(capsys):
+    from run_multi import _review_rules
+
+    names = ["nuclei_labels", "cyto_labels"]
+    ok = {"review": {"expect": {"cyto_labels": {"nuclei_labels": [1, 2]}}}}
+    assert _review_rules(ok, names) == ok["review"]
+    assert _review_rules({}, names) == {}
+    for bad in (
+        {"review": {"expect": {"cells": {"nuclei_labels": 1}}}},
+        {"review": {"expect": {"cyto_labels": {"nuclei_labels": [2, 1]}}}},
+        {"review": {"expct": {}}},
+    ):
+        with pytest.raises(SystemExit):
+            _review_rules(bad, names)
+    assert "not a segmentation's label_name" in capsys.readouterr().err
+
+
+def test_relate_writes_workbooks_from_the_reviewed_tables(tmp_path):
+    """The workbook reflects review decisions: re-running relate after a
+    review gives the corrected numbers, not the raw ones."""
+    pytest.importorskip("pandas")
+    from relate import run_relations
+    from test_tables import make_scene
+
+    from patchworks import Review
+
+    store = make_scene(tmp_path / "image.zarr")
+    Review(store).decide("cilia_labels", 4, "wrong")
+    rel = [{"a": "cilia_labels", "b": "cyto_labels", "output": "c.xlsx"}]
+    run_relations(str(tmp_path), store, rel)
+    wb = openpyxl.load_workbook(tmp_path / "c.xlsx")
+    ids = [
+        r[0] for r in wb["cilia_labels"].iter_rows(min_row=2, values_only=True)
+    ]
+    assert ids == [1, 2, 3, 5]  # the rejected cilium is gone
+    counts = {
+        r[0]: r[1]
+        for r in wb["cyto_labels"].iter_rows(min_row=2, values_only=True)
+    }
+    assert counts == {1: 1, 2: 2, 3: 1, 4: 0}
+
+
+def test_relate_rewrites_a_workbook_after_review_without_rereading(
+    tmp_path, monkeypatch
+):
+    """Decisions made after the workbook make it stale -- and only the
+    workbook is rewritten: the overlaps are already in the tables."""
+    pytest.importorskip("pandas")
+    import relate
+    from test_tables import make_scene
+
+    from patchworks import Review
+
+    store = make_scene(tmp_path / "image.zarr")
+    for name in ("cilia_labels", "cyto_labels"):
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "labels.done").touch()
+    rel = [{"a": "cilia_labels", "b": "cyto_labels", "output": "c.xlsx"}]
+    relate.run_relations(str(tmp_path), store, rel)
+    first = openpyxl.load_workbook(tmp_path / "c.xlsx")["cilia_labels"].max_row
+
+    time.sleep(1.1)  # decision strictly newer than the workbook
+    Review(store).decide("cilia_labels", 4, "wrong")
+    monkeypatch.setattr(
+        "patchworks.label_relations",
+        lambda *a, **k: pytest.fail("labels re-read for a review change"),
+    )
+    relate.run_relations(str(tmp_path), store, rel)
+    wb = openpyxl.load_workbook(tmp_path / "c.xlsx")
+    assert wb["cilia_labels"].max_row == first - 1
+    os.utime(tmp_path / "c.xlsx")
+    relate.run_relations(str(tmp_path), store, rel)  # now simply skipped

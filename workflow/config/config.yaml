@@ -102,6 +102,13 @@ iou_threshold: 0.5
 # struggles with file counts. `true` reuses `shard`'s spec; a list such as
 # [16, 512, 512] sets an explicit shard shape.
 shard_labels: false
+# After the merge, measure every object (size, centroid, bounding box) into
+# image.zarr/labels/<label_name>/table: what `patchworks review image.zarr`
+# (look at the likely mistakes, fix them) and the relation workbooks work
+# from. One read of the labels. table_channels adds each object's mean/std
+# intensity in those image channels, e.g. [0, 2] (one read of each).
+object_table: true
+table_channels: []
 
 # ---- merge performance --------------------------------------------------
 # null -> size the pool from the job's real budget: the SLURM/cgroup memory
