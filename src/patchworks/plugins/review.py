@@ -16,6 +16,12 @@ N / Shift+N           skip / go back
 U                     undo the decision about this object
 ====================  ==========================================================
 
+Outside the queue, click any object to inspect it with its parent and
+children (read at full resolution, so thin cilia are easy to hit), type an
+id in "Go to #", or hover to see its parent and position in the status bar.
+With a position rule, cilia can be coloured by class (apical, basal,
+lateral, central), seen from the side (z up), and their class corrected.
+
 Every decision is saved at once, next to the object table in the store, so
 the panel can be closed at any time and a later session continues where
 this one stopped. All logic lives in :class:`patchworks._review.Review`;
@@ -30,9 +36,17 @@ from typing import Any, Union
 
 import numpy as np
 
-from .._review import QUEUES, Review, _nice
+from .._review import POSITIONS, QUEUES, Review, _nice
 
 logger = logging.getLogger(__name__)
+
+_POSITION_COLOURS = {
+    "apical": "#2ecc71",
+    "basal": "#3498db",
+    "lateral": "#f39c12",
+    "central": "#e84393",
+}
+_POSITION_CODES = {c: i + 1 for i, c in enumerate(POSITIONS)}
 
 _QUEUE_TITLES = {
     "flagged": "Flagged first",
@@ -46,6 +60,7 @@ def review_in_napari(
     *,
     expect: dict | None = None,
     min_overlap: float | None = None,
+    position: dict | None = None,
     show: bool = True,
     viewer: Any = None,
 ):
@@ -56,7 +71,7 @@ def review_in_napari(
     store : str or Path
         OME-ZARR image store whose label images carry object tables
         (the workflow writes them; ``patchworks tables`` adds them).
-    expect, min_overlap
+    expect, min_overlap, position
         Review rules, see :class:`patchworks._review.Review`.
     show : bool
         Start the napari event loop (blocking).
@@ -71,7 +86,9 @@ def review_in_napari(
     from .napari import _require_napari, view_in_napari
 
     napari = _require_napari()
-    rv = Review(store, expect=expect, min_overlap=min_overlap)
+    rv = Review(
+        store, expect=expect, min_overlap=min_overlap, position=position
+    )
     if not rv.names:
         raise ValueError(
             f"no label image in {store} has an object table yet: run "
@@ -96,6 +113,7 @@ def _widgets():
         QGroupBox,
         QHBoxLayout,
         QLabel,
+        QLineEdit,
         QMessageBox,
         QPushButton,
         QVBoxLayout,
@@ -110,6 +128,7 @@ def _widgets():
         QGroupBox,
         QHBoxLayout,
         QLabel,
+        QLineEdit,
         QMessageBox,
         QPushButton,
         QVBoxLayout,
@@ -118,6 +137,52 @@ def _widgets():
 
 
 _CLASS: Any = None
+
+
+def _full_resolution_value(layer, event, reach: int = 2) -> int:
+    """The label under the cursor, read at full resolution.
+
+    napari reports the value of the pyramid level on screen, where an
+    object one voxel wide (a cilium) has vanished. In 2-D, read level 0
+    around the clicked voxel instead, and take the nearest object within
+    *reach* voxels in the displayed plane, so a thin object is easy to hit.
+    """
+    if len(event.dims_displayed) != 2:
+        value = layer.get_value(
+            event.position,
+            view_direction=event.view_direction,
+            dims_displayed=event.dims_displayed,
+            world=True,
+        )
+        return int((value[1] if isinstance(value, tuple) else value) or 0)
+    data = layer.data[0] if layer.multiscale else layer.data
+    point = np.round(np.asarray(layer.world_to_data(event.position))).astype(
+        int
+    )
+    offset = len(event.position) - data.ndim
+    shown = [d - offset for d in event.dims_displayed]
+    lo = point.copy()
+    hi = point + 1
+    for d in shown:
+        lo[d] -= reach
+        hi[d] += reach
+    lo = np.clip(lo, 0, data.shape)
+    hi = np.clip(hi, 0, data.shape)
+    if np.any(hi <= lo):
+        return 0
+    window = np.asarray(data[tuple(slice(a, b) for a, b in zip(lo, hi))])
+    hits = np.argwhere(window > 0)
+    if not hits.size:
+        return 0
+    nearest = hits[np.argmin(np.abs(hits + lo - point).sum(axis=1))]
+    return int(window[tuple(nearest)])
+
+
+def _hex_rgba(colour: str) -> np.ndarray:
+    return np.array(
+        [int(colour[i : i + 2], 16) / 255 for i in (1, 3, 5)] + [1.0],
+        dtype=np.float32,
+    )
 
 
 def _camera(viewer):
@@ -152,10 +217,11 @@ class _ReviewPanel:
             QGroupBox,
             QHBoxLayout,
             QLabel,
+            QLineEdit,
             QMessageBox,
             QPushButton,
             QVBoxLayout,
-            _,
+            QWidget,
         ) = _widgets()
         super().__init__()
         self.viewer = viewer
@@ -169,6 +235,7 @@ class _ReviewPanel:
         self._flags: Any = None
         self._saved: dict[str, tuple[Any, int, bool]] = {}
         self._by_parent: dict[str, Any] = {}
+        self._by_position: dict[str, Any] = {}
         self._points = None
 
         layout = QVBoxLayout(self)
@@ -198,6 +265,13 @@ class _ReviewPanel:
         self.prompt.setStyleSheet("color: #54a0ff; font-weight: bold")
         layout.addWidget(self.prompt)
 
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Go to #"))
+        self.goto_box = QLineEdit()
+        self.goto_box.setPlaceholderText("object id, Enter")
+        row.addWidget(self.goto_box)
+        layout.addLayout(row)
+
         grid = QGridLayout()
         self.btn_ok = QPushButton("✓ Correct  [G]")
         self.btn_wrong = QPushButton("✗ Not an object  [W]")
@@ -224,12 +298,42 @@ class _ReviewPanel:
         self.parent_box = QComboBox()
         row.addWidget(self.parent_box)
         layout.addLayout(row)
+        self.position_row = QWidget()
+        prow = QHBoxLayout(self.position_row)
+        prow.setContentsMargins(0, 0, 0, 0)
+        prow.addWidget(QLabel("Position is:"))
+        self.position_buttons = {}
+        for cls in POSITIONS:
+            b = QPushButton(cls)
+            b.clicked.connect(lambda _=False, c=cls: self.set_position(c))
+            prow.addWidget(b)
+            self.position_buttons[cls] = b
+        layout.addWidget(self.position_row)
 
+        self.inspect_box = QCheckBox(
+            "Click any object to inspect it (with its parent and children)"
+        )
+        self.inspect_box.setChecked(True)
+        layout.addWidget(self.inspect_box)
+        self.side_box = QCheckBox(
+            "Side view: z against x, z up (apical/basal at a glance)"
+        )
+        layout.addWidget(self.side_box)
         self.focus_box = QCheckBox("Show only this object and its relatives")
         self.focus_box.setChecked(True)
         layout.addWidget(self.focus_box)
         self.by_parent_box = QCheckBox("Colour these objects by their parent")
         layout.addWidget(self.by_parent_box)
+        self.by_position_label = QLabel(
+            "Colour by position: "
+            + " · ".join(
+                f"<span style='color:{_POSITION_COLOURS[c]}'>■ {c}</span>"
+                for c in POSITIONS
+            )
+        )
+        self.by_position_box = QCheckBox("Colour these objects by position")
+        layout.addWidget(self.by_position_box)
+        layout.addWidget(self.by_position_label)
 
         self.progress = QLabel()
         self.progress.setWordWrap(True)
@@ -261,6 +365,11 @@ class _ReviewPanel:
         self.btn_undo.clicked.connect(lambda: self.undo())
         self.focus_box.toggled.connect(lambda _: self._show())
         self.by_parent_box.toggled.connect(lambda _: self._colour_by_parent())
+        self.by_position_box.toggled.connect(
+            lambda _: self._colour_by_position()
+        )
+        self.goto_box.returnPressed.connect(self._goto)
+        self.side_box.toggled.connect(self._side_view)
         self.btn_export.clicked.connect(self._export)
         self.btn_write.clicked.connect(self._write_labels)
 
@@ -295,7 +404,15 @@ class _ReviewPanel:
         if not parents:
             self.by_parent_box.setChecked(False)
         self.by_parent_box.setEnabled(bool(parents))
+        has_position = name in self.rv.position
+        self.position_row.setVisible(has_position)
+        self._remove_by_position()
+        if not has_position:
+            self.by_position_box.setChecked(False)
+        self.by_position_box.setEnabled(has_position)
+        self.by_position_label.setVisible(has_position)
         self._refresh_queue()
+        self._update_features()
         self.next(record=False)
 
     def _set_mode(self, mode: str) -> None:
@@ -385,6 +502,20 @@ class _ReviewPanel:
             lines.append(where)
         for c in self.rv.children[self.name]:
             lines.append(f"{int(row[f'n_{c}'])} {_nice(c)}")
+        for unit in ("um", "voxels"):
+            if (
+                f"length_{unit}" in row
+                and row[f"length_{unit}"] == row[f"length_{unit}"]
+            ):
+                lines.append(
+                    f"length {row[f'length_{unit}']:.3g} "
+                    + ("µm" if unit == "um" else "voxels")
+                )
+        if "position" in row:
+            where = str(row["position"])
+            if row.get("angle_to_axis_deg") == row.get("angle_to_axis_deg"):
+                where += f", {row['angle_to_axis_deg']:.0f}° to the apical axis"
+            lines.append(where)
         self.info.setText(" · ".join(lines))
 
     # -- decisions -------------------------------------------------------------
@@ -406,6 +537,8 @@ class _ReviewPanel:
         self.pending = None
         self._refresh_queue()
         self._update_by_parent()
+        self._update_by_position()
+        self._update_features()
         self.history.append(done)
         self.current = None
         upcoming = [x for x in self.queue if x != done]
@@ -457,19 +590,27 @@ class _ReviewPanel:
         self.rv.undo(self.name, self.current)
         self._refresh_queue()
         self._update_by_parent()
+        self._update_by_position()
+        self._update_features()
         self._describe()
         self._show()
 
     def _on_click(self, viewer, event):
-        """A click (not a drag) while waiting for one picks an object."""
-        if self.pending is None:
+        """A click (not a drag): picks the object a pending decision waits
+        for, or else (inspect mode) shows the object under the cursor."""
+        if self.pending is None and not self.inspect_box.isChecked():
             return
         dragged = False
         yield
         while event.type == "mouse_move":
             dragged = True
             yield
-        if dragged or self.pending is None:
+        if dragged:
+            return
+        if self.pending is None:
+            hit = self._object_at(viewer, event)
+            if hit is not None:
+                self.inspect(*hit)
             return
         layer_name = (
             self.parent_box.currentText()
@@ -487,6 +628,41 @@ class _ReviewPanel:
                 world=True,
             )
         )
+
+    def _object_at(self, viewer, event) -> tuple[str, int] | None:
+        """The topmost reviewed object under the cursor: a cilium over its
+        cell, a nucleus over its cell, else the cell."""
+        for layer in reversed(list(viewer.layers)):
+            if layer.name not in self.rv.tables or not layer.visible:
+                continue
+            value = _full_resolution_value(layer, event)
+            if value and int(value) in self.rv.tables[layer.name].index:
+                return layer.name, int(value)
+        return None
+
+    def inspect(self, name: str, label: int) -> None:
+        """Show object *label* of *name*, with its parent and children --
+        whether or not it is in the queue."""
+        if name != self.name:
+            self.name_box.blockSignals(True)
+            self.name_box.setCurrentText(name)
+            self.name_box.blockSignals(False)
+            self._set_name(name)
+        if self.current is not None and self.current != label:
+            self.history.append(self.current)
+        self.go(label)
+
+    def _goto(self) -> None:
+        text = self.goto_box.text().strip().lstrip("#")
+        if text.isdigit() and int(text) in self.rv.tables[self.name].index:
+            self.inspect(self.name, int(text))
+            self.goto_box.clear()
+        else:
+            self.prompt.setText(f"{_nice(self.name)} has no object {text!r}")
+
+    def set_position(self, cls: str) -> None:
+        """Correct the position class of the current object."""
+        self._record("position", position=cls)
 
     def pick(self, value: Any) -> None:
         """Apply the pending decision with the object id *value* clicked."""
@@ -559,6 +735,16 @@ class _ReviewPanel:
         centre = [float(row[f"centroid_{ax}"]) for ax in axes]
         lo = np.array([row[f"bbox_min_{ax}"] for ax in axes], float)
         hi = np.array([row[f"bbox_max_{ax}"] for ax in axes], float) + 1
+        # Frame the object with its parent: a cilium alone is a few voxels,
+        # and where it sits in its cell is what the eye needs.
+        eff = self.rv.effective(self.name)
+        for p in self.rv.parents[self.name]:
+            pid = int(eff.loc[label, f"{p}_id"]) if label in eff.index else 0
+            ptable = self.rv.tables[p]
+            if pid in ptable.index:
+                prow = ptable.loc[pid]
+                lo = np.minimum(lo, [prow[f"bbox_min_{ax}"] for ax in axes])
+                hi = np.maximum(hi, [prow[f"bbox_max_{ax}"] + 1 for ax in axes])
         self._frame(layer, centre, lo, hi)
         self._restore()
         if not self.focus_box.isChecked():
@@ -583,7 +769,9 @@ class _ReviewPanel:
             by.visible = False
 
     def _frame(self, layer, centre, lo, hi) -> None:
+        """Put the slice through *centre*, and fit the box *lo*..*hi* in view."""
         world = np.asarray(layer.data_to_world(centre), float)
+        middle = np.asarray(layer.data_to_world((lo + hi - 1) / 2), float)
         dims = self.viewer.dims
         offset = dims.ndim - world.size
         for i in range(world.size):
@@ -591,15 +779,18 @@ class _ReviewPanel:
                 dims.set_point(offset + i, world[i])
         shown = [d - offset for d in dims.displayed if d >= offset]
         camera = _camera(self.viewer)
-        camera.center = tuple(world[shown])
+        camera.center = tuple(middle[shown])
         scale = np.asarray(layer.scale[-world.size :], float)
-        extent = float(((hi - lo) * scale)[shown].max())
+        # At least 32 voxels across, so a lone small object keeps context.
+        extent = float(
+            max(((hi - lo) * scale)[shown].max(), 32 * scale[shown].min())
+        )
         try:
             canvas = min(self.viewer.window._qt_viewer.canvas.size)
         except Exception:
             canvas = 600
         if extent > 0:
-            camera.zoom = canvas / (extent * 4)
+            camera.zoom = canvas / (extent * 1.3)
 
     def _update_points(self) -> None:
         """Mark the flagged objects still open: visible in 3D too, where
@@ -630,6 +821,7 @@ class _ReviewPanel:
             name=name,
             scale=layer.scale,
             translate=layer.translate,
+            units=layer.units,
             size=6,
             face_color="transparent",
             border_color="#ff9f43",
@@ -643,7 +835,13 @@ class _ReviewPanel:
         text = (
             f"{s['flagged_open']} of {s['flagged']} flagged still open · "
             f"{s['reviewed']} reviewed ({s['ok']} correct, {s['wrong']} "
-            f"rejected, {s['fixed']} fixed)"
+            f"rejected, {s['fixed']} fixed"
+            + (
+                f", {s['position_fixed']} positions corrected"
+                if s["position_fixed"]
+                else ""
+            )
+            + ")"
         )
         if s["sample"]:
             lo, hi = s["error_ci"]
@@ -696,6 +894,7 @@ class _ReviewPanel:
             multiscale=layer.multiscale,
             scale=layer.scale,
             translate=layer.translate,
+            units=layer.units,
             colormap=parent.colormap,
         )
         by.metadata["lut"] = lut
@@ -711,6 +910,113 @@ class _ReviewPanel:
         by = self._by_parent.pop(self.name, None)
         if by is not None and by.name in self.viewer.layers:
             self.viewer.layers.remove(by)
+
+    def _side_view(self, on: bool) -> None:
+        """Show z against x through the object (z up), or the usual y/x."""
+        dims = self.viewer.dims
+        n = dims.ndim
+        if n < 3:
+            return
+        rest = list(range(n - 3))
+        z, y, x = n - 3, n - 2, n - 1
+        dims.order = tuple(rest + ([y, z, x] if on else [z, y, x]))
+        camera = _camera(self.viewer)
+        try:
+            camera.orientation2d = ("up", "right") if on else ("down", "right")
+        except Exception:  # pragma: no cover - napari < 0.5
+            pass
+        self._show()
+
+    # -- colour by position, hover -------------------------------------------
+
+    def _position_lut(self) -> np.ndarray:
+        table = self.rv.tables[self.name]
+        eff = self.rv.effective(self.name)
+        roots = self.rv.roots(self.name)
+        codes = eff["position"].map(_POSITION_CODES).fillna(0).astype(np.int32)
+        lut = np.zeros(int(table.index.max()) + 1, dtype=np.int32)
+        for label in table.index:
+            root = roots.get(int(label), int(label))
+            if root in codes.index:
+                lut[label] = codes[root]
+        return lut
+
+    def _colour_by_position(self) -> None:
+        from napari.utils.colormaps import DirectLabelColormap
+
+        if not self.by_position_box.isChecked():
+            self._remove_by_position()
+            return
+        layer = self._layer(self.name)
+        if layer is None or self.name not in self.rv.position:
+            return
+        lut = self._position_lut()
+        levels = layer.data if layer.multiscale else [layer.data]
+
+        def mapped(level):
+            import dask.array as da
+
+            return da.asarray(level).map_blocks(
+                lambda b: lut[np.clip(b, 0, lut.size - 1)], dtype=np.int32
+            )
+
+        colours: dict[int | None, np.ndarray] = {
+            code: _hex_rgba(_POSITION_COLOURS[c])
+            for c, code in _POSITION_CODES.items()
+        }
+        grey = np.array([0.6, 0.6, 0.6, 1.0], dtype=np.float32)
+        palette: dict[int | None, np.ndarray] = {
+            **colours,
+            0: np.zeros(4, dtype=np.float32),
+            None: grey,
+        }
+        by = self.viewer.add_labels(
+            [mapped(lv) for lv in levels]
+            if layer.multiscale
+            else mapped(levels[0]),
+            name=f"{self.name} by position",
+            multiscale=layer.multiscale,
+            scale=layer.scale,
+            translate=layer.translate,
+            units=layer.units,
+            colormap=DirectLabelColormap(color_dict=palette),
+        )
+        by.metadata["lut"] = lut
+        self._by_position[self.name] = by
+
+    def _update_by_position(self) -> None:
+        by = self._by_position.get(self.name)
+        if by is not None and by.name in self.viewer.layers:
+            by.metadata["lut"][...] = self._position_lut()
+            by.refresh()
+
+    def _remove_by_position(self) -> None:
+        by = self._by_position.pop(self.name, None)
+        if by is not None and by.name in self.viewer.layers:
+            self.viewer.layers.remove(by)
+
+    def _update_features(self) -> None:
+        """What napari's status bar shows when hovering an object: its
+        parent, children and position (the layer's per-label features)."""
+        for name in self.rv.names:
+            layer = self._layer(name)
+            if layer is None:
+                continue
+            eff = self.rv.effective(name)
+            cols = [f"{p}_id" for p in self.rv.parents[name]]
+            cols += [f"n_{c}" for c in self.rv.children[name]]
+            cols += [c for c in ("position", "qc") if c in eff]
+            features = (
+                eff[cols]
+                .reset_index()
+                .rename(columns={eff.index.name or "label": "index"})
+            )
+            try:
+                layer.features = features
+            except Exception:  # pragma: no cover - depends on napari
+                logger.debug(
+                    "could not set features on %s", name, exc_info=True
+                )
 
     # -- results ---------------------------------------------------------------
 
