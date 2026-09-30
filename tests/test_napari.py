@@ -86,7 +86,11 @@ def test_label_hint_present_when_n_objects_written(tmp_path):
     )
 
     hint = nplugin._label_hint(f"{store}/labels/cells")
-    assert hint == {"n_objects": 17, "sequential_labels": True}
+    assert hint == {
+        "patchworks_labels": f"{store}/labels/cells",
+        "n_objects": 17,
+        "sequential_labels": True,
+    }
 
 
 def test_label_hint_empty_without_n_objects(tmp_path):
@@ -98,7 +102,10 @@ def test_label_hint_empty_without_n_objects(tmp_path):
     )
     write_labels(store, np.ones((8, 8, 8), "int32"), name="cells", n_levels=1)
 
-    assert nplugin._label_hint(f"{store}/labels/cells") == {}
+    # Where the labels are (for their object table), but no object count.
+    assert nplugin._label_hint(f"{store}/labels/cells") == {
+        "patchworks_labels": f"{store}/labels/cells"
+    }
 
 
 def test_label_hint_missing_store_returns_empty():
