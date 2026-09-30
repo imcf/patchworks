@@ -64,6 +64,12 @@ from ._provenance import provenance, read_provenance
 from ._relabel import relabel_sequential_array, relabel_sequential_zarr
 from ._relations import label_relations
 from ._seams import seam_report
+from ._tables import (
+    compute_table,
+    measure_objects,
+    read_table,
+    relate_tables,
+)
 from ._volume_filter import (
     filter_labels_by_size,
     max_voxels_for_volume,
@@ -97,6 +103,10 @@ __all__ = [
     "relabel_sequential_array",
     "relabel_sequential_zarr",
     "label_relations",
+    "measure_objects",
+    "compute_table",
+    "read_table",
+    "relate_tables",
     "seam_report",
     "suggest_overlap",
     "object_f1",
