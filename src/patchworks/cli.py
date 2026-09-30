@@ -290,9 +290,27 @@ def _cmd_tables(args: argparse.Namespace) -> int:
             args.store, name, channels=args.channels, n_workers=args.workers
         )
     for child, parent in args.relate or ():
-        relate_tables(args.store, child, parent, n_workers=args.workers)
+        relate_tables(
+            args.store,
+            child,
+            parent,
+            max_distance_um=args.max_distance,
+            n_workers=args.workers,
+        )
     print(f"tables written for: {', '.join(names)}")
     return 0
+
+
+def _position(text: str) -> tuple[str, dict]:
+    """``child:parent=apical`` -> ("child", {"parent": ..., "apical": ...})."""
+    pair, sep, apical = text.partition("=")
+    child, parent = _pair(pair)
+    if not sep or not apical:
+        raise argparse.ArgumentTypeError(
+            f"expected CHILD:PARENT=APICAL (APICAL: +z, -z, ... or a label "
+            f"image to point away from), got {text!r}"
+        )
+    return child, {"parent": parent, "apical": apical}
 
 
 def _cmd_review(args: argparse.Namespace) -> int:
@@ -301,14 +319,23 @@ def _cmd_review(args: argparse.Namespace) -> int:
     expect: dict = {}
     for parent, child, bounds in args.expect or ():
         expect.setdefault(parent, {})[child] = bounds
+    position = dict(args.position or ())
     if not (args.export or args.write_labels or args.summary or args.workbooks):
         from .plugins.review import review_in_napari
 
         review_in_napari(
-            args.store, expect=expect, min_overlap=args.min_overlap
+            args.store,
+            expect=expect,
+            min_overlap=args.min_overlap,
+            position=position,
         )
         return 0
-    rv = Review(args.store, expect=expect, min_overlap=args.min_overlap)
+    rv = Review(
+        args.store,
+        expect=expect,
+        min_overlap=args.min_overlap,
+        position=position,
+    )
     if args.summary:
         print(json.dumps({n: rv.summary(n) for n in rv.names}, indent=2))
     if args.export:
@@ -474,6 +501,13 @@ def build_parser() -> argparse.ArgumentParser:
         type=_ints,
         help="image channels to add mean/std intensity for, e.g. 0,2",
     )
+    p.add_argument(
+        "--max-distance",
+        type=float,
+        metavar="UM",
+        help="a CHILD touching no PARENT gets the nearest one within UM "
+        "micrometres",
+    )
     p.add_argument("--workers", type=int, help="parallel reads")
     p.set_defaults(func=_cmd_tables)
 
@@ -492,6 +526,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--min-overlap",
         type=float,
         help="flag children less than this fraction inside (default 0.5)",
+    )
+    p.add_argument(
+        "--position",
+        type=_position,
+        nargs="+",
+        metavar="CHILD:PARENT=APICAL",
+        help="classify CHILD objects as apical/basal/lateral/central in "
+        "their PARENT; APICAL is a direction (+z) or a label image to point "
+        "away from, e.g. cilia_labels:cyto_labels=nuclei_labels",
     )
     p.add_argument("--summary", action="store_true", help="print counts")
     p.add_argument("--export", metavar="DIR", help="write corrected tables")

@@ -106,3 +106,31 @@ def test_cli_tables_and_review(tmp_path, capsys):
     ]
     with pytest.raises(SystemExit):
         main(["review", store, "--expect", "cyto_labels=1"])
+
+
+def test_cli_position_and_distance(tmp_path, capsys):
+    pytest.importorskip("pandas")
+    from test_position import polarity_scene
+
+    store = polarity_scene(tmp_path / "p.zarr")
+    args = ["tables", store, "--names", "cilia_labels"]
+    args += ["--relate", "cilia_labels:cyto_labels", "--max-distance", "1"]
+    assert main(args) == 0
+    capsys.readouterr()
+    out = tmp_path / "t"
+    args = ["review", store, "--export", str(out)]
+    args += ["--position", "cilia_labels:cyto_labels=nuclei_labels"]
+    assert main(args) == 0
+    import pandas as pd
+
+    cilia = pd.read_csv(out / "cilia_labels.csv", index_col="label")
+    assert cilia["position"].tolist() == [
+        "apical",
+        "basal",
+        "lateral",
+        "central",
+        "unknown",
+    ]
+    assert "cyto_labels_distance_um" in cilia
+    with pytest.raises(SystemExit):
+        main(["review", store, "--position", "cilia_labels=+z"])
