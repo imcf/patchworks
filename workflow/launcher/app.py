@@ -164,6 +164,21 @@ def shared_form() -> dict:
         )
         v["shard_labels"] = c3.checkbox("shard_labels", value=False)
         v["seam_report"] = c4.checkbox("seam_report", value=True)
+        c1, c2 = st.columns(2)
+        v["object_table"] = c1.checkbox(
+            "object table (for `patchworks review`)",
+            value=True,
+            help="one row per object in labels/<name>/table: size, "
+            "centroid, bounding box",
+        )
+        chans = c2.text_input(
+            "table_channels (e.g. 0,2; blank = none)",
+            "",
+            help="adds each object's mean/std intensity in these channels",
+        )
+        v["table_channels"] = [
+            int(c) for c in chans.replace(" ", "").split(",") if c
+        ]
         workers = st.text_input("merge_workers (blank = auto)", "")
         v["merge_workers"] = int(workers) if workers.strip() else None
 
@@ -286,8 +301,8 @@ def segmentation_form(k: str = "", label: str = "labels") -> dict:
     return v
 
 
-def multi_form() -> tuple[list[dict], list[dict], dict, dict]:
-    """Segmentations, relations, and the relate/bundle job settings."""
+def multi_form() -> tuple[list[dict], list[dict], dict, dict, dict]:
+    """Segmentations, relations, relate/bundle job settings, review rules."""
     n = st.number_input(
         "segmentations", min_value=1, max_value=8, value=2, step=1
     )
@@ -335,7 +350,47 @@ def multi_form() -> tuple[list[dict], list[dict], dict, dict]:
         }
         fmt = st.selectbox("bundle the finished store", ["none", "zip", "iso"])
         bundle = {"format": None if fmt == "none" else fmt}
-    return segs, relations, relate, bundle
+    with st.expander("Review rules (what `patchworks review` flags)"):
+        st.caption(
+            "A child outside every parent, or less than min_overlap inside "
+            "one, is always flagged. Add how many of each child a parent "
+            "should hold: a cell with no nucleus, or 3 cilia, is then "
+            "flagged too."
+        )
+        rules = st.data_editor(
+            [],
+            num_rows="dynamic",
+            column_config={
+                "parent": st.column_config.SelectboxColumn(
+                    "parent", options=labels
+                ),
+                "child": st.column_config.SelectboxColumn(
+                    "child", options=labels
+                ),
+                "min": st.column_config.NumberColumn(
+                    "min", min_value=0, step=1
+                ),
+                "max": st.column_config.NumberColumn(
+                    "max", min_value=0, step=1
+                ),
+            },
+            key="review_rules",
+        )
+        min_overlap = st.number_input(
+            "min_overlap", min_value=0.0, max_value=1.0, value=0.5, step=0.05
+        )
+    expect: dict = {}
+    for r in rules:
+        if r.get("parent") and r.get("child") and r.get("min") is not None:
+            hi = r.get("max") if r.get("max") is not None else r["min"]
+            expect.setdefault(r["parent"], {})[r["child"]] = (
+                int(r["min"]) if hi == r["min"] else [int(r["min"]), int(hi)]
+            )
+    review = {
+        "expect": expect,
+        "min_overlap": None if min_overlap == 0.5 else float(min_overlap),
+    }
+    return segs, relations, relate, bundle, review
 
 
 # ---------------------------------------------------------------------------
@@ -509,7 +564,7 @@ with tab_config:
             name = f"{core.safe_name(cfg['label_name'])}_{stamp}"
             files = {f"{wf_dir}/config/launcher_{name}.yaml": cfg}
         else:
-            segs, relations, relate, bundle = multi_form()
+            segs, relations, relate, bundle, review = multi_form()
             name = f"multi_{stamp}"
             files = core.build_multi(
                 shared,
@@ -518,6 +573,7 @@ with tab_config:
                 directory=f"{wf_dir}/config/launcher_{name}",
                 relate=relate,
                 bundle=bundle,
+                review=review,
             )
             for problem in core.multi_problems(files):
                 st.error(problem)

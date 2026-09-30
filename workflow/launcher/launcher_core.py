@@ -166,6 +166,9 @@ def build_config(v: dict[str, Any]) -> dict[str, Any]:
         "sequential_labels": v.get("sequential_labels", True),
         "merge_workers": v.get("merge_workers"),
         "seam_report": v.get("seam_report", True),
+        # object table (patchworks review, relation workbooks)
+        "object_table": v.get("object_table", True),
+        "table_channels": list(v.get("table_channels") or []),
         # label pyramid
         "pyramid_levels": v.get("pyramid_levels", 5),
         "pyramid_downscale": v.get("pyramid_downscale", 2),
@@ -294,6 +297,7 @@ def build_multi(
     directory: str,
     relate: dict[str, Any] | None = None,
     bundle: dict[str, Any] | None = None,
+    review: dict[str, Any] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """The files of a multi-segmentation run, keyed by their remote path.
 
@@ -322,6 +326,11 @@ def build_multi(
     bundle = {k: v for k, v in (bundle or {}).items() if v not in (None, "")}
     if bundle.get("format"):
         multi["bundle"] = bundle
+    review = {
+        k: v for k, v in (review or {}).items() if v not in (None, {}, "")
+    }
+    if review:
+        multi["review"] = review
     files[f"{directory}/multi.yaml"] = multi
     return files
 
@@ -366,6 +375,15 @@ def multi_problems(files: dict[str, dict[str, Any]]) -> list[str]:
         outputs.append(rel["output"])
     if len(set(outputs)) != len(outputs):
         problems.append(f"relation outputs must differ: {outputs}")
+    for parent, children in (
+        (multi.get("review") or {}).get("expect") or {}
+    ).items():
+        for name in [parent, *children]:
+            if name not in labels:
+                problems.append(
+                    f"review rule names {name!r}, not a segmentation's "
+                    f"label_name ({labels})"
+                )
     return problems
 
 

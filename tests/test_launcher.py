@@ -207,6 +207,12 @@ def _multi_files(tmp_path, relations=None):
         directory="/w/config/launcher/run1",
         relate={"partition": "rtx4090", "mem": "", "time": None},
         bundle={"format": ""},
+        review={
+            "expect": {
+                "cyto_labels": {"nuclei_labels": 1, "cilia_labels": [0, 2]}
+            },
+            "min_overlap": None,
+        },
     )
 
 
@@ -232,6 +238,11 @@ def test_build_multi_writes_what_run_multi_accepts(tmp_path):
     paths = [Path(p) for p in multi["segmentations"]]
     assert run_multi._validate_configs(paths, cfgs) == str(tmp_path / "run")
     assert core.multi_problems(files) == []
+    labels = [c["label_name"] for c in cfgs]
+    assert run_multi._review_rules(multi, labels) == {
+        "expect": {"cyto_labels": {"nuclei_labels": 1, "cilia_labels": [0, 2]}}
+    }
+    assert all(c["object_table"] is True for c in cfgs)
 
 
 def argparse_ns():
