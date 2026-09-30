@@ -1283,3 +1283,64 @@ def test_relate_rewrites_a_workbook_after_review_without_rereading(
     assert wb["cilia_labels"].max_row == first - 1
     os.utime(tmp_path / "c.xlsx")
     relate.run_relations(str(tmp_path), store, rel)  # now simply skipped
+
+
+def test_position_rules_and_distances_are_checked(capsys):
+    from run_multi import _review_rules
+
+    names = ["nuclei_labels", "cyto_labels", "cilia_labels"]
+    rel = [
+        {"a": "nuclei_labels", "b": "cyto_labels"},
+        {"a": "cilia_labels", "b": "cyto_labels", "max_distance_um": 1.5},
+    ]
+    good = {
+        "relations": rel,
+        "review": {
+            "position": {
+                "cilia_labels": {
+                    "parent": "cyto_labels",
+                    "apical": "nuclei_labels",
+                }
+            }
+        },
+    }
+    assert _review_rules(good, names) == good["review"]
+    for review, relations in (
+        (
+            {
+                "position": {
+                    "cilia_labels": {"parent": "cyto_labels", "apical": "up"}
+                }
+            },
+            rel,
+        ),
+        (
+            {
+                "position": {
+                    "cilia_labels": {"parent": "nuclei_labels", "apical": "+z"}
+                }
+            },
+            rel,
+        ),
+        (
+            {
+                "position": {
+                    "cilia_labels": {
+                        "parent": "cyto_labels",
+                        "apical": "+z",
+                        "x": 1,
+                    }
+                }
+            },
+            rel,
+        ),
+        (
+            {},
+            [{"a": "cilia_labels", "b": "cyto_labels", "max_distance_um": -1}],
+        ),
+    ):
+        with pytest.raises(SystemExit):
+            _review_rules({"relations": relations, "review": review}, names)
+    err = capsys.readouterr().err
+    assert "needs the relation cilia_labels -> nuclei_labels" in err
+    assert "max_distance_um must be a positive number" in err

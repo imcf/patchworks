@@ -74,15 +74,21 @@ def _relation_up_to_date(
     return True
 
 
-def _tables_ready(image_store: str, a_name: str, b_name: str) -> bool:
-    """Both tables current, and *a*'s already relating it to *b*."""
+def _tables_ready(
+    image_store: str, a_name: str, b_name: str, max_distance=None
+) -> bool:
+    """Both tables current, and *a*'s already relating it to *b* (by
+    distance too, when asked)."""
     from patchworks._tables import has_table, is_stale, read_columns
 
     groups = [f"{image_store}/labels/{n}" for n in (a_name, b_name)]
     try:
         if not all(has_table(g) and not is_stale(g) for g in groups):
             return False
-        return f"{b_name}_id" in read_columns(groups[0], check=False)
+        cols = read_columns(groups[0], check=False)
+        return f"{b_name}_id" in cols and (
+            max_distance is None or f"{b_name}_distance_um" in cols
+        )
     except Exception:
         return False
 
@@ -137,7 +143,9 @@ def run_relations(
                     flush=True,
                 )
                 continue
-            if _tables_ready(image_store, a_name, b_name):
+            if _tables_ready(
+                image_store, a_name, b_name, rel.get("max_distance_um")
+            ):
                 # Only review decisions changed: the overlaps are already in
                 # the tables, so rewrite the workbook without re-reading the
                 # labels.
@@ -212,7 +220,13 @@ def run_relations(
                     flush=True,
                 )
                 compute_table(image_store, name)
-        relate_tables(image_store, a_name, b_name, matches=table)
+        relate_tables(
+            image_store,
+            a_name,
+            b_name,
+            matches=table,
+            max_distance_um=rel.get("max_distance_um"),
+        )
         # Only these two tables: another relate job may be writing others.
         written = Review(image_store, names=[a_name, b_name]).relation_workbook(
             a_name, b_name, out_path

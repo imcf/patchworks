@@ -460,18 +460,20 @@ def _review_rules(multi_cfg: dict, label_names: list[str]) -> dict:
     ``expect`` maps a parent label image to the number of each child it
     should hold (``1`` or ``[min, max]``); ``min_overlap`` is the fraction
     of a child that must be inside its parent (a number, or per
-    ``{child: {parent: value}}``). ``patchworks review`` flags whatever
-    breaks them.
+    ``{child: {parent: value}}``); ``position`` classifies children by where
+    they sit in their parent (apical, basal, lateral, central). ``patchworks
+    review`` flags whatever breaks them. Relations may also carry
+    ``max_distance_um`` (the nearest parent for a child touching none).
     """
     block = multi_cfg.get("review") or {}
     if not isinstance(block, dict):
         sys.exit("[run_multi] ERROR: `review:` must be a mapping")
     problems = []
-    unknown = set(block) - {"expect", "min_overlap"}
+    unknown = set(block) - {"expect", "min_overlap", "position"}
     if unknown:
         problems.append(
             f"unknown key(s) in `review:`: {', '.join(sorted(unknown))}; "
-            "expected expect, min_overlap"
+            "expected expect, min_overlap, position"
         )
     for parent, children in (block.get("expect") or {}).items():
         for name in [parent, *(children or {})]:
@@ -495,6 +497,53 @@ def _review_rules(multi_cfg: dict, label_names: list[str]) -> dict:
     overlap = block.get("min_overlap")
     if overlap is not None and not isinstance(overlap, (int, float, dict)):
         problems.append("`review: min_overlap:` must be a number or a mapping")
+    pairs = {(r.get("a"), r.get("b")) for r in multi_cfg.get("relations") or []}
+    for rel in multi_cfg.get("relations") or []:
+        dist = rel.get("max_distance_um")
+        if dist is not None and (
+            isinstance(dist, bool)
+            or not isinstance(dist, (int, float))
+            or dist <= 0
+        ):
+            problems.append(
+                f"relation {rel.get('a')} -> {rel.get('b')}: max_distance_um "
+                f"must be a positive number of micrometres; got {dist!r}"
+            )
+    for child, rule in (block.get("position") or {}).items():
+        rule = rule or {}
+        parent = rule.get("parent")
+        apical = str(rule.get("apical", ""))
+        ref = apical.removeprefix("towards:")
+        if child not in label_names or parent not in label_names:
+            problems.append(
+                f"`review: position: {child}:` needs a segmentation's "
+                f"label_name and a `parent:` one ({', '.join(label_names)})"
+            )
+            continue
+        if (child, parent) not in pairs:
+            problems.append(
+                f"`review: position: {child}:` needs the relation "
+                f"{child} -> {parent} under `relations:`"
+            )
+        directions = {f"{s}{a}" for s in "+-" for a in "zyx"}
+        if apical not in directions:
+            if ref not in label_names:
+                problems.append(
+                    f"`review: position: {child}: apical:` must be a "
+                    f"direction like +z, or a label_name (away from its "
+                    f"objects, e.g. the nuclei); got {apical!r}"
+                )
+            elif (ref, parent) not in pairs:
+                problems.append(
+                    f"`review: position: {child}: apical: {apical}` needs "
+                    f"the relation {ref} -> {parent} under `relations:`"
+                )
+        unknown = set(rule) - {"parent", "apical", "central_depth"}
+        if unknown:
+            problems.append(
+                f"`review: position: {child}:` unknown key(s) "
+                f"{', '.join(sorted(unknown))}"
+            )
     if problems:
         for p in problems:
             print(f"[run_multi] ERROR: {p}", file=sys.stderr)
