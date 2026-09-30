@@ -117,6 +117,9 @@ workflow = [
     "snakemake-executor-plugin-slurm",
     "openpyxl",
 ]
+# review: the object tables' corrected view and exports, without napari
+# (`patchworks review --summary/--export`). The napari panel needs [napari].
+review = ["pandas>=2.0", "openpyxl"]
 # jsonschema validates what we write against the vendored official
 # OME-NGFF schemas (tests/ngff_schemas/); without it that one test skips.
 # openpyxl -> tests/test_run_multi.py checks the relations workbook.

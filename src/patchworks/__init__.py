@@ -63,6 +63,7 @@ from ._postprocess import dilate_labels, fill_holes, open_labels
 from ._provenance import provenance, read_provenance
 from ._relabel import relabel_sequential_array, relabel_sequential_zarr
 from ._relations import label_relations
+from ._review import Review
 from ._seams import seam_report
 from ._tables import (
     compute_table,
@@ -107,6 +108,7 @@ __all__ = [
     "compute_table",
     "read_table",
     "relate_tables",
+    "Review",
     "seam_report",
     "suggest_overlap",
     "object_f1",
