@@ -381,17 +381,13 @@ class Review:
                 out[label] = cur
         return out
 
-    def effective(self, name: str) -> "pd.DataFrame":
-        """*name*'s table with every decision applied.
-
-        Rejected objects are dropped; merged objects become one row (sizes
-        added, centroids and intensities volume-weighted, boxes joined);
-        parent columns follow reassignments and the parents' own merges;
-        ``n_<child>`` columns count each object's children; ``qc`` says
-        ``ok``, ``fixed`` or ``""`` (not reviewed).
-        """
-        if name in self._cache:
-            return self._cache[name]
+    def _corrected(self, name: str) -> "pd.DataFrame":
+        """*name*'s rows with the decisions applied, before derived columns
+        (counts, shape, position) -- which need other tables' rows, never
+        their derived columns, so nothing here recurses."""
+        key = ("rows", name)
+        if key in self._cache:
+            return self._cache[key]
         import pandas as pd
 
         df = self.tables[name].copy()
@@ -421,12 +417,36 @@ class Review:
             if root and root in qc.index:
                 qc[root] = "fixed"
         df["qc"] = qc
+        self._cache[key] = df
+        return df
+
+    def effective(self, name: str) -> "pd.DataFrame":
+        """*name*'s table with every decision applied.
+
+        Rejected objects are dropped; merged objects become one row (sizes
+        added, centroids, spreads and intensities combined exactly, boxes
+        joined); parent columns follow reassignments and the parents' own
+        merges; ``qc`` says ``ok``, ``fixed`` or ``""`` (not reviewed).
+        Derived columns: ``n_<child>`` (children counted), ``length_um``,
+        ``elongation``, ``axis_<a>`` (shape, see
+        :func:`~patchworks._tables.shape_columns`).
+        """
+        if name in self._cache:
+            return self._cache[name]
+        from ._tables import shape_columns
+
+        df = self._corrected(name).copy()
         for child in self.children[name]:
-            ce = self.effective(child)
+            ce = self._corrected(child)
             counts = ce[f"{name}_id"].value_counts()
             df[f"n_{child}"] = (
                 counts.reindex(df.index).fillna(0).astype(np.int64)
             )
+        meta = self.meta[name]
+        for col, values in shape_columns(
+            df, meta.get("axes") or "", meta.get("pixel_size")
+        ).items():
+            df[col] = values
         self._cache[name] = df
         return df
 
@@ -491,7 +511,7 @@ class Review:
         ids = eff.index.to_numpy()
         parts = []
 
-        def rule(mask, reasons, scores, partners=None):
+        def rule_(mask, reasons, scores, partners=None):
             labels = ids[mask]
             if labels.size:
                 parts.append(
@@ -517,9 +537,9 @@ class Review:
             limit = self.min_overlap(name, p)
             nice = _nice(p)
             orphan = pid == 0
-            rule(orphan, [f"not inside any {nice}"] * int(orphan.sum()), 3.0)
+            rule_(orphan, [f"not inside any {nice}"] * int(orphan.sum()), 3.0)
             weak = (pid != 0) & (ov < limit)
-            rule(
+            rule_(
                 weak,
                 (
                     f"only {v:.0%} inside {nice} #{q}"
@@ -533,7 +553,7 @@ class Review:
             n = eff[f"n_{child}"].to_numpy()
             off = (n < lo) | (n > hi)
             want = f"{lo}" if lo == hi else f"{lo}-{hi}"
-            rule(
+            rule_(
                 off,
                 (f"{k} {_nice(child)} (expected {want})" for k in n[off]),
                 2.0,
@@ -545,7 +565,7 @@ class Review:
             if mad > 0:
                 z = (logv - med) / mad
                 odd = np.abs(z) > 3.5
-                rule(
+                rule_(
                     odd,
                     (
                         f"unusually large ({math.exp(lv - med):.1f}x the median)"
@@ -565,7 +585,7 @@ class Review:
                 partners = order.reindex(ids[mask]).to_numpy()
                 ax = pd.Series(axes, index=one)
                 ax = ax[~ax.index.duplicated()].reindex(ids[mask]).to_numpy()
-                rule(
+                rule_(
                     mask,
                     (
                         f"meets #{q} exactly at a tile seam ({x}): "
@@ -901,6 +921,8 @@ def _nice(name: str) -> str:
 
 def _combine(df: "pd.DataFrame", target: "pd.Series") -> "pd.DataFrame":
     """Collapse rows sharing a *target* id into one, exactly where possible."""
+    import pandas as pd
+
     n = df["area_voxels"].astype(float)
     groups = target.to_numpy()
     work = df.copy()
@@ -913,6 +935,8 @@ def _combine(df: "pd.DataFrame", target: "pd.Series") -> "pd.DataFrame":
             agg[col] = "min"
         elif col.startswith("bbox_max_"):
             agg[col] = "max"
+        elif col.startswith("cov_"):
+            agg[col] = "first"  # replaced below, once centroids are known
         elif col.startswith(("centroid_", "mean_intensity_")):
             work[col] = df[col] * n
             agg[col] = "sum"
@@ -936,6 +960,21 @@ def _combine(df: "pd.DataFrame", target: "pd.Series") -> "pd.DataFrame":
         if col.startswith("std_intensity_"):
             mean = out["mean_intensity_" + col[len("std_intensity_") :]]
             out[col] = np.sqrt(np.maximum(out[col] / total - mean**2, 0))
+    covs = [c for c in df.columns if c.startswith("cov_")]
+    if covs:
+        # Parallel-axis theorem: each part's spread plus its offset from the
+        # merged centroid (deviations, not raw products: no cancellation).
+        dev = {
+            ax: df[f"centroid_{ax}"].to_numpy()
+            - out.loc[groups, f"centroid_{ax}"].to_numpy()
+            for ax in {c[4] for c in covs} | {c[5] for c in covs}
+        }
+        for col in covs:
+            a, b = col[4], col[5]
+            part = n.to_numpy() * (df[col].to_numpy() + dev[a] * dev[b])
+            out[col] = (
+                pd.Series(part, index=df.index).groupby(groups).sum() / total
+            )
     merged = target.value_counts()
     for col in df.columns:
         if col.endswith("_overlap") and not col.endswith("_overlap_voxels"):

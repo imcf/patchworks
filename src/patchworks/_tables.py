@@ -29,7 +29,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Mapping, Sequence, Union
 
 import numpy as np
-import scipy.ndimage as ndi
 import zarr
 
 from ._chunks import chunk_slices, cpu_allocation
@@ -107,6 +106,13 @@ def label_fingerprint(group: "zarr.Group") -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+def _pairs(ndim: int) -> list[tuple[int, int]]:
+    """Index pairs of a symmetric matrix's upper triangle, diagonal first."""
+    return [(i, i) for i in range(ndim)] + [
+        (i, j) for i in range(ndim) for j in range(i + 1, ndim)
+    ]
+
+
 def _block_partial(
     lab: np.ndarray,
     offset: tuple[int, ...],
@@ -114,61 +120,81 @@ def _block_partial(
 ) -> "dict[str, np.ndarray] | None":
     """Per-object partial sums for one block of labels.
 
-    Every quantity here adds (or min/max-es) across blocks, so an object
-    spanning several blocks is reassembled exactly by :func:`_merge`.
+    Everything here combines exactly across blocks (:func:`_merge`), so an
+    object spanning several blocks is reassembled exactly. Second moments
+    are central, in block-local coordinates: small numbers, so no precision
+    is lost to coordinates in the tens of thousands.
     """
-    if not lab.any():
+    nz = np.nonzero(lab)
+    if not nz[0].size:
         return None
-    ids, local = np.unique(lab, return_inverse=True)
-    local = local.reshape(lab.shape)
-    if ids[0] != 0:  # keep local index 0 for background
-        ids = np.concatenate([[0], ids])
-        local = local + 1
+    ids, inv = np.unique(lab[nz], return_inverse=True)
     n = ids.size
-    flat = local.ravel()
-    count = np.bincount(flat, minlength=n)
+    count = np.bincount(inv, minlength=n)
     ndim = lab.ndim
-    pos = np.empty((n, ndim))
-    for ax in range(ndim):
-        shape = [1] * ndim
-        shape[ax] = lab.shape[ax]
-        coord = np.broadcast_to(
-            np.arange(lab.shape[ax], dtype=np.float64).reshape(shape),
-            lab.shape,
-        )
-        pos[:, ax] = np.bincount(flat, weights=coord.ravel(), minlength=n)
-    boxes = ndi.find_objects(local)  # one entry per local id 1..n-1
-    lo = np.array([[s.start for s in b] for b in boxes], dtype=np.int64)
-    hi = np.array([[s.stop - 1 for s in b] for b in boxes], dtype=np.int64)
+    coords = [c.astype(np.float64) for c in nz]
+    mean = (
+        np.stack([np.bincount(inv, weights=c, minlength=n) for c in coords], 1)
+        / count[:, None]
+    )
+    dev = [c - mean[inv, ax] for ax, c in enumerate(coords)]
+    m2 = np.stack(
+        [
+            np.bincount(inv, weights=dev[i] * dev[j], minlength=n)
+            for i, j in _pairs(ndim)
+        ],
+        1,
+    )
+    lo = np.stack([np.full(n, np.iinfo(np.int64).max) for _ in range(ndim)], 1)
+    hi = np.stack([np.full(n, -1) for _ in range(ndim)], 1).astype(np.int64)
+    for ax, c in enumerate(nz):
+        np.minimum.at(lo[:, ax], inv, c)
+        np.maximum.at(hi[:, ax], inv, c)
     off = np.asarray(offset, dtype=np.int64)
     part = {
-        "ids": ids[1:].astype(np.int64),
-        "count": count[1:].astype(np.int64),
-        "pos": pos[1:] + count[1:, None] * off,
+        "ids": ids.astype(np.int64),
+        "count": count.astype(np.int64),
+        "mean": mean + off,
+        "m2": m2,
         "lo": lo + off,
         "hi": hi + off,
     }
     for i, img in enumerate(images):
-        values = img.astype(np.float64).ravel()
-        part[f"sum{i}"] = np.bincount(flat, weights=values, minlength=n)[1:]
-        part[f"sq{i}"] = np.bincount(flat, weights=values**2, minlength=n)[1:]
+        values = img[nz].astype(np.float64)
+        part[f"sum{i}"] = np.bincount(inv, weights=values, minlength=n)
+        part[f"sq{i}"] = np.bincount(inv, weights=values**2, minlength=n)
     return part
 
 
 def _merge(parts: list[dict[str, np.ndarray]], n_images: int) -> dict:
-    """Combine every block's partial sums into one row per object."""
+    """Combine every block's partial sums into one row per object.
+
+    Second moments by the parallel-axis theorem: each block's central
+    moments plus its count times the offset of its mean from the object's.
+    """
     ids = np.concatenate([p["ids"] for p in parts])
     order = np.argsort(ids, kind="stable")
     ids = ids[order]
     starts = np.flatnonzero(np.concatenate([[True], ids[1:] != ids[:-1]]))
+    group = np.cumsum(np.concatenate([[False], ids[1:] != ids[:-1]]))
 
     def cat(key):
         return np.concatenate([p[key] for p in parts])[order]
 
+    n_b = cat("count").astype(np.float64)
+    mean_b = cat("mean")
+    count = np.add.reduceat(cat("count"), starts)
+    mean = (
+        np.add.reduceat(mean_b * n_b[:, None], starts, axis=0) / count[:, None]
+    )
+    d = mean_b - mean[group]
+    ndim = mean.shape[1]
+    shift = np.stack([n_b * d[:, i] * d[:, j] for i, j in _pairs(ndim)], 1)
     out = {
         "label": ids[starts],
-        "count": np.add.reduceat(cat("count"), starts),
-        "pos": np.add.reduceat(cat("pos"), starts, axis=0),
+        "count": count,
+        "mean": mean,
+        "m2": np.add.reduceat(cat("m2") + shift, starts, axis=0),
         "lo": np.minimum.reduceat(cat("lo"), starts, axis=0),
         "hi": np.maximum.reduceat(cat("hi"), starts, axis=0),
     }
@@ -213,7 +239,9 @@ def measure_objects(
     dict of str to np.ndarray
         Columns, all aligned: ``label``, ``area_voxels``,
         ``centroid_<axis>``, ``bbox_min_<axis>``, ``bbox_max_<axis>``
-        (inclusive, voxel indices), plus the optional ones above. Column
+        (inclusive, voxel indices), ``cov_<a><b>`` (the spread of the
+        object's voxels, in voxels squared: its size and orientation, see
+        :func:`shape_columns`), plus the optional ones above. Column
         names follow napari-chunked-regionprops, so either can read the
         other's tables.
 
@@ -277,16 +305,20 @@ def measure_objects(
         for ax in axes:
             cols[f"bbox_min_{ax}"] = np.empty(0, np.int64)
             cols[f"bbox_max_{ax}"] = np.empty(0, np.int64)
+        for i, j in _pairs(ndim):
+            cols[f"cov_{axes[i]}{axes[j]}"] = np.empty(0)
         return cols
     m = _merge(parts, len(img_list))
     count = m["count"]
     cols["label"] = m["label"]
     cols["area_voxels"] = count
     for i, ax in enumerate(axes):
-        cols[f"centroid_{ax}"] = m["pos"][:, i] / count
+        cols[f"centroid_{ax}"] = m["mean"][:, i]
     for i, ax in enumerate(axes):
         cols[f"bbox_min_{ax}"] = m["lo"][:, i]
         cols[f"bbox_max_{ax}"] = m["hi"][:, i]
+    for k, (i, j) in enumerate(_pairs(ndim)):
+        cols[f"cov_{axes[i]}{axes[j]}"] = m["m2"][:, k] / count
     for i, name in enumerate(images):
         mean = m[f"sum{i}"] / count
         cols[f"mean_intensity_{name}"] = mean
@@ -584,15 +616,78 @@ def relate_tables(
                 m["overlap_fraction"],
                 m["overlap_voxels"],
             )
-    add_columns(
-        cpath,
-        {
-            f"{parent}_id": pid,
-            f"{parent}_overlap": frac,
-            f"{parent}_overlap_voxels": vox,
-        },
-    )
+    cols = {
+        f"{parent}_id": pid,
+        f"{parent}_overlap": frac,
+        f"{parent}_overlap_voxels": vox,
+    }
+    add_columns(cpath, cols)
     return dict(matches)
+
+
+def physical_cov(
+    df: "pd.DataFrame", axes: str, pixel_size: Mapping[str, float] | None
+) -> np.ndarray:
+    """Each object's spread as an (n, ndim, ndim) matrix in µm² (voxels²
+    when uncalibrated), from its ``cov_<a><b>`` columns."""
+    ndim = len(axes)
+    size = np.array([float((pixel_size or {}).get(ax, 1.0)) for ax in axes])
+    cov = np.zeros((len(df), ndim, ndim))
+    for i, j in _pairs(ndim):
+        col = f"cov_{axes[i]}{axes[j]}"
+        if col not in df:
+            return np.full((len(df), ndim, ndim), np.nan)
+        v = df[col].to_numpy(dtype=float) * size[i] * size[j]
+        cov[:, i, j] = cov[:, j, i] = v
+    return cov
+
+
+def physical_centroids(
+    df: "pd.DataFrame", axes: str, pixel_size: Mapping[str, float] | None
+) -> np.ndarray:
+    size = np.array([float((pixel_size or {}).get(ax, 1.0)) for ax in axes])
+    return np.stack([df[f"centroid_{ax}"].to_numpy() for ax in axes], 1) * size
+
+
+def shape_columns(
+    df: "pd.DataFrame", axes: str, pixel_size: Mapping[str, float] | None
+) -> dict[str, np.ndarray]:
+    """Length, elongation and main axis of each object, from its moments.
+
+    ``length`` is the extent along the main axis of a uniform rod with the
+    same spread (``sqrt(12 * largest variance)``): exact for a straight
+    rod, shorter than the path of a curved one. ``elongation`` is the ratio
+    of the two largest spreads (1: round, large: rod-like). ``axis_<a>``
+    is the main axis as a unit vector (sign fixed so its first non-zero
+    component is positive). In µm when *pixel_size* is known.
+
+    Examples
+    --------
+    >>> import pandas as pd
+    >>> rod = pd.DataFrame({"cov_zz": [0.0], "cov_yy": [0.0], "cov_xx": [12.0],
+    ...     "cov_zy": [0.0], "cov_zx": [0.0], "cov_yx": [0.0]})
+    >>> cols = shape_columns(rod, "zyx", {"z": 1, "y": 1, "x": 0.5})
+    >>> round(float(cols["length_um"][0]), 3), float(cols["axis_x"][0])
+    (6.0, 1.0)
+    """
+    cov = physical_cov(df, axes, pixel_size)
+    unit = "um" if pixel_size else "voxels"
+    if not len(df) or np.isnan(cov).all():
+        return {}
+    w, v = np.linalg.eigh(cov)  # ascending
+    w = np.clip(w, 0, None)
+    main = v[:, :, -1]
+    first = np.argmax(np.abs(main) > 1e-9, axis=1)
+    sign = np.sign(main[np.arange(len(main)), first])
+    main = main * np.where(sign == 0, 1, sign)[:, None]
+    out = {f"length_{unit}": np.sqrt(12 * w[:, -1])}
+    with np.errstate(divide="ignore", invalid="ignore"):
+        out["elongation"] = (
+            np.sqrt(w[:, -1] / w[:, -2]) if w.shape[1] > 1 else np.ones(len(w))
+        )
+    for k, ax in enumerate(axes):
+        out[f"axis_{ax}"] = main[:, k]
+    return out
 
 
 def align_chunks(a, b):
