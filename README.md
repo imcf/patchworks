@@ -184,6 +184,16 @@ Pyramids downsample **X/Y only** (Z kept full-res) and are built level-by-level
 from disk, so terabyte volumes convert in bounded RAM. See the
 [OME-ZARR & napari guide](https://imcf.one/patchworks/guide/ome_zarr_napari/).
 
+### Check and correct the result
+
+Every label image comes with an object table (size, position, which cell
+each nucleus or cilium is in). `patchworks review scan.zarr` opens napari on
+the objects most likely to be wrong — a cilium in no cell, a cell with two
+nuclei, a nucleus cut in two at a tile seam — one at a time; one key
+accepts, rejects, reassigns or joins. The corrections flow into the tables
+and workbooks. See
+[Reviewing and correcting results](https://imcf.one/patchworks/guide/review/).
+
 ---
 
 ## From the command line

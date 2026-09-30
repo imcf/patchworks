@@ -3,6 +3,24 @@
 `skimage.measure.regionprops` needs the full labelled + intensity array in
 RAM — fine for one tile, not for a hundred-thousand-object OME-ZARR.
 
+## Already measured: the object tables
+
+The workflow measures every object once, right after the merge: size
+(`area_voxels`, `area_um3`), centroid and bounding box, plus mean/std
+intensity for the channels listed in `table_channels`. The table is stored
+with the labels (`image.zarr/labels/<name>/table`):
+
+```python
+from patchworks import read_table
+
+cells = read_table("results/image.zarr/labels/cyto_labels")  # pandas
+```
+
+For a store without one, `patchworks tables results/image.zarr --channels 0,1`
+adds them. With review corrections applied, and as csv files that
+napari-chunked-regionprops loads directly: `patchworks review
+results/image.zarr --export tables/` (see [Reviewing](review.md)).
+
 ## Interactively, in napari
 
 [napari-chunked-regionprops](https://github.com/imcf/napari-chunked-regionprops)

@@ -53,6 +53,14 @@ with open("nuclei_to_cell.csv", "w", newline="") as f:
         w.writerow([nucleus_id, m["match"], m["overlap_voxels"], m["overlap_fraction"]])
 ```
 
+To keep the result with the labels instead, as columns of the object
+tables (the corrections made in
+[`patchworks review`](review.md) then apply to it):
+
+```bash
+patchworks tables results/image.zarr --relate nuclei_labels:cyto_labels
+```
+
 On the cluster, producing the two label stores in the first place is a
 matter of running the workflow twice against the same `work_dir` — see
 [Running two segmentations](snakemake.md#running-two-segmentations-eg-nuclei-cytoplasm).
