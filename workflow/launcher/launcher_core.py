@@ -317,7 +317,13 @@ def build_multi(
     multi: dict[str, Any] = {
         "segmentations": paths,
         "relations": [
-            {"a": r["a"], "b": r["b"], "output": r["output"]} for r in relations
+            {"a": r["a"], "b": r["b"], "output": r["output"]}
+            | (
+                {"max_distance_um": float(r["max_distance_um"])}
+                if r.get("max_distance_um")
+                else {}
+            )
+            for r in relations
         ],
     }
     relate = {k: v for k, v in (relate or {}).items() if v not in (None, "")}

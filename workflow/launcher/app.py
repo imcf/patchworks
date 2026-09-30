@@ -331,6 +331,12 @@ def multi_form() -> tuple[list[dict], list[dict], dict, dict, dict]:
             "a": st.column_config.SelectboxColumn("a", options=labels),
             "b": st.column_config.SelectboxColumn("b", options=labels),
             "output": st.column_config.TextColumn("output (.xlsx)"),
+            "max_distance_um": st.column_config.NumberColumn(
+                "max distance (µm)",
+                min_value=0.0,
+                help="an `a` object touching no `b` gets the nearest one "
+                "within this distance (blank: overlap only)",
+            ),
         },
         key="relations",
     )
@@ -379,6 +385,16 @@ def multi_form() -> tuple[list[dict], list[dict], dict, dict, dict]:
         min_overlap = st.number_input(
             "min_overlap", min_value=0.0, max_value=1.0, value=0.5, step=0.05
         )
+        st.markdown("**Position** (apical / basal / lateral / central)")
+        c1, c2, c3 = st.columns(3)
+        pos_child = c1.selectbox("classify", ["(none)"] + labels)
+        pos_parent = c2.selectbox("in", labels, index=min(1, len(labels) - 1))
+        pos_apical = c3.selectbox(
+            "apical is",
+            [f"away from {n}" for n in labels] + ["+z", "-z"],
+            help="away from the nuclei: for epithelia with basal nuclei; "
+            "+z: apical is up the stack",
+        )
     expect: dict = {}
     for r in rules:
         if r.get("parent") and r.get("child") and r.get("min") is not None:
@@ -390,6 +406,13 @@ def multi_form() -> tuple[list[dict], list[dict], dict, dict, dict]:
         "expect": expect,
         "min_overlap": None if min_overlap == 0.5 else float(min_overlap),
     }
+    if pos_child != "(none)":
+        review["position"] = {
+            pos_child: {
+                "parent": pos_parent,
+                "apical": pos_apical.removeprefix("away from "),
+            }
+        }
     return segs, relations, relate, bundle, review
 
 
