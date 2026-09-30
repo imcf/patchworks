@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Mapping, Sequence, Union
 
 import numpy as np
+import scipy.ndimage as ndi
 import zarr
 
 from ._chunks import chunk_slices, cpu_allocation
@@ -567,6 +568,7 @@ def relate_tables(
     parent: str,
     *,
     matches: Mapping[int, Mapping[str, float]] | None = None,
+    max_distance_um: float | None = None,
     n_workers: int | None = None,
 ) -> dict[int, dict[str, float]]:
     """Add *child*'s parent columns: which *parent* object each one is in.
@@ -574,6 +576,11 @@ def relate_tables(
     Adds ``<parent>_id`` (0 = in none), ``<parent>_overlap`` (fraction of
     the child inside it) and ``<parent>_overlap_voxels`` to the child's
     table, computing the child's table first if it has none.
+
+    With *max_distance_um*, a child touching no parent gets the **nearest**
+    one within that distance instead (a cilium beside its cell rather than
+    on it), and a ``<parent>_distance_um`` column: 0 when overlapping, the
+    gap for those assigned by distance, NaN for none within reach.
 
     Parameters
     ----------
@@ -621,8 +628,80 @@ def relate_tables(
         f"{parent}_overlap": frac,
         f"{parent}_overlap_voxels": vox,
     }
+    if max_distance_um is not None:
+        dist = np.where(pid != 0, 0.0, np.nan)
+        orphans = np.flatnonzero(pid == 0)
+        found = nearest_parents(
+            store,
+            child,
+            parent,
+            labels[orphans],
+            max_distance_um=float(max_distance_um),
+            n_workers=n_workers,
+        )
+        for i, lab in zip(orphans, labels[orphans].tolist()):
+            if lab in found:
+                pid[i], dist[i] = found[lab]
+        cols[f"{parent}_distance_um"] = dist
     add_columns(cpath, cols)
     return dict(matches)
+
+
+def nearest_parents(
+    store: Union[str, Path],
+    child: str,
+    parent: str,
+    labels: Sequence[int],
+    *,
+    max_distance_um: float,
+    n_workers: int | None = None,
+) -> dict[int, tuple[int, float]]:
+    """The nearest *parent* object to each of *labels* (objects of *child*),
+    within *max_distance_um*: ``{label: (parent_id, distance_um)}``.
+
+    Exact surface-to-surface distance in µm (anisotropic voxels included),
+    from the voxels around each object only: its bounding box grown by
+    the distance. Meant for the few objects touching no parent, not all.
+    """
+    from ._io import open_group_any
+    from .plugins.ome_zarr import read_pixel_size
+
+    cpath, ppath = _label_group(store, child), _label_group(store, parent)
+    cgroup = open_group_any(cpath)
+    carr, parr = _level0(cgroup), _level0(open_group_any(ppath))
+    axes = _spatial_axes(cgroup, carr.ndim)
+    size = read_pixel_size(cpath)
+    spacing = np.array([float(size.get(ax, 1.0)) for ax in axes])
+    margin = np.ceil(max_distance_um / spacing).astype(int)
+    table = zarr.open_group(f"{cpath}/{TABLE_GROUP}", mode="r")
+    all_labels = table["label"][...]
+    lo = np.stack([np.asarray(table[f"bbox_min_{ax}"][...]) for ax in axes], 1)
+    hi = np.stack([np.asarray(table[f"bbox_max_{ax}"][...]) for ax in axes], 1)
+    where = {int(v): i for i, v in enumerate(all_labels)}
+
+    def one(label: int):
+        i = where.get(int(label))
+        if i is None:
+            return None
+        a = np.maximum(lo[i] - margin, 0)
+        b = np.minimum(hi[i] + margin + 1, carr.shape)
+        sl = tuple(slice(int(x), int(y)) for x, y in zip(a, b))
+        mask = np.asarray(carr[sl]) == label
+        region = np.asarray(parr[sl])
+        if not region.any() or not mask.any():
+            return None
+        dist, idx = ndi.distance_transform_edt(
+            region == 0, sampling=spacing, return_indices=True
+        )
+        pos = np.argmin(np.where(mask, dist, np.inf))
+        d = float(dist.flat[pos])
+        if d > max_distance_um:
+            return None
+        nearest = tuple(ix.flat[pos] for ix in idx)
+        return int(label), (int(region[nearest]), d)
+
+    with ThreadPoolExecutor(max_workers=n_workers or cpu_allocation()) as ex:
+        return dict(r for r in ex.map(one, labels) if r is not None)
 
 
 def physical_cov(

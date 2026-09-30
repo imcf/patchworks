@@ -146,6 +146,34 @@ def test_relation_workbook_has_positions(store, tmp_path):
     assert "cilia_labels_apical" in cells[0]
 
 
+def test_nearest_parent_within_a_distance(store):
+    """A cilium beside its cell, not on it, gets the nearest cell -- with
+    the gap in micrometres, anisotropy included."""
+    import zarr
+
+    from patchworks._tables import compute_table, relate_tables
+
+    group = f"{store}/labels/cilia_labels"
+    arr = zarr.open_group(group, mode="r+")["0"]
+    lab = arr[...]
+    lab[20, 16, 3 * 32 + 1] = 6  # 3 voxels (0.75 um) left of cell 4 (x 100)
+    arr[...] = lab
+    compute_table(store, "cilia_labels")
+    relate_tables(store, "cilia_labels", "cyto_labels", max_distance_um=1.0)
+    rv = Review(store)
+    cilia = rv.effective("cilia_labels")
+    assert cilia.loc[6, "cyto_labels_id"] == 4
+    assert cilia.loc[6, "cyto_labels_distance_um"] == pytest.approx(0.75)
+    assert cilia.loc[1, "cyto_labels_distance_um"] == 0
+    reasons = {f.label: f.reasons for f in rv.flags("cilia_labels")}
+    assert reasons[6] == ["outside cyto #4, 0.75 µm away"]
+
+    relate_tables(store, "cilia_labels", "cyto_labels", max_distance_um=0.5)
+    cilia = Review(store).effective("cilia_labels")
+    assert cilia.loc[6, "cyto_labels_id"] == 0  # too far now
+    assert np.isnan(cilia.loc[6, "cyto_labels_distance_um"])
+
+
 def test_tables_from_before_moments_classify_as_unknown(store, caplog):
     """A table written before the spread columns existed must not break the
     review: positions are unknown, with a message saying what to do."""

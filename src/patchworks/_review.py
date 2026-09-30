@@ -742,8 +742,32 @@ class Review:
             limit = self.min_overlap(name, p)
             nice = _nice(p)
             orphan = pid == 0
-            rule_(orphan, [f"not inside any {nice}"] * int(orphan.sum()), 3.0)
-            weak = (pid != 0) & (ov < limit)
+            by_distance = f"{p}_distance_um" in eff
+            rule_(
+                orphan,
+                [
+                    f"not inside or near any {nice}"
+                    if by_distance
+                    else f"not inside any {nice}"
+                ]
+                * int(orphan.sum()),
+                3.0,
+            )
+            gap = (
+                eff[f"{p}_distance_um"].to_numpy(dtype=float)
+                if by_distance
+                else np.zeros(len(eff))
+            )
+            near = (pid != 0) & (gap > 0)
+            rule_(
+                near,
+                (
+                    f"outside {nice} #{q}, {g:.2g} µm away"
+                    for q, g in zip(pid[near], gap[near])
+                ),
+                1.5,
+            )
+            weak = (pid != 0) & (ov < limit) & ~(gap > 0)
             rule_(
                 weak,
                 (
