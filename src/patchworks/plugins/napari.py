@@ -229,20 +229,23 @@ def _label_hint(path: Union[str, Path]) -> dict[str, Any]:
     Returns
     -------
     dict
-        ``{"n_objects": int, "sequential_labels": True}`` if the group has
-        the hint, else ``{}`` — safe to splat straight into
-        ``metadata=``/merge into a bigger dict either way.
+        ``{"patchworks_labels": path}`` (the label group, where its object
+        table lives), plus ``{"n_objects": int, "sequential_labels": True}``
+        if the group has the hint; ``{}`` if the group cannot be opened —
+        safe to splat straight into ``metadata=``/merge into a bigger dict
+        either way.
     """
     try:
         attrs = open_group_any(path).attrs
     except Exception:
         return {}
-    if "n_objects" not in attrs:
-        return {}
-    return {
-        "n_objects": attrs["n_objects"],
-        "sequential_labels": attrs.get("sequential_labels", False),
-    }
+    # Where the labels live, so a plugin can find their object table
+    # (napari-chunked-regionprops loads it instead of re-measuring).
+    hint: dict[str, Any] = {"patchworks_labels": str(path).rstrip("/")}
+    if "n_objects" in attrs:
+        hint["n_objects"] = attrs["n_objects"]
+        hint["sequential_labels"] = attrs.get("sequential_labels", False)
+    return hint
 
 
 def _inner_label_names(store: Union[str, Path]) -> list[str]:
