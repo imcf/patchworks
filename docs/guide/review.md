@@ -29,6 +29,8 @@ Each object in the queue shows why it is there:
 | *0 nuclei (expected 1)* | a parent holds an unexpected number of children | a cell split in two, two cells merged, a missed nucleus |
 | *meets #412 exactly at a tile seam (z)* | two objects touch face to face on a tile boundary | one object the tiling cut in two, or two neighbours; press J to join them |
 | *unusually large (6.2x the median)* | the size is far from the rest (robust z-score > 3.5) | two objects merged, or a fragment |
+| *outside cell #12, 0.8 µm away* | touches no parent, but one is within `max_distance_um` | a cilium beside its cell (worth a look, lower priority) |
+| *position unclear: its cell has no nucleus to orient it* | a position rule needs the nucleus, and the cell has none | a missed nucleus, or a cell cut by the image edge |
 
 The most suspicious objects come first. "Children" and "parents" come from
 the relations of a multi run (e.g. `cilia_labels → cyto_labels`); the size
@@ -68,17 +70,105 @@ continues where you stopped, and the queue leaves out what has been
 decided. Corrections chain as you would expect. For example, joining two
 halves of a cell moves the cilia of both halves to the joined cell.
 
-Two options in the panel help with the view:
+## Seeing what belongs to what
+
+Outside the queue, you can look at any object:
+
+- **Click any object** in the image: the panel switches to it and shows it
+  with its parent (outlined) and its children. Click a cell to see its
+  nuclei and cilia, a cilium to see its cell. A click reads the image at
+  full resolution, and a thin object is hit even a couple of voxels off,
+  so cilia are easy to pick.
+- **Go to #**: type an object's id and press Enter.
+- **Hover** over any object: napari's status bar shows its parent, its
+  number of children, its position and its review status.
+
+Options in the panel change the view:
 
 - **Show only this object and its relatives** (on by default) hides
-  everything but the object, its parent (outlined) and its children.
-  Untick it to see the neighbourhood.
+  everything else. Untick it to see the neighbourhood.
 - **Colour these objects by their parent** adds a layer where every child
   has its parent's colour: all cilia of one cell share a colour, so an
   assignment error stands out as a different colour.
+- **Colour these objects by position** colours each cilium by its class:
+  apical, basal, lateral or central.
+- **Side view** shows z against x, with z up, through the object. Apical
+  and basal are then seen at a glance.
 
 Orange rings mark the flagged objects still open. They stay visible in 3D,
 where napari's coarse 3D level hides small objects.
+
+## Where a cilium sits: apical, basal, lateral, central
+
+![A cilium classified as apical, in side view](../assets/review_position.png)
+
+*Side view, coloured by position: an apical cilium (green) standing out of
+the top of its cell, the nucleus at the bottom; next door, a basal cilium
+(blue).*
+
+Each cilium is classified by the cell surface its **base** is nearest to:
+
+| Class | The base is nearest to |
+| --- | --- |
+| `apical` | the top of the cell |
+| `basal` | the bottom of the cell |
+| `lateral` | the side wall |
+| `central` | none of them: deeper than half-way from every surface |
+
+"Top" needs an apical direction per cell. It can be a fixed direction:
+`+z` if apical is up the stack, as for a monolayer imaged from below. Or it
+can point **away from the nucleus**, for epithelia whose nuclei sit
+basally; then each cell gets its own axis, whatever its tilt. The base of
+a cilium is its end nearer the cell's centre, since a cilium grows out
+from its base.
+
+```yaml
+# multi.yaml
+review:
+  position:
+    cilia_labels:
+      parent: cyto_labels
+      apical: nuclei_labels     # away from the nucleus; or "+z", "-z", ...
+      central_depth: 0.5        # optional
+```
+
+Or when opening the review:
+`patchworks review image.zarr --position cilia_labels:cyto_labels=nuclei_labels`.
+
+The corrected tables get the class (`position`), where the base sits
+(`position_axial`: -1 basal … +1 apical; `position_radial`: 0 on the axis …
+1 at the side) and the cilium's angle to the apical axis
+(`angle_to_axis_deg`: 0 along it, 90 across it). Each cell gets its counts
+per class (`n_cilia_labels_apical`, …), as does the relation workbook.
+
+The cell's shape comes from its moments, i.e. an equivalent cylinder, so
+this is a classification, not a surface distance. It is reliable for
+columnar and cuboidal cells, and less so for very irregular ones. Check it
+the usual way: **Colour these objects by position** plus **Side view**. If
+one is wrong, the **Position is:** buttons correct it. A correction counts
+as a classification fix, not a segmentation error, so it does not enter
+the error rate. A cell without a nucleus cannot be oriented; its cilia are
+`unknown` and flagged.
+
+## Cilia next to their cell, not on it
+
+A cilium can lie against its cell without overlapping it, and would then
+count as belonging to no cell. With `max_distance_um` on a relation, such
+an object gets the **nearest** cell within that distance. The distance is
+exact, in µm, with anisotropic voxels taken into account, and is recorded
+in `cyto_labels_distance_um`. These objects are flagged with a lower
+priority ("outside cell #12, 0.8 µm away").
+
+```yaml
+relations:
+- a: cilia_labels
+  b: cyto_labels
+  output: cilia_to_cell.xlsx
+  max_distance_um: 1.0
+```
+
+For an existing store:
+`patchworks tables image.zarr --relate cilia_labels:cyto_labels --max-distance 1`.
 
 ## How good is the segmentation?
 
@@ -116,9 +206,13 @@ estimate without opening napari.
 ## Where the tables come from
 
 Every label image the workflow writes gets an **object table**: one row per
-object with its size (`area_voxels`, `area_um3`), centroid, bounding box
-and, for a multi run, the parent it sits in (`cyto_labels_id`,
-`cyto_labels_overlap`). The table lives inside the label group:
+object with its size (`area_voxels`, `area_um3`), centroid, bounding box,
+its spread (`cov_*`, the second moments) and, for a multi run, the parent
+it sits in (`cyto_labels_id`, `cyto_labels_overlap`). The corrected view
+adds each object's shape from its spread: `length_um` (for a straight rod
+the true length; shorter for a curved one), `elongation` (1 round, large
+rod-like) and its main axis (`axis_z`, `axis_y`, `axis_x`). The table lives
+inside the label group:
 
 ```text
 image.zarr/labels/cilia_labels/

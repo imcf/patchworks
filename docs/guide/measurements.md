@@ -6,8 +6,10 @@ RAM — fine for one tile, not for a hundred-thousand-object OME-ZARR.
 ## Already measured: the object tables
 
 The workflow measures every object once, right after the merge: size
-(`area_voxels`, `area_um3`), centroid and bounding box, plus mean/std
-intensity for the channels listed in `table_channels`. The table is stored
+(`area_voxels`, `area_um3`), centroid, bounding box and spread (second
+moments, from which the corrected view derives `length_um`, `elongation`
+and the main axis), plus mean/std intensity for the channels listed in
+`table_channels`. The table is stored
 with the labels (`image.zarr/labels/<name>/table`):
 
 ```python

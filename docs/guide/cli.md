@@ -30,7 +30,10 @@ patchworks review scan.zarr --expect cells:nuclei=1
 `patchworks review` without a window: `--summary` (counts and error
 estimate), `--export DIR --format csv|xlsx|parquet` (corrected tables),
 `--workbooks DIR` (relation workbooks), `--write-labels NAME` (a label image
-with the corrections applied). See
+with the corrections applied). `--position CHILD:PARENT=APICAL` classifies
+children as apical/basal/lateral/central (APICAL: `+z`, or a label image to
+point away from, such as the nuclei); `patchworks tables --max-distance UM`
+gives a child touching no parent the nearest one. See
 [Reviewing and correcting results](review.md).
 
 ## Segmentation methods

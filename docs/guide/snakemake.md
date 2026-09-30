@@ -952,8 +952,12 @@ needs `pip install "patchworks[dog]"` in the segment jobs' environment.
 
 A `review:` block in `multi.yaml` states what `patchworks review` should
 flag: how many of each child a parent should hold, and how far inside it a
-child must be. It is checked before anything runs, and stored with the
-results. See [Reviewing](review.md#what-gets-flagged).
+child must be. It can also classify children by where they sit in their
+parent: apical, basal, lateral or central, see
+[Where a cilium sits](review.md#where-a-cilium-sits-apical-basal-lateral-central).
+A relation with `max_distance_um` gives a child touching no parent the
+nearest one. All of it is checked before anything runs, and stored with
+the results. See [Reviewing](review.md#what-gets-flagged).
 
 A sheet that would exceed Excel's 1,048,576 rows is written as a csv file
 instead (`<stem>_<name>.csv`), and the log says so.
