@@ -38,7 +38,14 @@ cudadecon = ">=0.7.0,<0.8"
 # "dog" -> pycudadecon, for config_cilia.yaml's deconvolution step (part of
 # the shipped config/multi.yaml example).
 [pypi-dependencies]
-patchworks = { version = "*", extras = ["workflow", "cellpose", "imaris", "bioio", "dog"] }
+# >=3.1.0, not "*": the scripts in this workflow are the repository's own,
+# while patchworks comes from PyPI -- and pixi keeps a locked version for as
+# long as it satisfies this line. The merge step writes object tables and
+# the relate step writes workbooks through the review, both new in 3.1.0;
+# with an older lock, a run would segment for hours and then fail at the
+# merge on an ImportError. Raise this floor whenever the scripts start
+# using something newer: that is what upgrades existing environments.
+patchworks = { version = ">=3.1.0", extras = ["workflow", "cellpose", "imaris", "bioio", "dog"] }
 
 # Cellpose-version-pinned features for explicit environments below.
 [feature.cp3.pypi-dependencies]
@@ -84,14 +91,15 @@ cupy-cuda13x = "*"
 [feature.viewer.dependencies]
 python = "3.12.*"
 
-# >=2.8.0, not "*": reading a store straight out of a `pixi run zip` bundle
-# landed there. An older patchworks installs happily and then fails to open
-# a .zip with a GroupNotFoundError that says nothing about the version.
+# >=3.1.0, not "*": opening a `pixi run zip` bundle needs >=3.0.0 (2.8.0
+# sent the bundle to bioio and failed with "reading .zip requires bioio"),
+# and 3.1.0 adds the object tables and `patchworks review`.
 [feature.viewer.pypi-dependencies]
-patchworks = { version = ">=2.8.0", extras = ["napari"] }
+patchworks = { version = ">=3.1.0", extras = ["napari"] }
 
 [feature.viewer.tasks]
 napari = "python scripts/view.py"
+review = "patchworks review"
 
 # Named environments: pixi install -e cellpose3 / -e cellpose4 / -e viewer
 #                     pixi install -e cuda12 / -e cuda13   (adds cupy)

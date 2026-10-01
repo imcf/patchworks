@@ -1173,12 +1173,15 @@ def test_viewer_environment_is_lean():
 
 
 def test_viewer_requires_a_patchworks_that_reads_bundles():
-    """An older patchworks opens a .zip with an error about groups, not age."""
+    """An older patchworks fails to open a .zip, with an error about bioio
+    or groups, not about its age: 2.8.0 still sent a bundle to bioio
+    ("reading .zip requires bioio"). Opening one needs >= 3.0.0."""
     import tomllib
 
     pixi = tomllib.loads((_workflow_dir() / "pixi.toml").read_text())
     spec = pixi["feature"]["viewer"]["pypi-dependencies"]["patchworks"]
-    assert spec["version"].startswith(">=2.8"), spec
+    floor = tuple(int(x) for x in spec["version"].removeprefix(">=").split("."))
+    assert spec["version"].startswith(">=") and floor >= (3, 0, 0), spec
     assert "napari" in spec["extras"]
 
 
@@ -1203,7 +1206,10 @@ def test_viewer_workspace_solves_everywhere():
     assert set(pixi["pypi-dependencies"]) == {"patchworks"}
     spec = pixi["pypi-dependencies"]["patchworks"]
     assert spec["extras"] == ["napari"]
-    assert spec["version"].startswith(">=2.8")
+    floor = tuple(int(x) for x in spec["version"].removeprefix(">=").split("."))
+    assert spec["version"].startswith(">=") and floor >= (3, 0, 0), spec[
+        "version"
+    ]
 
     # It reuses the workflow's viewer script rather than duplicating it.
     task = pixi["tasks"]["napari"]
@@ -1344,3 +1350,25 @@ def test_position_rules_and_distances_are_checked(capsys):
     err = capsys.readouterr().err
     assert "needs the relation cilia_labels -> nuclei_labels" in err
     assert "max_distance_um must be a positive number" in err
+
+
+def test_pixi_manifests_require_the_patchworks_the_scripts_use():
+    """pixi keeps a locked patchworks for as long as it satisfies the
+    manifest, so a floor below what the repository's scripts use leaves old
+    environments broken: 2.8.0 in the viewer failed to open a .zip bundle,
+    and the workflow scripts write object tables (3.1.0)."""
+    import tomllib
+
+    wf = _workflow_dir()
+    main = tomllib.loads((wf / "pixi.toml").read_text())
+    viewer = tomllib.loads((wf / "viewer" / "pixi.toml").read_text())
+    pins = [
+        main["pypi-dependencies"]["patchworks"]["version"],
+        main["feature"]["viewer"]["pypi-dependencies"]["patchworks"]["version"],
+        viewer["pypi-dependencies"]["patchworks"]["version"],
+    ]
+    for pin in pins:
+        assert pin.startswith(">="), pin
+        floor = tuple(int(x) for x in pin[2:].split("."))
+        assert floor >= (3, 1, 0), pin
+    assert "review" in viewer["tasks"]

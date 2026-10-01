@@ -5,6 +5,7 @@
 #   pixi install
 #   pixi run napari /path/to/image.zarr
 #   pixi run napari /path/to/image.zarr.zip      # a `pixi run zip` bundle
+#   pixi run review /path/to/image.zarr          # check and correct objects
 #
 # Why a second manifest rather than an environment in the first one: the
 # workflow manifest needs cudadecon and the GPU segmentation stack, which
@@ -24,13 +25,20 @@ platforms = ["linux-64", "win-64", "osx-arm64", "osx-64"]
 [dependencies]
 python = "3.12.*"
 
-# >=2.8.0: reading a store straight out of a .zip bundle landed there. An
-# older patchworks installs happily and then fails to open one with a
-# GroupNotFoundError that says nothing about the version.
+# >=3.1.0: opening a .zip bundle needs >=3.0.0 -- 2.8.0 read stores out of
+# a bundle but did not recognise the bundle itself as one, sent it to bioio
+# and failed with "reading .zip requires bioio". 3.1.0 adds the object
+# tables and `patchworks review`. Raising this floor is also what makes an
+# existing environment upgrade: pixi keeps whatever its lock file holds for
+# as long as that still satisfies the manifest.
 [pypi-dependencies]
-patchworks = { version = ">=2.8.0", extras = ["napari"] }
+patchworks = { version = ">=3.1.0", extras = ["napari"] }
 
 [tasks]
 # Tasks run with the manifest's directory as cwd, so this reaches the
 # viewer script shared with the workflow rather than duplicating it.
 napari = "python ../scripts/view.py"
+# Look at the likely mistakes one by one and fix them (see the docs'
+# "Reviewing and correcting results"). The store must be writable: unzip a
+# bundle first, since decisions are saved in it.
+review = "patchworks review"
