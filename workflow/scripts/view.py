@@ -18,8 +18,20 @@ VNC session. It cannot open over a plain headless SSH session.
 from __future__ import annotations
 
 import argparse
+import os
+import tempfile
 
-from patchworks.plugins.napari import view_in_napari
+# Before anything imports numba (napari does): numba caches compiled code
+# next to its source, and inside a pixi environment on a network share
+# that path passes Windows' 260-character limit -- every labels layer then
+# fails with a FileNotFoundError on a .nbc.tmp file. Set here, not only in
+# patchworks, so a pulled checkout fixes it whatever patchworks is installed.
+os.environ.setdefault(
+    "NUMBA_CACHE_DIR",
+    os.path.join(tempfile.gettempdir(), "patchworks-numba-cache"),
+)
+
+from patchworks.plugins.napari import view_in_napari  # noqa: E402
 
 
 def main() -> None:
