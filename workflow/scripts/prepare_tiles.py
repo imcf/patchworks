@@ -24,9 +24,11 @@ from patchworks import (
 
 from _pw import (
     halo_path,
+    check_seed_labels,
     open_image,
     stage_path,
     start_log,
+    tile_channels,
     validate_config,
 )
 
@@ -45,6 +47,8 @@ image = open_image(work_dir, cfg["channel"], cfg["level"])
 # Fail here, on a cheap CPU job, rather than in the first GPU job hours after
 # convert and prepare have already run.
 validate_config(cfg)
+# The seeds' labels must exist by now (run_multi segments them first).
+check_seed_labels(work_dir, cfg)
 
 method = cfg.get("method", "cellpose")
 ts = cfg.get("tile_shape", "auto")
@@ -57,7 +61,7 @@ if ts == "auto":
     # `image` is single-channel here (the geometry is spatial), but segment
     # reads nuclei_channel alongside it, so a tile costs twice the bytes.
     # Without this the sizer would hand the GPU a tile it cannot hold.
-    n_channels = 2 if cfg.get("nuclei_channel") is not None else 1
+    n_channels = tile_channels(cfg)
     if method == "cellpose":
         cp = cfg["cellpose"]
         # The same anisotropy segment will derive (or was given). Cellpose

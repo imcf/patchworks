@@ -220,6 +220,7 @@ _SETTINGS = (
     "input",
     "channel",
     "nuclei_channel",
+    "seed_labels",
     "level",
     "method",
     "cellpose",

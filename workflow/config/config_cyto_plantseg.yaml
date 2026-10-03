@@ -1,6 +1,6 @@
 # Example segmentation config: cells from a membrane stain, with PlantSeg's
-# boundary U-Net flooded from the nuclei -- one cell per nucleus. See
-# docs/guide/membrane_cells.md. Used by config/multi_plantseg.yaml.
+# boundary U-Net flooded from the nuclei Cellpose found -- one cell per
+# nucleus. See docs/guide/membrane_cells.md. Used by config/multi_plantseg.yaml.
 #
 # Needs the plantseg environment (PlantSeg is on conda-forge only):
 #
@@ -10,9 +10,16 @@
 # Only what differs from config/common.yaml, as for the other configs.
 
 channel: 0 # membrane channel
-# Stacked onto each tile as [membrane, nuclei]: the nuclei are the seeds.
-# Only this step reads it, so the labels stay comparable with the nuclei run.
-nuclei_channel: 1
+
+# Grow the cells from the objects of this label image: each tile carries
+# them next to the membrane, global ids and all. run_multi segments
+# nuclei_labels first and starts this config once it has finished; run on
+# its own, the labels must already be in image.zarr. Both must be segmented
+# at the same `level` (run_multi enforces it).
+seed_labels: "nuclei_labels"
+# Alternatively, find the nuclei in an intensity channel instead (Otsu per
+# tile, nuclei_* kwargs below), independently of any nuclei segmentation:
+# nuclei_channel: 1  # and drop seed_labels
 
 # The halo must hold a whole cell: a cell cut by the tile edge has no seed
 # in the tile next door. [z, y, x], like the other configs.
@@ -28,15 +35,10 @@ custom:
     # to the voxel size it was trained at (from the image's calibration).
     # generic_light_sheet_3D_unet for light-sheet data.
     model: "generic_confocal_3D_unet"
-    # The U-Net's boundaries flooded from the nuclei. Alternatives:
-    # "lifted_multicut" (also uses the nuclei), or "gasp" (no nuclei).
+    # The U-Net's boundaries flooded from the nuclei. "lifted_multicut"
+    # also takes them; "gasp" does not use nuclei at all.
     segmentation: "nuclei_watershed"
-    # Where the nuclei are, in the nuclear channel: Otsu per tile, holes
-    # filled, specks below nuclei_min_size voxels dropped. Set
-    # nuclei_threshold (an intensity) if Otsu misses dim nuclei or joins
-    # touching ones -- two nuclei as one seed give one cell for two.
-    nuclei_min_size: 200
-    # nuclei_threshold: 800
+    # (seeds: "labels" is set by the workflow because of seed_labels.)
     # A boundary U-Net sees cells everywhere: keep the tissue only.
     foreground: "otsu"
     # max_radius_um: 15 # and/or: no further than this from the nucleus

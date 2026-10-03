@@ -1385,3 +1385,80 @@ def test_pixi_manifests_require_the_patchworks_the_scripts_use():
         floor = tuple(int(x) for x in pin[2:].split("."))
         assert floor >= (3, 1, 0), pin
     assert "review" in viewer["tasks"]
+
+
+class _FakeProc:
+    def __init__(self, log, name, rc, steps=2):
+        self.log, self.name, self.rc, self.steps = log, name, rc, steps
+        self.returncode = None
+        log.append(("start", name))
+
+    def poll(self):
+        self.steps -= 1
+        if self.steps <= 0 and self.returncode is None:
+            self.returncode = self.rc
+            self.log.append(("end", self.name))
+        return self.returncode
+
+
+def test_seeded_config_waits_for_the_labels_it_grows_from():
+    from run_multi import run_after, seed_dependencies
+
+    cfgs = [
+        {"label_name": "cyto_labels", "seed_labels": "nuclei_labels"},
+        {"label_name": "nuclei_labels"},
+        {"label_name": "cilia_labels"},
+        {"label_name": "old_cells", "seed_labels": "from_an_earlier_run"},
+    ]
+    deps = seed_dependencies(cfgs)
+    assert deps == {0: 1}
+    log = []
+    names = ["cyto", "nuclei", "cilia", "old"]
+    status = run_after(
+        names, deps, lambda i: _FakeProc(log, names[i], 0), poll_seconds=0
+    )
+    assert status == [(n, "ok") for n in names]
+    # Everything independent starts together; cyto only after nuclei ended
+    assert log[:3] == [
+        ("start", "nuclei"),
+        ("start", "cilia"),
+        ("start", "old"),
+    ]
+    assert log.index(("start", "cyto")) > log.index(("end", "nuclei"))
+
+
+def test_a_failed_seed_config_skips_its_dependent_only():
+    from run_multi import run_after
+
+    log = []
+    names = ["cyto", "nuclei", "cilia"]
+    rcs = {"nuclei": 1}
+    status = run_after(
+        names,
+        {0: 1},
+        lambda i: _FakeProc(log, names[i], rcs.get(names[i], 0)),
+        poll_seconds=0,
+    )
+    assert status == [
+        ("cyto", "skipped (nuclei failed)"),
+        ("nuclei", "FAILED"),
+        ("cilia", "ok"),
+    ]
+    assert ("start", "cyto") not in log
+
+
+def test_configs_seeding_each_other_are_refused(tmp_path, capsys):
+    base = {
+        "work_dir": str(tmp_path / "w"),
+        "tile_shape": [16, 64, 64],
+        "level": 0,
+    }
+    cfgs = [
+        {**base, "label_name": "a", "seed_labels": "b"},
+        {**base, "label_name": "b", "seed_labels": "a"},
+    ]
+    with pytest.raises(SystemExit):
+        _validate_configs([Path("a.yaml"), Path("b.yaml")], cfgs)
+    assert "from each other" in capsys.readouterr().err
+    del cfgs[1]["seed_labels"]
+    assert _validate_configs([Path("a.yaml"), Path("b.yaml")], cfgs)

@@ -79,6 +79,9 @@ cellpose:
 # stain with nuclei_channel set:
 #   module: "patchworks.plugins.watershed"   # one cell per nucleus
 #   kwargs: {nuclei_min_size: 200, foreground: "otsu"}
+# or grow them from a label image already in the store (e.g. Cellpose's
+# nuclei) instead of nuclei_channel; run_multi segments it first:
+# seed_labels: "nuclei_labels"
 # or PlantSeg (pixi install -e plantseg; run from that environment):
 #   module: "patchworks.plugins.plantseg"
 #   kwargs: {model: "generic_confocal_3D_unet", segmentation: "gasp"}

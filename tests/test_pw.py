@@ -318,3 +318,105 @@ def test_custom_plugins_validate_through_their_factories():
                     "custom": {"module": module, "kwargs": {"bogus": 1}},
                 }
             )
+
+
+def _seeded_store(tmp_path):
+    """image.zarr with a membrane-like channel 0 and a nuclei label image."""
+    from patchworks.plugins.ome_zarr import to_ome_zarr, write_labels
+
+    img = np.zeros((2, 4, 32, 32), "uint16")
+    img[0, :, 15:17, :] = 500  # a wall across y = 16
+    store = to_ome_zarr(img, tmp_path / "image.zarr", axes="czyx", n_levels=2)
+    nuclei = np.zeros((4, 32, 32), "uint32")
+    nuclei[1:3, 5:9, 10:14] = 70_001
+    nuclei[1:3, 22:26, 10:14] = 70_002
+    write_labels(store, nuclei, name="nuclei_labels", progress=False)
+    return nuclei
+
+
+def test_open_image_stacks_the_seed_labels(tmp_path):
+    from _pw import check_seed_labels, open_image
+
+    nuclei = _seeded_store(tmp_path)
+    arr = open_image(tmp_path, 0, 0, seed_labels="nuclei_labels")
+    assert arr.shape == (2, 4, 32, 32)
+    np.testing.assert_array_equal(np.asarray(arr[1]), nuclei)  # ids exact
+    assert np.asarray(arr[0])[0, 16, 0] == 500
+    check_seed_labels(
+        tmp_path, {"seed_labels": "nuclei_labels", "channel": 0, "level": 0}
+    )
+
+    import pytest
+
+    with pytest.raises(ValueError, match="does not exist"):
+        check_seed_labels(
+            tmp_path, {"seed_labels": "cells", "channel": 0, "level": 0}
+        )
+    with pytest.raises(ValueError, match="same level"):
+        open_image(tmp_path, 0, 1, seed_labels="nuclei_labels")
+    with pytest.raises(ValueError, match="set one"):
+        open_image(
+            tmp_path, 0, 0, nuclei_channel=1, seed_labels="nuclei_labels"
+        )
+
+
+def test_seed_labels_grow_one_cell_per_given_nucleus(tmp_path):
+    from _pw import build_fn, open_image
+
+    nuclei = _seeded_store(tmp_path)
+    cfg = {
+        "method": "custom",
+        "work_dir": str(tmp_path),
+        "seed_labels": "nuclei_labels",
+        "custom": {
+            "module": "patchworks.plugins.watershed",
+            "kwargs": {"foreground": None},
+        },
+    }
+    fn = build_fn(cfg)
+    assert fn.keywords["seeds"] == "labels"
+    cells = fn(
+        np.asarray(open_image(tmp_path, 0, 0, seed_labels="nuclei_labels"))
+    )
+    # The wall at y = 16 parts the two cells, one per nucleus
+    assert len(np.unique(cells[cells > 0])) == 2
+    assert cells[2, 7, 12] != cells[2, 24, 12]
+    assert (cells[:, :15] == cells[2, 7, 12]).all()
+    assert nuclei.max() > cells.max()  # renumbered per tile, merged later
+
+
+def test_validate_config_checks_seed_labels():
+    import pytest
+    from _pw import validate_config
+
+    ok = {
+        "method": "custom",
+        "label_name": "cyto_labels",
+        "seed_labels": "nuclei_labels",
+        "custom": {"module": "patchworks.plugins.watershed"},
+    }
+    validate_config(ok)
+    cases = {
+        "own label_name": {**ok, "seed_labels": "cyto_labels"},
+        "set one": {**ok, "nuclei_channel": 1},
+        'needs method: "custom"': {
+            **ok,
+            "method": "cellpose",
+            "cellpose": {"model": "cyto3"},
+        },
+        "takes no `seeds`": {
+            **ok,
+            "custom": {"module": "patchworks.plugins.dog"},
+        },
+        "custom.kwargs.seeds": {
+            **ok,
+            "custom": {
+                "module": "patchworks.plugins.watershed",
+                "kwargs": {"seeds": "channel"},
+            },
+        },
+        "name of a label image": {**ok, "seed_labels": 3},
+    }
+    for message, cfg in cases.items():
+        with pytest.raises(ValueError, match=message):
+            validate_config(cfg)

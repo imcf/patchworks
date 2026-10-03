@@ -139,7 +139,7 @@ def test_options_checked_before_any_tile(fake_plantseg):
         plantseg.plantseg_fn(segmentation="watershed")
     with pytest.raises(ValueError, match="voxel_size"):
         plantseg.plantseg_fn(segmentation="nuclei_watershed", max_radius_um=10)
-    with pytest.raises(ValueError, match="nuclear channel"):
+    with pytest.raises(ValueError, match="seed_labels"):
         plantseg.segment(epithelium()[0][0], segmentation="lifted_multicut")
     assert plantseg.available_models() == ["generic_confocal_3D_unet"]
     plantseg.fetch_model("generic_confocal_3D_unet")
@@ -154,3 +154,22 @@ def test_actionable_error_without_plantseg(monkeypatch):
     with pytest.raises(ImportError, match="conda-forge"):
         plantseg.plantseg_fn()
     assert plantseg.available_models() == []
+
+
+def test_nuclei_watershed_from_given_labels(fake_plantseg):
+    from patchworks.plugins.plantseg import segment
+
+    tile, truth = epithelium()
+    labels = np.zeros(tile.shape[1:], "uint32")
+    for i, (y, x) in enumerate(((10, 10), (10, 30), (30, 10), (30, 30))):
+        labels[2:6, y - 3 : y + 3, x - 3 : x + 3] = 500 + i
+    out = segment(
+        np.stack([tile[0].astype("uint32"), labels]),
+        segmentation="nuclei_watershed",
+        seeds="labels",
+        rescale=False,
+        device="cpu",
+    )
+    assert len(np.unique(out[out > 0])) == 4
+    with pytest.raises(ValueError, match="would ignore them"):
+        segment(np.stack([tile[0], labels]), seeds="labels")

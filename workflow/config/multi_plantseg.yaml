@@ -1,5 +1,7 @@
-# Nuclei with Cellpose, cells with PlantSeg flooded from the nuclei, related
-# to each other -- one command. See docs/guide/membrane_cells.md.
+# Nuclei with Cellpose, then cells with PlantSeg grown from exactly those
+# nuclei (seed_labels), related to each other -- one command. The cells'
+# config waits for the nuclei's to finish; anything else listed here runs
+# alongside. See docs/guide/membrane_cells.md.
 #
 #   cd workflow
 #   pixi install -e plantseg
@@ -15,15 +17,16 @@ common: config/common.yaml
 
 segmentations:
 - config/config_nuclei.yaml # Cellpose "nuclei" model on channel 1
-- config/config_cyto_plantseg.yaml # PlantSeg + nuclei seeds on channel 0
+- config/config_cyto_plantseg.yaml # PlantSeg on channel 0, seeded by nuclei_labels
 
 relations:
 - a: nuclei_labels
   b: cyto_labels
   output: nuclei_to_cyto.xlsx
 
-# One nucleus per cell is what the seeding promises: `patchworks review`
-# flags the cells where Cellpose's nuclei disagree (none, or two).
+# One nucleus per cell is what the seeding promises; `patchworks review`
+# flags any cell where that does not hold (a nucleus outside the tissue
+# mask, a cell dropped by min_volume).
 review:
   expect:
     cyto_labels:

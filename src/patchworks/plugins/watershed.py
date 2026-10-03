@@ -41,6 +41,9 @@ logger = logging.getLogger(__name__)
 
 #: Accepted ``foreground`` modes besides a number.
 FOREGROUND_MODES = (None, "otsu")
+#: Where the seeds come from: found in a nuclear intensity channel, or
+#: given as a label image (the workflow's ``seed_labels``).
+SEED_MODES = ("channel", "labels")
 
 
 def _sigma(sigma: Any, ndim: int, voxel_size: dict | None, units: str):
@@ -107,6 +110,50 @@ def nuclei_seeds(
     mask = smooth > threshold
     mask = ndi.binary_fill_holes(mask)
     return _drop_small(label(mask).astype("int32"), min_size)
+
+
+def seeds_from_labels(labels: np.ndarray) -> np.ndarray:
+    """A label image's objects as seeds, renumbered ``1..n`` (int32).
+
+    The labels arrive with their global ids -- possibly millions, and
+    promoted to the image's dtype when stacked with it -- so they are
+    renumbered for the tile; which seed is which does not matter here, only
+    that each object stays one seed.
+    """
+    labels = np.asarray(labels)
+    if labels.dtype.kind == "f":
+        labels = np.rint(labels)
+    ids, inverse = np.unique(labels.astype("int64"), return_inverse=True)
+    out = inverse.reshape(labels.shape).astype("int32")
+    if ids[0] != 0:
+        out += 1  # no background in this tile: every id shifts up one
+    return out
+
+
+def tile_seeds(
+    second: np.ndarray, cfg: dict[str, Any], ndim: int, units: str = "px"
+) -> np.ndarray:
+    """The seeds for one tile from its second channel, per ``cfg["seeds"]``:
+    the given labels, or nuclei found in the intensities."""
+    if cfg.get("seeds", "channel") == "labels":
+        return seeds_from_labels(second)
+    cal = cfg.get("voxel_size")
+    return nuclei_seeds(
+        second,
+        sigma=_sigma(cfg["nuclei_sigma"], ndim, cal, units),
+        threshold=cfg["nuclei_threshold"],
+        min_size=cfg["nuclei_min_size"],
+    )
+
+
+def missing_seeds_error(tile_shape) -> ValueError:
+    """The error for a tile carrying no second channel to seed from."""
+    return ValueError(
+        "seeding needs a second channel: set nuclei_channel (a nuclear "
+        "stain to find the nuclei in) or seed_labels (a label image, e.g. "
+        "Cellpose's nuclei) in the config -- the tile must be [membrane, "
+        f"nuclei] on its first axis; got a tile of shape {tuple(tile_shape)}"
+    )
 
 
 def foreground_mask(
@@ -228,6 +275,7 @@ def watershed_fn(
     compactness: float = 0.0,
     min_size: int = 0,
     sigma_units: str = "px",
+    seeds: str = "channel",
     voxel_size: dict[str, float] | None = None,
 ) -> Callable[[np.ndarray], np.ndarray]:
     """Return a nuclei-seeded watershed for ``tile_process``.
@@ -253,6 +301,12 @@ def watershed_fn(
         Drop cells smaller than this many voxels.
     sigma_units :
         ``"px"`` (default) or ``"um"`` for every sigma above.
+    seeds :
+        ``"channel"`` (default): the tile's second channel is a nuclear
+        stain, and the nuclei are found in it (the ``nuclei_*`` options).
+        ``"labels"``: it is a label image -- the workflow's ``seed_labels``,
+        e.g. Cellpose's nuclei -- and each of its objects seeds one cell, as
+        it is. The workflow sets this itself when ``seed_labels`` is used.
     voxel_size :
         ``{"z": .., "y": .., "x": ..}`` in micrometres.
 
@@ -277,6 +331,8 @@ def watershed_fn(
         raise ValueError(
             f'foreground must be "otsu", a number or null, got {foreground!r}'
         )
+    if seeds not in SEED_MODES:
+        raise ValueError(f"seeds must be one of {SEED_MODES}, got {seeds!r}")
     cfg = dict(
         boundary_sigma=boundary_sigma,
         nuclei_sigma=nuclei_sigma,
@@ -288,6 +344,7 @@ def watershed_fn(
         compactness=compactness,
         min_size=min_size,
         sigma_units=sigma_units,
+        seeds=seeds,
         voxel_size=voxel_size,
     )
     return partial(_run, cfg=cfg)
@@ -304,19 +361,10 @@ def _run(tile: np.ndarray, cfg: dict[str, Any]) -> np.ndarray:
 
     membrane, nuclei = split_channels(tile)
     if nuclei is None:
-        raise ValueError(
-            "the nuclei-seeded watershed needs a nuclear channel: set "
-            "nuclei_channel in the config (the tile must be [membrane, "
-            f"nuclei] on its first axis), got a tile of shape {tile.shape}"
-        )
+        raise missing_seeds_error(tile.shape)
     ndim = membrane.ndim
     units, cal = cfg["sigma_units"], cfg["voxel_size"]
-    seeds = nuclei_seeds(
-        nuclei,
-        sigma=_sigma(cfg["nuclei_sigma"], ndim, cal, units),
-        threshold=cfg["nuclei_threshold"],
-        min_size=cfg["nuclei_min_size"],
-    )
+    seeds = tile_seeds(nuclei, cfg, ndim, units)
     if not seeds.any():
         return np.zeros(membrane.shape, "int32")
     boundaries = ndi.gaussian_filter(

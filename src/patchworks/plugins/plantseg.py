@@ -50,12 +50,14 @@ import numpy as np
 
 from .._gpu import free_gpu_caches, retry_on_oom
 from .watershed import (
+    SEED_MODES,
     _sigma,
     foreground_mask,
     max_radius_px,
-    nuclei_seeds,
+    missing_seeds_error,
     seeded_watershed,
     split_channels,
+    tile_seeds,
 )
 
 logger = logging.getLogger(__name__)
@@ -173,6 +175,7 @@ def plantseg_fn(
     patch: tuple[int, ...] | None = None,
     device: str = "cuda",
     n_threads: int | None = None,
+    seeds: str = "channel",
     voxel_size: dict[str, float] | None = None,
 ) -> Callable[[np.ndarray], np.ndarray]:
     """Return a PlantSeg segmentation for ``tile_process``.
@@ -218,6 +221,11 @@ def plantseg_fn(
         ``"cuda"`` or ``"cpu"``.
     n_threads :
         Threads for the watershed and agglomeration.
+    seeds :
+        For the modes using nuclei: ``"channel"`` (default) finds them in
+        the tile's nuclear channel (``nuclei_*`` options); ``"labels"``
+        takes them as given, one object per seed -- the workflow's
+        ``seed_labels``, e.g. Cellpose's nuclei, which sets this itself.
     voxel_size :
         ``{"z": .., "y": .., "x": ..}`` in micrometres; the workflow passes
         the image's own calibration.
@@ -233,6 +241,13 @@ def plantseg_fn(
         )
     if model is None and model_id is None and config_path is None:
         raise ValueError("give a zoo model, a model_id or a config_path")
+    if seeds not in SEED_MODES:
+        raise ValueError(f"seeds must be one of {SEED_MODES}, got {seeds!r}")
+    if seeds == "labels" and segmentation not in NEEDS_NUCLEI:
+        raise ValueError(
+            f'seeds: "labels" (seed_labels) is only used by segmentation '
+            f'{NEEDS_NUCLEI}; "{segmentation}" would ignore them'
+        )
     if max_radius_um is not None and not voxel_size:
         raise ValueError(
             "max_radius_um needs voxel_size (the image calibration)"
@@ -279,6 +294,7 @@ def plantseg_fn(
         patch=tuple(patch) if patch else None,
         device=device,
         n_threads=n_threads,
+        seeds=seeds,
         voxel_size=voxel_size,
     )
     return partial(_run, cfg=cfg)
@@ -429,21 +445,12 @@ def _run(tile: np.ndarray, cfg: dict[str, Any]) -> np.ndarray:
     membrane, nuclei = split_channels(tile)
     mode = cfg["segmentation"]
     if mode in NEEDS_NUCLEI and nuclei is None:
-        raise ValueError(
-            f'segmentation "{mode}" needs the nuclear channel: set '
-            "nuclei_channel in the config (the tile must be [membrane, "
-            f"nuclei] on its first axis), got a tile of shape {tile.shape}"
-        )
+        raise missing_seeds_error(tile.shape)
     ndim = membrane.ndim
     cal = cfg["voxel_size"]
     seeds = None
     if mode in NEEDS_NUCLEI:
-        seeds = nuclei_seeds(
-            nuclei,
-            sigma=_sigma(cfg["nuclei_sigma"], ndim, cal, "px"),
-            threshold=cfg["nuclei_threshold"],
-            min_size=cfg["nuclei_min_size"],
-        )
+        seeds = tile_seeds(nuclei, cfg, ndim)
         if not seeds.any():
             return np.zeros(membrane.shape, "int32")
 

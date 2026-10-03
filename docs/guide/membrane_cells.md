@@ -43,7 +43,9 @@ custom:
 ```
 
 Two nuclei touching each other give one seed, so one cell for two: raise
-`nuclei_threshold` if that happens. Each tile's halo (`overlap`) must hold a
+`nuclei_threshold` if that happens -- or grow the cells from nuclei you have
+already segmented, with `seed_labels` instead of `nuclei_channel` (see
+[the example below](#how-seed_labels-works)). Each tile's halo (`overlap`) must hold a
 whole cell, as for any method.
 
 ## PlantSeg
@@ -87,23 +89,24 @@ setting for a pretrained U-Net; the prediction is resampled back.
 ## Example: Cellpose nuclei + PlantSeg cells in one run
 
 The workflow ships this pairing ready to edit: Cellpose segments the nuclei,
-PlantSeg the cells, flooded from the nuclei, and the two are related and
-checked against each other. Three files, next to `config/multi.yaml`:
+then PlantSeg grows the cells from **exactly those nuclei** -- one cell per
+nucleus Cellpose found -- and the two are related. Three files, next to
+`config/multi.yaml`:
 
 ```yaml
 # config/multi_plantseg.yaml
-common: config/common.yaml           # input, work_dir, tile_shape: shared
+common: config/common.yaml           # input, work_dir, tile_shape, level: shared
 
 segmentations:
 - config/config_nuclei.yaml          # Cellpose "nuclei" model on channel 1
-- config/config_cyto_plantseg.yaml   # PlantSeg + nuclei seeds on channel 0
+- config/config_cyto_plantseg.yaml   # PlantSeg on channel 0, seeded by nuclei_labels
 
 relations:
 - a: nuclei_labels
   b: cyto_labels
   output: nuclei_to_cyto.xlsx
 
-review:                              # flag cells with no nucleus, or two
+review:                              # a sanity check: one nucleus per cell
   expect:
     cyto_labels:
       nuclei_labels: 1
@@ -125,7 +128,7 @@ cellpose:
 ```yaml
 # config/config_cyto_plantseg.yaml
 channel: 0                  # membrane
-nuclei_channel: 1           # each tile becomes [membrane, nuclei]
+seed_labels: "nuclei_labels" # each tile becomes [membrane, nuclei labels]
 overlap: [4, 40, 40]        # the halo must hold a whole cell
 method: "custom"
 label_name: "cyto_labels"
@@ -135,8 +138,6 @@ custom:
   kwargs:
     model: "generic_confocal_3D_unet"   # generic_light_sheet_3D_unet for light-sheet
     segmentation: "nuclei_watershed"    # U-Net boundaries flooded from the nuclei
-    nuclei_min_size: 200                # voxels
-    # nuclei_threshold: 800             # if Otsu misses dim nuclei / joins touching ones
     foreground: "otsu"                  # keep the tissue only
     # max_radius_um: 15
 ```
@@ -151,25 +152,44 @@ pixi run -e plantseg multi-plantseg-slurm                      # submit
 ```
 
 The `plantseg` environment is the default one plus PlantSeg, so the
-Cellpose run comes from it too; both segmentations run at the same time, one
-GPU job per batch of tiles each. Afterwards, `nuclei_to_cyto.xlsx` gives
+Cellpose run comes from it too. Afterwards, `nuclei_to_cyto.xlsx` gives
 each nucleus its cell, and `pixi run -e viewer review <work_dir>/image.zarr`
-lists the cells that hold no nucleus or two.
+lists any cell not holding exactly one nucleus.
 
-!!! note "Two looks at the nuclei"
+### How `seed_labels` works
 
-    The cells' seeds are found in the nuclear channel by the plugin itself
-    (Otsu per tile), independently of the Cellpose nuclei. Where the two
-    disagree -- touching nuclei that Cellpose splits but the threshold
-    joins, a dim nucleus only Cellpose finds -- the review's `expect` rule
-    flags the cell. Many such flags mean `nuclei_threshold` or
-    `nuclei_min_size` want adjusting.
+- **Order.** `run_multi` starts the cells' config only once the config
+  producing `nuclei_labels` has finished; everything else listed (cilia,
+  say) runs alongside. If the nuclei fail, the cells are skipped, not run
+  without seeds. Two configs seeding each other are refused up front. A
+  dry run (`-n`) waits for nothing.
+- **Tiles.** The nuclei label image is stacked onto the membrane as each
+  tile's second channel, halo included, so neighbouring tiles see the same
+  nuclei and a cell crossing a seam is grown from the same nucleus on both
+  sides. Both runs must use the same `level`, which `run_multi` already
+  enforces; the plugin is told `seeds: "labels"` automatically.
+- **Seeds as given.** Two touching nuclei that Cellpose split stay two
+  cells; a dim nucleus Cellpose found still gets its cell. Cellpose's
+  mistakes carry over the same way: a nucleus split in two makes two
+  cells. Correcting the nuclei first (`patchworks review`, then
+  `--write-labels nuclei_labels` and `seed_labels: nuclei_labels_reviewed`)
+  gives the cells the corrected nuclei.
+- **On its own**, outside `run_multi`, the cells' config needs
+  `labels/nuclei_labels` already in `image.zarr`: `prepare` checks, and
+  stops with a message rather than segmenting without seeds.
+- **Re-segmenting the nuclei** does not re-run the cells by itself: delete
+  `<work_dir>/cyto_labels` and `image.zarr/labels/cyto_labels` to grow them
+  again from the new nuclei.
 
-Without PlantSeg, the same run works with the plain
+`nuclei_channel: 1` instead of `seed_labels` makes the plugin find the
+nuclei itself, in the nuclear stain (Otsu per tile, `nuclei_*` options),
+independently of Cellpose -- both segmentations then run at the same time.
+
+Without PlantSeg, the same works with the plain
 [nuclei-seeded watershed](#nuclei-seeded-watershed): set `module:
-"patchworks.plugins.watershed"` with only the `nuclei_*`, `foreground` and
-`max_radius_um` keys, and use the default environment (`pixi run multi-slurm`
-with this pair listed in `config/multi.yaml`).
+"patchworks.plugins.watershed"` with only the `foreground` and
+`max_radius_um` keys, and use the default environment (`pixi run
+multi-slurm` with this pair listed in `config/multi.yaml`).
 
 ## Cellpose: membrane only, in 3-D
 

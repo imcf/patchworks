@@ -88,3 +88,37 @@ def test_workflow_validates_kwargs_against_the_factory():
     import inspect
 
     assert "voxel_size" in inspect.signature(watershed_fn).parameters
+
+
+def test_seeds_given_as_labels_split_touching_nuclei():
+    """Two nuclei pressed together: a threshold finds one blob, so one cell;
+    given as labels (e.g. Cellpose's nuclei) they seed one cell each."""
+    tile, _ = epithelium()
+    membrane, nuclei = tile
+    # Remove the wall between the upper cells and push their nuclei together
+    membrane[:, :19, 19:21] = 30
+    nuclei[:] = 10
+    nuclei[2:6, 7:13, 14:20] = 150
+    nuclei[2:6, 7:13, 20:26] = 150
+    by_threshold = ws.segment(np.stack([membrane, nuclei]), nuclei_min_size=20)
+    upper = by_threshold[4, 3:17, 3:37]
+    assert len(np.unique(upper[upper > 0])) == 1  # merged
+
+    labels = np.zeros(nuclei.shape, "float64")  # promoted, as when stacked
+    labels[2:6, 7:13, 14:20] = 1_000_001  # global ids from the other run
+    labels[2:6, 7:13, 20:26] = 2_000_002
+    seeded = ws.segment(np.stack([membrane, labels]), seeds="labels")
+    upper = seeded[4, 3:17, 3:37]
+    assert len(np.unique(upper[upper > 0])) == 2
+
+
+def test_seeds_from_labels_renumbers_compactly():
+    lab = np.array([[0, 7, 7], [900, 0, 900]])
+    np.testing.assert_array_equal(
+        ws.seeds_from_labels(lab), [[0, 1, 1], [2, 0, 2]]
+    )
+    np.testing.assert_array_equal(
+        ws.seeds_from_labels(np.full(3, 5)), [1, 1, 1]
+    )
+    with pytest.raises(ValueError, match="seeds must be"):
+        ws.watershed_fn(seeds="nuclei")
