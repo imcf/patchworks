@@ -1037,9 +1037,12 @@ def main() -> None:
     # layouts. Needs the just-converted image, so this can only happen here,
     # not in _validate_configs(). Dry runs never reach a real image.zarr.
     tile_override = None
-    if not args.dry_run and {
-        cfg.get("tile_shape", "auto") for cfg in seg_cfgs
-    } == {"auto"}:
+    # all(), not a set of the values: an explicit tile_shape is a list,
+    # which a set cannot hold -- every real run with one (the shipped
+    # common.yaml has one) died here, right after the conversion.
+    if not args.dry_run and all(
+        cfg.get("tile_shape", "auto") == "auto" for cfg in seg_cfgs
+    ):
         channel_counts = {_tile_channels(cfg) for cfg in seg_cfgs}
         if len(channel_counts) > 1:
             tile_override = _resolve_shared_tile_shape(

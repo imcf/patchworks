@@ -1462,3 +1462,52 @@ def test_configs_seeding_each_other_are_refused(tmp_path, capsys):
     assert "from each other" in capsys.readouterr().err
     del cfgs[1]["seed_labels"]
     assert _validate_configs([Path("a.yaml"), Path("b.yaml")], cfgs)
+
+
+def test_main_runs_with_an_explicit_tile_shape_seeds_first(
+    tmp_path, monkeypatch
+):
+    """main() past the conversion, with the shipped style of config: an
+    explicit tile_shape list (which used to crash it, unhashable in a set)
+    and a config seeded by another, listed first but started second."""
+    import run_multi
+
+    common = tmp_path / "common.yaml"
+    common.write_text(
+        yaml.safe_dump(
+            {
+                "input": str(tmp_path / "scan.zarr"),
+                "work_dir": str(tmp_path / "results"),
+                "tile_shape": [16, 512, 512],
+                "level": 0,
+            }
+        )
+    )
+    cells = tmp_path / "cells.yaml"
+    cells.write_text(
+        yaml.safe_dump({"label_name": "cyto_labels", "seed_labels": "nuclei"})
+    )
+    nuclei = tmp_path / "nuclei.yaml"
+    nuclei.write_text(yaml.safe_dump({"label_name": "nuclei"}))
+    multi = tmp_path / "multi.yaml"
+    multi.write_text(
+        yaml.safe_dump(
+            {"common": str(common), "segmentations": [str(cells), str(nuclei)]}
+        )
+    )
+    log = []
+    monkeypatch.setattr(run_multi, "_run", lambda cmd, wd: 0)  # convert
+
+    def popen(cmd, cwd=None):
+        name = Path(cmd[cmd.index("--configfile") + 2]).stem
+        return _FakeProc(log, name, 0)
+
+    monkeypatch.setattr(run_multi.subprocess, "Popen", popen)
+    monkeypatch.setattr(
+        sys, "argv", ["run_multi.py", "--config", str(multi), "--cores", "1"]
+    )
+    monkeypatch.setattr("time.sleep", lambda s: None)
+    with pytest.raises(SystemExit) as done:  # no relations: exits after
+        run_multi.main()
+    assert done.value.code == 0
+    assert log.index(("start", "cells")) > log.index(("end", "nuclei"))
