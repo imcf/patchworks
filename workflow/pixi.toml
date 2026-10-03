@@ -38,14 +38,15 @@ cudadecon = ">=0.7.0,<0.8"
 # "dog" -> pycudadecon, for config_cilia.yaml's deconvolution step (part of
 # the shipped config/multi.yaml example).
 [pypi-dependencies]
-# >=3.1.0, not "*": the scripts in this workflow are the repository's own,
+# >=3.2.0, not "*": the scripts in this workflow are the repository's own,
 # while patchworks comes from PyPI -- and pixi keeps a locked version for as
 # long as it satisfies this line. The merge step writes object tables and
-# the relate step writes workbooks through the review, both new in 3.1.0;
-# with an older lock, a run would segment for hours and then fail at the
-# merge on an ImportError. Raise this floor whenever the scripts start
+# the relate step writes workbooks through the review (3.1.0); the segment
+# step can denoise with CAREamics, and the PlantSeg and nuclei-seeded
+# watershed plugins are new (3.2.0). With an older lock, a run would fail
+# on an ImportError hours in. Raise this floor whenever the scripts start
 # using something newer: that is what upgrades existing environments.
-patchworks = { version = ">=3.1.0", extras = ["workflow", "cellpose", "imaris", "bioio", "dog"] }
+patchworks = { version = ">=3.2.0", extras = ["workflow", "cellpose", "imaris", "bioio", "dog"] }
 
 # Cellpose-version-pinned features for explicit environments below.
 [feature.cp3.pypi-dependencies]
@@ -64,6 +65,35 @@ cellpose = ">=4"
 #
 # A pixi environment includes the default feature as well, so `-e cuda12` is
 # "everything the default has, plus cupy" -- nothing else needs changing.
+# PlantSeg (method: "custom", module patchworks.plugins.plantseg) is on
+# conda-forge only -- vigra, nifty and elf have no wheels. Its own solve
+# group, since it brings a conda PyTorch the others get from PyPI.
+#   pixi install -e plantseg
+#   pixi run -e plantseg plantseg-fetch   # download the U-Net, on a node
+#                                         # with internet (GPU nodes often
+#                                         # have none)
+[feature.plantseg.dependencies]
+plant-seg = ">=2.0.0rc12"
+# A CUDA build: left to itself the solver may pick conda-forge's CPU
+# PyTorch, and the U-Net then runs on the CPU of a GPU node.
+pytorch = { version = ">=2.4", build = "cuda*" }
+
+[feature.plantseg.system-requirements]
+cuda = "12"
+
+[feature.plantseg.tasks]
+plantseg-fetch = "python -c 'import sys; from patchworks.plugins.plantseg import fetch_model; fetch_model(*sys.argv[1:])'"
+
+# CAREamics (the optional `denoise:` step): Noise2Void denoising of every
+# tile before segmenting it.
+#   pixi install -e careamics
+#   pixi run -e careamics denoise-train <work_dir>/image.zarr --out n2v.ckpt
+[feature.careamics.pypi-dependencies]
+careamics = ">=0.3"
+
+[feature.careamics.tasks]
+denoise-train = "patchworks denoise-train"
+
 [feature.cuda12.pypi-dependencies]
 cupy-cuda12x = "*"
 
@@ -103,6 +133,7 @@ review = "patchworks review"
 
 # Named environments: pixi install -e cellpose3 / -e cellpose4 / -e viewer
 #                     pixi install -e cuda12 / -e cuda13   (adds cupy)
+#                     pixi install -e plantseg / -e careamics
 # The base patchworks[cellpose] (>=3.0) is further constrained by each feature.
 # Each of these is the default environment *plus* its feature, so tasks and
 # every other dependency are available in all of them.
@@ -114,6 +145,10 @@ cellpose4 = { features = ["cp4"], solve-group = "cp4" }
 viewer = { features = ["viewer"], no-default-feature = true }
 cuda12 = { features = ["cuda12"] }
 cuda13 = { features = ["cuda13"] }
+plantseg = { features = ["plantseg"], solve-group = "plantseg" }
+careamics = { features = ["careamics"] }
+# PlantSeg on denoised tiles
+plantseg-careamics = { features = ["plantseg", "careamics"], solve-group = "plantseg" }
 # Combined, for a cluster that needs a pinned Cellpose *and* cupy.
 cellpose4-cuda12 = { features = ["cp4", "cuda12"], solve-group = "cp4-cu12" }
 cellpose4-cuda13 = { features = ["cp4", "cuda13"], solve-group = "cp4-cu13" }
