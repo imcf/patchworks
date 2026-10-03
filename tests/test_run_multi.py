@@ -110,7 +110,8 @@ def test_convert_keys_must_agree_across_configs():
         _validate_configs(paths, bad)
 
 
-def test_shipped_multi_configs_are_consistent(tmp_path):
+@pytest.mark.parametrize("multi_file", ["multi.yaml", "multi_plantseg.yaml"])
+def test_shipped_multi_configs_are_consistent(tmp_path, multi_file):
     """The shipped example must satisfy its own validator.
 
     It is the thing users copy, so a config set that run_multi would refuse to
@@ -123,7 +124,7 @@ def test_shipped_multi_configs_are_consistent(tmp_path):
     them at a real directory first and check that.
     """
     cfg_dir = Path(__file__).resolve().parents[1] / "workflow" / "config"
-    multi = yaml.safe_load((cfg_dir / "multi.yaml").read_text())
+    multi = yaml.safe_load((cfg_dir / multi_file).read_text())
     common = yaml.safe_load((cfg_dir.parent / multi["common"]).read_text())
     paths = [cfg_dir.parent / p for p in multi["segmentations"]]
     cfgs = [{**common, **yaml.safe_load(p.read_text())} for p in paths]
@@ -138,6 +139,18 @@ def test_shipped_multi_configs_are_consistent(tmp_path):
     for path in paths:
         own = yaml.safe_load(path.read_text())
         assert not set(own) & set(_CONVERT_KEYS), path.name
+    # Each config passes prepare's own checks too (custom kwargs included),
+    # and the relations and review rules name label images that get made.
+    from _pw import validate_config
+    from run_multi import _review_rules
+
+    for cfg in cfgs:
+        validate_config(cfg)
+    names = [c["label_name"] for c in cfgs]
+    for rel in multi.get("relations") or ():
+        assert {rel["a"], rel["b"]} <= set(names)
+    if multi.get("review"):
+        _review_rules(multi, names)
 
 
 def _workflow_dir() -> Path:
@@ -1173,12 +1186,15 @@ def test_viewer_environment_is_lean():
 
 
 def test_viewer_requires_a_patchworks_that_reads_bundles():
-    """An older patchworks opens a .zip with an error about groups, not age."""
+    """An older patchworks fails to open a .zip, with an error about bioio
+    or groups, not about its age: 2.8.0 still sent a bundle to bioio
+    ("reading .zip requires bioio"). Opening one needs >= 3.0.0."""
     import tomllib
 
     pixi = tomllib.loads((_workflow_dir() / "pixi.toml").read_text())
     spec = pixi["feature"]["viewer"]["pypi-dependencies"]["patchworks"]
-    assert spec["version"].startswith(">=2.8"), spec
+    floor = tuple(int(x) for x in spec["version"].removeprefix(">=").split("."))
+    assert spec["version"].startswith(">=") and floor >= (3, 0, 0), spec
     assert "napari" in spec["extras"]
 
 
@@ -1203,7 +1219,10 @@ def test_viewer_workspace_solves_everywhere():
     assert set(pixi["pypi-dependencies"]) == {"patchworks"}
     spec = pixi["pypi-dependencies"]["patchworks"]
     assert spec["extras"] == ["napari"]
-    assert spec["version"].startswith(">=2.8")
+    floor = tuple(int(x) for x in spec["version"].removeprefix(">=").split("."))
+    assert spec["version"].startswith(">=") and floor >= (3, 0, 0), spec[
+        "version"
+    ]
 
     # It reuses the workflow's viewer script rather than duplicating it.
     task = pixi["tasks"]["napari"]
@@ -1344,3 +1363,151 @@ def test_position_rules_and_distances_are_checked(capsys):
     err = capsys.readouterr().err
     assert "needs the relation cilia_labels -> nuclei_labels" in err
     assert "max_distance_um must be a positive number" in err
+
+
+def test_pixi_manifests_require_the_patchworks_the_scripts_use():
+    """pixi keeps a locked patchworks for as long as it satisfies the
+    manifest, so a floor below what the repository's scripts use leaves old
+    environments broken: 2.8.0 in the viewer failed to open a .zip bundle,
+    and the workflow scripts write object tables (3.1.0)."""
+    import tomllib
+
+    wf = _workflow_dir()
+    main = tomllib.loads((wf / "pixi.toml").read_text())
+    viewer = tomllib.loads((wf / "viewer" / "pixi.toml").read_text())
+    pins = [
+        main["pypi-dependencies"]["patchworks"]["version"],
+        main["feature"]["viewer"]["pypi-dependencies"]["patchworks"]["version"],
+        viewer["pypi-dependencies"]["patchworks"]["version"],
+    ]
+    for pin in pins:
+        assert pin.startswith(">="), pin
+        floor = tuple(int(x) for x in pin[2:].split("."))
+        assert floor >= (3, 1, 0), pin
+    assert "review" in viewer["tasks"]
+
+
+class _FakeProc:
+    def __init__(self, log, name, rc, steps=2):
+        self.log, self.name, self.rc, self.steps = log, name, rc, steps
+        self.returncode = None
+        log.append(("start", name))
+
+    def poll(self):
+        self.steps -= 1
+        if self.steps <= 0 and self.returncode is None:
+            self.returncode = self.rc
+            self.log.append(("end", self.name))
+        return self.returncode
+
+
+def test_seeded_config_waits_for_the_labels_it_grows_from():
+    from run_multi import run_after, seed_dependencies
+
+    cfgs = [
+        {"label_name": "cyto_labels", "seed_labels": "nuclei_labels"},
+        {"label_name": "nuclei_labels"},
+        {"label_name": "cilia_labels"},
+        {"label_name": "old_cells", "seed_labels": "from_an_earlier_run"},
+    ]
+    deps = seed_dependencies(cfgs)
+    assert deps == {0: 1}
+    log = []
+    names = ["cyto", "nuclei", "cilia", "old"]
+    status = run_after(
+        names, deps, lambda i: _FakeProc(log, names[i], 0), poll_seconds=0
+    )
+    assert status == [(n, "ok") for n in names]
+    # Everything independent starts together; cyto only after nuclei ended
+    assert log[:3] == [
+        ("start", "nuclei"),
+        ("start", "cilia"),
+        ("start", "old"),
+    ]
+    assert log.index(("start", "cyto")) > log.index(("end", "nuclei"))
+
+
+def test_a_failed_seed_config_skips_its_dependent_only():
+    from run_multi import run_after
+
+    log = []
+    names = ["cyto", "nuclei", "cilia"]
+    rcs = {"nuclei": 1}
+    status = run_after(
+        names,
+        {0: 1},
+        lambda i: _FakeProc(log, names[i], rcs.get(names[i], 0)),
+        poll_seconds=0,
+    )
+    assert status == [
+        ("cyto", "skipped (nuclei failed)"),
+        ("nuclei", "FAILED"),
+        ("cilia", "ok"),
+    ]
+    assert ("start", "cyto") not in log
+
+
+def test_configs_seeding_each_other_are_refused(tmp_path, capsys):
+    base = {
+        "work_dir": str(tmp_path / "w"),
+        "tile_shape": [16, 64, 64],
+        "level": 0,
+    }
+    cfgs = [
+        {**base, "label_name": "a", "seed_labels": "b"},
+        {**base, "label_name": "b", "seed_labels": "a"},
+    ]
+    with pytest.raises(SystemExit):
+        _validate_configs([Path("a.yaml"), Path("b.yaml")], cfgs)
+    assert "from each other" in capsys.readouterr().err
+    del cfgs[1]["seed_labels"]
+    assert _validate_configs([Path("a.yaml"), Path("b.yaml")], cfgs)
+
+
+def test_main_runs_with_an_explicit_tile_shape_seeds_first(
+    tmp_path, monkeypatch
+):
+    """main() past the conversion, with the shipped style of config: an
+    explicit tile_shape list (which used to crash it, unhashable in a set)
+    and a config seeded by another, listed first but started second."""
+    import run_multi
+
+    common = tmp_path / "common.yaml"
+    common.write_text(
+        yaml.safe_dump(
+            {
+                "input": str(tmp_path / "scan.zarr"),
+                "work_dir": str(tmp_path / "results"),
+                "tile_shape": [16, 512, 512],
+                "level": 0,
+            }
+        )
+    )
+    cells = tmp_path / "cells.yaml"
+    cells.write_text(
+        yaml.safe_dump({"label_name": "cyto_labels", "seed_labels": "nuclei"})
+    )
+    nuclei = tmp_path / "nuclei.yaml"
+    nuclei.write_text(yaml.safe_dump({"label_name": "nuclei"}))
+    multi = tmp_path / "multi.yaml"
+    multi.write_text(
+        yaml.safe_dump(
+            {"common": str(common), "segmentations": [str(cells), str(nuclei)]}
+        )
+    )
+    log = []
+    monkeypatch.setattr(run_multi, "_run", lambda cmd, wd: 0)  # convert
+
+    def popen(cmd, cwd=None):
+        name = Path(cmd[cmd.index("--configfile") + 2]).stem
+        return _FakeProc(log, name, 0)
+
+    monkeypatch.setattr(run_multi.subprocess, "Popen", popen)
+    monkeypatch.setattr(
+        sys, "argv", ["run_multi.py", "--config", str(multi), "--cores", "1"]
+    )
+    monkeypatch.setattr("time.sleep", lambda s: None)
+    with pytest.raises(SystemExit) as done:  # no relations: exits after
+        run_multi.main()
+    assert done.value.code == 0
+    assert log.index(("start", "cells")) > log.index(("end", "nuclei"))

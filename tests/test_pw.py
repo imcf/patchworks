@@ -276,3 +276,245 @@ def test_build_fn_applies_fill_holes_and_opening():
     )
     out = fn(tile)
     assert out[0, 5, 5] == out[0, 3, 3] != 0
+
+
+def test_validate_config_checks_the_denoise_block(tmp_path):
+    import pytest
+    from _pw import validate_config
+
+    model = tmp_path / "n2v.ckpt"
+    model.write_bytes(b"")
+    validate_config({"method": "threshold", "denoise": {"model": str(model)}})
+    with pytest.raises(ValueError) as err:
+        validate_config(
+            {
+                "method": "threshold",
+                "denoise": {
+                    "model": str(tmp_path / "missing.ckpt"),
+                    "tile": [16, 256, 256],
+                    "tile_size": "big",
+                },
+            }
+        )
+    msg = str(err.value)
+    assert "missing.ckpt" in msg and "unknown denoise keys ['tile']" in msg
+    assert "denoise.tile_size" in msg
+    with pytest.raises(ValueError, match="needs a model"):
+        validate_config({"method": "threshold", "denoise": {}})
+
+
+def test_custom_plugins_validate_through_their_factories():
+    import pytest
+    from _pw import validate_config
+
+    for module in (
+        "patchworks.plugins.watershed",
+        "patchworks.plugins.plantseg",
+    ):
+        with pytest.raises(ValueError, match="unknown custom.kwargs"):
+            validate_config(
+                {
+                    "method": "custom",
+                    "custom": {"module": module, "kwargs": {"bogus": 1}},
+                }
+            )
+
+
+def _seeded_store(tmp_path):
+    """image.zarr with a membrane-like channel 0 and a nuclei label image."""
+    from patchworks.plugins.ome_zarr import to_ome_zarr, write_labels
+
+    img = np.zeros((2, 4, 32, 32), "uint16")
+    img[0, :, 15:17, :] = 500  # a wall across y = 16
+    store = to_ome_zarr(img, tmp_path / "image.zarr", axes="czyx", n_levels=2)
+    nuclei = np.zeros((4, 32, 32), "uint32")
+    nuclei[1:3, 5:9, 10:14] = 70_001
+    nuclei[1:3, 22:26, 10:14] = 70_002
+    write_labels(store, nuclei, name="nuclei_labels", progress=False)
+    return nuclei
+
+
+def test_open_image_stacks_the_seed_labels(tmp_path):
+    from _pw import check_seed_labels, open_image
+
+    nuclei = _seeded_store(tmp_path)
+    arr = open_image(tmp_path, 0, 0, seed_labels="nuclei_labels")
+    assert arr.shape == (2, 4, 32, 32)
+    np.testing.assert_array_equal(np.asarray(arr[1]), nuclei)  # ids exact
+    assert np.asarray(arr[0])[0, 16, 0] == 500
+    check_seed_labels(
+        tmp_path, {"seed_labels": "nuclei_labels", "channel": 0, "level": 0}
+    )
+
+    import pytest
+
+    with pytest.raises(ValueError, match="does not exist"):
+        check_seed_labels(
+            tmp_path, {"seed_labels": "cells", "channel": 0, "level": 0}
+        )
+    with pytest.raises(ValueError, match="same level"):
+        open_image(tmp_path, 0, 1, seed_labels="nuclei_labels")
+    with pytest.raises(ValueError, match="set one"):
+        open_image(
+            tmp_path, 0, 0, nuclei_channel=1, seed_labels="nuclei_labels"
+        )
+
+
+def test_seed_labels_grow_one_cell_per_given_nucleus(tmp_path):
+    from _pw import build_fn, open_image
+
+    nuclei = _seeded_store(tmp_path)
+    cfg = {
+        "method": "custom",
+        "work_dir": str(tmp_path),
+        "seed_labels": "nuclei_labels",
+        "custom": {
+            "module": "patchworks.plugins.watershed",
+            "kwargs": {"foreground": None},
+        },
+    }
+    fn = build_fn(cfg)
+    assert fn.keywords["seeds"] == "labels"
+    cells = fn(
+        np.asarray(open_image(tmp_path, 0, 0, seed_labels="nuclei_labels"))
+    )
+    # The wall at y = 16 parts the two cells, one per nucleus
+    assert len(np.unique(cells[cells > 0])) == 2
+    assert cells[2, 7, 12] != cells[2, 24, 12]
+    assert (cells[:, :15] == cells[2, 7, 12]).all()
+    assert nuclei.max() > cells.max()  # renumbered per tile, merged later
+
+
+def test_validate_config_checks_seed_labels():
+    import pytest
+    from _pw import validate_config
+
+    ok = {
+        "method": "custom",
+        "label_name": "cyto_labels",
+        "seed_labels": "nuclei_labels",
+        "stitch": "iou",
+        "custom": {"module": "patchworks.plugins.watershed"},
+    }
+    validate_config(ok)
+    cases = {
+        "own label_name": {**ok, "seed_labels": "cyto_labels"},
+        "set one": {**ok, "nuclei_channel": 1},
+        'needs method: "custom"': {
+            **ok,
+            "method": "cellpose",
+            "cellpose": {"model": "cyto3"},
+        },
+        "takes no `seeds`": {
+            **ok,
+            "custom": {"module": "patchworks.plugins.dog"},
+        },
+        "custom.kwargs.seeds": {
+            **ok,
+            "custom": {
+                "module": "patchworks.plugins.watershed",
+                "kwargs": {"seeds": "channel"},
+            },
+        },
+        "name of a label image": {**ok, "seed_labels": 3},
+    }
+    for message, cfg in cases.items():
+        with pytest.raises(ValueError, match=message):
+            validate_config(cfg)
+
+
+def test_space_filling_plugins_require_iou_stitching():
+    import pytest
+    from _pw import validate_config
+
+    for module in (
+        "patchworks.plugins.watershed",
+        "patchworks.plugins.plantseg",
+    ):
+        cfg = {
+            "method": "custom",
+            "nuclei_channel": 1,
+            "custom": {"module": module},
+        }
+        with pytest.raises(ValueError, match='stitch: "iou"'):
+            validate_config(cfg)  # "touch" is the default
+        validate_config({**cfg, "stitch": "iou"})
+    # Other custom functions are left alone
+    validate_config(
+        {
+            "method": "custom",
+            "custom": {
+                "module": "patchworks.plugins.dog",
+                "kwargs": {"low_sigma": 1, "high_sigma": 2, "threshold": 1},
+            },
+        }
+    )
+
+
+def test_seeded_cells_across_tiles_one_per_nucleus(tmp_path):
+    """The real segment path on six tiles: open_image with seed_labels, the
+    config's function, stage_tile, then the merge -- 12 nuclei, 12 cells,
+    with IoU stitching; "touch" joins neighbours at the seams."""
+    import dask.array as da
+    from _pw import build_fn, open_image
+    from patchworks import merge_tile_labels
+    from patchworks._distributed import create_stage, spatial_tiles, stage_tile
+    from patchworks.plugins.ome_zarr import to_ome_zarr, write_labels
+
+    rng = np.random.default_rng(1)
+    shape = (6, 60, 80)
+    mem = rng.normal(20, 3, shape).astype("float32")
+    mem[:, ::20, :] = 300  # walls: a 3 x 4 grid of cells
+    mem[:, :, ::20] = 300
+    nuclei = np.zeros(shape, "uint32")
+    for k, (cy, cx) in enumerate(
+        (y, x) for y in range(10, 60, 20) for x in range(10, 80, 20)
+    ):
+        nuclei[1:5, cy - 3 : cy + 3, cx - 3 : cx + 3] = 1000 + k
+    img = np.stack([mem.astype("uint16"), np.zeros(shape, "uint16")])
+    store = to_ome_zarr(img, tmp_path / "image.zarr", axes="czyx", n_levels=1)
+    write_labels(store, nuclei, name="nuclei_labels", progress=False)
+    cfg = {
+        "method": "custom",
+        "work_dir": str(tmp_path),
+        "seed_labels": "nuclei_labels",
+        "custom": {
+            "module": "patchworks.plugins.watershed",
+            "kwargs": {"foreground": None},
+        },
+    }
+    image = open_image(tmp_path, 0, 0, seed_labels="nuclei_labels")
+    fn = build_fn(cfg)
+    tile_shape = (6, 32, 32)  # tile seams cut through cells
+
+    def cells(stitch):
+        stage = str(tmp_path / f"stage_{stitch}.zarr")
+        halo = tmp_path / f"halo_{stitch}" if stitch == "iou" else None
+        create_stage(stage, shape, tile_shape)
+        for i in range(len(spatial_tiles(shape, tile_shape))):
+            stage_tile(
+                image,
+                fn,
+                stage,
+                i,
+                tile_shape=tile_shape,
+                overlap=(0, 12, 12),
+                channel_axis=0,
+                halo_dir=halo,
+            )
+        merged = np.asarray(
+            merge_tile_labels(
+                da.from_zarr(stage, component="staged"),
+                sequential_labels=True,
+                halo_dir=halo,
+            )
+        )
+        pairs = {
+            (int(n), int(c))
+            for n, c in zip(nuclei.ravel(), merged.ravel())
+            if n
+        }
+        return len({c for _, c in pairs}), len(pairs)
+
+    assert cells("iou") == (12, 12)  # each nucleus in its own cell
+    assert cells("touch")[0] < 12  # why the workflow requires "iou"

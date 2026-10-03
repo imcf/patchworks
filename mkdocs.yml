@@ -42,6 +42,7 @@ nav:
   - GPU & distributed: guide/gpu_distributed.md
   - Performance & memory: guide/performance.md
   - Custom segmentation function: guide/custom_segmentation.md
+  - Cells from a membrane stain: guide/membrane_cells.md
   - Relating labels across segmentations: guide/label_relations.md
   - Reviewing and correcting results: guide/review.md
   - Measurements: guide/measurements.md
@@ -72,6 +73,9 @@ nav:
   - Plugins:
     - Cellpose: api/plugins/cellpose.md
     - Difference of Gaussians: api/plugins/dog.md
+    - Nuclei-seeded watershed: api/plugins/watershed.md
+    - PlantSeg: api/plugins/plantseg.md
+    - CAREamics denoising: api/plugins/careamics.md
     - OME-ZARR conversion: api/plugins/ome_zarr.md
     - napari viewer: api/plugins/napari.md
 

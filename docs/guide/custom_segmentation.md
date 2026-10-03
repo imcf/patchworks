@@ -29,6 +29,14 @@ That is the whole interface. Anything that turns an image tile into a label
 image works: classic image processing, StarDist, a trained model, an external
 binary you shell out to, …
 
+Ready-made ones ship with patchworks: `patchworks.plugins.dog` (spots,
+cilia), and for cells from a membrane stain `patchworks.plugins.watershed`
+(nuclei-seeded watershed) and `patchworks.plugins.plantseg` (PlantSeg) --
+see [Cells from a membrane stain](membrane_cells.md). With
+`nuclei_channel` set, the tile is `(2, z, y, x)`: `[channel,
+nuclei_channel]` on the first axis. Any method can also run on
+[denoised tiles](membrane_cells.md#denoising-first-careamics).
+
 ## Minimal example (no GPU, no deps beyond scikit-image)
 
 ```python

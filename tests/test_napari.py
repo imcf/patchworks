@@ -377,3 +377,30 @@ def test_resolve_image_reads_other_formats_and_picks_the_channel(monkeypatch):
     assert every.shape == (2, 4, 4)
     second = napari_plugin._resolve_image("scan.czi", 1)
     np.testing.assert_array_equal(second, cyx[1])
+
+
+def test_numba_cache_kept_short_unless_set(monkeypatch, tmp_path):
+    """numba's default cache sits next to napari's code; on a network share
+    that path passes Windows' 260-character limit and labels fail to draw.
+    The viewer moves it to a short local directory -- unless one is set."""
+    import os
+
+    monkeypatch.delenv("NUMBA_CACHE_DIR", raising=False)
+    nplugin.short_numba_cache()
+    assert os.environ["NUMBA_CACHE_DIR"].endswith("patchworks-numba-cache")
+    monkeypatch.setenv("NUMBA_CACHE_DIR", str(tmp_path))
+    nplugin.short_numba_cache()
+    assert os.environ["NUMBA_CACHE_DIR"] == str(tmp_path)
+
+
+def test_view_script_sets_the_numba_cache_before_importing_napari():
+    """view.py runs from the checkout, so its own setting reaches users
+    before a patchworks release does -- and must come before the import."""
+    from pathlib import Path
+
+    src = (
+        Path(__file__).resolve().parents[1] / "workflow" / "scripts" / "view.py"
+    ).read_text()
+    assert src.index("NUMBA_CACHE_DIR") < src.index(
+        "from patchworks.plugins.napari import"
+    )

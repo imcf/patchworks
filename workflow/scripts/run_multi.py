@@ -551,6 +551,29 @@ def _review_rules(multi_cfg: dict, label_names: list[str]) -> dict:
     return block
 
 
+def _tile_channels(cfg: dict) -> int:
+    """Channels a segment tile carries (as ``_pw.tile_channels``): the
+    nuclei channel or the seed labels are stacked onto the image."""
+    two = cfg.get("nuclei_channel") is not None or bool(cfg.get("seed_labels"))
+    return 2 if two else 1
+
+
+def seed_dependencies(cfgs: list[dict]) -> dict[int, int]:
+    """``{config index: index of the config whose labels it grows from}``.
+
+    A config with ``seed_labels: <name>`` reads that label image in every
+    tile, so the config producing ``<name>`` must have finished first.
+    Labels no listed config produces are taken from the store as they are
+    (an earlier run); ``prepare`` checks they exist.
+    """
+    by_name = {cfg.get("label_name"): i for i, cfg in enumerate(cfgs)}
+    return {
+        i: by_name[cfg["seed_labels"]]
+        for i, cfg in enumerate(cfgs)
+        if cfg.get("seed_labels") and cfg["seed_labels"] in by_name
+    }
+
+
 def _validate_configs(paths: list[Path], cfgs: list[dict]) -> str:
     """Check the cross-config invariants before anything is submitted.
 
@@ -650,6 +673,14 @@ def _validate_configs(paths: list[Path], cfgs: list[dict]) -> str:
                 r"sequence_pattern: '_Z(?P<Z>\d+)_C(?P<C>\d+)_V\d+'"
             )
 
+    deps = seed_dependencies(cfgs)
+    for i, j in deps.items():
+        if deps.get(j) == i or i == j:
+            problems.append(
+                f"{paths[i].name} and {paths[j].name} take their seed_labels "
+                "from each other; one of them has to come first"
+            )
+
     names = [cfg.get("label_name") for cfg in cfgs]
     duplicates = {n for n in names if names.count(n) > 1}
     if duplicates:
@@ -712,7 +743,7 @@ def _resolve_shared_tile_shape(
         )
         gpu_gb = cfg.get("gpu_memory_gb")
         gpu_bytes = int(gpu_gb * 1024**3) if gpu_gb else None
-        n_channels = 2 if cfg.get("nuclei_channel") is not None else 1
+        n_channels = _tile_channels(cfg)
         method = cfg.get("method", "cellpose")
         if method == "cellpose":
             cp = cfg["cellpose"]
@@ -752,6 +783,47 @@ def _resolve_shared_tile_shape(
         f"tile_shape: {list(tile_shape)}\n"
     )
     return override_path
+
+
+def run_after(
+    names: list[str],
+    deps: dict[int, int],
+    launch,
+    poll_seconds: float = 5.0,
+) -> list[tuple[str, str]]:
+    """Run every job, each as soon as the one it depends on has succeeded.
+
+    *launch(i)* starts job *i* and returns its ``Popen``. Jobs without a
+    dependency start at once, side by side. One whose dependency failed is
+    not started (``"skipped"``); a failure does not stop the others, which
+    are independent and may hold hours of finished GPU work.
+
+    Returns
+    -------
+    list of (str, str)
+        ``(name, "ok" | "FAILED" | "skipped (<dependency> failed)")``, in
+        *names* order.
+    """
+    import time
+
+    status: dict[int, str] = {}
+    running: dict[int, subprocess.Popen] = {}
+    pending = list(range(len(names)))
+    while pending or running:
+        for i in list(pending):
+            dep = deps.get(i)
+            if dep is None or status.get(dep) == "ok":
+                running[i] = launch(i)
+                pending.remove(i)
+            elif dep in status:
+                status[i] = f"skipped ({names[dep]} failed)"
+                pending.remove(i)
+        finished = [i for i, p in running.items() if p.poll() is not None]
+        for i in finished:
+            status[i] = "ok" if running.pop(i).returncode == 0 else "FAILED"
+        if running and not finished:
+            time.sleep(poll_seconds)
+    return [(names[i], status[i]) for i in range(len(names))]
 
 
 def _resolve(workflow_dir: Path, path_str: str) -> Path:
@@ -965,13 +1037,13 @@ def main() -> None:
     # layouts. Needs the just-converted image, so this can only happen here,
     # not in _validate_configs(). Dry runs never reach a real image.zarr.
     tile_override = None
-    if not args.dry_run and {
-        cfg.get("tile_shape", "auto") for cfg in seg_cfgs
-    } == {"auto"}:
-        channel_counts = {
-            2 if cfg.get("nuclei_channel") is not None else 1
-            for cfg in seg_cfgs
-        }
+    # all(), not a set of the values: an explicit tile_shape is a list,
+    # which a set cannot hold -- every real run with one (the shipped
+    # common.yaml has one) died here, right after the conversion.
+    if not args.dry_run and all(
+        cfg.get("tile_shape", "auto") == "auto" for cfg in seg_cfgs
+    ):
+        channel_counts = {_tile_channels(cfg) for cfg in seg_cfgs}
         if len(channel_counts) > 1:
             tile_override = _resolve_shared_tile_shape(
                 seg_cfgs, image_store, work_dir
@@ -982,8 +1054,7 @@ def main() -> None:
     # stay busy instead of idling through each config's prepare and merge.
     # Each needs its own state directory: .snakemake/locks/ is per working
     # directory, not per config.
-    procs = []
-    for cfg_path, cfg in zip(seg_config_paths, seg_cfgs):
+    def _launch(cfg_path, cfg):
         cmd = _snakemake_cmd(
             cfg_path,
             workflow_dir=workflow_dir,
@@ -997,15 +1068,20 @@ def main() -> None:
             extra_configfiles=[tile_override] if tile_override else None,
         )
         print(f"[run_multi] $ {' '.join(cmd)}", flush=True)
-        procs.append((cfg_path.name, subprocess.Popen(cmd, cwd=workflow_dir)))
+        return subprocess.Popen(cmd, cwd=workflow_dir)
 
-    # Don't abort the siblings when one config fails: the others are
-    # independent, and killing them would throw away hours of finished GPU
-    # work over an unrelated failure.
-    failed = [name for name, p in procs if p.wait() != 0]
-    for name, p in procs:
-        status = "FAILED" if p.returncode else "ok"
-        print(f"[run_multi] {name}: {status}", flush=True)
+    # A config growing from another's labels (seed_labels) waits for it;
+    # everything else starts at once. A dry run never writes labels, so
+    # nothing waits there.
+    deps = {} if args.dry_run else seed_dependencies(seg_cfgs)
+    status = run_after(
+        [p.name for p in seg_config_paths],
+        deps,
+        lambda i: _launch(seg_config_paths[i], seg_cfgs[i]),
+    )
+    failed = [name for name, st in status if st != "ok"]
+    for name, st in status:
+        print(f"[run_multi] {name}: {st}", flush=True)
     if failed:
         print(
             f"[run_multi] ERROR: {len(failed)} config(s) failed: "

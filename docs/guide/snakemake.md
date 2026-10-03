@@ -696,6 +696,14 @@ cellpose:
 usually improves cytoplasm segmentation. Both indices are 0-based, like
 `channel`.
 
+!!! tip "Cellpose 4 and a bright nuclear channel"
+
+    `cpsam` gives the two channels no roles, so next to a faint membrane it
+    may segment the nuclei instead of the cells. Give it the membrane alone
+    (`nuclei_channel: null`), or use the nuclei the other way round: as
+    seeds, with the nuclei-seeded watershed or PlantSeg plugins. See
+    [Cells from a membrane stain](membrane_cells.md).
+
 Only the `segment` step reads it. The pair is stacked on a leading axis that
 is *carried* into each tile rather than tiled, so the tile geometry, the
 occupancy map and the staged labels are byte-for-byte what a single-channel
@@ -832,6 +840,11 @@ relations:
     b: cyto_labels
     output: nuclei_to_cyto.xlsx # written into work_dir
 ```
+
+A second example, `config/multi_plantseg.yaml`, pairs Cellpose nuclei with
+PlantSeg cells seeded from the nuclei (`pixi run -e plantseg
+multi-plantseg-slurm`); see [Cells from a membrane
+stain](membrane_cells.md#example-cellpose-nuclei-plantseg-cells-in-one-run).
 
 `common:` is optional — leave it out and each config must be self-contained,
 as before. With it, changing the input path or turning on `shard` is a
@@ -1074,6 +1087,11 @@ pixi run dry          # dry-run
 pixi run go           # run locally (8 cores)
 pixi run slurm        # submit to SLURM (edit profile/slurm/config.yaml first)
 ```
+
+Optional environments add methods: `-e plantseg` (PlantSeg, from
+conda-forge), `-e careamics` (the `denoise:` step and `pixi run denoise-train`),
+`-e plantseg-careamics` for both -- see
+[Cells from a membrane stain](membrane_cells.md).
 
 `pixi run …` activates the env, so the rule scripts execute in that env — do
 **not** pass `--use-conda`. On a cluster, keep the `workflow/` directory on a

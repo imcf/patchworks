@@ -36,6 +36,27 @@ from .ome_zarr import read_ngff_attr
 logger = logging.getLogger(__name__)
 
 
+def short_numba_cache() -> None:
+    """Keep numba's compiled-code cache out of the install directory.
+
+    napari's labels colouring is numba-compiled, and numba caches the
+    result next to the source, in site-packages. When the environment sits
+    deep on a network share (a pixi environment inside a project on a
+    mapped drive, say), that cache path passes Windows' 260-character limit
+    and every Labels layer fails to draw with a FileNotFoundError on a
+    ``.nbc.tmp`` file. A short local directory avoids it, and costs nothing
+    elsewhere. An explicit ``NUMBA_CACHE_DIR`` is kept; numba reads it once,
+    at import, so this must run before napari (or numba) is imported.
+    """
+    import os
+    import tempfile
+
+    os.environ.setdefault(
+        "NUMBA_CACHE_DIR",
+        os.path.join(tempfile.gettempdir(), "patchworks-numba-cache"),
+    )
+
+
 def _require_napari():
     """Import and return napari, or raise an actionable ImportError.
 
@@ -44,6 +65,7 @@ def _require_napari():
     module
         The imported ``napari`` module.
     """
+    short_numba_cache()
     try:
         import napari
     except ImportError as exc:

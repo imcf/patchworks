@@ -72,7 +72,7 @@ def start_log(path, *, append=True):
     return handle
 
 
-def open_image(work_dir, channel, level, nuclei_channel=None):
+def open_image(work_dir, channel, level, nuclei_channel=None, seed_labels=None):
     """Open the converted image for segmentation.
 
     Parameters
@@ -89,6 +89,15 @@ def open_image(work_dir, channel, level, nuclei_channel=None):
         nuclei_channel]``. This is Cellpose's cyto+nucleus pair (see
         ``config/config_cyto.yaml``). ``None`` (default) returns the plain
         ``(z, y, x)`` single-channel array.
+    seed_labels : str or None, optional
+        Name of a label image already in the store (``labels/<name>``),
+        stacked in second place instead of an intensity channel:
+        ``[channel, labels]``. Its level 0 must cover the same voxels as the
+        image at *level* -- true when it was segmented at that level, as
+        :func:`check_seed_labels` verifies. Each tile then carries the
+        objects of that label image, global ids and all, for a method to
+        grow from (see ``seeds: "labels"`` in the watershed and PlantSeg
+        plugins).
 
     Returns
     -------
@@ -96,10 +105,30 @@ def open_image(work_dir, channel, level, nuclei_channel=None):
         The (lazy) image array.
     """
     path = str(Path(work_dir) / "image.zarr")
-    if nuclei_channel is None:
+    if nuclei_channel is not None and seed_labels:
+        raise ValueError(
+            "nuclei_channel and seed_labels both stack a second channel; "
+            "set one of them"
+        )
+    if nuclei_channel is None and not seed_labels:
         return load_ome_zarr(path, channel=channel, level=level)
 
     import dask.array as da
+
+    image = load_ome_zarr(path, channel=channel, level=level)
+    if seed_labels:
+        seeds = load_ome_zarr(
+            f"{path}/labels/{seed_labels}", channel=None, level=0
+        )
+        if tuple(seeds.shape) != tuple(image.shape):
+            raise ValueError(
+                f"seed_labels {seed_labels!r} is {tuple(seeds.shape)} but the "
+                f"image at level {level} is {tuple(image.shape)}; segment "
+                "both at the same level"
+            )
+        # One dtype for both (da.stack promotes): uint16 + uint32 labels ->
+        # uint32, float32 + labels -> float64; ids stay exact either way.
+        return da.stack([image, seeds.rechunk(image.chunks)], axis=0)
 
     if nuclei_channel == channel:
         raise ValueError(
@@ -110,12 +139,36 @@ def open_image(work_dir, channel, level, nuclei_channel=None):
     # Two lazy reads of the same spatial box, stacked. The tiling stays
     # spatial -- stage_tile carries this axis through rather than tiling it.
     return da.stack(
-        [
-            load_ome_zarr(path, channel=c, level=level)
-            for c in (channel, nuclei_channel)
-        ],
+        [image, load_ome_zarr(path, channel=nuclei_channel, level=level)],
         axis=0,
     )
+
+
+def tile_channels(cfg) -> int:
+    """How many channels a segment tile carries: 2 with ``nuclei_channel``
+    or ``seed_labels`` (stacked on a leading axis), else 1. The tile sizer
+    charges per channel."""
+    two = cfg.get("nuclei_channel") is not None or bool(cfg.get("seed_labels"))
+    return 2 if two else 1
+
+
+def check_seed_labels(work_dir, cfg) -> None:
+    """Fail early when ``seed_labels`` names labels that are not there yet.
+
+    Run from ``prepare``: under ``run_multi`` the config producing them has
+    finished by then; run alone, its labels must already be in the store.
+    """
+    name = cfg.get("seed_labels")
+    if not name:
+        return
+    group = Path(work_dir) / "image.zarr" / "labels" / name
+    if not group.exists():
+        raise ValueError(
+            f"seed_labels: {name!r} -- {group} does not exist. Segment it "
+            "first (list both configs in a multi.yaml: run_multi runs the "
+            "seeds' config before this one)."
+        )
+    open_image(work_dir, cfg["channel"], cfg["level"], seed_labels=name)
 
 
 def stage_path(work_dir, label_name):
@@ -336,6 +389,9 @@ def validate_config(cfg) -> None:
                 "which segments a single channel"
             )
 
+    problems.extend(_seed_labels_problems(cfg))
+    problems.extend(_stitch_problems(cfg))
+
     min_volume = cfg.get("min_volume")
     if min_volume is not None and (
         isinstance(min_volume, bool)
@@ -436,8 +492,137 @@ def validate_config(cfg) -> None:
     elif method == "custom":
         problems.extend(_custom_problems(cfg.get("custom")))
 
+    if cfg.get("denoise") is not None:
+        problems.extend(_denoise_problems(cfg["denoise"]))
+
     if problems:
         raise ValueError("invalid config:\n  - " + "\n  - ".join(problems))
+
+
+def _stitch_problems(cfg) -> list[str]:
+    """A method that fills space needs ``stitch: "iou"``.
+
+    A watershed (or PlantSeg's partitioning) gives every voxel to some cell,
+    so at a seam neighbouring cells always touch -- and ``"touch"``
+    stitching joins every pair of labels touching across a seam: measured
+    on a 3 x 4 grid of cells cut by six tiles, 12 cells came out as 5. The
+    plugin says so with ``patchworks_stitch = "iou"`` on its function.
+    """
+    if cfg.get("method") != "custom" or cfg.get("stitch", "touch") == "iou":
+        return []
+    spec = cfg.get("custom") or {}
+    try:
+        import importlib
+
+        fn = getattr(
+            importlib.import_module(spec["module"]),
+            spec.get("function", "segment"),
+        )
+    except Exception:
+        return []  # _custom_problems reports it
+    if getattr(fn, "patchworks_stitch", None) != "iou":
+        return []
+    return [
+        f"{spec['module']} fills space (every voxel goes to a cell), so "
+        'neighbouring cells touch at every tile seam and stitch: "touch" '
+        'would join them; set stitch: "iou" in this config (it needs '
+        "overlap > 0)"
+    ]
+
+
+def _seed_labels_problems(cfg) -> list[str]:
+    """Check ``seed_labels``: a label image name, for a method that can
+    grow from it (a custom function taking ``seeds``)."""
+    name = cfg.get("seed_labels")
+    if name is None:
+        return []
+    if not isinstance(name, str) or not name or "/" in name:
+        return [f"seed_labels must be the name of a label image; got {name!r}"]
+    problems = []
+    if name == cfg.get("label_name"):
+        problems.append(f"seed_labels {name!r} is this config's own label_name")
+    if cfg.get("nuclei_channel") is not None:
+        problems.append(
+            "nuclei_channel and seed_labels both stack a second channel onto "
+            "each tile; set one (seed_labels: the objects themselves, "
+            "nuclei_channel: an intensity image to find them in)"
+        )
+    if cfg.get("method", "cellpose") != "custom":
+        problems.append(
+            'seed_labels needs method: "custom" with a function that takes '
+            "seeds (patchworks.plugins.watershed or .plantseg)"
+        )
+        return problems
+    spec = cfg.get("custom") or {}
+    try:
+        import importlib
+        import inspect
+
+        fn = getattr(
+            importlib.import_module(spec["module"]),
+            spec.get("function", "segment"),
+        )
+        target = getattr(fn, "patchworks_kwargs_target", fn)
+        takes = "seeds" in inspect.signature(target).parameters
+    except Exception:
+        return problems  # _custom_problems reports an unimportable module
+    if not takes:
+        problems.append(
+            f"seed_labels: {spec['module']} takes no `seeds` argument, so it "
+            "would treat the label image as a second intensity channel"
+        )
+    elif (spec.get("kwargs") or {}).get("seeds", "labels") != "labels":
+        problems.append(
+            "seed_labels hands each tile labels, but custom.kwargs.seeds is "
+            f'{spec["kwargs"]["seeds"]!r}; drop it (it is set to "labels")'
+        )
+    return problems
+
+
+#: Keys of the optional ``denoise:`` block (patchworks.plugins.careamics).
+DENOISE_KEYS = (
+    "model",
+    "nuclei_model",
+    "tile_size",
+    "tile_overlap",
+    "batch_size",
+)
+
+
+def _denoise_problems(spec) -> list[str]:
+    """Check the ``denoise:`` block: known keys, model files that exist.
+
+    Checked here, on the prepare node, so a typo'd path fails in seconds
+    rather than on every GPU job. CAREamics itself is not imported: the
+    prepare environment need not have PyTorch.
+    """
+    if not isinstance(spec, dict) or not spec.get("model"):
+        return [
+            "denoise: needs a model, e.g. denoise: {model: n2v.ckpt} "
+            "(train one with `patchworks denoise-train`)"
+        ]
+    problems = []
+    unknown = sorted(set(spec) - set(DENOISE_KEYS))
+    if unknown:
+        problems.append(
+            f"unknown denoise keys {unknown}; known: {list(DENOISE_KEYS)}"
+        )
+    for key in ("model", "nuclei_model"):
+        path = spec.get(key)
+        if path and not Path(path).exists():
+            problems.append(f"denoise.{key} {path!r} does not exist")
+    for key in ("tile_size", "tile_overlap"):
+        value = spec.get(key)
+        if value is not None and not (
+            isinstance(value, list)
+            and value
+            and all(isinstance(v, int) and v > 0 for v in value)
+        ):
+            problems.append(
+                f"denoise.{key} must be a list of positive ints like "
+                f"[16, 256, 256]; got {value!r}"
+            )
+    return problems
 
 
 def _cellpose_problems(cp: dict) -> list[str]:
@@ -536,7 +721,10 @@ def build_fn(cfg):
         Omitted/0 disables dilation. ``cfg["dilate_gpu"]``: bool, dilate via
         cupyx instead of scipy (default ``False``); only takes effect when
         ``dilate`` is set, and needs a GPU allocated for the segment job
-        (independent of whether ``method`` itself uses one).
+        (independent of whether ``method`` itself uses one). Optional
+        ``cfg["denoise"]``: ``{model, nuclei_model, ...}``, denoise every
+        tile with CAREamics before segmenting it
+        (:func:`patchworks.plugins.careamics.denoise_fn`).
 
     Returns
     -------
@@ -544,6 +732,13 @@ def build_fn(cfg):
         ``(ndarray) -> ndarray`` returning integer labels.
     """
     fn = _build_method_fn(cfg)
+
+    # Pre-processing: denoise each tile before the method sees it.
+    if cfg.get("denoise"):
+        from patchworks.plugins.careamics import denoise_fn
+
+        spec = dict(cfg["denoise"])
+        fn = denoise_fn(fn, spec.pop("model"), **spec)
 
     # Post-processing, in order: fill holes, cut spurs, then grow.
     holes = cfg.get("fill_holes")
@@ -595,6 +790,9 @@ def _build_method_fn(cfg):
         )
         kwargs = dict(spec.get("kwargs") or {})
         kwargs = _with_voxel_size(fn, kwargs, cfg)
+        if cfg.get("seed_labels"):
+            # The tile's second channel is a label image, not intensities.
+            kwargs.setdefault("seeds", "labels")
         return partial(fn, **kwargs) if kwargs else fn
 
     if method == "threshold":

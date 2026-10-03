@@ -44,3 +44,15 @@ cellpose:
   diameter: 30
   do_3D: true
   gpu: true
+# With a membrane stain, Cellpose 4 (cpsam) may segment the nuclei instead of
+# the cells. Alternatives that use the nuclei as seeds, one cell each
+# (docs/guide/membrane_cells.md) -- replace `method` and `cellpose` above:
+# method: "custom"
+# stitch: "iou"   # required: these fill space, cells touch at every seam
+# custom:
+#   module: "patchworks.plugins.watershed"
+#   kwargs: {nuclei_min_size: 200, foreground: "otsu"}
+# or, with PlantSeg's boundary U-Net (pixi install -e plantseg):
+# custom:
+#   module: "patchworks.plugins.plantseg"
+#   kwargs: {model: "generic_confocal_3D_unet", segmentation: "nuclei_watershed", foreground: "otsu"}
