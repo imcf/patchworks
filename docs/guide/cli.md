@@ -46,7 +46,15 @@ gives a child touching no parent the nearest one. See
 | `custom` | any importable function | `--fn module:function`, `--fn-kwargs '{"k": 1}'` |
 
 Cellpose's anisotropy and the DoG plugin's voxel size are read from the
-store's own calibration, at the level being segmented.
+store's own calibration, at the level being segmented -- as is `voxel_size`
+for a custom function that takes one, such as the PlantSeg and watershed
+plugins: `--method custom --fn patchworks.plugins.plantseg:segment
+--fn-kwargs '{"segmentation": "gasp"}'`.
+
+`--denoise MODEL` denoises every tile with a CAREamics model before any
+method segments it; `patchworks denoise-train STORE --channel 0 --out
+n2v.ckpt` trains one (Noise2Void, no ground truth). See
+[Cells from a membrane stain](membrane_cells.md).
 
 Tiling and stitching take the same options as
 [`tile_process`](../api/tile_process.md): `--tile-shape` (`z,y,x`, `auto` or

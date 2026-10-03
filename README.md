@@ -49,6 +49,7 @@ pip install "patchworks[cellpose]"  # Cellpose plugin (>=3.0, v3 or v4)
 pip install "patchworks[cellpose3]" # Cellpose plugin, pinned to v3.x
 pip install "patchworks[cellpose4]" # Cellpose plugin, pinned to v4+
 pip install "patchworks[dog]"       # deconvolution + DoG plugin (pycudadecon)
+pip install "patchworks[careamics]" # Noise2Void denoising before segmenting
 pip install "patchworks[bioio]"     # convert any image format to OME-ZARR
 pip install "patchworks[imaris]"    # convert Imaris .ims files to OME-ZARR
 pip install "patchworks[napari]"    # interactive napari viewer plugin
@@ -352,6 +353,13 @@ Optional:
 - `cellpose` — Cellpose plugin, v3 or v4 (`patchworks[cellpose]`);
   pin with `[cellpose3]` or `[cellpose4]`
 - `pycudadecon` — deconvolution step of the `dog` plugin (`patchworks[dog]`)
+- `careamics` — denoise tiles before segmenting them (Noise2Void),
+  `patchworks[careamics]`
+- `plant-seg` — PlantSeg plugin (boundary U-Net + GASP/multicut), from
+  conda-forge only (`conda install -c conda-forge plant-seg`, or the
+  workflow's `pixi install -e plantseg`). The nuclei-seeded watershed plugin
+  needs only scikit-image. See the
+  [membrane cells guide](https://imcf.one/patchworks/guide/membrane_cells/).
 - `bioio` + readers — convert CZI/LIF/ND2/OME-TIFF/… to OME-ZARR
   (`patchworks[bioio]`)
 - `imaris-ims-file-reader` — convert Imaris `.ims` (`patchworks[imaris]`)

@@ -75,6 +75,21 @@ cellpose:
 #   module: "my_seg"     # importable on the cluster (workflow/scripts/, PYTHONPATH, or pip-installed)
 #   function: "segment"  # def segment(tile: np.ndarray) -> np.ndarray (int32 labels)
 #   kwargs: {}           # optional extra keyword args
+# Shipped plugins (docs/guide/membrane_cells.md), e.g. cells from a membrane
+# stain with nuclei_channel set:
+#   module: "patchworks.plugins.watershed"   # one cell per nucleus
+#   kwargs: {nuclei_min_size: 200, foreground: "otsu"}
+# or PlantSeg (pixi install -e plantseg; run from that environment):
+#   module: "patchworks.plugins.plantseg"
+#   kwargs: {model: "generic_confocal_3D_unet", segmentation: "gasp"}
+
+# Optional: denoise every tile with CAREamics (Noise2Void) before the method
+# segments it, whatever the method. Train the model once with
+#   pixi run -e careamics denoise-train <work_dir>/image.zarr --channel 0 --out n2v.ckpt
+# and run from the careamics environment (pixi run -e careamics ...).
+# denoise:
+#   model: "/path/to/n2v.ckpt"            # .ckpt or a BioImage.IO .zip
+#   nuclei_model: "/path/to/n2v_nuc.ckpt" # optional, for nuclei_channel
 
 # ---- pyramid for the labels -------------------------------------------------
 pyramid_levels: 5
