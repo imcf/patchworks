@@ -24,6 +24,10 @@ seed_labels: "nuclei_labels"
 # The halo must hold a whole cell: a cell cut by the tile edge has no seed
 # in the tile next door. [z, y, x], like the other configs.
 overlap: [4, 40, 40]
+# Every voxel goes to some cell, so neighbouring cells touch at each tile
+# seam; "touch" stitching would join them. "iou" joins two pieces only where
+# both tiles agree on the overlap -- required with this plugin.
+stitch: "iou"
 
 method: "custom"
 label_name: "cyto_labels"

@@ -390,6 +390,7 @@ def validate_config(cfg) -> None:
             )
 
     problems.extend(_seed_labels_problems(cfg))
+    problems.extend(_stitch_problems(cfg))
 
     min_volume = cfg.get("min_volume")
     if min_volume is not None and (
@@ -496,6 +497,37 @@ def validate_config(cfg) -> None:
 
     if problems:
         raise ValueError("invalid config:\n  - " + "\n  - ".join(problems))
+
+
+def _stitch_problems(cfg) -> list[str]:
+    """A method that fills space needs ``stitch: "iou"``.
+
+    A watershed (or PlantSeg's partitioning) gives every voxel to some cell,
+    so at a seam neighbouring cells always touch -- and ``"touch"``
+    stitching joins every pair of labels touching across a seam: measured
+    on a 3 x 4 grid of cells cut by six tiles, 12 cells came out as 5. The
+    plugin says so with ``patchworks_stitch = "iou"`` on its function.
+    """
+    if cfg.get("method") != "custom" or cfg.get("stitch", "touch") == "iou":
+        return []
+    spec = cfg.get("custom") or {}
+    try:
+        import importlib
+
+        fn = getattr(
+            importlib.import_module(spec["module"]),
+            spec.get("function", "segment"),
+        )
+    except Exception:
+        return []  # _custom_problems reports it
+    if getattr(fn, "patchworks_stitch", None) != "iou":
+        return []
+    return [
+        f"{spec['module']} fills space (every voxel goes to a cell), so "
+        'neighbouring cells touch at every tile seam and stitch: "touch" '
+        'would join them; set stitch: "iou" in this config (it needs '
+        "overlap > 0)"
+    ]
 
 
 def _seed_labels_problems(cfg) -> list[str]:

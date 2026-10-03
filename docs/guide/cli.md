@@ -49,7 +49,8 @@ Cellpose's anisotropy and the DoG plugin's voxel size are read from the
 store's own calibration, at the level being segmented -- as is `voxel_size`
 for a custom function that takes one, such as the PlantSeg and watershed
 plugins: `--method custom --fn patchworks.plugins.plantseg:segment
---fn-kwargs '{"segmentation": "gasp"}'`.
+--fn-kwargs '{"segmentation": "gasp"}' --stitch iou` (`iou`: these fill
+space, so neighbouring cells touch at every seam).
 
 `--denoise MODEL` denoises every tile with a CAREamics model before any
 method segments it; `patchworks denoise-train STORE --channel 0 --out

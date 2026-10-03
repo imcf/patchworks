@@ -48,6 +48,7 @@ cellpose:
 # the cells. Alternatives that use the nuclei as seeds, one cell each
 # (docs/guide/membrane_cells.md) -- replace `method` and `cellpose` above:
 # method: "custom"
+# stitch: "iou"   # required: these fill space, cells touch at every seam
 # custom:
 #   module: "patchworks.plugins.watershed"
 #   kwargs: {nuclei_min_size: 200, foreground: "otsu"}

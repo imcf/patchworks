@@ -483,3 +483,6 @@ def segment(tile: np.ndarray, **kwargs: Any) -> np.ndarray:
 
 
 setattr(segment, "patchworks_kwargs_target", plantseg_fn)
+# Every voxel goes to some cell, so neighbours touch at every tile seam:
+# the workflow requires IoU stitching (stitch: "iou") with this function.
+setattr(segment, "patchworks_stitch", "iou")

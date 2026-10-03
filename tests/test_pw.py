@@ -393,6 +393,7 @@ def test_validate_config_checks_seed_labels():
         "method": "custom",
         "label_name": "cyto_labels",
         "seed_labels": "nuclei_labels",
+        "stitch": "iou",
         "custom": {"module": "patchworks.plugins.watershed"},
     }
     validate_config(ok)
@@ -420,3 +421,100 @@ def test_validate_config_checks_seed_labels():
     for message, cfg in cases.items():
         with pytest.raises(ValueError, match=message):
             validate_config(cfg)
+
+
+def test_space_filling_plugins_require_iou_stitching():
+    import pytest
+    from _pw import validate_config
+
+    for module in (
+        "patchworks.plugins.watershed",
+        "patchworks.plugins.plantseg",
+    ):
+        cfg = {
+            "method": "custom",
+            "nuclei_channel": 1,
+            "custom": {"module": module},
+        }
+        with pytest.raises(ValueError, match='stitch: "iou"'):
+            validate_config(cfg)  # "touch" is the default
+        validate_config({**cfg, "stitch": "iou"})
+    # Other custom functions are left alone
+    validate_config(
+        {
+            "method": "custom",
+            "custom": {
+                "module": "patchworks.plugins.dog",
+                "kwargs": {"low_sigma": 1, "high_sigma": 2, "threshold": 1},
+            },
+        }
+    )
+
+
+def test_seeded_cells_across_tiles_one_per_nucleus(tmp_path):
+    """The real segment path on six tiles: open_image with seed_labels, the
+    config's function, stage_tile, then the merge -- 12 nuclei, 12 cells,
+    with IoU stitching; "touch" joins neighbours at the seams."""
+    import dask.array as da
+    from _pw import build_fn, open_image
+    from patchworks import merge_tile_labels
+    from patchworks._distributed import create_stage, spatial_tiles, stage_tile
+    from patchworks.plugins.ome_zarr import to_ome_zarr, write_labels
+
+    rng = np.random.default_rng(1)
+    shape = (6, 60, 80)
+    mem = rng.normal(20, 3, shape).astype("float32")
+    mem[:, ::20, :] = 300  # walls: a 3 x 4 grid of cells
+    mem[:, :, ::20] = 300
+    nuclei = np.zeros(shape, "uint32")
+    for k, (cy, cx) in enumerate(
+        (y, x) for y in range(10, 60, 20) for x in range(10, 80, 20)
+    ):
+        nuclei[1:5, cy - 3 : cy + 3, cx - 3 : cx + 3] = 1000 + k
+    img = np.stack([mem.astype("uint16"), np.zeros(shape, "uint16")])
+    store = to_ome_zarr(img, tmp_path / "image.zarr", axes="czyx", n_levels=1)
+    write_labels(store, nuclei, name="nuclei_labels", progress=False)
+    cfg = {
+        "method": "custom",
+        "work_dir": str(tmp_path),
+        "seed_labels": "nuclei_labels",
+        "custom": {
+            "module": "patchworks.plugins.watershed",
+            "kwargs": {"foreground": None},
+        },
+    }
+    image = open_image(tmp_path, 0, 0, seed_labels="nuclei_labels")
+    fn = build_fn(cfg)
+    tile_shape = (6, 32, 32)  # tile seams cut through cells
+
+    def cells(stitch):
+        stage = str(tmp_path / f"stage_{stitch}.zarr")
+        halo = tmp_path / f"halo_{stitch}" if stitch == "iou" else None
+        create_stage(stage, shape, tile_shape)
+        for i in range(len(spatial_tiles(shape, tile_shape))):
+            stage_tile(
+                image,
+                fn,
+                stage,
+                i,
+                tile_shape=tile_shape,
+                overlap=(0, 12, 12),
+                channel_axis=0,
+                halo_dir=halo,
+            )
+        merged = np.asarray(
+            merge_tile_labels(
+                da.from_zarr(stage, component="staged"),
+                sequential_labels=True,
+                halo_dir=halo,
+            )
+        )
+        pairs = {
+            (int(n), int(c))
+            for n, c in zip(nuclei.ravel(), merged.ravel())
+            if n
+        }
+        return len({c for _, c in pairs}), len(pairs)
+
+    assert cells("iou") == (12, 12)  # each nucleus in its own cell
+    assert cells("touch")[0] < 12  # why the workflow requires "iou"

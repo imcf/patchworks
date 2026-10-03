@@ -76,7 +76,7 @@ cellpose:
 #   function: "segment"  # def segment(tile: np.ndarray) -> np.ndarray (int32 labels)
 #   kwargs: {}           # optional extra keyword args
 # Shipped plugins (docs/guide/membrane_cells.md), e.g. cells from a membrane
-# stain with nuclei_channel set:
+# stain with nuclei_channel set (both need stitch: "iou" below):
 #   module: "patchworks.plugins.watershed"   # one cell per nucleus
 #   kwargs: {nuclei_min_size: 200, foreground: "otsu"}
 # or grow them from a label image already in the store (e.g. Cellpose's

@@ -33,6 +33,7 @@ channel: 0              # membrane
 nuclei_channel: 1       # stacked onto each tile as [membrane, nuclei]
 method: "custom"
 label_name: "cyto_labels"
+stitch: "iou"           # required: see below
 custom:
   module: "patchworks.plugins.watershed"
   kwargs:
@@ -41,6 +42,14 @@ custom:
     # max_radius_um: 15     # or: no further than this from the nucleus
     # nuclei_threshold: 800 # intensity, if Otsu misses dim nuclei
 ```
+
+`stitch: "iou"` is required with this plugin and with PlantSeg, and
+`prepare` refuses the config without it. They give every voxel to some
+cell, so neighbouring cells touch at every tile seam, and the default
+`"touch"` stitching would join each such pair: on a test grid of 12 cells
+cut by six tiles, 5 came out. `"iou"` joins two pieces only where both tiles
+agree on their overlap, and gives the 12. (From the command line, pass
+`--stitch iou` yourself: nothing checks it there.)
 
 Two nuclei touching each other give one seed, so one cell for two: raise
 `nuclei_threshold` if that happens -- or grow the cells from nuclei you have
@@ -66,6 +75,7 @@ pixi run -e plantseg multi-slurm
 
 ```yaml
 method: "custom"
+stitch: "iou"                           # required, as for the watershed
 custom:
   module: "patchworks.plugins.plantseg"
   kwargs:
@@ -130,6 +140,7 @@ cellpose:
 channel: 0                  # membrane
 seed_labels: "nuclei_labels" # each tile becomes [membrane, nuclei labels]
 overlap: [4, 40, 40]        # the halo must hold a whole cell
+stitch: "iou"               # cells touch at every seam: join on agreement only
 method: "custom"
 label_name: "cyto_labels"
 custom:
