@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import inspect
 import json
 import logging
 import sys
@@ -111,6 +112,15 @@ def _build_fn(args: argparse.Namespace, image: Any) -> Callable:
     module, _, name = args.fn.partition(":")
     fn = getattr(importlib.import_module(module), name or "segment")
     kwargs = json.loads(args.fn_kwargs) if args.fn_kwargs else {}
+    # A function asking for voxel_size gets the store's calibration (as in
+    # the workflow); a **kwargs passthrough names its real target.
+    target = getattr(fn, "patchworks_kwargs_target", fn)
+    try:
+        takes_voxel = "voxel_size" in inspect.signature(target).parameters
+    except (TypeError, ValueError):
+        takes_voxel = False
+    if takes_voxel and voxel and "voxel_size" not in kwargs:
+        kwargs["voxel_size"] = voxel
     return partial(fn, **kwargs) if kwargs else fn
 
 

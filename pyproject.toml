@@ -117,6 +117,8 @@ workflow = [
     "snakemake-executor-plugin-slurm",
     "openpyxl",
     "pandas>=2.0",
+    # method: "threshold" and the nuclei-seeded watershed plugin
+    "scikit-image",
 ]
 # review: the object tables' corrected view and exports, without napari
 # (`patchworks review --summary/--export`). The napari panel needs [napari].
