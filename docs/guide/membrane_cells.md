@@ -84,6 +84,93 @@ Each tile is resampled to the voxel size the model was trained at (from the
 image's own calibration, `rescale: true`), which matters more than any other
 setting for a pretrained U-Net; the prediction is resampled back.
 
+## Example: Cellpose nuclei + PlantSeg cells in one run
+
+The workflow ships this pairing ready to edit: Cellpose segments the nuclei,
+PlantSeg the cells, flooded from the nuclei, and the two are related and
+checked against each other. Three files, next to `config/multi.yaml`:
+
+```yaml
+# config/multi_plantseg.yaml
+common: config/common.yaml           # input, work_dir, tile_shape: shared
+
+segmentations:
+- config/config_nuclei.yaml          # Cellpose "nuclei" model on channel 1
+- config/config_cyto_plantseg.yaml   # PlantSeg + nuclei seeds on channel 0
+
+relations:
+- a: nuclei_labels
+  b: cyto_labels
+  output: nuclei_to_cyto.xlsx
+
+review:                              # flag cells with no nucleus, or two
+  expect:
+    cyto_labels:
+      nuclei_labels: 1
+```
+
+```yaml
+# config/config_nuclei.yaml (unchanged)
+channel: 1
+overlap: [4, 30, 30]
+method: "cellpose"
+label_name: "nuclei_labels"
+cellpose:
+  model: "nuclei"
+  diameter: 15
+  do_3D: true
+  gpu: true
+```
+
+```yaml
+# config/config_cyto_plantseg.yaml
+channel: 0                  # membrane
+nuclei_channel: 1           # each tile becomes [membrane, nuclei]
+overlap: [4, 40, 40]        # the halo must hold a whole cell
+method: "custom"
+label_name: "cyto_labels"
+custom:
+  module: "patchworks.plugins.plantseg"
+  function: "segment"
+  kwargs:
+    model: "generic_confocal_3D_unet"   # generic_light_sheet_3D_unet for light-sheet
+    segmentation: "nuclei_watershed"    # U-Net boundaries flooded from the nuclei
+    nuclei_min_size: 200                # voxels
+    # nuclei_threshold: 800             # if Otsu misses dim nuclei / joins touching ones
+    foreground: "otsu"                  # keep the tissue only
+    # max_radius_um: 15
+```
+
+Set `input` and `work_dir` in `config/common.yaml`, then, from `workflow/`:
+
+```bash
+pixi install -e plantseg
+pixi run -e plantseg plantseg-fetch generic_confocal_3D_unet   # once, with internet
+pixi run -e plantseg multi-plantseg-dry                        # check the plan
+pixi run -e plantseg multi-plantseg-slurm                      # submit
+```
+
+The `plantseg` environment is the default one plus PlantSeg, so the
+Cellpose run comes from it too; both segmentations run at the same time, one
+GPU job per batch of tiles each. Afterwards, `nuclei_to_cyto.xlsx` gives
+each nucleus its cell, and `pixi run -e viewer review <work_dir>/image.zarr`
+lists the cells that hold no nucleus or two.
+
+!!! note "Two looks at the nuclei"
+
+    The cells' seeds are found in the nuclear channel by the plugin itself
+    (Otsu per tile), independently of the Cellpose nuclei. Where the two
+    disagree -- touching nuclei that Cellpose splits but the threshold
+    joins, a dim nucleus only Cellpose finds -- the review's `expect` rule
+    flags the cell. Many such flags mean `nuclei_threshold` or
+    `nuclei_min_size` want adjusting.
+
+Without PlantSeg, the same run works with the plain
+[nuclei-seeded watershed](#nuclei-seeded-watershed): set `module:
+"patchworks.plugins.watershed"` with only the `nuclei_*`, `foreground` and
+`max_radius_um` keys, and use the default environment (`pixi run multi-slurm`
+with this pair listed in `config/multi.yaml`).
+
 ## Cellpose: membrane only, in 3-D
 
 If you stay with Cellpose on such images:

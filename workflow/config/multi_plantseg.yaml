@@ -1,0 +1,30 @@
+# Nuclei with Cellpose, cells with PlantSeg flooded from the nuclei, related
+# to each other -- one command. See docs/guide/membrane_cells.md.
+#
+#   cd workflow
+#   pixi install -e plantseg
+#   pixi run -e plantseg plantseg-fetch generic_confocal_3D_unet  # once, with internet
+#   pixi run -e plantseg multi-plantseg-dry
+#   pixi run -e plantseg multi-plantseg-slurm
+#
+# The plantseg environment is the default one plus PlantSeg, so Cellpose
+# runs from it too. Everything else works as in config/multi.yaml, which
+# documents the optional relate:, review: and bundle: blocks.
+
+common: config/common.yaml
+
+segmentations:
+- config/config_nuclei.yaml # Cellpose "nuclei" model on channel 1
+- config/config_cyto_plantseg.yaml # PlantSeg + nuclei seeds on channel 0
+
+relations:
+- a: nuclei_labels
+  b: cyto_labels
+  output: nuclei_to_cyto.xlsx
+
+# One nucleus per cell is what the seeding promises: `patchworks review`
+# flags the cells where Cellpose's nuclei disagree (none, or two).
+review:
+  expect:
+    cyto_labels:
+      nuclei_labels: 1

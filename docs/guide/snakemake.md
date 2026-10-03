@@ -841,6 +841,11 @@ relations:
     output: nuclei_to_cyto.xlsx # written into work_dir
 ```
 
+A second example, `config/multi_plantseg.yaml`, pairs Cellpose nuclei with
+PlantSeg cells seeded from the nuclei (`pixi run -e plantseg
+multi-plantseg-slurm`); see [Cells from a membrane
+stain](membrane_cells.md#example-cellpose-nuclei-plantseg-cells-in-one-run).
+
 `common:` is optional — leave it out and each config must be self-contained,
 as before. With it, changing the input path or turning on `shard` is a
 one-line edit in one file instead of the same edit repeated per config.

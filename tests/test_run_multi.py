@@ -110,7 +110,8 @@ def test_convert_keys_must_agree_across_configs():
         _validate_configs(paths, bad)
 
 
-def test_shipped_multi_configs_are_consistent(tmp_path):
+@pytest.mark.parametrize("multi_file", ["multi.yaml", "multi_plantseg.yaml"])
+def test_shipped_multi_configs_are_consistent(tmp_path, multi_file):
     """The shipped example must satisfy its own validator.
 
     It is the thing users copy, so a config set that run_multi would refuse to
@@ -123,7 +124,7 @@ def test_shipped_multi_configs_are_consistent(tmp_path):
     them at a real directory first and check that.
     """
     cfg_dir = Path(__file__).resolve().parents[1] / "workflow" / "config"
-    multi = yaml.safe_load((cfg_dir / "multi.yaml").read_text())
+    multi = yaml.safe_load((cfg_dir / multi_file).read_text())
     common = yaml.safe_load((cfg_dir.parent / multi["common"]).read_text())
     paths = [cfg_dir.parent / p for p in multi["segmentations"]]
     cfgs = [{**common, **yaml.safe_load(p.read_text())} for p in paths]
@@ -138,6 +139,18 @@ def test_shipped_multi_configs_are_consistent(tmp_path):
     for path in paths:
         own = yaml.safe_load(path.read_text())
         assert not set(own) & set(_CONVERT_KEYS), path.name
+    # Each config passes prepare's own checks too (custom kwargs included),
+    # and the relations and review rules name label images that get made.
+    from _pw import validate_config
+    from run_multi import _review_rules
+
+    for cfg in cfgs:
+        validate_config(cfg)
+    names = [c["label_name"] for c in cfgs]
+    for rel in multi.get("relations") or ():
+        assert {rel["a"], rel["b"]} <= set(names)
+    if multi.get("review"):
+        _review_rules(multi, names)
 
 
 def _workflow_dir() -> Path:

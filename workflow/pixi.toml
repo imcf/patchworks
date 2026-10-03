@@ -83,6 +83,10 @@ cuda = "12"
 
 [feature.plantseg.tasks]
 plantseg-fetch = "python -c 'import sys; from patchworks.plugins.plantseg import fetch_model; fetch_model(*sys.argv[1:])'"
+# Cellpose nuclei + PlantSeg cells, related (config/multi_plantseg.yaml)
+multi-plantseg-dry = "python scripts/run_multi.py --config config/multi_plantseg.yaml -n"
+multi-plantseg = "python scripts/run_multi.py --config config/multi_plantseg.yaml"
+multi-plantseg-slurm = "python scripts/run_multi.py --config config/multi_plantseg.yaml --profile profile/slurm"
 
 # CAREamics (the optional `denoise:` step): Noise2Void denoising of every
 # tile before segmenting it.
