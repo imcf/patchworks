@@ -436,8 +436,57 @@ def validate_config(cfg) -> None:
     elif method == "custom":
         problems.extend(_custom_problems(cfg.get("custom")))
 
+    if cfg.get("denoise") is not None:
+        problems.extend(_denoise_problems(cfg["denoise"]))
+
     if problems:
         raise ValueError("invalid config:\n  - " + "\n  - ".join(problems))
+
+
+#: Keys of the optional ``denoise:`` block (patchworks.plugins.careamics).
+DENOISE_KEYS = (
+    "model",
+    "nuclei_model",
+    "tile_size",
+    "tile_overlap",
+    "batch_size",
+)
+
+
+def _denoise_problems(spec) -> list[str]:
+    """Check the ``denoise:`` block: known keys, model files that exist.
+
+    Checked here, on the prepare node, so a typo'd path fails in seconds
+    rather than on every GPU job. CAREamics itself is not imported: the
+    prepare environment need not have PyTorch.
+    """
+    if not isinstance(spec, dict) or not spec.get("model"):
+        return [
+            "denoise: needs a model, e.g. denoise: {model: n2v.ckpt} "
+            "(train one with `patchworks denoise-train`)"
+        ]
+    problems = []
+    unknown = sorted(set(spec) - set(DENOISE_KEYS))
+    if unknown:
+        problems.append(
+            f"unknown denoise keys {unknown}; known: {list(DENOISE_KEYS)}"
+        )
+    for key in ("model", "nuclei_model"):
+        path = spec.get(key)
+        if path and not Path(path).exists():
+            problems.append(f"denoise.{key} {path!r} does not exist")
+    for key in ("tile_size", "tile_overlap"):
+        value = spec.get(key)
+        if value is not None and not (
+            isinstance(value, list)
+            and value
+            and all(isinstance(v, int) and v > 0 for v in value)
+        ):
+            problems.append(
+                f"denoise.{key} must be a list of positive ints like "
+                f"[16, 256, 256]; got {value!r}"
+            )
+    return problems
 
 
 def _cellpose_problems(cp: dict) -> list[str]:
@@ -536,7 +585,10 @@ def build_fn(cfg):
         Omitted/0 disables dilation. ``cfg["dilate_gpu"]``: bool, dilate via
         cupyx instead of scipy (default ``False``); only takes effect when
         ``dilate`` is set, and needs a GPU allocated for the segment job
-        (independent of whether ``method`` itself uses one).
+        (independent of whether ``method`` itself uses one). Optional
+        ``cfg["denoise"]``: ``{model, nuclei_model, ...}``, denoise every
+        tile with CAREamics before segmenting it
+        (:func:`patchworks.plugins.careamics.denoise_fn`).
 
     Returns
     -------
@@ -544,6 +596,13 @@ def build_fn(cfg):
         ``(ndarray) -> ndarray`` returning integer labels.
     """
     fn = _build_method_fn(cfg)
+
+    # Pre-processing: denoise each tile before the method sees it.
+    if cfg.get("denoise"):
+        from patchworks.plugins.careamics import denoise_fn
+
+        spec = dict(cfg["denoise"])
+        fn = denoise_fn(fn, spec.pop("model"), **spec)
 
     # Post-processing, in order: fill holes, cut spurs, then grow.
     holes = cfg.get("fill_holes")

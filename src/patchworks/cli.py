@@ -153,6 +153,10 @@ def _cmd_segment(args: argparse.Namespace) -> int:
         raise SystemExit("--method custom needs --fn module:function")
     image = load_ome_zarr(args.image, channel=args.channel, level=args.level)
     fn = _build_fn(args, image)
+    if args.denoise:
+        from .plugins.careamics import denoise_fn
+
+        fn = denoise_fn(fn, args.denoise)
     tile_shape: Any = args.tile_shape
     if tile_shape not in (None, "auto"):
         tile_shape = _ints(tile_shape)
@@ -363,6 +367,25 @@ def _cmd_review(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_denoise_train(args: argparse.Namespace) -> int:
+    from .plugins.careamics import train_n2v
+
+    out = train_n2v(
+        args.image,
+        args.out,
+        channel=args.channel,
+        level=args.level,
+        crop_shape=args.crop_shape,
+        n_crops=args.crops,
+        patch_size=args.patch_size,
+        batch_size=args.batch_size,
+        epochs=args.epochs,
+        n2v2=args.n2v2,
+    )
+    print(out)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     """The ``patchworks`` argument parser (exposed for tests and docs)."""
     parser = argparse.ArgumentParser(
@@ -473,7 +496,39 @@ def build_parser() -> argparse.ArgumentParser:
     g = p.add_argument_group("custom")
     g.add_argument("--fn", help="module:function returning labels")
     g.add_argument("--fn-kwargs", help="JSON object of keyword arguments")
+    p.add_argument(
+        "--denoise",
+        metavar="MODEL",
+        help="denoise each tile with this CAREamics model (.ckpt or .zip) "
+        "before segmenting it; see `patchworks denoise-train`",
+    )
     p.set_defaults(func=_cmd_segment)
+
+    p = sub.add_parser(
+        "denoise-train",
+        help="train a Noise2Void denoiser on a store (CAREamics)",
+        description="Train a Noise2Void model on the brightest crops of one "
+        "channel -- no ground truth needed -- for `segment --denoise` or the "
+        "workflow's denoise: block. Run it on a GPU node.",
+    )
+    p.add_argument("image", help="OME-ZARR store")
+    p.add_argument("--out", required=True, help="checkpoint to write (.ckpt)")
+    p.add_argument("--channel", type=int, default=0)
+    p.add_argument("--level", type=int, default=0, help="pyramid level")
+    p.add_argument(
+        "--crop-shape",
+        type=_ints,
+        default=(32, 512, 512),
+        help="z,y,x of each training crop (default 32,512,512)",
+    )
+    p.add_argument("--crops", type=int, default=4, help="how many crops")
+    p.add_argument(
+        "--patch-size", type=_ints, help="training patch (default 16,64,64)"
+    )
+    p.add_argument("--batch-size", type=int, default=8)
+    p.add_argument("--epochs", type=int, default=30)
+    p.add_argument("--n2v2", action="store_true", help="use Noise2Void2")
+    p.set_defaults(func=_cmd_denoise_train)
 
     p = sub.add_parser("seams", help="does the tiling show in the labels?")
     p.add_argument("labels", help="label group (or any zarr group)")

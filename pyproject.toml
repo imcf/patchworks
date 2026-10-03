@@ -59,6 +59,11 @@ cellpose4 = ["cellpose>=4"]
 # path, isn't included here — it's CUDA-version-specific (e.g.
 # cupy-cuda12x), install it separately to match your CUDA version.
 dog = ["pycudadecon"]
+# careamics: Noise2Void denoising before segmentation (patchworks.plugins.
+# careamics, the workflow's `denoise:` step, `patchworks denoise-train`).
+# Brings PyTorch. PlantSeg (patchworks.plugins.plantseg) has no extra: it is
+# on conda-forge only (`plant-seg`; the workflow's `-e plantseg`).
+careamics = ["careamics>=0.3"]
 gpu = ["nvidia-ml-py"]
 # remote reads/writes s3://, gs:// and https:// stores through fsspec
 # (credentials come from the usual AWS/GCP environment or config files).

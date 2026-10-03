@@ -276,3 +276,45 @@ def test_build_fn_applies_fill_holes_and_opening():
     )
     out = fn(tile)
     assert out[0, 5, 5] == out[0, 3, 3] != 0
+
+
+def test_validate_config_checks_the_denoise_block(tmp_path):
+    import pytest
+    from _pw import validate_config
+
+    model = tmp_path / "n2v.ckpt"
+    model.write_bytes(b"")
+    validate_config({"method": "threshold", "denoise": {"model": str(model)}})
+    with pytest.raises(ValueError) as err:
+        validate_config(
+            {
+                "method": "threshold",
+                "denoise": {
+                    "model": str(tmp_path / "missing.ckpt"),
+                    "tile": [16, 256, 256],
+                    "tile_size": "big",
+                },
+            }
+        )
+    msg = str(err.value)
+    assert "missing.ckpt" in msg and "unknown denoise keys ['tile']" in msg
+    assert "denoise.tile_size" in msg
+    with pytest.raises(ValueError, match="needs a model"):
+        validate_config({"method": "threshold", "denoise": {}})
+
+
+def test_custom_plugins_validate_through_their_factories():
+    import pytest
+    from _pw import validate_config
+
+    for module in (
+        "patchworks.plugins.watershed",
+        "patchworks.plugins.plantseg",
+    ):
+        with pytest.raises(ValueError, match="unknown custom.kwargs"):
+            validate_config(
+                {
+                    "method": "custom",
+                    "custom": {"module": module, "kwargs": {"bogus": 1}},
+                }
+            )

@@ -224,6 +224,7 @@ _SETTINGS = (
     "method",
     "cellpose",
     "custom",
+    "denoise",
     "dilate",
     "min_volume",
     "max_volume",
