@@ -392,7 +392,7 @@ def tile_occupancy(
         occupancy[idx] = bool(window.size) and bool(window.max() > threshold)
 
     n_tiles = int(occupancy.size)
-    n_occ = int(occupancy.sum())
+    n_occ = int(np.count_nonzero(occupancy))
     logger.info(
         "tile_occupancy: threshold=%.4g  occupied %d/%d tiles",
         threshold,
