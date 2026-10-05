@@ -97,6 +97,13 @@ multi-plantseg-slurm = "python scripts/run_multi.py --config config/multi_plants
 [feature.careamics.pypi-dependencies]
 careamics = ">=0.3"
 
+# PlantSeg's conda stack pins scipy (and others) as PyPI sees them, and
+# careamics needs microssim, which caps scipy below what conda-forge would
+# pick: hold the conda side back so both solve together.
+[feature.plantseg-careamics.dependencies]
+scipy = "<=1.17.1"
+tqdm = "<=4.67.3"
+
 [feature.careamics.tasks]
 denoise-train = "patchworks denoise-train"
 
@@ -153,8 +160,11 @@ cuda12 = { features = ["cuda12"] }
 cuda13 = { features = ["cuda13"] }
 plantseg = { features = ["plantseg"], solve-group = "plantseg" }
 careamics = { features = ["careamics"] }
-# PlantSeg on denoised tiles
-plantseg-careamics = { features = ["plantseg", "careamics"], solve-group = "plantseg" }
+# PlantSeg on denoised tiles. A solve group of its own, with the conda
+# packages held back to what CAREamics accepts (see plantseg-careamics
+# feature): shared with `plantseg`, its conflict broke every environment --
+# pixi solves them all, even for a task in the default one.
+plantseg-careamics = { features = ["plantseg", "careamics", "plantseg-careamics"], solve-group = "plantseg-careamics" }
 # Combined, for a cluster that needs a pinned Cellpose *and* cupy.
 cellpose4-cuda12 = { features = ["cp4", "cuda12"], solve-group = "cp4-cu12" }
 cellpose4-cuda13 = { features = ["cp4", "cuda13"], solve-group = "cp4-cu13" }
