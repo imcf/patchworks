@@ -168,6 +168,21 @@ def check_seed_labels(work_dir, cfg) -> None:
             "first (list both configs in a multi.yaml: run_multi runs the "
             "seeds' config before this one)."
         )
+    # Finished, not merely there: segmenting in place writes tiles straight
+    # into labels/<name>/0 of a bare group, and only the merge, at its very
+    # end, registers it as a label image (multiscales). Seeds read before
+    # that are unmerged tiles with per-tile ids.
+    import zarr
+    from patchworks.plugins.ome_zarr import read_ngff_attr
+
+    attrs = zarr.open_group(str(group), mode="r").attrs
+    if not read_ngff_attr(attrs, "multiscales"):
+        raise ValueError(
+            f"seed_labels: {name!r} is still being made ({group} has no "
+            "label pyramid yet: its merge has not finished). Wait for it -- "
+            "run_multi starts this config once the one producing "
+            f"{name!r} is done."
+        )
     open_image(work_dir, cfg["channel"], cfg["level"], seed_labels=name)
 
 

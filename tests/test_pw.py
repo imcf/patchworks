@@ -351,6 +351,16 @@ def test_open_image_stacks_the_seed_labels(tmp_path):
 
     import pytest
 
+    # A label group being segmented in place has no pyramid yet: refused
+    import zarr
+
+    zarr.open_group(str(tmp_path / "image.zarr"), mode="a").require_group(
+        "labels/unfinished"
+    ).create_array("0", shape=(4, 32, 32), dtype="uint32")
+    with pytest.raises(ValueError, match="still being made"):
+        check_seed_labels(
+            tmp_path, {"seed_labels": "unfinished", "channel": 0, "level": 0}
+        )
     with pytest.raises(ValueError, match="does not exist"):
         check_seed_labels(
             tmp_path, {"seed_labels": "cells", "channel": 0, "level": 0}
