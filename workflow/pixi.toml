@@ -76,6 +76,12 @@ cellpose = ">=4"
 #                                         # have none)
 [feature.plantseg.dependencies]
 plant-seg = ">=2.0.0rc12"
+# profile/slurm sets `slurm-jobname-prefix`, which the SLURM executor plugin
+# has from 2.2 on. Here conda fixes numpy at 2.3 (the plugin's 2.7+ want
+# 2.4.5) and would take pandas 3 (2.2-2.6 want <3), so the solver fell back
+# to plugin 1.4.0 and every Snakemake call died on "unrecognized arguments:
+# --slurm-jobname-prefix". Keep pandas on 2.x so 2.6 fits, and require it.
+pandas = ">=2.2.3,<3"
 # A CUDA build: left to itself the solver may pick conda-forge's CPU
 # PyTorch, and the U-Net then runs on the CPU of a GPU node.
 pytorch = { version = ">=2.4", build = "cuda*" }
@@ -88,6 +94,9 @@ pytorch = { version = ">=2.4", build = "cuda*" }
 # satisfies cuda-version's `__cuda >=12`), e.g. in ~/.bashrc.
 [feature.plantseg.system-requirements]
 cuda = "12"
+
+[feature.plantseg.pypi-dependencies]
+snakemake-executor-plugin-slurm = ">=2.2"
 
 [feature.plantseg.tasks]
 plantseg-fetch = "python -c 'import sys; from patchworks.plugins.plantseg import fetch_model; fetch_model(*sys.argv[1:])'"

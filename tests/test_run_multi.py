@@ -1607,6 +1607,16 @@ def test_plantseg_and_careamics_environment_cannot_break_the_others():
     assert "plantseg-careamics" in both["features"]
     held = pixi["feature"]["plantseg-careamics"]["dependencies"]
     assert held["scipy"] == "<=1.17.1" and held["tqdm"] == "<=4.67.3"
+    # The SLURM profile's slurm-jobname-prefix needs executor plugin >=2.2;
+    # PlantSeg's conda pins pushed the solver down to 1.4.0, and every
+    # snakemake call failed on "unrecognized arguments". pandas<3 lets
+    # 2.2-2.6 fit next to conda's numpy 2.3.
+    plantseg = pixi["feature"]["plantseg"]
+    assert (
+        plantseg["pypi-dependencies"]["snakemake-executor-plugin-slurm"]
+        == ">=2.2"
+    )
+    assert plantseg["dependencies"]["pandas"] == ">=2.2.3,<3"
     # and the plantseg U-Net gets a CUDA build, not conda-forge's CPU one
     assert (
         pixi["feature"]["plantseg"]["dependencies"]["pytorch"]["build"]
