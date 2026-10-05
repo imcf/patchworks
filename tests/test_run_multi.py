@@ -85,7 +85,7 @@ def test_common_configfile_is_merged_under_the_per_config_one():
     assert not plain[j + 2].endswith(".yaml")
 
 
-def test_convert_keys_must_agree_across_configs():
+def test_convert_keys_must_agree_across_configs(tmp_path):
     """`convert` runs once from the first config, so a later one is ignored.
 
     Setting shard on the second config and watching a million files appear
@@ -93,12 +93,14 @@ def test_convert_keys_must_agree_across_configs():
     value was dropped, because nothing ever read it.
     """
     paths = [Path("a.yaml"), Path("b.yaml")]
-    base = {"work_dir": "/w", "tile_shape": [16, 512, 512], "level": 0}
+    # A creatable work_dir: "/w" only passed where the tests ran as root.
+    w = str(tmp_path / "w")
+    base = {"work_dir": w, "tile_shape": [16, 512, 512], "level": 0}
     good = [
         {**base, "label_name": "a", "shard": True},
         {**base, "label_name": "b", "shard": True},
     ]
-    assert _validate_configs(paths, good) == "/w"
+    assert _validate_configs(paths, good) == w
 
     bad = [
         {**base, "label_name": "a", "shard": True},
@@ -495,7 +497,7 @@ def test_relate_skips_a_relation_whose_workbook_is_up_to_date(tmp_path):
     assert wb.active["A1"].value == "sentinel"
 
 
-def test_mixed_nuclei_channel_auto_passes_validation():
+def test_mixed_nuclei_channel_auto_passes_validation(tmp_path):
     """A channel-count mismatch under `tile_shape: "auto"` is no longer
 
     refused at validation time -- it's resolved automatically instead (see
@@ -505,21 +507,22 @@ def test_mixed_nuclei_channel_auto_passes_validation():
     would now be testing the wrong layer.
     """
     paths = [Path("a.yaml"), Path("b.yaml")]
-    base = {"work_dir": "/w", "tile_shape": "auto", "level": 0}
+    w = str(tmp_path / "w")  # creatable, without root
+    base = {"work_dir": w, "tile_shape": "auto", "level": 0}
 
     mixed = [
         {**base, "label_name": "a", "channel": 0, "nuclei_channel": 1},
         {**base, "label_name": "b", "channel": 2},
     ]
-    assert _validate_configs(paths, mixed) == "/w"
+    assert _validate_configs(paths, mixed) == w
 
     # Same pair with one explicit shape is fine: both get that tile.
     pinned = [{**c, "tile_shape": [16, 512, 512]} for c in mixed]
-    assert _validate_configs(paths, pinned) == "/w"
+    assert _validate_configs(paths, pinned) == w
 
     # And "auto" is fine when every config carries the same channel count.
     both = [{**mixed[0]}, {**mixed[1], "nuclei_channel": 3}]
-    assert _validate_configs(paths, both) == "/w"
+    assert _validate_configs(paths, both) == w
 
 
 def test_resolve_shared_tile_shape_pins_the_smallest_candidate(
