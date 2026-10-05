@@ -486,3 +486,12 @@ setattr(segment, "patchworks_kwargs_target", plantseg_fn)
 # Every voxel goes to some cell, so neighbours touch at every tile seam:
 # the workflow requires IoU stitching (stitch: "iou") with this function.
 setattr(segment, "patchworks_stitch", "iou")
+# Checked by the workflow before anything runs (an import spec lookup, no
+# import): run from the default environment, the first GPU job failed.
+setattr(
+    segment,
+    "patchworks_requires",
+    {
+        "plantseg": "PlantSeg is in the plantseg environment: pixi run -e plantseg ..."
+    },
+)

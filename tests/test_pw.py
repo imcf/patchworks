@@ -278,9 +278,12 @@ def test_build_fn_applies_fill_holes_and_opening():
     assert out[0, 5, 5] == out[0, 3, 3] != 0
 
 
-def test_validate_config_checks_the_denoise_block(tmp_path):
+def test_validate_config_checks_the_denoise_block(tmp_path, monkeypatch):
+    import _pw
     import pytest
     from _pw import validate_config
+
+    monkeypatch.setattr(_pw, "has_module", lambda name: True)
 
     model = tmp_path / "n2v.ckpt"
     model.write_bytes(b"")
@@ -423,9 +426,12 @@ def test_validate_config_checks_seed_labels():
             validate_config(cfg)
 
 
-def test_space_filling_plugins_require_iou_stitching():
+def test_space_filling_plugins_require_iou_stitching(monkeypatch):
+    import _pw
     import pytest
     from _pw import validate_config
+
+    monkeypatch.setattr(_pw, "has_module", lambda name: True)
 
     for module in (
         "patchworks.plugins.watershed",
@@ -518,3 +524,33 @@ def test_seeded_cells_across_tiles_one_per_nucleus(tmp_path):
 
     assert cells("iou") == (12, 12)  # each nucleus in its own cell
     assert cells("touch")[0] < 12  # why the workflow requires "iou"
+
+
+def test_missing_packages_are_named_with_the_environment_to_use(
+    tmp_path, monkeypatch
+):
+    """Run from the default environment, a PlantSeg config failed in its
+    first GPU job; it is now refused up front, saying which environment."""
+    import _pw
+
+    missing = {"plantseg", "careamics"}
+    monkeypatch.setattr(_pw, "has_module", lambda name: name not in missing)
+    model = tmp_path / "n2v.ckpt"
+    model.write_bytes(b"")
+    cfg = {
+        "method": "custom",
+        "label_name": "cyto_labels_plantseg",
+        "stitch": "iou",
+        "nuclei_channel": 1,
+        "custom": {"module": "patchworks.plugins.plantseg"},
+        "denoise": {"model": str(model)},
+    }
+    problems = _pw.environment_problems(cfg)
+    assert len(problems) == 2
+    assert "pixi run -e plantseg" in problems[0]
+    assert "cyto_labels_plantseg needs 'plantseg'" in problems[0]
+    assert "-e careamics" in problems[1]
+    missing.clear()
+    assert _pw.environment_problems(cfg) == []
+    # Functions that need nothing extra are left alone
+    assert _pw.environment_problems({"method": "threshold"}) == []

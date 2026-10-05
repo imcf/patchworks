@@ -494,6 +494,7 @@ def validate_config(cfg) -> None:
 
     if cfg.get("denoise") is not None:
         problems.extend(_denoise_problems(cfg["denoise"]))
+    problems.extend(environment_problems(cfg))
 
     if problems:
         raise ValueError("invalid config:\n  - " + "\n  - ".join(problems))
@@ -576,6 +577,53 @@ def _seed_labels_problems(cfg) -> list[str]:
             "seed_labels hands each tile labels, but custom.kwargs.seeds is "
             f'{spec["kwargs"]["seeds"]!r}; drop it (it is set to "labels")'
         )
+    return problems
+
+
+def has_module(name: str) -> bool:
+    """Whether *name* is importable here, without importing it."""
+    import importlib.util
+
+    try:
+        return importlib.util.find_spec(name) is not None
+    except (ImportError, ValueError):
+        return False
+
+
+def environment_problems(cfg) -> list[str]:
+    """Packages the config needs that this environment does not have.
+
+    A custom function lists them in ``patchworks_requires`` (``{module:
+    hint}``), and ``denoise:`` needs CAREamics. Only the import specs are
+    looked up -- nothing is imported, so this is cheap enough for run_multi
+    to check every config before converting, where a missing PlantSeg used
+    to surface as an ImportError in the first GPU job.
+    """
+    import importlib
+
+    needs: dict[str, str] = {}
+    if cfg.get("method") == "custom":
+        spec = cfg.get("custom") or {}
+        try:
+            fn = getattr(
+                importlib.import_module(spec["module"]),
+                spec.get("function", "segment"),
+            )
+            needs.update(getattr(fn, "patchworks_requires", None) or {})
+        except Exception:
+            pass  # _custom_problems reports an unimportable module
+    if cfg.get("denoise"):
+        needs["careamics"] = (
+            "CAREamics is in the careamics environment: pixi run -e "
+            "careamics ... (-e plantseg-careamics with PlantSeg)"
+        )
+    problems = []
+    for module, hint in needs.items():
+        if not has_module(module):
+            problems.append(
+                f"{cfg.get('label_name', 'this config')} needs {module!r}, "
+                f"which this environment does not have. {hint}"
+            )
     return problems
 
 

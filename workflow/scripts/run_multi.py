@@ -994,6 +994,16 @@ def main() -> None:
         sys.exit(_test_email(seg_cfgs[0]))
 
     work_dir = _validate_configs(seg_config_paths, seg_cfgs)
+    # Every package a config needs, checked in the environment that will run
+    # it (this one: the jobs re-launch from its interpreter) before anything
+    # is converted or submitted.
+    from _pw import environment_problems
+
+    missing = [p for cfg in seg_cfgs for p in environment_problems(cfg)]
+    if missing:
+        for p in missing:
+            print(f"[run_multi] ERROR: {p}", file=sys.stderr)
+        sys.exit(1)
     # Checked now, not after hours of segmentation: a typo'd label name here
     # would otherwise only surface once the relations start.
     review_rules = _review_rules(
