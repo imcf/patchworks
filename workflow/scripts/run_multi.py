@@ -826,9 +826,32 @@ def run_after(
     return [(names[i], status[i]) for i in range(len(names))]
 
 
-def _resolve(workflow_dir: Path, path_str: str) -> Path:
-    path = Path(path_str)
-    return path if path.is_absolute() else workflow_dir / path
+def _resolve(path_str: str, *bases: Path) -> Path:
+    """*path_str* as given if absolute, else under the first of *bases*
+    holding it (the first base when none does, so the error names it)."""
+    path = Path(path_str).expanduser()
+    if path.is_absolute():
+        return path
+    for base in bases:
+        if (base / path).exists():
+            return base / path
+    return bases[0] / path
+
+
+def _config_bases(workflow_dir: Path) -> list[Path]:
+    """Where a relative ``--config`` is looked for, in order.
+
+    pixi runs a task from the workspace root (``workflow/``) whatever
+    directory it was called from, and says which in ``INIT_CWD``: so
+    ``pixi run multi-slurm --config my_multi.yaml`` from a project folder
+    finds the file there, while the shipped ``config/multi.yaml`` still
+    resolves against ``workflow/``.
+    """
+    bases = []
+    for base in (os.environ.get("INIT_CWD"), os.getcwd(), workflow_dir):
+        if base and Path(base) not in bases:
+            bases.append(Path(base))
+    return bases
 
 
 def main() -> None:
@@ -837,7 +860,12 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
-        "--config", required=True, help="multi-segmentation config YAML"
+        "--config",
+        default="config/multi.yaml",
+        help="multi-segmentation config YAML (default: config/multi.yaml). "
+        "A relative path is looked for in the directory pixi was run from, "
+        "then in workflow/; the configs it lists, next to it, then in "
+        "workflow/. E.g. pixi run multi-slurm --config my_multi.yaml",
     )
     parser.add_argument(
         "--profile",
@@ -939,19 +967,27 @@ def main() -> None:
     args = parser.parse_args()
 
     workflow_dir = Path(__file__).resolve().parent.parent
-    multi_cfg_path = _resolve(workflow_dir, args.config)
+    bases = _config_bases(workflow_dir)
+    multi_cfg_path = _resolve(args.config, *bases)
+    if not multi_cfg_path.is_file():
+        looked = ", ".join(str(b / args.config) for b in bases)
+        sys.exit(
+            f"[run_multi] ERROR: --config {args.config} not found (looked at {looked})"
+        )
+    multi_cfg_path = multi_cfg_path.resolve()
     multi_cfg = _load_yaml(multi_cfg_path)
+    # Paths inside the multi config: next to it first (a copy kept with the
+    # data, listing its own configs), then workflow/ (the shipped one).
+    inner = (multi_cfg_path.parent, workflow_dir)
 
-    seg_config_paths = [
-        _resolve(workflow_dir, c) for c in multi_cfg["segmentations"]
-    ]
+    seg_config_paths = [_resolve(c, *inner) for c in multi_cfg["segmentations"]]
     # Optional shared config: Snakemake merges --configfile values in order,
     # so `common` holds what every segmentation agrees on and each per-config
     # file overrides only what differs. Validation has to see the same merged
     # view Snakemake will, or it would report a missing work_dir that is
     # simply defined one file over.
     common_path = multi_cfg.get("common")
-    common_path = _resolve(workflow_dir, common_path) if common_path else None
+    common_path = _resolve(common_path, *inner) if common_path else None
     common_cfg = _load_yaml(common_path) if common_path else {}
     seg_cfgs = [{**common_cfg, **_load_yaml(p)} for p in seg_config_paths]
     if args.test_email:
@@ -1026,7 +1062,7 @@ def main() -> None:
             "[run_multi] ERROR: conversion failed.\n"
             "  If the log says the directory cannot be locked, a previous run "
             "was killed rather than exiting cleanly; release it with:\n"
-            f"      {Path(sys.argv[0]).name} --config {args.config} --unlock",
+            f"      {Path(sys.argv[0]).name} --config {multi_cfg_path} --unlock",
             file=sys.stderr,
         )
         sys.exit(rc)

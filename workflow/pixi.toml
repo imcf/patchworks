@@ -6,6 +6,7 @@
 #   pixi run multi        # run several segmentations + relate their labels (local)
 #   pixi run multi-slurm  # same, on SLURM
 #   pixi run multi-dry    # dry-run every segmentation in config/multi.yaml
+#                          # any of the three: --config my_multi.yaml for another
 #   pixi install -e viewer && pixi run -e viewer napari <image.zarr>
 #                          # open a store in napari, every label auto-loaded.
 #                          # Also takes a `pixi run zip` bundle directly:
@@ -83,7 +84,8 @@ cuda = "12"
 
 [feature.plantseg.tasks]
 plantseg-fetch = "python -c 'import sys; from patchworks.plugins.plantseg import fetch_model; fetch_model(*sys.argv[1:])'"
-# Cellpose nuclei + PlantSeg cells, related (config/multi_plantseg.yaml)
+# Cellpose nuclei + PlantSeg cells, related (config/multi_plantseg.yaml).
+# `--config my_multi.yaml` after these overrides it too (the last one wins).
 multi-plantseg-dry = "python scripts/run_multi.py --config config/multi_plantseg.yaml -n"
 multi-plantseg = "python scripts/run_multi.py --config config/multi_plantseg.yaml"
 multi-plantseg-slurm = "python scripts/run_multi.py --config config/multi_plantseg.yaml --profile profile/slurm"
@@ -198,6 +200,10 @@ zip = "python scripts/export_iso.py --format zip"
 # relate their labels by voxel overlap (patchworks.label_relations) and write
 # a CSV per configured pair — see config/multi.yaml and
 # docs/guide/snakemake.md "Running two segmentations".
-multi-dry = "python scripts/run_multi.py --config config/multi.yaml -n"
-multi = "python scripts/run_multi.py --config config/multi.yaml"
-multi-slurm = "python scripts/run_multi.py --config config/multi.yaml --profile profile/slurm"
+#
+# Another multi config: pixi run multi-slurm --config /path/to/my_multi.yaml
+# A relative path is taken from the directory you run pixi in (then from
+# here); the configs it lists, from its own directory (then from here).
+multi-dry = "python scripts/run_multi.py -n"
+multi = "python scripts/run_multi.py"
+multi-slurm = "python scripts/run_multi.py --profile profile/slurm"

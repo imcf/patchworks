@@ -856,6 +856,19 @@ pixi run multi        # run locally
 pixi run multi-slurm  # submit every segmentation to SLURM
 ```
 
+They read `config/multi.yaml` unless given another with `--config`:
+
+```bash
+pixi run multi-slurm --config /data/run42/multi.yaml
+pixi run multi-dry --config my_multi.yaml   # relative to where you run pixi
+```
+
+A relative `--config` is looked for in the directory you run `pixi` from,
+then in `workflow/`. The `common:` and `segmentations:` paths inside it are
+looked for next to the multi config first, then in `workflow/` -- so a run's
+configs can live together in a folder of their own, beside the data, while
+the shipped `config/multi.yaml` keeps working as it is.
+
 Before anything is submitted, the script checks that every listed config
 shares one `work_dir` (so `label_relations` has a single `image.zarr` to read
 both label groups from), that `tile_shape` and `level` are identical (so the

@@ -1511,3 +1511,77 @@ def test_main_runs_with_an_explicit_tile_shape_seeds_first(
         run_multi.main()
     assert done.value.code == 0
     assert log.index(("start", "cells")) > log.index(("end", "nuclei"))
+
+
+def test_config_option_resolves_from_where_pixi_runs(tmp_path, monkeypatch):
+    """`pixi run multi-slurm --config my_multi.yaml` from a project folder:
+    pixi runs the task in workflow/ but says where it was called from
+    (INIT_CWD); the configs the multi lists are found next to it."""
+    import run_multi
+
+    project = tmp_path / "project"
+    (project / "configs").mkdir(parents=True)
+    common = {
+        "input": str(tmp_path / "scan.zarr"),
+        "work_dir": str(tmp_path / "results"),
+        "tile_shape": [16, 512, 512],
+        "level": 0,
+    }
+    (project / "configs" / "common.yaml").write_text(yaml.safe_dump(common))
+    (project / "configs" / "a.yaml").write_text(
+        yaml.safe_dump({"label_name": "a"})
+    )
+    (project / "my_multi.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "common": "configs/common.yaml",
+                "segmentations": ["configs/a.yaml"],
+            }
+        )
+    )
+    started = []
+    monkeypatch.setattr(run_multi, "_run", lambda cmd, wd: 0)
+    monkeypatch.setattr(
+        run_multi.subprocess,
+        "Popen",
+        lambda cmd, cwd=None: started.append(cmd) or _FakeProc([], "a", 0, 1),
+    )
+    monkeypatch.setenv("INIT_CWD", str(project))
+    monkeypatch.chdir(_workflow_dir())  # where pixi runs every task
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["run_multi.py", "--config", "my_multi.yaml", "--cores", "1"],
+    )
+    with pytest.raises(SystemExit) as done:
+        run_multi.main()
+    assert done.value.code == 0
+    cmd = started[0]
+    i = cmd.index("--configfile")
+    assert cmd[i + 1 : i + 3] == [
+        str(project / "configs" / "common.yaml"),
+        str(project / "configs" / "a.yaml"),
+    ]
+
+
+def test_config_defaults_to_the_shipped_multi_and_names_a_missing_one(
+    tmp_path, monkeypatch, capsys
+):
+    import run_multi
+
+    wf = _workflow_dir()
+    monkeypatch.delenv("INIT_CWD", raising=False)
+    monkeypatch.chdir(tmp_path)
+    assert run_multi._resolve(
+        "config/multi.yaml", *run_multi._config_bases(wf)
+    ) == (wf / "config" / "multi.yaml")
+    monkeypatch.setattr(sys, "argv", ["run_multi.py", "--config", "nope.yaml"])
+    with pytest.raises(SystemExit) as err:
+        run_multi.main()
+    assert "nope.yaml not found" in str(err.value.code)
+    # The pixi tasks leave --config to the caller, defaulting to multi.yaml
+    tasks = (wf / "pixi.toml").read_text()
+    assert (
+        'multi-slurm = "python scripts/run_multi.py --profile profile/slurm"'
+        in tasks
+    )
