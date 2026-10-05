@@ -1663,3 +1663,28 @@ def test_a_missing_package_stops_the_run_before_converting(
         run_multi.main()
     assert done.value.code == 1 and not ran  # nothing converted
     assert "pixi run -e plantseg" in capsys.readouterr().err
+
+
+def test_seed_plan_warns_when_the_seeds_come_from_no_config(tmp_path):
+    """A seed_labels name that no config makes (nuclei_labels for
+    nuclei_labels_cpsam) used to start the cells at once, from whatever old
+    labels the store held under that name -- silently."""
+    from run_multi import seed_plan
+
+    store = tmp_path / "image.zarr"
+    (store / "labels" / "nuclei_labels").mkdir(parents=True)
+    cfgs = [
+        {"label_name": "nuclei_labels_cpsam"},
+        {"label_name": "cyto_labels_plantseg", "seed_labels": "nuclei_labels"},
+        {"label_name": "cells_b", "seed_labels": "nuclei_labels_cpsam"},
+        {"label_name": "cells_c", "seed_labels": "nope"},
+    ]
+    lines = seed_plan(cfgs, str(store))
+    assert lines[0].startswith("WARNING: cyto_labels_plantseg grows from")
+    assert "already in the store, NOT re-made" in lines[0]
+    assert "nuclei_labels_cpsam" in lines[0]
+    assert lines[1] == (
+        "cells_b grows from nuclei_labels_cpsam: starts once "
+        "nuclei_labels_cpsam is done"
+    )
+    assert "not in the store either" in lines[2]
