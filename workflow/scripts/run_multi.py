@@ -574,6 +574,42 @@ def seed_dependencies(cfgs: list[dict]) -> dict[int, int]:
     }
 
 
+def seed_plan(cfgs: list[dict], image_store: str) -> list[str]:
+    """What each ``seed_labels`` config will grow from, said up front.
+
+    A name no listed config produces is taken from the store as it is --
+    typically left by an earlier run under that name, so the cells would
+    grow from old seeds while the current nuclei are re-segmented next to
+    them, with nothing to show for it. Say so loudly, and name the configs'
+    own label images, since a near-miss (``nuclei_labels`` for
+    ``nuclei_labels_cpsam``) is the usual cause.
+    """
+    names = [cfg.get("label_name") for cfg in cfgs]
+    lines = []
+    for cfg in cfgs:
+        seed = cfg.get("seed_labels")
+        if not seed:
+            continue
+        me = cfg.get("label_name")
+        if seed in names:
+            lines.append(f"{me} grows from {seed}: starts once {seed} is done")
+            continue
+        here = Path(image_store, "labels", seed).exists()
+        lines.append(
+            f"WARNING: {me} grows from seed_labels {seed!r}, which no config "
+            "in this run produces -- "
+            + (
+                f"using the {seed} already in the store, NOT re-made by "
+                "this run"
+                if here
+                else f"and {seed} is not in the store either (prepare will "
+                "stop)"
+            )
+            + f". This run's label images: {', '.join(map(str, names))}"
+        )
+    return lines
+
+
 def _validate_configs(paths: list[Path], cfgs: list[dict]) -> str:
     """Check the cross-config invariants before anything is submitted.
 
@@ -1120,6 +1156,8 @@ def main() -> None:
     # everything else starts at once. A dry run never writes labels, so
     # nothing waits there.
     deps = {} if args.dry_run else seed_dependencies(seg_cfgs)
+    for line in seed_plan(seg_cfgs, image_store):
+        print(f"[run_multi] {line}", flush=True)
     status = run_after(
         [p.name for p in seg_config_paths],
         deps,
