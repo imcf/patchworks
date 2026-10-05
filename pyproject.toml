@@ -119,7 +119,8 @@ napari = [
 # workbook (per-object + per-container sheets) from the object tables.
 workflow = [
     "snakemake>=8",
-    "snakemake-executor-plugin-slurm",
+    # >=2.2: profile/slurm sets slurm-jobname-prefix, unknown before 2.2
+    "snakemake-executor-plugin-slurm>=2.2",
     "openpyxl",
     "pandas>=2.0",
     # method: "threshold" and the nuclei-seeded watershed plugin
