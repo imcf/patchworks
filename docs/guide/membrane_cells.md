@@ -162,6 +162,18 @@ pixi run -e plantseg multi-plantseg-dry                        # check the plan
 pixi run -e plantseg multi-plantseg-slurm                      # submit
 ```
 
+Your own multi config with a PlantSeg segmentation in it runs the same
+way, from the same environment:
+
+```bash
+pixi run -e plantseg multi-slurm --config /path/to/my_multi.yaml
+```
+
+The `-e plantseg` matters: every job runs in the environment the command
+was started from, and the default one has no PlantSeg. `run_multi` checks
+this before converting anything and says which environment to use (as it
+does for `denoise:`, which needs `-e careamics`).
+
 The `plantseg` environment is the default one plus PlantSeg, so the
 Cellpose run comes from it too. Afterwards, `nuclei_to_cyto.xlsx` gives
 each nucleus its cell, and `pixi run -e viewer review <work_dir>/image.zarr`

@@ -111,7 +111,9 @@ def test_convert_keys_must_agree_across_configs():
 
 
 @pytest.mark.parametrize("multi_file", ["multi.yaml", "multi_plantseg.yaml"])
-def test_shipped_multi_configs_are_consistent(tmp_path, multi_file):
+def test_shipped_multi_configs_are_consistent(
+    tmp_path, multi_file, monkeypatch
+):
     """The shipped example must satisfy its own validator.
 
     It is the thing users copy, so a config set that run_multi would refuse to
@@ -141,9 +143,12 @@ def test_shipped_multi_configs_are_consistent(tmp_path, multi_file):
         assert not set(own) & set(_CONVERT_KEYS), path.name
     # Each config passes prepare's own checks too (custom kwargs included),
     # and the relations and review rules name label images that get made.
+    import _pw
     from _pw import validate_config
     from run_multi import _review_rules
 
+    # PlantSeg is not installed here; its own environment has it.
+    monkeypatch.setattr(_pw, "has_module", lambda name: True)
     for cfg in cfgs:
         validate_config(cfg)
     names = [c["label_name"] for c in cfgs]
@@ -1607,3 +1612,44 @@ def test_plantseg_and_careamics_environment_cannot_break_the_others():
         pixi["feature"]["plantseg"]["dependencies"]["pytorch"]["build"]
         == "cuda*"
     )
+
+
+def test_a_missing_package_stops_the_run_before_converting(
+    tmp_path, monkeypatch, capsys
+):
+    import _pw
+    import run_multi
+
+    common = tmp_path / "common.yaml"
+    common.write_text(
+        yaml.safe_dump(
+            {
+                "input": str(tmp_path / "scan.zarr"),
+                "work_dir": str(tmp_path / "results"),
+                "tile_shape": [16, 512, 512],
+                "level": 0,
+            }
+        )
+    )
+    cells = tmp_path / "cells.yaml"
+    cells.write_text(
+        yaml.safe_dump(
+            {
+                "label_name": "cyto_labels_plantseg",
+                "method": "custom",
+                "custom": {"module": "patchworks.plugins.plantseg"},
+            }
+        )
+    )
+    multi = tmp_path / "multi.yaml"
+    multi.write_text(
+        yaml.safe_dump({"common": str(common), "segmentations": [str(cells)]})
+    )
+    monkeypatch.setattr(_pw, "has_module", lambda name: name != "plantseg")
+    ran = []
+    monkeypatch.setattr(run_multi, "_run", lambda *a: ran.append(a) or 0)
+    monkeypatch.setattr(sys, "argv", ["run_multi.py", "--config", str(multi)])
+    with pytest.raises(SystemExit) as done:
+        run_multi.main()
+    assert done.value.code == 1 and not ran  # nothing converted
+    assert "pixi run -e plantseg" in capsys.readouterr().err
