@@ -68,6 +68,7 @@ gets closed by the partitioning, where Cellpose would merge across it.
 PlantSeg is on conda-forge only, so it has its own pixi environment:
 
 ```bash
+export CONDA_OVERRIDE_CUDA=12.0   # login node without a GPU: see below
 pixi install -e plantseg
 pixi run -e plantseg plantseg-fetch generic_confocal_3D_unet   # once, with internet
 pixi run -e plantseg multi-slurm
@@ -168,6 +169,22 @@ way, from the same environment:
 ```bash
 pixi run -e plantseg multi-slurm --config /path/to/my_multi.yaml
 ```
+
+!!! note "`Virtual package '__cuda' does not match` on a login node"
+
+    The `plantseg` environment holds a CUDA build of PyTorch, and pixi
+    refuses to install or run an environment needing CUDA on a machine with
+    no GPU driver -- a login node. Only the GPU jobs need CUDA, and they
+    start the environment's Python directly, without pixi. Tell pixi on the
+    login node that a driver is there:
+
+    ```bash
+    export CONDA_OVERRIDE_CUDA=12.0   # any 12.x; put it in ~/.bashrc
+    ```
+
+    It must be set for every `pixi run -e plantseg ...` there, not only for
+    the install. Check the GPU nodes' driver supports CUDA 12 (`nvidia-smi`
+    in a GPU job prints "CUDA Version: 12.x" or later).
 
 The `-e plantseg` matters: every job runs in the environment the command
 was started from, and the default one has no PlantSeg. `run_multi` checks

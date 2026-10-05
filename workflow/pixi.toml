@@ -69,6 +69,7 @@ cellpose = ">=4"
 # PlantSeg (method: "custom", module patchworks.plugins.plantseg) is on
 # conda-forge only -- vigra, nifty and elf have no wheels. Its own solve
 # group, since it brings a conda PyTorch the others get from PyPI.
+#   export CONDA_OVERRIDE_CUDA=12.0       # on a login node without a GPU
 #   pixi install -e plantseg
 #   pixi run -e plantseg plantseg-fetch   # download the U-Net, on a node
 #                                         # with internet (GPU nodes often
@@ -79,6 +80,12 @@ plant-seg = ">=2.0.0rc12"
 # PyTorch, and the U-Net then runs on the CPU of a GPU node.
 pytorch = { version = ">=2.4", build = "cuda*" }
 
+# pixi refuses to install or run this environment on a machine without a
+# GPU driver (a login node): "Virtual package '__cuda' does not match".
+# Only the jobs on GPU nodes need CUDA, and they run the environment's
+# interpreter directly, without pixi; on the login node, which only submits
+# them, say a driver is there: export CONDA_OVERRIDE_CUDA=12.0 (any 12.x
+# satisfies cuda-version's `__cuda >=12`), e.g. in ~/.bashrc.
 [feature.plantseg.system-requirements]
 cuda = "12"
 
