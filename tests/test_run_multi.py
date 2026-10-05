@@ -1585,3 +1585,25 @@ def test_config_defaults_to_the_shipped_multi_and_names_a_missing_one(
         'multi-slurm = "python scripts/run_multi.py --profile profile/slurm"'
         in tasks
     )
+
+
+def test_plantseg_and_careamics_environment_cannot_break_the_others():
+    """pixi solves every environment, even to run a task in the default one,
+    so one unsolvable optional environment stops everybody. PlantSeg's conda
+    stack and CAREamics (via microssim) disagree on scipy/tqdm: shared with
+    the plantseg solve group, `pixi run multi-slurm` failed on the cluster
+    with "failed to solve the pypi requirements of environment 'plantseg'"."""
+    import tomllib
+
+    pixi = tomllib.loads((_workflow_dir() / "pixi.toml").read_text())
+    envs = pixi["environments"]
+    both = envs["plantseg-careamics"]
+    assert both["solve-group"] != envs["plantseg"]["solve-group"]
+    assert "plantseg-careamics" in both["features"]
+    held = pixi["feature"]["plantseg-careamics"]["dependencies"]
+    assert held["scipy"] == "<=1.17.1" and held["tqdm"] == "<=4.67.3"
+    # and the plantseg U-Net gets a CUDA build, not conda-forge's CPU one
+    assert (
+        pixi["feature"]["plantseg"]["dependencies"]["pytorch"]["build"]
+        == "cuda*"
+    )
