@@ -1131,10 +1131,12 @@ def test_bundle_runs_after_the_relations_not_before():
     # The failure branch exits without bundling...
     failed = src.index("relation(s) failed")
     exit_one = src.index("sys.exit(1)", failed)
-    bundle_after = src.index("_run_bundle", exit_one)
+    bundle_after = src.index("_finish()", exit_one)
     assert exit_one < bundle_after
-    # ...and the success path bundles.
-    assert src.count("_run_bundle(image_store, workflow_dir, bundle") == 3
+    # ...as does a run with relations skipped; the success path bundles.
+    finish = src[src.index("def _finish():") :].split("\n\n")[0]
+    assert finish.index("if skipped:") < finish.index("_run_bundle(")
+    assert src.count("_finish()") == 4
 
 
 def test_bundle_store_path_is_made_absolute():
@@ -1811,3 +1813,147 @@ def test_driver_alive_finds_a_running_driver(tmp_path):
     finally:
         proc.kill()
         proc.wait()
+
+
+def _label_store(tmp_path, names, ngff_version="0.5"):
+    import zarr
+
+    from patchworks.plugins.ome_zarr import register_labels
+
+    store = tmp_path / "results" / "image.zarr"
+    zarr_format = 2 if ngff_version == "0.4" else 3
+    labels = zarr.open_group(
+        str(store), mode="w", zarr_format=zarr_format
+    ).require_group("labels")
+    for name in names:
+        labels.require_group(name).create_array(
+            "0", shape=(4, 8, 8), dtype="int32"
+        )
+        register_labels(
+            str(store),
+            name,
+            axes="zyx",
+            n_levels=1,
+            progress=False,
+            ngff_version=ngff_version,
+        )
+    return store
+
+
+@pytest.mark.parametrize("ngff_version", ["0.4", "0.5"])
+def test_label_ready_needs_a_registered_label_image(tmp_path, ngff_version):
+    import zarr
+
+    import run_multi
+
+    store = _label_store(tmp_path, ["nuclei"], ngff_version)
+    assert run_multi.label_ready(store, "nuclei")
+    assert not run_multi.label_ready(store, "cilia")
+    # Tiles written in place, merge not finished: a bare group
+    zarr.open_group(str(store / "labels")).require_group("cells").create_array(
+        "0", shape=(4, 8, 8), dtype="int32"
+    )
+    assert not run_multi.label_ready(store, "cells")
+
+
+def test_relations_must_name_labels_this_run_makes_or_has(tmp_path):
+    """A relation on a label image nobody makes failed as a zarr
+    ArrayNotFoundError in its relate job, after every segmentation."""
+    import run_multi
+
+    store = _label_store(tmp_path, ["old_nuclei"])
+    cfgs = [{"label_name": "cyto"}, {"label_name": "cilia_dog"}]
+    rels = [
+        {"a": "old_nuclei", "b": "cyto"},  # in the store: fine
+        {"a": "cilia_labels", "b": "cyto"},  # nobody makes it
+    ]
+    problems = run_multi.relation_problems(rels, cfgs, store)
+    assert len(problems) == 1
+    assert "'cilia_labels'" in problems[0] and "cilia_dog" in problems[0]
+
+
+def test_a_done_run_whose_labels_are_gone_is_reported(tmp_path):
+    """labels.done in the run directory, labels/<name> missing from the
+    store: Snakemake reported the config ok and nothing re-made it."""
+    import run_multi
+
+    store = _label_store(tmp_path, ["nuclei"])
+    work = tmp_path / "results"
+    cfgs = [
+        {"work_dir": str(work), "label_name": n}
+        for n in ("nuclei", "cilia_labels", "cyto")
+    ]
+    for name in ("nuclei", "cilia_labels"):
+        (work / name).mkdir()
+        (work / name / "labels.done").touch()
+    problems = run_multi.stale_runs(cfgs, store)
+    assert len(problems) == 1
+    assert problems[0].startswith("cilia_labels:")
+    assert f"Remove {work / 'cilia_labels'}" in problems[0]
+
+
+def test_relations_on_labels_a_run_left_missing_are_skipped(
+    tmp_path, monkeypatch
+):
+    """Every config reported ok but one left no label image: its relations
+    are skipped with a message, the others still run, and the exit says
+    something is missing."""
+    import types
+
+    import run_multi
+
+    work = tmp_path / "results"
+    common = tmp_path / "common.yaml"
+    common.write_text(
+        yaml.safe_dump(
+            {
+                "input": str(tmp_path / "scan.zarr"),
+                "work_dir": str(work),
+                "tile_shape": [16, 512, 512],
+                "level": 0,
+            }
+        )
+    )
+    paths = []
+    for name in ("nuclei", "cyto", "cilia"):
+        paths.append(tmp_path / f"{name}.yaml")
+        paths[-1].write_text(yaml.safe_dump({"label_name": name}))
+    multi = tmp_path / "multi.yaml"
+    multi.write_text(
+        yaml.safe_dump(
+            {
+                "common": str(common),
+                "segmentations": [str(p) for p in paths],
+                "relations": [
+                    {"a": "nuclei", "b": "cyto", "output": "n.xlsx"},
+                    {"a": "cilia", "b": "cyto", "output": "c.xlsx"},
+                ],
+            }
+        )
+    )
+    log = []
+    monkeypatch.setattr(run_multi, "_run", lambda cmd, wd: 0)  # convert
+
+    def popen(cmd, cwd=None):
+        name = Path(cmd[cmd.index("--configfile") + 2]).stem
+        if name != "cilia":  # cilia "succeeds" without its labels
+            _label_store(tmp_path, ["nuclei", "cyto"])
+        return _FakeProc(log, name, 0)
+
+    ran = []
+    monkeypatch.setitem(
+        sys.modules,
+        "relate",
+        types.SimpleNamespace(
+            run_relations=lambda w, s, rels: ran.extend(rels)
+        ),
+    )
+    monkeypatch.setattr(run_multi.subprocess, "Popen", popen)
+    monkeypatch.setattr(
+        sys, "argv", ["run_multi.py", "--config", str(multi), "--cores", "1"]
+    )
+    monkeypatch.setattr("time.sleep", lambda s: None)
+    with pytest.raises(SystemExit) as done:
+        run_multi.main()
+    assert done.value.code == 1
+    assert [r["a"] for r in ran] == ["nuclei"]

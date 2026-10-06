@@ -610,6 +610,72 @@ def seed_plan(cfgs: list[dict], image_store: str) -> list[str]:
     return lines
 
 
+def label_ready(image_store: str | Path, name: str) -> bool:
+    """Whether ``labels/<name>`` in *image_store* is a finished label image.
+
+    Finished, not merely there: segmenting in place writes tiles into a bare
+    group, and only the end of the merge registers it (multiscales).
+    """
+    group = Path(image_store) / "labels" / str(name)
+    for meta in ("zarr.json", ".zattrs"):
+        try:
+            attrs = json.loads((group / meta).read_text())
+        except (OSError, ValueError):
+            continue
+        attrs = attrs.get("attributes", attrs)
+        if "multiscales" in attrs or "multiscales" in attrs.get("ome", {}):
+            return True
+    return False
+
+
+def relation_problems(
+    relations: list[dict], cfgs: list[dict], image_store: str | Path
+) -> list[str]:
+    """Relations naming a label image this run neither makes nor finds.
+
+    Caught before the segmentations, not as a zarr ArrayNotFoundError from
+    the relate job hours later.
+    """
+    names = [str(cfg.get("label_name")) for cfg in cfgs]
+    problems = []
+    for rel in relations:
+        for side in ("a", "b"):
+            name = rel.get(side)
+            if name in names or label_ready(image_store, name):
+                continue
+            problems.append(
+                f"relation {rel.get('a')} -> {rel.get('b')}: {side}: {name!r} "
+                f"is not a label_name of this run ({', '.join(names)}) and "
+                f"not a finished label image in {image_store}"
+            )
+    return problems
+
+
+def stale_runs(cfgs: list[dict], image_store: str | Path) -> list[str]:
+    """Configs Snakemake would call done whose labels are not in the store.
+
+    A run is done for Snakemake once ``<work_dir>/<label_name>/labels.done``
+    exists; the labels themselves live in ``image.zarr/labels/<label_name>``.
+    Delete or replace the label group (or image.zarr) and the marker still
+    says done: the run reports ok and only the relations fail, on labels
+    that are not there.
+    """
+    problems = []
+    for cfg in cfgs:
+        name = str(cfg.get("label_name"))
+        run = Path(str(cfg.get("work_dir"))) / name
+        if (run / "labels.done").exists() and not label_ready(
+            image_store, name
+        ):
+            problems.append(
+                f"{name}: {run}/labels.done says this segmentation is done, "
+                f"but {image_store}/labels/{name} is missing or unfinished, "
+                f"so nothing would re-make it. Remove {run} to segment it "
+                "again (or point label_name at the labels you meant)."
+            )
+    return problems
+
+
 def _validate_configs(paths: list[Path], cfgs: list[dict]) -> str:
     """Check the cross-config invariants before anything is submitted.
 
@@ -1266,6 +1332,15 @@ def main() -> None:
         print(f"[run_multi] $ {' '.join(cmd)}", flush=True)
         return subprocess.Popen(cmd, cwd=workflow_dir)
 
+    stale = stale_runs(seg_cfgs, image_store)
+    stale += relation_problems(
+        multi_cfg.get("relations") or [], seg_cfgs, image_store
+    )
+    if stale:
+        for p in stale:
+            print(f"[run_multi] ERROR: {p}", file=sys.stderr)
+        sys.exit(1)
+
     # A config growing from another's labels (seed_labels) waits for it;
     # everything else starts at once. A dry run never writes labels, so
     # nothing waits there.
@@ -1322,10 +1397,41 @@ def main() -> None:
         # Once, here, before the concurrent relate jobs: `patchworks review`
         # reads them from the store instead of being told again.
         write_rules(image_store, review_rules)
+    # Every config said ok, so each of its labels should be there; a
+    # relation on one that is not is skipped here, named, instead of failing
+    # as a zarr traceback in its job. The others still run.
+    skipped = [
+        rel
+        for rel in relations
+        if not (
+            label_ready(image_store, rel["a"])
+            and label_ready(image_store, rel["b"])
+        )
+    ]
+    for rel in skipped:
+        missing = [
+            rel[side]
+            for side in ("a", "b")
+            if not label_ready(image_store, rel[side])
+        ]
+        print(
+            f"[run_multi] ERROR: skipping relation {rel['a']} -> {rel['b']}: "
+            f"no finished label image {', '.join(missing)} in "
+            f"{image_store}/labels.",
+            file=sys.stderr,
+        )
+    relations = [rel for rel in relations if rel not in skipped]
+
+    def _finish():
+        # Not bundled with relations missing: it would look complete.
+        if skipped:
+            sys.exit(1)
+        sys.exit(_run_bundle(image_store, workflow_dir, bundle, args.profile))
+
     if not relations:
         # No relations to compute, but the store is finished, so the
         # bundling step still applies.
-        sys.exit(_run_bundle(image_store, workflow_dir, bundle, args.profile))
+        _finish()
 
     if args.profile:
         # Real CPU/IO work -- tens of thousands of zarr chunk reads for a
@@ -1379,12 +1485,12 @@ def main() -> None:
             # Not bundled: a bundle of a run whose relations failed would
             # look complete and quietly be missing workbooks.
             sys.exit(1)
-        sys.exit(_run_bundle(image_store, workflow_dir, bundle, args.profile))
+        _finish()
 
     from relate import run_relations
 
     run_relations(work_dir, image_store, relations)
-    sys.exit(_run_bundle(image_store, workflow_dir, bundle, args.profile))
+    _finish()
 
 
 if __name__ == "__main__":

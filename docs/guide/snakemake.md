@@ -650,6 +650,14 @@ running the workflow **twice with two configs against the same `work_dir`**
 never collides: each run gets its own private subdirectory, and both reuse
 the *same* already-converted `image.zarr` (conversion never re-runs).
 
+`labels.done` is what makes Snakemake call a segmentation finished, while
+the labels themselves are in `image.zarr/labels/<label_name>`. Deleting only
+the latter leaves the run "done" with nothing re-making it: `run_multi`
+refuses that up front and names the `work_dir/<label_name>` folder to remove
+for a fresh segmentation. It also refuses a relation naming a label image
+that no listed config makes and the store does not hold, and skips (with a
+message) a relation whose labels are still missing once everything has run.
+
 Most of what those configs contain is identical — the input, the `work_dir`,
 the tiling, everything `convert` reads. Put it in **one** shared file and let
 each config carry only what actually differs. Snakemake merges several
