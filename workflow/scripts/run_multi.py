@@ -866,25 +866,45 @@ def run_after(
 DRIVER_FILE = ".run_multi.pid"
 
 
+def _process_args(pid: int) -> list[str] | None:
+    """The command line of *pid*: [] if there is no such process, None if
+    it cannot be read. /proc on Linux, ``ps`` elsewhere (macOS)."""
+    cmdline = Path(f"/proc/{pid}/cmdline")
+    if Path("/proc/self/cmdline").exists():
+        try:
+            raw = cmdline.read_bytes()
+        except FileNotFoundError:
+            return []
+        except OSError:
+            return None
+        return [a.decode(errors="replace") for a in raw.split(b"\0") if a]
+    try:
+        out = subprocess.run(
+            ["ps", "-o", "args=", "-p", str(pid)],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return out.stdout.split()
+
+
 def _driver_alive(pid: int) -> bool:
     """Whether *pid* is a live run_multi on this machine."""
+    if os.name == "nt":
+        return False  # os.kill(pid, 0) sends Ctrl-C there; no check
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
     except PermissionError:
         return True  # alive, someone else's
-    cmdline = Path(f"/proc/{pid}/cmdline")
-    if cmdline.exists():  # a recycled pid is some other program
-        try:
-            args = cmdline.read_bytes().split(b"\0")
-        except OSError:
-            return True
-        return any(
-            Path(a.decode(errors="replace")).name == "run_multi.py"
-            for a in args
-        )
-    return True
+    args = _process_args(pid)
+    if args is None:
+        return True  # alive, command line unreadable
+    # A recycled pid is some other program
+    return any(Path(a).name == "run_multi.py" for a in args)
 
 
 def claim_driver(work_dir: str | Path, config: Path) -> Path:
