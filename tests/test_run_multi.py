@@ -3,6 +3,7 @@
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -1795,3 +1796,18 @@ def test_driver_alive_rejects_a_recycled_pid():
         run_multi._driver_alive(os.getpid()) is False
     )  # pytest, not run_multi
     assert run_multi._driver_alive(2**22 + 12345) is False  # no such process
+
+
+@pytest.mark.skipif(os.name == "nt", reason="no liveness check on Windows")
+def test_driver_alive_finds_a_running_driver(tmp_path):
+    import run_multi
+
+    script = tmp_path / "run_multi.py"
+    script.write_text("import time\ntime.sleep(60)\n")
+    proc = subprocess.Popen([sys.executable, str(script)])
+    try:
+        time.sleep(0.5)
+        assert run_multi._driver_alive(proc.pid) is True
+    finally:
+        proc.kill()
+        proc.wait()
