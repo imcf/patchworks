@@ -95,7 +95,7 @@ def test_tiles_resampled_to_the_model_resolution(fake_plantseg):
     tile, _ = epithelium()
     cal = {"z": 0.47, "y": 0.3, "x": 0.3}  # twice the model's voxel size
     labels = segment(tile[0], voxel_size=cal, device="cpu")
-    # 8 planes, mirrored to MIN_DEPTH (16), then twice as fine: 32
+    # 8 planes, extended to MIN_DEPTH (16), then twice as fine: 32
     assert fake_plantseg["predict"]["shape"] == (32, 80, 112)
     assert labels.shape == tile.shape[1:]  # back at the tile's own shape
     # The supervoxel watershed measures distances on the image's sampling
@@ -131,8 +131,8 @@ def test_lifted_multicut_gets_the_nuclei(fake_plantseg):
         rescale=False,
         device="cpu",
     )
-    # 4, and their mirror images in the depth padding (cropped off after)
-    assert fake_plantseg["lifted"]["n_nuclei"] == 8
+    # The depth padding repeats the last plane: no extra (mirrored) nuclei
+    assert fake_plantseg["lifted"]["n_nuclei"] == 4
 
 
 def test_options_checked_before_any_tile(fake_plantseg):
@@ -267,7 +267,7 @@ def test_out_of_memory_at_the_smallest_patch_says_so(
         pl.predict_boundaries(np.zeros((40, 100, 100), "float32"), _cfg())
 
 
-def test_thin_z_tiles_are_mirrored_to_min_depth(fake_plantseg):
+def test_thin_z_tiles_are_extended_to_min_depth(fake_plantseg):
     """Real PlantSeg reads 1-2 planes as a 2-D image and vigra's smoothing
     needs ~8 planes: the last z-tile of a stack failed. Found running the
     plugin against plant-seg 2.0.0rc14."""

@@ -583,7 +583,8 @@ def _split(tile: np.ndarray, cfg: dict[str, Any]):
 #: Fewest z-planes a 3-D tile is processed with: PlantSeg reads a stack of
 #: 1-2 planes as a 2-D image, and the supervoxel watershed's smoothing
 #: (vigra) needs ~8 planes for its kernel. Thinner tiles -- the last z-tile
-#: of a stack -- are mirrored up to this depth and cropped back.
+#: of a stack -- are extended to this depth (last plane repeated) and
+#: cropped back.
 MIN_DEPTH = 16
 
 
@@ -595,7 +596,10 @@ def _run(tile: np.ndarray, cfg: dict[str, Any]) -> np.ndarray:
         pad = [(0, MIN_DEPTH - depth), (0, 0), (0, 0)]
         if nuclei is not None:
             pad = [(0, 0), *pad]
-        deeper = np.pad(np.asarray(tile), pad, mode="symmetric")
+        # "edge", not a mirror: a mirrored nucleus is a second, separate
+        # seed, whose cell then competes for the real planes; a repeated
+        # last plane only prolongs what touches it (the same seed).
+        deeper = np.pad(np.asarray(tile), pad, mode="edge")
         return _run(deeper, cfg)[:depth]
     mode = cfg["segmentation"]
     if mode in NEEDS_NUCLEI and nuclei is None:
