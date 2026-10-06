@@ -576,6 +576,24 @@ def segment(tile: np.ndarray, **kwargs: Any) -> np.ndarray:
 # key in `prepare` instead of on a GPU node hours later.
 setattr(segment, "patchworks_kwargs_target", dog_label_fn)
 
+_CUPY_HINT = (
+    "use_gpu: true needs cupy: pixi run -e cuda12 ... (or -e cuda13), or -e "
+    "plantseg, which has it too; use_gpu: false runs on the CPU"
+)
+
+
+def _requires(kwargs: dict) -> dict[str, str]:
+    """Modules these ``kwargs`` need (the workflow checks them up front)."""
+    # pycudadecon (decon_kwargs) is not listed: every workflow environment
+    # has it, and checking for it refused the launcher's configs on a
+    # machine that only writes them.
+    return {"cupy": _CUPY_HINT} if kwargs.get("use_gpu") else {}
+
+
+# Checked by the workflow before anything runs: a missing cupy failed every
+# GPU job of the run instead.
+setattr(segment, "patchworks_requires", _requires)
+
 
 # Keep the lower-level name available for advanced users
 run_dog_label = _run

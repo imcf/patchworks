@@ -191,8 +191,9 @@ was started from, and the default one has no PlantSeg. `run_multi` checks
 this before converting anything and says which environment to use (as it
 does for `denoise:`, which needs `-e careamics`).
 
-The `plantseg` environment is the default one plus PlantSeg, so the
-Cellpose run comes from it too. Afterwards, `nuclei_to_cyto.xlsx` gives
+The `plantseg` environment is the default one plus PlantSeg and cupy, so
+the Cellpose run comes from it too, as does a cilia config with the DoG
+plugin's `use_gpu: true` (cupy) and deconvolution. Afterwards, `nuclei_to_cyto.xlsx` gives
 each nucleus its cell, and `pixi run -e viewer review <work_dir>/image.zarr`
 lists any cell not holding exactly one nucleus.
 

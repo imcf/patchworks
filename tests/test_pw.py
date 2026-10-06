@@ -566,6 +566,29 @@ def test_missing_packages_are_named_with_the_environment_to_use(
     assert _pw.environment_problems({"method": "threshold"}) == []
 
 
+def test_gpu_dog_needs_cupy_only_when_it_uses_the_gpu(monkeypatch):
+    """config_cilia.yaml with use_gpu: true, run from the plantseg
+    environment without cupy: every segment job failed on import."""
+    import _pw
+
+    monkeypatch.setattr(_pw, "has_module", lambda name: name != "cupy")
+    cfg = {
+        "method": "custom",
+        "label_name": "cilia_labels",
+        "custom": {
+            "module": "patchworks.plugins.dog",
+            "kwargs": {"use_gpu": True, "decon_kwargs": {"psf": "p.tif"}},
+        },
+    }
+    problems = _pw.environment_problems(cfg)
+    assert len(problems) == 1
+    assert "cilia_labels needs 'cupy'" in problems[0]
+    assert "-e cuda12" in problems[0]
+    cfg["custom"]["kwargs"]["use_gpu"] = False
+    assert _pw.environment_problems(cfg) == []
+    assert len(_pw.environment_problems({"dilate_gpu": True})) == 1
+
+
 def test_pin_slurm_gpus_only_where_the_node_does_not_isolate():
     """Unset CUDA_VISIBLE_DEVICES on an unisolated node put every job on
     GPU 0. Pin to SLURM's GPUs then -- and only then."""
