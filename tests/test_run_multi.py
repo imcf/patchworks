@@ -1751,3 +1751,47 @@ def test_a_config_failing_on_a_stale_lock_says_how_to_unlock(
     err = capsys.readouterr().err
     assert "cells.yaml: its Snakemake directory is locked" in err
     assert f"--config {multi} --unlock" in err
+
+
+def test_one_run_multi_per_work_dir(tmp_path, monkeypatch):
+    """A run_multi left running from an earlier attempt drove the same
+    work_dir as the new one: two Snakemakes per config, a lock, and two
+    merges heading for one label group."""
+    import json
+    import socket
+
+    import run_multi
+
+    work = tmp_path / "results"
+    marker = run_multi.claim_driver(work, Path("multi.yaml"))
+    mine = json.loads(marker.read_text())
+    assert mine["pid"] == os.getpid() and mine["host"] == socket.gethostname()
+
+    # Another live driver on this machine: refused, saying how to stop it
+    marker.write_text(json.dumps({**mine, "pid": 999999, "config": "old.yaml"}))
+    monkeypatch.setattr(run_multi, "_driver_alive", lambda pid: True)
+    with pytest.raises(SystemExit) as err:
+        run_multi.claim_driver(work, Path("multi.yaml"))
+    assert "already driving" in str(err.value) and "kill 999999" in str(
+        err.value
+    )
+
+    # Its marker left behind by a driver that died: taken over
+    monkeypatch.setattr(run_multi, "_driver_alive", lambda pid: False)
+    run_multi.claim_driver(work, Path("multi.yaml"))
+    assert json.loads(marker.read_text())["pid"] == os.getpid()
+
+    # A driver on another login node cannot be checked from here: refused
+    marker.write_text(json.dumps({**mine, "pid": 4242, "host": "login99"}))
+    with pytest.raises(SystemExit) as err:
+        run_multi.claim_driver(work, Path("multi.yaml"))
+    assert "login99" in str(err.value) and str(marker) in str(err.value)
+
+
+def test_driver_alive_rejects_a_recycled_pid():
+    import run_multi
+
+    assert (
+        run_multi._driver_alive(os.getpid()) is False
+    )  # pytest, not run_multi
+    assert run_multi._driver_alive(2**22 + 12345) is False  # no such process
