@@ -1,5 +1,7 @@
 """Tests for the global, post-merge label volume filter."""
 
+from pathlib import Path
+
 import numpy as np
 import zarr
 
@@ -191,3 +193,36 @@ def test_filter_labels_by_size_requires_at_least_one_bound(tmp_path):
 
     with pytest.raises(ValueError, match="min_voxels.*max_voxels"):
         filter_labels_by_size(path, "labels")
+
+
+def test_size_filter_skips_background_chunks_and_matches_serial(tmp_path):
+    """Threads give the serial result, objects spanning chunks are counted
+    whole, and a background chunk is neither rewritten nor materialised."""
+    from patchworks import filter_labels_by_size
+
+    rng = np.random.default_rng(0)
+    array = np.zeros((32, 32), "uint32")
+    array[2:6, 2:14] = 7  # 48 voxels across two chunks: kept
+    array[20:22, 20:22] = 3  # 4 voxels: dropped
+    array[9:12, 25:28] = rng.integers(10, 12, (3, 3))  # small specks
+    results = []
+    for workers in (1, 4):
+        path = str(tmp_path / f"labels{workers}.zarr")
+        root = zarr.open_group(path, mode="w")
+        arr = root.create_array(
+            "labels", shape=array.shape, chunks=(8, 8), dtype="uint32"
+        )
+        arr[:] = array
+        chunks = Path(path, "labels", "c")
+        before = sorted(p for p in chunks.rglob("*") if p.is_file())
+        assert 0 < len(before) < 16  # zarr stores only non-empty chunks
+        out = filter_labels_by_size(
+            path, "labels", min_voxels=10, n_workers=workers
+        )
+        after = sorted(p for p in chunks.rglob("*") if p.is_file())
+        assert set(after) <= set(before)  # no background chunk written
+        results.append((out, np.asarray(root["labels"])))
+    (out1, lab1), (out4, lab4) = results
+    assert out1 == out4 and np.array_equal(lab1, lab4)
+    assert set(np.unique(lab1).tolist()) == {0, 1}
+    assert (lab1[2:6, 2:14] == 1).all()
