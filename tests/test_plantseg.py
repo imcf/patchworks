@@ -95,7 +95,8 @@ def test_tiles_resampled_to_the_model_resolution(fake_plantseg):
     tile, _ = epithelium()
     cal = {"z": 0.47, "y": 0.3, "x": 0.3}  # twice the model's voxel size
     labels = segment(tile[0], voxel_size=cal, device="cpu")
-    assert fake_plantseg["predict"]["shape"] == (16, 80, 112)
+    # 8 planes, mirrored to MIN_DEPTH (16), then twice as fine: 32
+    assert fake_plantseg["predict"]["shape"] == (32, 80, 112)
     assert labels.shape == tile.shape[1:]  # back at the tile's own shape
     # The supervoxel watershed measures distances on the image's sampling
     pitch = fake_plantseg["dt_watershed"]["pixel_pitch"]
@@ -130,7 +131,8 @@ def test_lifted_multicut_gets_the_nuclei(fake_plantseg):
         rescale=False,
         device="cpu",
     )
-    assert fake_plantseg["lifted"]["n_nuclei"] == 4
+    # 4, and their mirror images in the depth padding (cropped off after)
+    assert fake_plantseg["lifted"]["n_nuclei"] == 8
 
 
 def test_options_checked_before_any_tile(fake_plantseg):
@@ -263,3 +265,25 @@ def test_out_of_memory_at_the_smallest_patch_says_so(
     )
     with pytest.raises(ValueError, match="bad weights"):
         pl.predict_boundaries(np.zeros((40, 100, 100), "float32"), _cfg())
+
+
+def test_thin_z_tiles_are_mirrored_to_min_depth(fake_plantseg):
+    """Real PlantSeg reads 1-2 planes as a 2-D image and vigra's smoothing
+    needs ~8 planes: the last z-tile of a stack failed. Found running the
+    plugin against plant-seg 2.0.0rc14."""
+    from patchworks.plugins import plantseg as pl
+
+    tile = np.random.default_rng(0).random((3, 70, 70), "float32") * 100
+    out = pl.segment(tile, segmentation="gasp", rescale=False, device="cpu")
+    assert fake_plantseg["predict"]["shape"] == (pl.MIN_DEPTH, 70, 70)
+    assert out.shape == (3, 70, 70)
+
+
+def test_two_plane_tile_is_not_taken_for_a_channel_pair(fake_plantseg):
+    from patchworks.plugins import plantseg as pl
+
+    tile = np.random.default_rng(0).random((2, 70, 70), "float32") * 100
+    out = pl.segment(tile, segmentation="gasp", rescale=False, device="cpu")
+    assert out.shape == (2, 70, 70)  # one 3-D tile, not [membrane, nuclei]
+    with pytest.raises(ValueError, match="seed_labels"):
+        pl.segment(tile[0], segmentation="nuclei_watershed", device="cpu")

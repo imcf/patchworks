@@ -1201,8 +1201,7 @@ def test_viewer_requires_a_patchworks_that_reads_bundles():
 
     pixi = tomllib.loads((_workflow_dir() / "pixi.toml").read_text())
     spec = pixi["feature"]["viewer"]["pypi-dependencies"]["patchworks"]
-    floor = tuple(int(x) for x in spec["version"].removeprefix(">=").split("."))
-    assert spec["version"].startswith(">=") and floor >= (3, 0, 0), spec
+    assert _patchworks_is_recent(spec, (3, 0, 0)), spec
     assert "napari" in spec["extras"]
 
 
@@ -1383,16 +1382,30 @@ def test_pixi_manifests_require_the_patchworks_the_scripts_use():
     wf = _workflow_dir()
     main = tomllib.loads((wf / "pixi.toml").read_text())
     viewer = tomllib.loads((wf / "viewer" / "pixi.toml").read_text())
-    pins = [
-        main["pypi-dependencies"]["patchworks"]["version"],
-        main["feature"]["viewer"]["pypi-dependencies"]["patchworks"]["version"],
-        viewer["pypi-dependencies"]["patchworks"]["version"],
+    specs = [
+        main["pypi-dependencies"]["patchworks"],
+        main["feature"]["viewer"]["pypi-dependencies"]["patchworks"],
+        viewer["pypi-dependencies"]["patchworks"],
     ]
-    for pin in pins:
-        assert pin.startswith(">="), pin
-        floor = tuple(int(x) for x in pin[2:].split("."))
-        assert floor >= (3, 1, 0), pin
+    for spec in specs:
+        assert _patchworks_is_recent(spec, (3, 1, 0)), spec
+    # The workflow's own environments run the scripts: same revision.
+    assert "git" in main["pypi-dependencies"]["patchworks"]
     assert "review" in viewer["tasks"]
+
+
+def _patchworks_is_recent(spec, floor):
+    """The manifest takes patchworks from GitHub main, or a release >= floor."""
+    if "git" in spec:
+        return (
+            spec["git"].rstrip("/").removesuffix(".git")
+            == "https://github.com/imcf/patchworks"
+            and spec.get("branch") == "main"
+        )
+    pin = spec["version"]
+    if not pin.startswith(">="):
+        return False
+    return tuple(int(x) for x in pin[2:].split(".")) >= floor
 
 
 class _FakeProc:
