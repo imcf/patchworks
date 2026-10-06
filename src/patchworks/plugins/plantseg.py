@@ -128,6 +128,36 @@ MIN_PATCH_YX = 64
 #: Patch when neither the config nor the zoo names one.
 DEFAULT_PATCH = (80, 160, 160)
 
+# Per process: the largest patch that fitted the GPU, per model and device,
+# so the batch's next tiles start there instead of failing their way down.
+_fitting_patch: dict[tuple, tuple[int, int, int]] = {}
+
+
+def _is_gpu_oom(exc: BaseException) -> bool:
+    """A GPU out-of-memory, as torch raises it or as PlantSeg predicts it.
+
+    PlantSeg runs one forward pass before predicting and, when that fails,
+    raises its own "OOM error will happen. Please reduce the patch
+    size/halo." -- which says nothing torch-like about memory.
+    """
+    text = str(exc)
+    return (
+        is_oom(exc)
+        or "OOM error will happen" in text
+        or "feasible batch size" in text
+    )
+
+
+def _gpu_memory() -> str:
+    """'x.x of y.y GB free' on the current CUDA device, or '' if unknown."""
+    try:
+        import torch
+
+        free, total = torch.cuda.mem_get_info()
+    except Exception:  # no torch, no CUDA: nothing to say
+        return ""
+    return f"{free / 1e9:.1f} of {total / 1e9:.1f} GB free"
+
 
 def start_patch(
     shape: tuple[int, ...], patch: tuple[int, ...] | None, model: str | None
@@ -418,13 +448,16 @@ def predict_boundaries(membrane: np.ndarray, cfg: dict[str, Any]) -> np.ndarray:
     layout = "ZYX" if img.ndim == 3 else "YX"
     on_gpu = str(cfg["device"]).startswith("cuda")
     patch = start_patch(img.shape, cfg["patch"], cfg["model"])
+    fit_key = (cfg["model"], cfg["model_id"], cfg["config_path"], cfg["device"])
+    if fit_key in _fitting_patch:
+        patch = tuple(min(p, f) for p, f in zip(patch, _fitting_patch[fit_key]))
 
     def _predict():
         nonlocal patch
         while True:
             oom = None
             try:
-                return unet_prediction(
+                result = unet_prediction(
                     img,
                     input_layout=layout,
                     model_name=cfg["model"],
@@ -435,8 +468,11 @@ def predict_boundaries(membrane: np.ndarray, cfg: dict[str, Any]) -> np.ndarray:
                     config_path=cfg["config_path"],
                     model_weights_path=cfg["weights_path"],
                 )
+                if on_gpu:
+                    _fitting_patch[fit_key] = patch
+                return result
             except Exception as exc:  # torch's OOM is a RuntimeError subclass
-                if not (on_gpu and is_oom(exc)):
+                if not (on_gpu and _is_gpu_oom(exc)):
                     raise
                 oom = str(exc).split("\n", 1)[0]
             # Outside the except: the traceback would keep the failed
@@ -444,14 +480,18 @@ def predict_boundaries(membrane: np.ndarray, cfg: dict[str, Any]) -> np.ndarray:
             gc.collect()
             free_gpu_caches()
             smaller = smaller_patch(patch)
+            memory = _gpu_memory()
             if smaller is None:
                 raise RuntimeError(
                     f"PlantSeg ran out of GPU memory even at patch {patch} "
-                    f"({oom}). Is the GPU shared with another job?"
+                    f"({oom}; GPU: {memory or 'unknown'}). Is the GPU shared "
+                    "with another job?"
                 )
             logger.warning(
-                "PlantSeg: out of GPU memory at patch %s, retrying at %s",
+                "PlantSeg: out of GPU memory at patch %s (GPU: %s), retrying "
+                "at %s",
                 patch,
+                memory or "unknown",
                 smaller,
             )
             patch = smaller
