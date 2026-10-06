@@ -47,6 +47,7 @@ def fake_plantseg(monkeypatch):
 
     zoo = types.SimpleNamespace(
         get_model_resolution=lambda name: RES,
+        get_model_patch_size=lambda name: [80, 160, 160],
         get_model_names=lambda: ["generic_confocal_3D_unet"],
         get_model_by_name=lambda name, **kw: calls.setdefault("fetched", name),
     )
@@ -173,3 +174,92 @@ def test_nuclei_watershed_from_given_labels(fake_plantseg):
     assert len(np.unique(out[out > 0])) == 4
     with pytest.raises(ValueError, match="would ignore them"):
         segment(np.stack([tile[0], labels]), seeds="labels")
+
+
+def _cfg(**over):
+    cfg = dict(
+        model="generic_confocal_3D_unet",
+        model_id=None,
+        config_path=None,
+        weights_path=None,
+        rescale=None,
+        patch=None,
+        device="cuda",
+        boundary_channel=0,
+    )
+    cfg.update(over)
+    return cfg
+
+
+def test_patch_from_the_zoo_not_plantsegs_own_search(fake_plantseg):
+    """PlantSeg's own search (patch=None) probed up to 416-voxel cubes and,
+    on a cluster GPU, ended at 24 -- under its 64-pixel minimum."""
+    from patchworks.plugins import plantseg as pl
+
+    tile = np.random.default_rng(0).random((129, 430, 430), "float32")
+    out = pl.predict_boundaries(tile, _cfg())
+    assert fake_plantseg["predict"]["patch"] == (80, 160, 160)
+    assert out.shape == tile.shape
+
+
+def test_thin_edge_tiles_are_padded_to_plantsegs_minimum(fake_plantseg):
+    from patchworks.plugins import plantseg as pl
+
+    tile = np.random.default_rng(0).random((8, 40, 30), "float32")
+    out = pl.predict_boundaries(tile, _cfg())
+    assert fake_plantseg["predict"]["shape"] == (8, 64, 64)
+    assert fake_plantseg["predict"]["patch"] == (8, 64, 64)
+    assert out.shape == (8, 40, 30)
+
+
+def test_gpu_out_of_memory_shrinks_the_patch(fake_plantseg, monkeypatch):
+    from patchworks.plugins import plantseg as pl
+
+    tried = []
+    predict = sys.modules["plantseg.functionals.prediction"].unet_prediction
+
+    def tight_gpu(raw, input_layout, model_name, model_id, **kw):
+        tried.append(kw["patch"])
+        if kw["patch"][1] > 90:
+            raise RuntimeError("CUDA out of memory. Tried to allocate 2 GiB")
+        return predict(raw, input_layout, model_name, model_id, **kw)
+
+    monkeypatch.setattr(
+        sys.modules["plantseg.functionals.prediction"],
+        "unet_prediction",
+        tight_gpu,
+    )
+    tile = np.random.default_rng(0).random((40, 300, 300), "float32")
+    out = pl.predict_boundaries(tile, _cfg())
+    assert tried == [(40, 160, 160), (40, 120, 120), (40, 90, 90)]
+    assert out.shape == tile.shape
+
+
+def test_out_of_memory_at_the_smallest_patch_says_so(
+    fake_plantseg, monkeypatch
+):
+    from patchworks.plugins import plantseg as pl
+
+    def no_gpu(*a, **kw):
+        raise RuntimeError("CUDA out of memory")
+
+    monkeypatch.setattr(
+        sys.modules["plantseg.functionals.prediction"],
+        "unet_prediction",
+        no_gpu,
+    )
+    monkeypatch.setattr(pl, "retry_on_oom", lambda call, **kw: call())
+    with pytest.raises(RuntimeError, match="even at patch \\(8, 64, 64\\)"):
+        pl.predict_boundaries(np.zeros((40, 100, 100), "float32"), _cfg())
+
+    # Anything else is not retried
+    def broken(*a, **kw):
+        raise ValueError("bad weights")
+
+    monkeypatch.setattr(
+        sys.modules["plantseg.functionals.prediction"],
+        "unet_prediction",
+        broken,
+    )
+    with pytest.raises(ValueError, match="bad weights"):
+        pl.predict_boundaries(np.zeros((40, 100, 100), "float32"), _cfg())

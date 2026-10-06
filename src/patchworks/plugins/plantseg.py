@@ -48,7 +48,7 @@ from typing import Any, Callable
 
 import numpy as np
 
-from .._gpu import free_gpu_caches, retry_on_oom
+from .._gpu import free_gpu_caches, is_oom, retry_on_oom
 from .watershed import (
     SEED_MODES,
     _sigma,
@@ -109,6 +109,79 @@ def model_resolution(model: str) -> tuple[float, ...] | None:
     except Exception:
         return None
     return tuple(float(r) for r in res) if res else None
+
+
+def model_patch_size(model: str | None) -> tuple[int, ...] | None:
+    """The patch shape (z, y, x) PlantSeg's zoo recommends for *model*."""
+    if not model:
+        return None
+    try:
+        from plantseg.core.zoo import model_zoo
+
+        patch = model_zoo.get_model_patch_size(model)
+    except Exception:
+        return None
+    return tuple(int(p) for p in patch) if patch else None
+
+
+#: PlantSeg's slice builder refuses patches under 64 pixels in y or x.
+MIN_PATCH_YX = 64
+#: Patch when neither the config nor the zoo names one.
+DEFAULT_PATCH = (80, 160, 160)
+
+
+def start_patch(
+    shape: tuple[int, ...], patch: tuple[int, ...] | None, model: str | None
+) -> tuple[int, int, int]:
+    """The (z, y, x) patch to predict a (possibly padded) tile of *shape*
+    with: the configured one, else the zoo's recommendation for *model*,
+    no larger than the tile.
+
+    PlantSeg's own search for the largest patch the GPU holds is not used:
+    it probes cubes up to 416 voxels a side, and on a cluster GPU it came
+    down to 24, under its own 64-pixel minimum, and failed the tile.
+
+    Examples
+    --------
+    >>> start_patch((129, 430, 430), None, None)
+    (80, 160, 160)
+    >>> start_patch((40, 100, 70), (80, 160, 160), None)
+    (40, 100, 70)
+    >>> start_patch((300, 70), None, None)
+    (1, 160, 70)
+    """
+    base = tuple(patch) if patch else (model_patch_size(model) or DEFAULT_PATCH)
+    base = tuple(int(b) for b in base)[-3:]
+    if len(shape) == 2:
+        shape = (1, *shape)
+        base = (1, *base[-2:])
+    return tuple(max(1, min(b, s)) for b, s in zip(base, shape))  # type: ignore[return-value]
+
+
+def smaller_patch(patch: tuple[int, int, int]) -> tuple[int, int, int] | None:
+    """The next patch to try after a GPU out-of-memory: y and x shrink by a
+    quarter down to PlantSeg's 64-pixel minimum, then z. None when nothing
+    can shrink any more.
+
+    Examples
+    --------
+    >>> smaller_patch((80, 160, 160))
+    (80, 120, 120)
+    >>> smaller_patch((80, 64, 64))
+    (60, 64, 64)
+    >>> smaller_patch((8, 64, 64)) is None
+    True
+    """
+    z, y, x = patch
+    if max(y, x) > MIN_PATCH_YX:
+        return (
+            z,
+            max(MIN_PATCH_YX, y * 3 // 4),
+            max(MIN_PATCH_YX, x * 3 // 4),
+        )
+    if z > 8:
+        return (max(8, z * 3 // 4), y, x)
+    return None
 
 
 def fetch_model(model: str = "generic_confocal_3D_unet") -> None:
@@ -216,7 +289,10 @@ def plantseg_fn(
         predicting (and the prediction back), from *voxel_size*. The single
         biggest factor in a pretrained U-Net's quality.
     patch :
-        U-Net patch shape; ``None`` lets PlantSeg size it to the GPU.
+        U-Net patch shape (z, y, x). ``None``: the zoo's recommendation for
+        *model* (80, 160, 160 for the generic ones), no larger than the
+        tile; it shrinks by itself on a GPU out-of-memory, down to
+        PlantSeg's 64-pixel minimum in y and x.
     device :
         ``"cuda"`` or ``"cpu"``.
     n_threads :
@@ -319,6 +395,8 @@ def _zoom_to(img: np.ndarray, shape: tuple[int, ...], order: int = 1):
 
 def predict_boundaries(membrane: np.ndarray, cfg: dict[str, Any]) -> np.ndarray:
     """The U-Net's boundary probability map for *membrane*, same shape."""
+    import gc
+
     from plantseg.functionals.prediction import unet_prediction
 
     shape = membrane.shape
@@ -328,30 +406,74 @@ def predict_boundaries(membrane: np.ndarray, cfg: dict[str, Any]) -> np.ndarray:
             max(1, int(round(s * f))) for s, f in zip(shape, cfg["rescale"])
         )
         img = _zoom_to(img, target)
+    # PlantSeg needs at least 64 pixels in y and x: pad an edge tile that
+    # is thinner (mirrored, as PlantSeg pads its own halo), crop back after.
+    unpadded = img.shape
+    pad = [(0, 0)] * (img.ndim - 2) + [
+        (0, max(0, MIN_PATCH_YX - s)) for s in img.shape[-2:]
+    ]
+    if any(after for _, after in pad):
+        img = np.pad(
+            img, pad, mode="reflect" if min(img.shape[-2:]) > 1 else "edge"
+        )
     layout = "ZYX" if img.ndim == 3 else "YX"
+    on_gpu = str(cfg["device"]).startswith("cuda")
+    patch = start_patch(img.shape, cfg["patch"], cfg["model"])
 
     def _predict():
-        return unet_prediction(
-            img,
-            input_layout=layout,
-            model_name=cfg["model"],
-            model_id=cfg["model_id"],
-            patch=cfg["patch"],
-            device=cfg["device"],
-            disable_tqdm=True,
-            config_path=cfg["config_path"],
-            model_weights_path=cfg["weights_path"],
-        )
+        nonlocal patch
+        while True:
+            oom = None
+            try:
+                return unet_prediction(
+                    img,
+                    input_layout=layout,
+                    model_name=cfg["model"],
+                    model_id=cfg["model_id"],
+                    patch=patch,
+                    device=cfg["device"],
+                    disable_tqdm=True,
+                    config_path=cfg["config_path"],
+                    model_weights_path=cfg["weights_path"],
+                )
+            except Exception as exc:  # torch's OOM is a RuntimeError subclass
+                if not (on_gpu and is_oom(exc)):
+                    raise
+                oom = str(exc).split("\n", 1)[0]
+            # Outside the except: the traceback would keep the failed
+            # attempt's tensors alive through the next one.
+            gc.collect()
+            free_gpu_caches()
+            smaller = smaller_patch(patch)
+            if smaller is None:
+                raise RuntimeError(
+                    f"PlantSeg ran out of GPU memory even at patch {patch} "
+                    f"({oom}). Is the GPU shared with another job?"
+                )
+            logger.warning(
+                "PlantSeg: out of GPU memory at patch %s, retrying at %s",
+                patch,
+                smaller,
+            )
+            patch = smaller
 
-    pmaps = retry_on_oom(
-        _predict,
-        enabled=str(cfg["device"]).startswith("cuda"),
-        on_release=free_gpu_caches,
-    )
+    try:
+        # The patch loop handles a GPU too small for the patch; this outer
+        # retry, a co-tenant briefly holding the memory.
+        pmaps = retry_on_oom(
+            _predict, enabled=on_gpu, on_release=free_gpu_caches
+        )
+    finally:
+        # One model per tile, and PlantSeg keeps nothing across calls: give
+        # its memory back before the batch's next tile, or each one starts
+        # with less (a later tile of a batch hit OOM at every patch size).
+        gc.collect()
+        free_gpu_caches()
     pmaps = np.asarray(pmaps)
     if pmaps.ndim > img.ndim:
         pmaps = pmaps[cfg["boundary_channel"]]
     pmaps = pmaps.reshape(img.shape).astype("float32")
+    pmaps = pmaps[tuple(slice(0, s) for s in unpadded)]
     if pmaps.shape != shape:
         pmaps = _zoom_to(pmaps, shape)
     return np.clip(pmaps, 0.0, 1.0)
