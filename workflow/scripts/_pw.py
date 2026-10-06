@@ -656,8 +656,9 @@ def has_module(name: str) -> bool:
 def environment_problems(cfg) -> list[str]:
     """Packages the config needs that this environment does not have.
 
-    A custom function lists them in ``patchworks_requires`` (``{module:
-    hint}``), and ``denoise:`` needs CAREamics. Only the import specs are
+    A custom function lists them in ``patchworks_requires``: ``{module:
+    hint}``, or a function of its kwargs returning one (cupy only with
+    ``use_gpu``). ``denoise:`` needs CAREamics, ``dilate_gpu`` cupy. Only the import specs are
     looked up -- nothing is imported, so this is cheap enough for run_multi
     to check every config before converting, where a missing PlantSeg used
     to surface as an ImportError in the first GPU job.
@@ -672,9 +673,17 @@ def environment_problems(cfg) -> list[str]:
                 importlib.import_module(spec["module"]),
                 spec.get("function", "segment"),
             )
-            needs.update(getattr(fn, "patchworks_requires", None) or {})
+            requires = getattr(fn, "patchworks_requires", None) or {}
+            if callable(requires):
+                requires = requires(dict(spec.get("kwargs") or {}))
+            needs.update(requires)
         except Exception:
             pass  # _custom_problems reports an unimportable module
+    if cfg.get("dilate_gpu"):
+        needs["cupy"] = (
+            "dilate_gpu: true needs cupy: pixi run -e cuda12 ... (or -e "
+            "cuda13, -e plantseg)"
+        )
     if cfg.get("denoise"):
         needs["careamics"] = (
             "CAREamics is in the careamics environment: pixi run -e "

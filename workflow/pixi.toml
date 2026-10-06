@@ -84,6 +84,11 @@ pandas = ">=2.2.3,<3"
 # A CUDA build: left to itself the solver may pick conda-forge's CPU
 # PyTorch, and the U-Net then runs on the CPU of a GPU node.
 pytorch = { version = ">=2.4", build = "cuda*" }
+# The dog plugin's `use_gpu: true` (config_cilia.yaml) and `dilate_gpu`, so
+# a multi run with cilia works from this environment too. From conda-forge,
+# built against the same cuda-version as PyTorch: the cupy-cuda12x wheel the
+# cuda12 environment uses would bring a second CUDA runtime.
+cupy = ">=13"
 
 # pixi refuses to install or run this environment on a machine without a
 # GPU driver (a login node): "Virtual package '__cuda' does not match".
