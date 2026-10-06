@@ -862,6 +862,89 @@ def run_after(
     return [(names[i], status[i]) for i in range(len(names))]
 
 
+#: Marks the run_multi driving a work_dir: {"host", "pid", "started", "config"}.
+DRIVER_FILE = ".run_multi.pid"
+
+
+def _driver_alive(pid: int) -> bool:
+    """Whether *pid* is a live run_multi on this machine."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # alive, someone else's
+    cmdline = Path(f"/proc/{pid}/cmdline")
+    if cmdline.exists():  # a recycled pid is some other program
+        try:
+            args = cmdline.read_bytes().split(b"\0")
+        except OSError:
+            return True
+        return any(
+            Path(a.decode(errors="replace")).name == "run_multi.py"
+            for a in args
+        )
+    return True
+
+
+def claim_driver(work_dir: str | Path, config: Path) -> Path:
+    """Make this the only run_multi driving *work_dir*, or exit saying who is.
+
+    Two drivers of one work_dir run every config twice: two Snakemakes per
+    config, each submitting its own jobs and merges into the same label
+    group, one of them holding the lock the other then fails on. A driver
+    left running from an earlier attempt did exactly that. The marker of a
+    driver that died is taken over; it is removed at exit.
+    """
+    import atexit
+    import socket
+    import time
+
+    marker = Path(work_dir) / DRIVER_FILE
+    host, me = socket.gethostname(), os.getpid()
+    if marker.exists():
+        try:
+            other = json.loads(marker.read_text())
+        except (OSError, ValueError):
+            other = {}
+        pid, where = other.get("pid"), other.get("host")
+        if pid and pid != me and where == host and _driver_alive(int(pid)):
+            sys.exit(
+                f"[run_multi] ERROR: another run_multi (pid {pid}, started "
+                f"{other.get('started', '?')}, --config {other.get('config')}) "
+                f"is already driving {work_dir}. Wait for it, or stop it "
+                f"first: kill {pid}"
+            )
+        if pid and where and where != host:
+            sys.exit(
+                f"[run_multi] ERROR: a run_multi on {where} (pid {pid}, "
+                f"started {other.get('started', '?')}) is driving {work_dir}. "
+                f"If it is not running any more (ssh {where} ps -p {pid}), "
+                f"delete {marker} and start again."
+            )
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(
+        json.dumps(
+            {
+                "host": host,
+                "pid": me,
+                "started": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "config": str(config),
+            }
+        )
+    )
+
+    def _release():
+        try:
+            if json.loads(marker.read_text()).get("pid") == me:
+                marker.unlink()
+        except (OSError, ValueError):
+            pass
+
+    atexit.register(_release)
+    return marker
+
+
 def held_locks(state_dir: Path) -> list[Path]:
     """Snakemake's lock files for a run whose --directory is *state_dir*."""
     locks = Path(state_dir) / ".snakemake" / "locks"
@@ -1064,6 +1147,11 @@ def main() -> None:
         Path(cfg["work_dir"]) / cfg["label_name"] / ".snakemake"
         for cfg in seg_cfgs
     ]
+    # One driver per work_dir -- --unlock included: releasing the locks of
+    # a run that is still going is exactly how two runs end up in one store.
+    if not args.dry_run:
+        claim_driver(work_dir, multi_cfg_path)
+
     if args.unlock:
         for state_dir in state_dirs:
             if not state_dir.exists():
