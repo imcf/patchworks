@@ -56,7 +56,6 @@ from .watershed import (
     max_radius_px,
     missing_seeds_error,
     seeded_watershed,
-    split_channels,
     tile_seeds,
 )
 
@@ -562,9 +561,42 @@ def partition(
     raise ValueError(f"unknown segmentation {mode!r}")  # pragma: no cover
 
 
+def _split(tile: np.ndarray, cfg: dict[str, Any]):
+    """``(membrane, nuclei or None)``, from what the mode expects.
+
+    A (2, y, x) tile is a [membrane, nuclei] pair only for a mode that uses
+    nuclei; otherwise it is a 3-D tile two planes deep (the last z-tile of a
+    stack can be), which split_channels' shape rule took for a pair.
+    """
+    tile = np.asarray(tile)
+    if tile.ndim == 4:
+        return tile[0], tile[1]
+    if (
+        tile.ndim == 3
+        and tile.shape[0] == 2
+        and cfg["segmentation"] in NEEDS_NUCLEI
+    ):
+        return tile[0], tile[1]
+    return tile, None
+
+
+#: Fewest z-planes a 3-D tile is processed with: PlantSeg reads a stack of
+#: 1-2 planes as a 2-D image, and the supervoxel watershed's smoothing
+#: (vigra) needs ~8 planes for its kernel. Thinner tiles -- the last z-tile
+#: of a stack -- are mirrored up to this depth and cropped back.
+MIN_DEPTH = 16
+
+
 def _run(tile: np.ndarray, cfg: dict[str, Any]) -> np.ndarray:
     """Predict boundaries, then partition them, for one tile."""
-    membrane, nuclei = split_channels(tile)
+    membrane, nuclei = _split(tile, cfg)
+    if membrane.ndim == 3 and membrane.shape[0] < MIN_DEPTH:
+        depth = membrane.shape[0]
+        pad = [(0, MIN_DEPTH - depth), (0, 0), (0, 0)]
+        if nuclei is not None:
+            pad = [(0, 0), *pad]
+        deeper = np.pad(np.asarray(tile), pad, mode="symmetric")
+        return _run(deeper, cfg)[:depth]
     mode = cfg["segmentation"]
     if mode in NEEDS_NUCLEI and nuclei is None:
         raise missing_seeds_error(tile.shape)
