@@ -1704,3 +1704,50 @@ def test_seed_plan_warns_when_the_seeds_come_from_no_config(tmp_path):
         "nuclei_labels_cpsam is done"
     )
     assert "not in the store either" in lines[2]
+
+
+def test_a_config_failing_on_a_stale_lock_says_how_to_unlock(
+    tmp_path, monkeypatch, capsys
+):
+    """A run interrupted mid-way leaves Snakemake's lock behind; the next
+    run of that config fails at once with a LockException, which run_multi
+    only reported as FAILED."""
+    import run_multi
+
+    work = tmp_path / "results"
+    locks = work / "cells" / ".snakemake" / ".snakemake" / "locks"
+    locks.mkdir(parents=True)
+    (locks / "0.input.lock").write_text("x")
+    assert run_multi.held_locks(work / "cells" / ".snakemake")
+    assert run_multi.held_locks(work / "other" / ".snakemake") == []
+
+    common = tmp_path / "common.yaml"
+    common.write_text(
+        yaml.safe_dump(
+            {
+                "input": str(tmp_path / "scan.zarr"),
+                "work_dir": str(work),
+                "tile_shape": [16, 512, 512],
+                "level": 0,
+            }
+        )
+    )
+    cells = tmp_path / "cells.yaml"
+    cells.write_text(yaml.safe_dump({"label_name": "cells"}))
+    multi = tmp_path / "multi.yaml"
+    multi.write_text(
+        yaml.safe_dump({"common": str(common), "segmentations": [str(cells)]})
+    )
+    monkeypatch.setattr(run_multi, "_run", lambda cmd, wd: 0)
+    monkeypatch.setattr(
+        run_multi.subprocess,
+        "Popen",
+        lambda cmd, cwd=None: _FakeProc([], "cells", 1, 1),
+    )
+    monkeypatch.setattr("time.sleep", lambda s: None)
+    monkeypatch.setattr(sys, "argv", ["run_multi.py", "--config", str(multi)])
+    with pytest.raises(SystemExit):
+        run_multi.main()
+    err = capsys.readouterr().err
+    assert "cells.yaml: its Snakemake directory is locked" in err
+    assert f"--config {multi} --unlock" in err
