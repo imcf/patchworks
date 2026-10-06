@@ -239,6 +239,42 @@ def test_empty_chunks_are_skipped_not_just_short_circuited(tmp_path):
     assert written == ["0"], f"only the occupied chunk should exist: {written}"
 
 
+def test_relabel_progress_counts_only_the_chunks_it_relabels(
+    tmp_path, monkeypatch
+):
+    """Counted against every chunk, the progress of a sparse merge stopped
+    at 29% and the merge looked hung while it built the pyramid."""
+    import patchworks._merge as merge_mod
+
+    img = np.zeros((8, 64), "uint16")
+    img[1:4, 1:7] = 500
+    tile = (8, 8)
+    stage = str(tmp_path / "stage.zarr")
+    create_stage(stage, img.shape, tile)
+    counts = {
+        i: stage_tile(img, _fn, stage, i, tile_shape=tile, overlap=0)
+        for i in range(len(spatial_tiles(img.shape, tile)))
+    }
+    seen = []
+    real = merge_mod.track
+
+    def spy(iterable, label, total, **kw):
+        items = list(real(iterable, label, total, **kw))
+        seen.append((label, len(items), total))
+        return iter(items)
+
+    monkeypatch.setattr(merge_mod, "track", spy)
+    merge_tile_labels(
+        stage,
+        write_to=str(tmp_path / "out.zarr"),
+        input_component="staged",
+        label_counts=counts,
+        n_workers=1,
+    )
+    relabel = [s for s in seen if s[0] == "relabel chunks"]
+    assert relabel == [("relabel chunks", 1, 1)]
+
+
 def test_in_place_merge_matches_the_two_store_merge(tmp_path):
     """Relabelling back into the source must give the same labelling.
 
