@@ -61,6 +61,13 @@ def start_log(path, *, append=True):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     handle = open(path, "a" if append else "w", buffering=1)
+    # The SLURM log too: not a terminal, so Python block-buffered it and it
+    # trailed the real progress by many minutes (a merge looked hung).
+    for stream in (sys.__stdout__, sys.__stderr__):
+        try:
+            getattr(stream, "reconfigure")(line_buffering=True)
+        except (AttributeError, ValueError):
+            pass
     sys.stdout = _Tee(sys.__stdout__, handle)
     sys.stderr = _Tee(sys.__stderr__, handle)
     logging.basicConfig(

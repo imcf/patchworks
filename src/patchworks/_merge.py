@@ -1092,7 +1092,7 @@ def zarr_native_merge(
                 lut_path, staged_path, staged_component, out_path, out_component
             )
             it: Any = track(
-                tasks, "relabel chunks", n_chunks, enabled=show_progress
+                tasks, "relabel chunks", len(tasks), enabled=show_progress
             )
             try:
                 for task in it:
@@ -1114,7 +1114,9 @@ def zarr_native_merge(
                 it = track(
                     pool.imap_unordered(_relabel_chunk_worker, tasks),
                     "relabel chunks",
-                    n_chunks,
+                    # Only the chunks holding labels are relabelled: counted
+                    # against all of them, it stopped at 29% and looked hung.
+                    len(tasks),
                     enabled=show_progress,
                 )
                 for _ in it:
