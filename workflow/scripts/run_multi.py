@@ -862,6 +862,12 @@ def run_after(
     return [(names[i], status[i]) for i in range(len(names))]
 
 
+def held_locks(state_dir: Path) -> list[Path]:
+    """Snakemake's lock files for a run whose --directory is *state_dir*."""
+    locks = Path(state_dir) / ".snakemake" / "locks"
+    return sorted(locks.glob("*")) if locks.is_dir() else []
+
+
 def _resolve(path_str: str, *bases: Path) -> Path:
     """*path_str* as given if absolute, else under the first of *bases*
     holding it (the first base when none does, so the error names it)."""
@@ -1172,6 +1178,24 @@ def main() -> None:
             f"{', '.join(failed)}; skipping relations.",
             file=sys.stderr,
         )
+        locked = [
+            p.name
+            for p, cfg in zip(seg_config_paths, seg_cfgs)
+            if p.name in failed
+            and held_locks(
+                Path(cfg["work_dir"]) / cfg["label_name"] / ".snakemake"
+            )
+        ]
+        if locked:
+            print(
+                f"[run_multi] {', '.join(locked)}: its Snakemake directory is "
+                "locked. If no other run of these configs is still going "
+                "(pgrep -af snakemake; squeue -u $USER), the lock is left over "
+                "from an interrupted run; release it with the same command "
+                "plus --unlock:\n"
+                f"      {Path(sys.argv[0]).name} --config {multi_cfg_path} --unlock",
+                file=sys.stderr,
+            )
         sys.exit(1)
 
     relations = multi_cfg.get("relations", [])
