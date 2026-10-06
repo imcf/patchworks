@@ -19,12 +19,17 @@ from _pw import (
     load_segment_progress,
     load_tiles_json,
     open_image,
+    pin_slurm_gpus,
     save_segment_progress,
     segment_progress_path,
     start_log,
 )
 
 start_log(snakemake.log[0])  # noqa: F821
+# Before anything initialises CUDA: stay on the GPU SLURM gave this job.
+pinned = pin_slurm_gpus()
+if pinned:
+    print(f"[patchworks] {pinned}", flush=True)
 cfg = snakemake.config  # noqa: F821
 batch = int(snakemake.wildcards.batch)  # noqa: F821
 work_dir = cfg["work_dir"]
