@@ -148,6 +148,55 @@ def _is_gpu_oom(exc: BaseException) -> bool:
     )
 
 
+def gpu_report() -> str:
+    """Who is on this job's GPU: CUDA_VISIBLE_DEVICES, the device, its free
+    memory, and every compute process nvidia-smi lists, ours marked.
+
+    On the cluster a PlantSeg job found 5.7 of 25.3 GB free before loading
+    anything, falling to 0.8 GB while it released all it held between
+    attempts: another process was on the GPU. This says which.
+    """
+    import os
+    import subprocess
+
+    lines = [
+        f"CUDA_VISIBLE_DEVICES={os.environ.get('CUDA_VISIBLE_DEVICES', '(unset)')}",
+    ]
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            lines.append(
+                f"device: {torch.cuda.get_device_name()} "
+                f"({_gpu_memory() or 'memory unknown'})"
+            )
+    except Exception:  # no torch / no CUDA: nothing more to say
+        pass
+    try:
+        out = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-compute-apps=pid,process_name,used_memory,gpu_uuid",
+                "--format=csv,noheader",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        ).stdout.strip()
+    except Exception:  # nvidia-smi missing or hanging
+        out = ""
+    me = str(os.getpid())
+    for row in out.splitlines() or [
+        "(nvidia-smi: no compute processes listed)"
+    ]:
+        pid = row.split(",", 1)[0].strip()
+        lines.append(("  * " if pid == me else "    ") + row)
+    return "\n".join(lines)
+
+
+_reported: set[str] = set()
+
+
 def _gpu_memory() -> str:
     """'x.x of y.y GB free' on the current CUDA device, or '' if unknown."""
     try:
@@ -448,6 +497,10 @@ def predict_boundaries(membrane: np.ndarray, cfg: dict[str, Any]) -> np.ndarray:
     layout = "ZYX" if img.ndim == 3 else "YX"
     on_gpu = str(cfg["device"]).startswith("cuda")
     patch = start_patch(img.shape, cfg["patch"], cfg["model"])
+    if on_gpu and cfg["device"] not in _reported:
+        # Once per process: what the GPU looks like before PlantSeg loads.
+        _reported.add(cfg["device"])
+        logger.info("PlantSeg GPU, before loading the model:\n%s", gpu_report())
     fit_key = (cfg["model"], cfg["model_id"], cfg["config_path"], cfg["device"])
     if fit_key in _fitting_patch:
         patch = tuple(min(p, f) for p, f in zip(patch, _fitting_patch[fit_key]))
@@ -484,8 +537,10 @@ def predict_boundaries(membrane: np.ndarray, cfg: dict[str, Any]) -> np.ndarray:
             if smaller is None:
                 raise RuntimeError(
                     f"PlantSeg ran out of GPU memory even at patch {patch} "
-                    f"({oom}; GPU: {memory or 'unknown'}). Is the GPU shared "
-                    "with another job?"
+                    f"({oom}; GPU: {memory or 'unknown'}). The smallest patch "
+                    "needs ~3.5 GB; if this GPU has that much in total, "
+                    "another process holds it -- the processes on it (ours "
+                    "marked *):\n" + gpu_report()
                 )
             logger.warning(
                 "PlantSeg: out of GPU memory at patch %s (GPU: %s), retrying "

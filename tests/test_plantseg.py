@@ -324,3 +324,46 @@ def test_plantsegs_own_oom_check_shrinks_the_patch_and_is_remembered(
     tried.clear()
     pl.predict_boundaries(tile, _cfg())  # next tile of the batch
     assert tried == [(80, 120, 120)]
+
+
+def test_gpu_report_names_the_processes_on_the_gpu(monkeypatch):
+    """5.7 of 25.3 GB free before PlantSeg loaded anything, then 0.8: the
+    report lists every process on the GPU, ours marked, to say whose."""
+    import os
+    import subprocess
+
+    from patchworks.plugins import plantseg as pl
+
+    rows = f"{os.getpid()}, python, 900 MiB, GPU-1\n4242, python, 19400 MiB, GPU-1\n"
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *a, **k: types.SimpleNamespace(stdout=rows),
+    )
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "3")
+    report = pl.gpu_report()
+    assert "CUDA_VISIBLE_DEVICES=3" in report
+    assert f"  * {os.getpid()}, python, 900 MiB" in report
+    assert "    4242, python, 19400 MiB" in report
+
+
+def test_smallest_patch_failure_carries_the_gpu_report(
+    fake_plantseg, monkeypatch
+):
+    from patchworks.plugins import plantseg as pl
+
+    def no_room(*a, **kw):
+        raise RuntimeError(
+            "OOM error will happen. Please reduce the patch size/halo."
+        )
+
+    monkeypatch.setattr(
+        sys.modules["plantseg.functionals.prediction"],
+        "unet_prediction",
+        no_room,
+    )
+    monkeypatch.setattr(pl, "retry_on_oom", lambda call, **kw: call())
+    monkeypatch.setattr(pl, "gpu_report", lambda: "4242, python, 19400 MiB")
+    with pytest.raises(RuntimeError, match="another process holds it") as err:
+        pl.predict_boundaries(np.zeros((40, 100, 100), "float32"), _cfg())
+    assert "19400 MiB" in str(err.value)
