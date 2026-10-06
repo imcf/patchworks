@@ -72,6 +72,54 @@ def start_log(path, *, append=True):
     return handle
 
 
+def _visible_gpu_count() -> int | None:
+    """GPUs this process can see (``nvidia-smi -L``), None if unknown."""
+    import subprocess
+
+    try:
+        out = subprocess.run(
+            ["nvidia-smi", "-L"], capture_output=True, text=True, timeout=20
+        ).stdout
+    except Exception:  # no nvidia-smi: cannot tell
+        return None
+    return sum(1 for line in out.splitlines() if line.startswith("GPU "))
+
+
+def pin_slurm_gpus(environ=None, visible=None) -> str | None:
+    """Keep a SLURM job on the GPUs it was given, when nothing else does.
+
+    With CUDA_VISIBLE_DEVICES unset and no cgroup hiding the other cards,
+    every job on a node runs on GPU 0, whatever SLURM assigned it: a
+    PlantSeg job found 5.7 of 25.3 GB free before loading anything, and
+    less with every attempt. SLURM still names the job's GPUs
+    (SLURM_STEP_GPUS / SLURM_JOB_GPUS, physical indices): restrict CUDA to
+    them -- but only when this process can see more GPUs than it was given.
+    Otherwise the node isolates GPUs already, its own showing as index 0,
+    and pinning a physical index would hide it.
+
+    Returns what was set, or None. Must run before anything initialises
+    CUDA (it reads the variable once).
+    """
+    environ = os.environ if environ is None else environ
+    if environ.get("CUDA_VISIBLE_DEVICES", "").strip():
+        return None
+    for key in ("SLURM_STEP_GPUS", "SLURM_JOB_GPUS"):
+        gpus = environ.get(key, "").strip()
+        if gpus and gpus.lower() not in ("none", "(null)"):
+            break
+    else:
+        return None
+    count = _visible_gpu_count() if visible is None else visible
+    if count is None or count <= len(gpus.split(",")):
+        return None
+    environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"  # nvidia-smi's (SLURM's) order
+    environ["CUDA_VISIBLE_DEVICES"] = gpus
+    return (
+        f"CUDA_VISIBLE_DEVICES was unset and {count} GPUs were visible; "
+        f"pinned to this job's {key}={gpus}"
+    )
+
+
 def open_image(work_dir, channel, level, nuclei_channel=None, seed_labels=None):
     """Open the converted image for segmentation.
 

@@ -564,3 +564,27 @@ def test_missing_packages_are_named_with_the_environment_to_use(
     assert _pw.environment_problems(cfg) == []
     # Functions that need nothing extra are left alone
     assert _pw.environment_problems({"method": "threshold"}) == []
+
+
+def test_pin_slurm_gpus_only_where_the_node_does_not_isolate():
+    """Unset CUDA_VISIBLE_DEVICES on an unisolated node put every job on
+    GPU 0. Pin to SLURM's GPUs then -- and only then."""
+    from _pw import pin_slurm_gpus
+
+    env = {"SLURM_JOB_GPUS": "3"}
+    msg = pin_slurm_gpus(env, visible=8)  # sees the node's 8 GPUs
+    assert env["CUDA_VISIBLE_DEVICES"] == "3" and "SLURM_JOB_GPUS=3" in msg
+    assert env["CUDA_DEVICE_ORDER"] == "PCI_BUS_ID"
+
+    isolated = {"SLURM_JOB_GPUS": "3"}  # cgroup: its one GPU shows as 0
+    assert pin_slurm_gpus(isolated, visible=1) is None
+    assert "CUDA_VISIBLE_DEVICES" not in isolated
+
+    already = {"SLURM_JOB_GPUS": "3", "CUDA_VISIBLE_DEVICES": "0"}
+    assert pin_slurm_gpus(already, visible=8) is None
+    assert already["CUDA_VISIBLE_DEVICES"] == "0"
+
+    assert pin_slurm_gpus({}, visible=8) is None  # not a GPU job
+    step = {"SLURM_STEP_GPUS": "1,2", "SLURM_JOB_GPUS": "1,2"}
+    assert pin_slurm_gpus(step, visible=8)
+    assert step["CUDA_VISIBLE_DEVICES"] == "1,2"
