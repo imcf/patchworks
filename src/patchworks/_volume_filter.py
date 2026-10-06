@@ -23,7 +23,10 @@ import math
 import numpy as np
 import zarr
 
-from ._chunks import chunk_slices
+from concurrent.futures import ThreadPoolExecutor
+
+from ._chunks import chunk_slices, cpu_allocation
+from ._progress import track
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +128,7 @@ def filter_labels_by_size(
     max_voxels: "int | None" = None,
     *,
     relabel: bool = True,
+    n_workers: "int | None" = None,
 ) -> "tuple[int, int]":
     """Drop label objects outside ``[min_voxels, max_voxels]``, in place.
 
@@ -152,6 +156,9 @@ def filter_labels_by_size(
         the same LUT that drops the out-of-range ones (default ``True``)
         -- otherwise the removed ids leave permanent gaps and survivors
         keep their original ids.
+    n_workers : int, optional
+        Threads reading and writing chunks. Default: the CPUs this process
+        may use (the SLURM allocation on a cluster).
 
     Returns
     -------
@@ -181,15 +188,32 @@ def filter_labels_by_size(
     root = zarr.open_group(store_path, mode="r+")
     z = root[component]
     slices = chunk_slices(z.shape, z.chunks)
+    n_threads = max(1, int(n_workers or cpu_allocation()))
+
+    # Pass 1, one chunk per task on a thread pool: zarr's decompression and
+    # numpy's unique release the GIL. A label image is mostly background, so
+    # an all-zero chunk is told by a cheap any() and never revisited -- a
+    # serial unique over every chunk of a 126 x 46k x 42k volume ran for
+    # over an hour in silence.
+    def _count(sl):
+        block = np.asarray(z[sl])
+        if not block.any():
+            return None
+        ids, n = np.unique(block, return_counts=True)
+        fg = ids != 0
+        return sl, ids[fg].astype(np.int64), n[fg].astype(np.int64)
 
     # Per-chunk (id, count) arrays, summed once at the end: vectorised, where
     # a per-object Python loop crawls on millions of objects.
-    chunk_ids, chunk_counts = [], []
-    for sl in slices:
-        ids, n = np.unique(np.asarray(z[sl]), return_counts=True)
-        fg = ids != 0
-        chunk_ids.append(ids[fg].astype(np.int64))
-        chunk_counts.append(n[fg].astype(np.int64))
+    chunk_ids, chunk_counts, occupied = [], [], []
+    with ThreadPoolExecutor(n_threads) as pool:
+        for res in track(
+            pool.map(_count, slices), "size filter: counting", len(slices)
+        ):
+            if res is not None:
+                occupied.append(res[0])
+                chunk_ids.append(res[1])
+                chunk_counts.append(res[2])
     if chunk_ids:
         all_ids = np.concatenate(chunk_ids)
         all_counts = np.concatenate(chunk_counts)
@@ -225,9 +249,21 @@ def filter_labels_by_size(
 
     max_out = n_kept if relabel else max_label
     out_dtype = np.uint16 if max_out < np.iinfo(np.uint16).max else np.uint32
-    for sl in slices:
+
+    # Pass 2 only where pass 1 found labels: a background chunk maps to
+    # itself. Each task writes its own chunk, so the threads never share one.
+    def _apply(sl):
         block = np.asarray(z[sl])
         z[sl] = lut[block].astype(out_dtype)
+
+    if n_removed or relabel:
+        with ThreadPoolExecutor(n_threads) as pool:
+            for _ in track(
+                pool.map(_apply, occupied),
+                "size filter: writing",
+                len(occupied),
+            ):
+                pass
 
     bounds = "-".join(
         str(v) if v is not None else "" for v in (min_voxels, max_voxels)
