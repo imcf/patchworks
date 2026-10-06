@@ -155,7 +155,7 @@ def start_patch(
     if len(shape) == 2:
         shape = (1, *shape)
         base = (1, *base[-2:])
-    return tuple(max(1, min(b, s)) for b, s in zip(base, shape))  # type: ignore[return-value]
+    return tuple(max(1, min(b, s)) for b, s in zip(base, shape))
 
 
 def smaller_patch(patch: tuple[int, int, int]) -> tuple[int, int, int] | None:
