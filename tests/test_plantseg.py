@@ -73,6 +73,10 @@ def fake_plantseg(monkeypatch):
     mods["plantseg.core.zoo"].model_zoo = zoo
     for name, mod in mods.items():
         monkeypatch.setitem(sys.modules, name, mod)
+    # The patch that fitted is remembered per process: not across tests.
+    from patchworks.plugins import plantseg as pl
+
+    monkeypatch.setattr(pl, "_fitting_patch", {})
     return calls
 
 
@@ -287,3 +291,36 @@ def test_two_plane_tile_is_not_taken_for_a_channel_pair(fake_plantseg):
     assert out.shape == (2, 70, 70)  # one 3-D tile, not [membrane, nuclei]
     with pytest.raises(ValueError, match="seed_labels"):
         pl.segment(tile[0], segmentation="nuclei_watershed", device="cpu")
+
+
+def test_plantsegs_own_oom_check_shrinks_the_patch_and_is_remembered(
+    fake_plantseg, monkeypatch
+):
+    """On a 24 GB RTX 4090, PlantSeg refused the zoo patch before running:
+    "OOM error will happen. Please reduce the patch size/halo." -- a
+    message without "out of memory", so the patch never shrank. The patch
+    that fits is then where the batch's next tile starts."""
+    from patchworks.plugins import plantseg as pl
+
+    tried = []
+    predict = sys.modules["plantseg.functionals.prediction"].unet_prediction
+
+    def plantseg_check(raw, input_layout, model_name, model_id, **kw):
+        tried.append(kw["patch"])
+        if kw["patch"][1] > 120:  # what ArrayPredictor raises
+            raise RuntimeError(
+                "OOM error will happen. Please reduce the patch size/halo."
+            )
+        return predict(raw, input_layout, model_name, model_id, **kw)
+
+    monkeypatch.setattr(
+        sys.modules["plantseg.functionals.prediction"],
+        "unet_prediction",
+        plantseg_check,
+    )
+    tile = np.random.default_rng(0).random((129, 430, 430), "float32")
+    pl.predict_boundaries(tile, _cfg())
+    assert tried == [(80, 160, 160), (80, 120, 120)]
+    tried.clear()
+    pl.predict_boundaries(tile, _cfg())  # next tile of the batch
+    assert tried == [(80, 120, 120)]
