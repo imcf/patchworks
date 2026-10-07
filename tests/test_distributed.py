@@ -701,3 +701,67 @@ def test_tiled_labels_match_whole_image_labelling_for_every_connectivity(
                     tile,
                     conn,
                 )
+
+
+@pytest.mark.parametrize("mode", ["two_store", "in_place", "iou"])
+def test_object_table_from_tile_sums_equals_measuring_the_merge(tmp_path, mode):
+    """The tiles' object sums, combined through the merge's lookup table,
+    give exactly the table measured from the merged labels -- objects cut by
+    tile boundaries included -- and the size filter decided from them leaves
+    exactly the objects that a filter of the merged labels keeps."""
+    from scipy import ndimage as ndi
+
+    from patchworks._tables import measure_objects, table_columns
+
+    rng = np.random.default_rng(11)
+    shape, tile = (12, 30, 34), (6, 9, 11)
+    mask = ndi.binary_dilation(rng.random(shape) < 0.04)
+    struct = ndi.generate_binary_structure(3, 3)
+
+    def fn(t):
+        return ndi.label(t, structure=struct)[0].astype("int32")
+
+    stage = str(tmp_path / "stage.zarr")
+    parts = str(tmp_path / "parts")
+    halos = str(tmp_path / "halo") if mode == "iou" else None
+    create_stage(stage, shape, tile)
+    counts = {
+        i: stage_tile(
+            mask.astype("uint8"),
+            fn,
+            stage,
+            i,
+            tile_shape=tile,
+            overlap=2,
+            halo_dir=halos,
+            parts_dir=parts,
+        )
+        for i in range(len(spatial_tiles(shape, tile)))
+    }
+    objects: dict = {}
+    out = stage if mode == "in_place" else str(tmp_path / "out.zarr")
+    merged = merge_tile_labels(
+        stage,
+        write_to=out,
+        input_component="staged",
+        output_component="staged" if mode == "in_place" else "labels",
+        sequential_labels=True,
+        label_counts=counts,
+        connectivity=3,
+        halo_dir=halos,
+        parts_dir=parts,
+        min_voxels=8,
+        objects_out=objects,
+        n_workers=2,
+    ).compute()
+
+    assert merged.max() == len(objects["label"]) > 0
+    got = table_columns(objects, "zyx")
+    want = measure_objects(merged)
+    for key, values in want.items():
+        np.testing.assert_allclose(got[key], values, atol=1e-9, err_msg=key)
+    assert want["area_voxels"].min() >= 8
+    if mode != "iou":  # touch stitching: the whole image's labelling
+        whole = ndi.label(mask, structure=struct)[0]
+        ids, n = np.unique(whole[whole > 0], return_counts=True)
+        assert np.array_equal(merged > 0, np.isin(whole, ids[n >= 8]))

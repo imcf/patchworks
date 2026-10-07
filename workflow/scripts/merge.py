@@ -35,6 +35,7 @@ from _pw import (
     halo_path,
     load_tiles_json,
     merge_connectivity,
+    parts_path,
     stage_path,
     start_log,
 )
@@ -105,6 +106,47 @@ else:
     parent.require_group(label_name)
     out_chunks = capped_output_chunks(staged.chunks, LABEL_CHUNK_CAP)
 
+# The size filter, in voxels at the segmented level's resolution.
+min_volume = cfg.get("min_volume")
+max_volume = cfg.get("max_volume")
+min_voxels = max_voxels = None
+if min_volume or max_volume:
+    voxel_size = read_pixel_size(image_store, level=int(cfg.get("level", 0)))
+    if not voxel_size:
+        raise RuntimeError(
+            f"min_volume/max_volume filtering needs calibration in "
+            f"{image_store}, which has none -- set both to null, or make "
+            "sure the source carries a pixel size at conversion time"
+        )
+    min_voxels = (
+        min_voxels_for_volume(min_volume, voxel_size) if min_volume else None
+    )
+    max_voxels = (
+        max_voxels_for_volume(max_volume, voxel_size) if max_volume else None
+    )
+
+# The segment jobs measured their tiles' objects as they wrote them. With
+# every labelled tile's sums there, the merge combines them through its own
+# lookup table: the object table without reading the labels again, and the
+# size filter decided from it and applied in the same relabel pass (no two
+# passes of its own over the volume). Tiles segmented by an older version
+# have none: then the labels are filtered and measured as before.
+parts_dir = parts_path(work_dir, label_name)
+fused = bool(label_counts) and all(
+    (Path(parts_dir) / f"{index}.npz").exists()
+    for index, n in label_counts.items()
+    if n > 0
+)
+print(
+    "[patchworks] object table: "
+    + (
+        "from the tiles' sums, with the merge"
+        if fused
+        else "measured after the merge (tiles without sums)"
+    )
+)
+objects: dict = {}
+
 _, n_objects = merge_tile_labels(
     target_path,
     write_to=label_group if not in_place else target_path,
@@ -127,30 +169,26 @@ _, n_objects = merge_tile_labels(
     iou_threshold=float(cfg.get("iou_threshold", 0.5)),
     # The neighbourhood the tiles were labelled with (DoG / threshold).
     connectivity=merge_connectivity(cfg),
+    parts_dir=parts_dir if fused else None,
+    min_voxels=min_voxels if fused else None,
+    max_voxels=max_voxels if fused else None,
+    objects_out=objects,
 )
 shutil.rmtree(halo_path(work_dir, label_name), ignore_errors=True)
 
-# Global, exact volume filter -- runs once on the fully merged array so an
+# Global, exact volume filter -- once on the fully merged objects, so an
 # object's size is never judged from just the fragment one tile happened to
-# see. Runs before the pyramid so every level reflects the filtered result.
-min_volume = cfg.get("min_volume")
-max_volume = cfg.get("max_volume")
-if min_volume or max_volume:
-    # The labels are at the segmented level's resolution, so voxel counts
-    # must be converted with that level's voxel size.
-    voxel_size = read_pixel_size(image_store, level=int(cfg.get("level", 0)))
-    if not voxel_size:
-        raise RuntimeError(
-            f"min_volume/max_volume filtering needs calibration in "
-            f"{image_store}, which has none -- set both to null, or make "
-            "sure the source carries a pixel size at conversion time"
-        )
-    min_voxels = (
-        min_voxels_for_volume(min_volume, voxel_size) if min_volume else None
+# see; before the pyramid, so every level reflects it. Fused into the merge
+# when the tiles' sums were there (`objects` filled); otherwise a pass of
+# its own over the merged labels.
+if (min_voxels or max_voxels) and objects:
+    print(
+        f"[patchworks] volume filter: [{min_volume or 0}, "
+        f"{max_volume or 'inf'}] µm³ ([{min_voxels or 0}, "
+        f"{max_voxels or 'inf'}] voxels) applied with the merge, "
+        f"{len(objects['label'])} object(s) remain"
     )
-    max_voxels = (
-        max_voxels_for_volume(max_volume, voxel_size) if max_volume else None
-    )
+elif min_voxels or max_voxels:
     n_objects, n_removed = filter_labels_by_size(
         label_group,
         "0",
@@ -307,18 +345,28 @@ if cfg.get("seam_report", True):
         )
 # One row per object (size, centroid, bounding box; intensities of
 # `table_channels`) inside the label group: what `patchworks review` and the
-# relation workbooks work from. One read of the labels.
+# relation workbooks work from. From the tiles' sums when the merge combined
+# them -- no read of the labels; measured from the labels when it did not,
+# or when intensities are asked for (those need the image anyway). Written
+# after the registration, which completes the fingerprint the table is
+# checked against, so relate finds it current and measures nothing.
 if cfg.get("object_table", True):
-    from patchworks._tables import compute_table
+    from patchworks._tables import compute_table, write_table_from_sums
 
-    cols = compute_table(
-        image_store,
-        label_name,
-        channels=cfg.get("table_channels") or None,
-    )
+    if objects and not cfg.get("table_channels"):
+        cols = write_table_from_sums(image_store, label_name, objects)
+        how = "from the tiles' sums"
+    else:
+        cols = compute_table(
+            image_store,
+            label_name,
+            channels=cfg.get("table_channels") or None,
+        )
+        how = "measured from the labels"
     print(
         f"[patchworks] object table: {len(cols['label']):,} objects in "
-        f"{group}/table"
+        f"{group}/table ({how})"
     )
+shutil.rmtree(parts_dir, ignore_errors=True)
 print(f"[patchworks] labels written to {group}")
 open(snakemake.output[0], "w").close()  # noqa: F821

@@ -205,6 +205,106 @@ def _merge(parts: list[dict[str, np.ndarray]], n_images: int) -> dict:
     return out
 
 
+#: Voxels measured at once by :func:`tile_partial`. Measuring holds about
+#: a dozen 8-byte arrays of the foreground's size, so 4 M voxels stay near
+#: 400 MB whatever the tile -- a fully labelled 126 x 516 x 516 tile at once
+#: would need over 3 GB.
+TILE_PARTIAL_BLOCK = 1 << 22
+
+
+def tile_partial(
+    labels: np.ndarray,
+    offset: Sequence[int],
+    *,
+    block_voxels: int = TILE_PARTIAL_BLOCK,
+) -> "dict[str, np.ndarray] | None":
+    """Per-object sums of one tile of labels, for :func:`combine_partials`.
+
+    Measured in slabs of at most *block_voxels* along the first axis and
+    combined, so memory stays bounded by the slab, not the tile. *offset* is
+    the tile's position in the full image: centroids and bounding boxes come
+    out in its coordinates. ``None`` for a tile without labels.
+    """
+    labels = np.asarray(labels)
+    if not labels.any():
+        return None
+    plane = int(np.prod(labels.shape[1:])) or 1
+    step = max(1, int(block_voxels) // plane)
+    off = [int(o) for o in offset]
+    parts = []
+    for z in range(0, labels.shape[0], step):
+        part = _block_partial(labels[z : z + step], (off[0] + z, *off[1:]), [])
+        if part is not None:
+            parts.append(part)
+    if len(parts) == 1:
+        return parts[0]
+    return _as_partial(_merge(parts, 0))
+
+
+def _as_partial(m: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+    """A :func:`_merge` result back in partial form (``ids`` for ``label``)."""
+    out = dict(m)
+    out["ids"] = out.pop("label")
+    return out
+
+
+def combine_partials(
+    parts: Sequence[dict[str, np.ndarray]],
+) -> "dict[str, np.ndarray] | None":
+    """One row per object from partial sums whose ``ids`` are already global
+    (pieces of one object carry the same id): ``label``, ``count``, ``mean``,
+    ``m2``, ``lo``, ``hi``, as :func:`_merge`. ``None`` when there are none."""
+    parts = [p for p in parts if p is not None and len(p["ids"])]
+    if not parts:
+        return None
+    return _merge(list(parts), 0)
+
+
+def table_columns(
+    m: "dict[str, np.ndarray] | None",
+    axes: str,
+    pixel_size: Mapping[str, float] | None = None,
+    image_names: Sequence[str] = (),
+) -> dict[str, np.ndarray]:
+    """The table's columns from combined sums (:func:`_merge`)."""
+    ndim = len(axes)
+    cols: dict[str, np.ndarray] = {}
+    if m is None or not len(m["label"]):
+        cols["label"] = np.empty(0, np.int64)
+        cols["area_voxels"] = np.empty(0, np.int64)
+        for ax in axes:
+            cols[f"centroid_{ax}"] = np.empty(0)
+        for ax in axes:
+            cols[f"bbox_min_{ax}"] = np.empty(0, np.int64)
+            cols[f"bbox_max_{ax}"] = np.empty(0, np.int64)
+        for i, j in _pairs(ndim):
+            cols[f"cov_{axes[i]}{axes[j]}"] = np.empty(0)
+        return cols
+    count = m["count"]
+    cols["label"] = m["label"]
+    cols["area_voxels"] = count
+    for i, ax in enumerate(axes):
+        cols[f"centroid_{ax}"] = m["mean"][:, i]
+    for i, ax in enumerate(axes):
+        cols[f"bbox_min_{ax}"] = m["lo"][:, i]
+        cols[f"bbox_max_{ax}"] = m["hi"][:, i]
+    for k, (i, j) in enumerate(_pairs(ndim)):
+        cols[f"cov_{axes[i]}{axes[j]}"] = m["m2"][:, k] / count
+    for i, name in enumerate(image_names):
+        mean = m[f"sum{i}"] / count
+        cols[f"mean_intensity_{name}"] = mean
+        cols[f"std_intensity_{name}"] = np.sqrt(
+            np.maximum(m[f"sq{i}"] / count - mean**2, 0.0)
+        )
+    if pixel_size:
+        size = [float(pixel_size.get(ax, 1.0)) for ax in axes]
+        key = "area_um3" if ndim == 3 else f"area_um{ndim}"
+        cols[key] = count * float(np.prod(size))
+        for ax, sz in zip(axes, size):
+            cols[f"centroid_{ax}_um"] = cols[f"centroid_{ax}"] * sz
+    return cols
+
+
 def measure_objects(
     labels: Any,
     *,
@@ -297,42 +397,12 @@ def measure_objects(
                 log_progress("measure_objects", done, len(blocks), started)
                 last = now
 
-    cols: dict[str, np.ndarray] = {}
-    if not parts:
-        cols["label"] = np.empty(0, np.int64)
-        cols["area_voxels"] = np.empty(0, np.int64)
-        for ax in axes:
-            cols[f"centroid_{ax}"] = np.empty(0)
-        for ax in axes:
-            cols[f"bbox_min_{ax}"] = np.empty(0, np.int64)
-            cols[f"bbox_max_{ax}"] = np.empty(0, np.int64)
-        for i, j in _pairs(ndim):
-            cols[f"cov_{axes[i]}{axes[j]}"] = np.empty(0)
-        return cols
-    m = _merge(parts, len(img_list))
-    count = m["count"]
-    cols["label"] = m["label"]
-    cols["area_voxels"] = count
-    for i, ax in enumerate(axes):
-        cols[f"centroid_{ax}"] = m["mean"][:, i]
-    for i, ax in enumerate(axes):
-        cols[f"bbox_min_{ax}"] = m["lo"][:, i]
-        cols[f"bbox_max_{ax}"] = m["hi"][:, i]
-    for k, (i, j) in enumerate(_pairs(ndim)):
-        cols[f"cov_{axes[i]}{axes[j]}"] = m["m2"][:, k] / count
-    for i, name in enumerate(images):
-        mean = m[f"sum{i}"] / count
-        cols[f"mean_intensity_{name}"] = mean
-        cols[f"std_intensity_{name}"] = np.sqrt(
-            np.maximum(m[f"sq{i}"] / count - mean**2, 0.0)
-        )
-    if pixel_size:
-        size = [float(pixel_size.get(ax, 1.0)) for ax in axes]
-        key = "area_um3" if ndim == 3 else f"area_um{ndim}"
-        cols[key] = count * float(np.prod(size))
-        for ax, s in zip(axes, size):
-            cols[f"centroid_{ax}_um"] = cols[f"centroid_{ax}"] * s
-    return cols
+    return table_columns(
+        _merge(parts, len(img_list)) if parts else None,
+        axes,
+        pixel_size,
+        list(images),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -557,6 +627,38 @@ def compute_table(
             "pixel_size": read_pixel_size(path),
             "tile_shape": list(tile) if tile else None,
             "channels": list(images),
+        },
+    )
+    return cols
+
+
+def write_table_from_sums(
+    store: Union[str, Path], name: str, sums: dict[str, np.ndarray]
+) -> dict[str, np.ndarray]:
+    """Store ``labels/<name>``'s table from combined per-tile sums (the
+    merge's ``objects_out``), as :func:`compute_table` would from the labels.
+
+    Call it once the label group is registered: the table records the
+    labels' fingerprint, which the registration completes.
+    """
+    from .plugins.ome_zarr import read_pixel_size
+
+    path = _label_group(store, name)
+    grp = zarr.open_group(path, mode="r")
+    arr = _level0(grp)
+    axes = _spatial_axes(grp, arr.ndim)
+    pixel_size = read_pixel_size(path)
+    settings = (dict(grp.attrs).get(PROVENANCE_KEY) or {}).get("settings") or {}
+    tile = settings.get("tile_shape")
+    cols = table_columns(sums, axes, pixel_size)
+    write_table(
+        path,
+        cols,
+        attrs={
+            "axes": axes,
+            "pixel_size": pixel_size,
+            "tile_shape": list(tile) if tile else None,
+            "channels": [],
         },
     )
     return cols

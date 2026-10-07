@@ -913,6 +913,78 @@ def _lut_scratch_dir(lut_nbytes: int, fallback: str) -> str:
     return tempfile.mkdtemp(prefix="_pws_lut_", dir=parent)
 
 
+def _combine_tile_parts(
+    parts_dir: str,
+    offsets: np.ndarray,
+    counts: np.ndarray,
+    lut: np.ndarray,
+) -> dict:
+    """Every tile's object sums under its merged id, combined per object.
+
+    Memory: about 136 bytes per (object, tile) piece, a few times over while
+    sorting -- ~1.5 GB for 2.7 M cilia, against the LUT's 8 bytes per id
+    already held. Tiles are read one at a time.
+    """
+    from ._tables import combine_partials
+
+    parts = []
+    missing = []
+    for i in np.flatnonzero(counts > 0):
+        path = os.path.join(parts_dir, f"{int(i)}.npz")
+        try:
+            with np.load(path) as f:
+                part = {k: f[k] for k in f.files}
+        except FileNotFoundError:
+            missing.append(int(i))
+            continue
+        part["ids"] = lut[part["ids"] + int(offsets[i])]
+        parts.append(part)
+    if missing:
+        raise FileNotFoundError(
+            f"no object sums for {len(missing)} tile(s) with labels in "
+            f"{parts_dir} (e.g. {missing[:3]}); measure the merged labels "
+            "instead"
+        )
+    rows = sum(len(p["ids"]) for p in parts)
+    logger.info(
+        "zarr_native_merge: combining %d object piece(s) from %d tile(s)",
+        rows,
+        len(parts),
+    )
+    objects = combine_partials(parts)
+    if objects is None:
+        objects = {
+            "label": np.empty(0, np.int64),
+            "count": np.empty(0, np.int64),
+        }
+    return objects
+
+
+def _size_filter_lut(lut, objects, min_voxels, max_voxels):
+    """Drop merged objects outside ``[min_voxels, max_voxels]`` from *lut*
+    (they become background) and from *objects*."""
+    count = objects["count"]
+    keep = np.ones(len(count), bool)
+    if min_voxels is not None:
+        keep &= count >= int(min_voxels)
+    if max_voxels is not None:
+        keep &= count <= int(max_voxels)
+    dropped = objects["label"][~keep]
+    if dropped.size:
+        gone = np.zeros(len(lut), bool)
+        gone[dropped] = True
+        lut = np.where(gone[lut], 0, lut)
+    logger.info(
+        "zarr_native_merge: size filter drops %d of %d object(s) "
+        "outside [%s, %s] voxels",
+        int((~keep).sum()),
+        len(count),
+        min_voxels if min_voxels is not None else 0,
+        max_voxels if max_voxels is not None else "inf",
+    )
+    return lut, {k: v[keep] for k, v in objects.items()}
+
+
 def zarr_native_merge(
     staged_path: str,
     staged_component: str,
@@ -926,6 +998,10 @@ def zarr_native_merge(
     halo_dir: "str | Path | None" = None,
     iou_threshold: float = 0.5,
     connectivity: int = 1,
+    parts_dir: "str | Path | None" = None,
+    min_voxels: "int | None" = None,
+    max_voxels: "int | None" = None,
+    objects_out: "dict | None" = None,
 ) -> "int | None":
     """Zarr-native label merge: boundary scan → scipy CC → parallel relabel.
 
@@ -978,6 +1054,21 @@ def zarr_native_merge(
         Neighbourhood the tiles were labelled with (1 faces, 2 edges, 3
         corners); labels touching across a boundary that way are joined.
         Ignored in IoU mode, which joins by agreement, not by touch.
+    parts_dir : str or Path, optional
+        Per-tile object sums saved by :func:`patchworks.stage_tile`
+        (``parts_dir=``), one ``<index>.npz`` per tile holding labels. They
+        are combined through the merge's own lookup table into one row per
+        merged object -- the object table, without reading the labels again
+        -- and put in *objects_out*. Needs *label_counts*.
+    min_voxels, max_voxels : int, optional
+        With *parts_dir*: drop merged objects outside this size, decided
+        from the combined counts and folded into the same lookup table, so
+        the one relabel pass writes the filtered labels (no separate filter
+        pass over the volume).
+    objects_out : dict, optional
+        Filled with the combined sums (``label``, ``count``, ``mean``,
+        ``m2``, ``lo``, ``hi``; see :func:`patchworks._tables.table_columns`),
+        under the final ids, when *parts_dir* was used and the merge ran.
 
     Returns
     -------
@@ -1070,6 +1161,16 @@ def zarr_native_merge(
         "zarr_native_merge: %d labels remapped across boundaries", n_remapped
     )
 
+    objects = None
+    if parts_dir is not None:
+        if offsets is None:
+            raise ValueError("parts_dir needs label_counts")
+        objects = _combine_tile_parts(str(parts_dir), offsets, counts_arr, lut)
+        if min_voxels is not None or max_voxels is not None:
+            lut, objects = _size_filter_lut(
+                lut, objects, min_voxels, max_voxels
+            )
+
     n_objects = None
     if sequential:
         # Every id in 1..max_label exists in the store (both paths above make
@@ -1081,6 +1182,8 @@ def zarr_native_merge(
         logger.info(
             "zarr_native_merge: renumbered to 1..%d in the same LUT", n_objects
         )
+        if objects is not None:
+            objects["label"] = np.searchsorted(uniq, objects["label"])
 
     # Relabelling straight back into the source array saves writing the whole
     # volume a second time. It is safe because the boundary scan has already
@@ -1238,6 +1341,8 @@ def zarr_native_merge(
         arr.attrs[_MERGE_COUNT] = n_objects
         arr.attrs[_MERGE_STATE] = "done"
 
+    if objects_out is not None and objects is not None:
+        objects_out.update(objects)
     return n_objects
 
 
@@ -1264,6 +1369,10 @@ def merge_tile_labels(
     halo_dir: "str | Path | None" = None,
     iou_threshold: float = 0.5,
     connectivity: int = 1,
+    parts_dir: "str | Path | None" = None,
+    min_voxels: "int | None" = None,
+    max_voxels: "int | None" = None,
+    objects_out: "dict | None" = None,
 ) -> Union["da.Array", tuple["da.Array", Union[int, None]]]:
     """Merge per-tile labels into a globally consistent label array.
 
@@ -1328,6 +1437,12 @@ def merge_tile_labels(
         also edges, 3 also corners (``scipy.ndimage.generate_binary_structure``).
         Labels touching across a tile boundary that way are joined, so the
         result is that of labelling the whole image at once.
+    parts_dir, min_voxels, max_voxels, objects_out:
+        Object sums saved per tile by :func:`stage_tile` (``parts_dir=``),
+        combined into one row per merged object in *objects_out* -- the
+        object table without a second read of the labels -- and an optional
+        size filter applied in the same relabel pass. See
+        :func:`zarr_native_merge`. Needs *label_counts*.
     n_workers:
         Parallel workers for the relabel step. Default ``min(4, cpu_count)``.
     stage_dir:
@@ -1449,6 +1564,10 @@ def merge_tile_labels(
             halo_dir=halo_dir,
             iou_threshold=iou_threshold,
             connectivity=connectivity,
+            parts_dir=parts_dir,
+            min_voxels=min_voxels,
+            max_voxels=max_voxels,
+            objects_out=objects_out,
         )
     finally:
         # -- Cleanup temp stage (only when we created it), even on failure:

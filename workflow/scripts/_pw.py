@@ -263,6 +263,12 @@ def stage_path(work_dir, label_name):
     return str(Path(work_dir) / label_name / "stage.zarr")
 
 
+def parts_path(work_dir, label_name):
+    """Where segment jobs keep each tile's object sums for the merge, which
+    builds the object table from them instead of reading the labels again."""
+    return str(Path(work_dir) / label_name / "parts")
+
+
 def halo_path(work_dir, label_name):
     """Where segment jobs keep halo strips for ``stitch: iou``.
 

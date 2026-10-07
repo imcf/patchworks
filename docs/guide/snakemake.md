@@ -363,8 +363,12 @@ shard_labels: false            # true → also reshard label level 0 after the
     one blob). Set either, both, or neither (`null`, the default, disables
     each). Both run once on the **fully merged** image — not per tile, where
     an object crossing a tile boundary would look smaller or larger than it
-    really is. Runs after `merge` and before the pyramid is built, so every
-    pyramid level reflects the filtered result, and needs `image.zarr` to
+    really is. The sizes come from what the segment jobs measured per tile,
+    added up per merged object, and the filter is applied in the merge's
+    own relabelling pass, so it costs no pass of its own over the image
+    (runs whose tiles were segmented by an older version filter the merged
+    labels in a separate pass instead). Every pyramid level reflects the
+    filtered result. It needs `image.zarr` to
     carry a pixel size (the same calibration deconvolution's voxel sizes and
     Cellpose's `anisotropy` are derived from — see the tip below); an
     uncalibrated store raises rather than silently skipping the filter. See

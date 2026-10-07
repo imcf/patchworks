@@ -127,8 +127,10 @@ shard_labels: false
 # After the merge, measure every object (size, centroid, bounding box) into
 # image.zarr/labels/<label_name>/table: what `patchworks review image.zarr`
 # (look at the likely mistakes, fix them) and the relation workbooks work
-# from. One read of the labels. table_channels adds each object's mean/std
-# intensity in those image channels, e.g. [0, 2] (one read of each).
+# from. Built from what the segment jobs measured per tile -- no extra read
+# of the labels. table_channels adds each object's mean/std intensity in
+# those image channels, e.g. [0, 2] (then one read of the labels and of
+# each channel).
 object_table: true
 table_channels: []
 
