@@ -148,3 +148,30 @@ def test_fix_metadata_repairs_stores_from_older_versions(tmp_path):
     assert "9" not in root["labels"]["cells"]
     assert np.array_equal(np.asarray(root["labels"]["cells"]["0"]), before)
     assert fix_ngff_metadata(path) == []
+
+
+def test_fix_metadata_drops_deleted_label_images_from_the_list(tmp_path):
+    """A label image removed with rm -r stayed in the labels list, and
+    fix-metadata (like every reader) died opening it."""
+    import shutil
+
+    path = _store(tmp_path, "0.5")
+    shutil.rmtree(Path(path) / "labels" / "coarse")
+    changes = fix_ngff_metadata(path)
+    assert (
+        "labels: removed coarse from the list (no such label image)" in changes
+    )
+    root = zarr.open_group(path, mode="r")
+    assert read_ngff_attr(root["labels"].attrs, "labels") == ["cells"]
+    assert fix_ngff_metadata(path) == []
+    # Registering another label image drops such entries too
+    shutil.rmtree(Path(path) / "labels" / "cells")
+    write_labels(
+        path,
+        np.zeros((8, 64, 80), "int32"),
+        name="fresh",
+        progress=False,
+        provenance=provenance(level=0),
+    )
+    root = zarr.open_group(path, mode="r")
+    assert read_ngff_attr(root["labels"].attrs, "labels") == ["fresh"]
