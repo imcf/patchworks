@@ -143,6 +143,7 @@ print(f"[patchworks] halo read amplification: {amplification:.2f}x")
 
 tiles = spatial_tiles(image.shape, tile_shape)
 occupied = list(range(len(tiles)))
+threshold = None
 if cfg.get("skip_empty", True):
     # The occupancy map reduces every voxel of the image to per-brick maxima,
     # so testing a tile covers the whole tile instead of a centred sample. The
@@ -228,6 +229,8 @@ Path(work_dir, label_name, "tiles.json").write_text(
             "overlap": list(overlap),
             "n_tiles": len(tiles),
             "occupied": occupied,
+            # The cutoff skip_empty actually used (Otsu when not configured).
+            "empty_threshold": None if threshold is None else float(threshold),
             "tiles_per_job": tiles_per_job,
             "batches": batches,
             "target_path": target_path,
@@ -240,4 +243,5 @@ Path(work_dir, label_name, "tiles.json").write_text(
 print(
     f"[patchworks] {len(occupied)}/{len(tiles)} tiles to segment "
     f"in {len(batches)} job(s) of up to {tiles_per_job}"
+    + ("" if threshold is None else f"; empty below {float(threshold):g}")
 )
