@@ -720,7 +720,7 @@ def test_existing_store_format_beats_the_requested_version(tmp_path):
         a,
         tmp_path / "a.zarr",
         axes="zyx",
-        n_levels=1,
+        n_levels=2,  # a label image has as many levels as its image
         chunks=(2, 16, 16),
         ngff_version="0.4",
     )
@@ -1044,8 +1044,9 @@ def test_label_pyramid_keeps_objects_nearest_would_drop(tmp_path):
     for y in range(1, 64, 16):
         for x in range(1, 64, 16):
             labels[0, y, x] = next(ids)
-    store = to_ome_zarr(img, tmp_path / "a.zarr", axes="zyx", n_levels=1)
-    write_labels(store, labels, name="dots", n_levels=3)
+    # Three levels: a label image has as many as its image.
+    store = to_ome_zarr(img, tmp_path / "a.zarr", axes="zyx", n_levels=3)
+    write_labels(store, labels, name="dots")
     grp = zarr.open_group(f"{store}/labels/dots", mode="r")
     for level in ("1", "2"):
         assert set(np.unique(grp[level][:])) - {0} == set(range(1, 17))

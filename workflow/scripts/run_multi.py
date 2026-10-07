@@ -676,6 +676,15 @@ def stale_runs(cfgs: list[dict], image_store: str | Path) -> list[str]:
     return problems
 
 
+def zarr_root_file(cfg: dict) -> str:
+    """The store's root metadata file, as rules/common.smk names it."""
+    return (
+        ".zgroup"
+        if str(cfg.get("ngff_version", "auto")) == "0.4"
+        else "zarr.json"
+    )
+
+
 def _validate_configs(paths: list[Path], cfgs: list[dict]) -> str:
     """Check the cross-config invariants before anything is submitted.
 
@@ -1292,6 +1301,10 @@ def main() -> None:
     # Phase A: convert exactly once. The three runs are about to go concurrent
     # and `convert` writes with overwrite=True, so letting them race on it
     # would have them clobbering one store. Ask for its marker explicitly.
+    # The marker the convert and occupancy rules produce (rules/common.smk):
+    # a zarr v2 store (ngff_version 0.4) has no zarr.json, and asking for one
+    # failed every multi run writing 0.4 with "No rule to produce".
+    root_file = zarr_root_file(seg_cfgs[0])
     rc = _run(
         _snakemake_cmd(
             seg_config_paths[0],
@@ -1306,7 +1319,8 @@ def main() -> None:
             # without a traceback. It is shared by every config, so it must
             # not be left to the concurrent `prepare` steps either.
             targets=[
-                f"{image_store}/zarr.json",
+                f"{image_store}/{root_file}",
+                # Private, always zarr v3 (see rules/common.smk).
                 f"{occupancy_store}/zarr.json",
             ],
             jobname_prefix=slurm_jobname_prefix("convert"),

@@ -95,6 +95,8 @@ cellpose:
 #   nuclei_model: "/path/to/n2v_nuc.ckpt" # optional, for nuclei_channel
 
 # ---- pyramid for the labels -------------------------------------------------
+# The labels always get as many levels as the image: OME-Zarr requires it of
+# a label image. pyramid_levels only applies to an image without a pyramid.
 pyramid_levels: 5
 pyramid_downscale: 2
 sequential_labels: true # renumber merged labels to a contiguous 1..N range

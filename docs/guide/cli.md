@@ -25,7 +25,17 @@ patchworks tables scan.zarr --relate nuclei:cells
 
 # Look at the likely mistakes one by one and fix them (napari)
 patchworks review scan.zarr --expect cells:nuclei=1
+
+# Bring a store written by an older patchworks up to the OME-Zarr spec
+patchworks fix-metadata scan.zarr
 ```
+
+`patchworks fix-metadata` changes metadata only, in place: it gives every
+OME-Zarr 0.5 array its `dimension_names` (required by 0.5; versions before
+this one wrote none, which strict readers such as `ome-zarr-models` refuse),
+and drops surplus coarse levels from a label image with more pyramid levels
+than its image (the spec requires the same number). Running it twice
+changes nothing the second time.
 
 `patchworks review` without a window: `--summary` (counts and error
 estimate), `--export DIR --format csv|xlsx|parquet` (corrected tables),

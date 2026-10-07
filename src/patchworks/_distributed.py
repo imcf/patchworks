@@ -125,6 +125,7 @@ def create_stage(
     *,
     component: str = "staged",
     dtype=np.int32,
+    zarr_format: int | None = None,
 ) -> str:
     """Create the empty (zero-filled) shared stage store for tiled writes.
 
@@ -141,19 +142,27 @@ def create_stage(
     dtype : data-type, optional
         Label dtype (default ``int32``). Tiles write local labels; the merge's
         first pass renumbers them to a compact global range that fits int32.
+    zarr_format : int, optional
+        2 or 3. Give the image store's own format when staging straight into
+        its ``labels/<name>`` group: a v3 group inside a v2 (OME-Zarr 0.4)
+        store is something no reader can open. Default: zarr's.
 
     Returns
     -------
     str
         The stage store path.
     """
-    root = zarr.open_group(str(stage_path), mode="w")
+    root = zarr.open_group(
+        str(stage_path),
+        mode="w",
+        **({"zarr_format": zarr_format} if zarr_format else {}),
+    )
     root.create_array(
         name=component,
         shape=shape,
         chunks=tile_shape,
         dtype=dtype,
-        **zarr_compressor_kwargs(),
+        **zarr_compressor_kwargs(root.metadata.zarr_format),
     )
     return str(stage_path)
 
