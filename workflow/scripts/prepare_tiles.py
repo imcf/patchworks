@@ -206,7 +206,18 @@ else:
         f"{LABEL_CHUNK_CAP}; staging to a scratch store so level 0 stays "
         "chunked for viewing"
     )
-create_stage(target_path, image.shape, tile_shape, component=target_component)
+create_stage(
+    target_path,
+    image.shape,
+    tile_shape,
+    component=target_component,
+    # In place, the stage *is* the label group: in the image's own format.
+    zarr_format=(
+        zarr.open_group(image_store, mode="r").metadata.zarr_format
+        if in_place
+        else None
+    ),
+)
 # Halo strips from an earlier run describe tiles that no longer exist.
 shutil.rmtree(halo_path(work_dir, label_name), ignore_errors=True)
 

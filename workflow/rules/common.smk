@@ -19,7 +19,9 @@ IMAGE_OK = f"{IMAGE}/{ZARR_ROOT_FILE}"
 # which zarr would refuse to walk). Shared by every config against this image,
 # so it is keyed on the image and the level rather than on label_name.
 OCCUPANCY = f"{WORK}/image.occupancy.zarr/{int(config.get('level', 0))}"
-OCCUPANCY_OK = f"{OCCUPANCY}/{ZARR_ROOT_FILE}"
+# A private zarr v3 array, not part of the OME-Zarr image, so its marker does
+# not follow ngff_version (a 0.4 run waited for a .zgroup it never gets).
+OCCUPANCY_OK = f"{OCCUPANCY}/zarr.json"
 OCCUPANCYLOG = f"{WORK}/logs/occupancy.log"
 
 # Everything below is per-segmentation, namespaced under WORK/<label_name>/, so

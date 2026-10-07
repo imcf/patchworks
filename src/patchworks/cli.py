@@ -263,6 +263,17 @@ def _cmd_info(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_fix_metadata(args: argparse.Namespace) -> int:
+    from .plugins.ome_zarr import fix_ngff_metadata
+
+    changes = fix_ngff_metadata(args.store)
+    for line in changes:
+        print(line)
+    if not changes:
+        print(f"{args.store}: nothing to fix")
+    return 0
+
+
 def _cmd_view(args: argparse.Namespace) -> int:
     from .plugins.napari import view_in_napari
 
@@ -540,6 +551,14 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("info", help="levels, chunks, codecs and labels")
     p.add_argument("store")
     p.set_defaults(func=_cmd_info)
+
+    p = sub.add_parser(
+        "fix-metadata",
+        help="repair OME-Zarr metadata written by older versions (in place, "
+        "metadata only)",
+    )
+    p.add_argument("store")
+    p.set_defaults(func=_cmd_fix_metadata)
 
     p = sub.add_parser("view", help="open in napari")
     p.add_argument("image")

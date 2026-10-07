@@ -651,7 +651,17 @@ def test_store_marker_file_follows_the_zarr_format():
     assert '".zgroup"' in smk
     assert '"zarr.json"' in smk
     assert 'IMAGE_OK = f"{IMAGE}/{ZARR_ROOT_FILE}"' in smk
-    assert 'OCCUPANCY_OK = f"{OCCUPANCY}/{ZARR_ROOT_FILE}"' in smk
+    # The occupancy map is a private zarr v3 array whatever ngff_version
+    # says: under 0.4 a .zgroup marker for it was never written.
+    assert 'OCCUPANCY_OK = f"{OCCUPANCY}/zarr.json"' in smk
+
+    # run_multi asks Snakemake for the same markers: it asked for zarr.json
+    # under 0.4 and every multi run writing 0.4 failed to convert.
+    import run_multi
+
+    assert run_multi.zarr_root_file({"ngff_version": "0.4"}) == ".zgroup"
+    assert run_multi.zarr_root_file({}) == "zarr.json"
+    assert run_multi.zarr_root_file({"ngff_version": "0.5"}) == "zarr.json"
 
     # Both scripts that turn the marker back into a store path must strip
     # whichever name is in use.

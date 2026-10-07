@@ -366,7 +366,12 @@ def _store_exists(path: str) -> bool:
     remote NGFF 0.4 (zarr v2) store as v3.
     """
     if not is_remote(path):
-        return zarr.storage.LocalStore(path).root.exists()
+        # A group's metadata file, not the directory: Snakemake creates the
+        # output's directory before the job runs, and an empty one taken for
+        # a store left zarr's default (v3) in charge -- `ngff_version: "0.4"`
+        # then wrote 0.5.
+        root = Path(path)
+        return (root / "zarr.json").is_file() or (root / ".zgroup").is_file()
     try:
         zarr.open_group(path, mode="r")
     except (
@@ -1347,7 +1352,39 @@ def _write_multiscales(
     version = _ngff_version_for(group_path)
     if _NGFF_ZARR_FORMAT[version] == 2:
         entry["version"] = version  # 0.5 carries it on the ome group instead
-    write_ngff_attrs(_open_group(group_path), multiscales=[entry])
+    group = _open_group(group_path)
+    write_ngff_attrs(group, multiscales=[entry])
+    if group.metadata.zarr_format == 3:
+        _set_dimension_names(group, [d["path"] for d in datasets], axes)
+
+
+def _set_dimension_names(group, paths, axes: str) -> None:
+    """Name every level array's dimensions after the multiscales axes.
+
+    OME-Zarr 0.5 requires each array's ``dimension_names`` to match the axes
+    (validators reject a store without them). Set here, where the axes are
+    written, rather than at each array's creation: a label image's level 0
+    is created by the segment jobs or the merge, which know nothing of axes.
+    """
+    import dataclasses
+
+    from zarr.core.sync import sync
+
+    names = tuple(axes)
+    for path in paths:
+        arr = group[path]
+        if tuple(arr.metadata.dimension_names or ()) == names:
+            continue
+        if len(arr.shape) != len(names):
+            raise ValueError(
+                f"{path}: {len(arr.shape)}-D array under axes {axes!r}"
+            )
+        inner = arr._async_array
+        sync(
+            inner._save_metadata(
+                dataclasses.replace(inner.metadata, dimension_names=names)
+            )
+        )
 
 
 def read_pixel_size(store: Union[str, Path], level: int = 0) -> PixelSize:
@@ -2282,13 +2319,113 @@ def add_pyramid(
         return gp
 
 
+def _label_level_count(
+    store: str, name: str, requested: Union[int, None]
+) -> int:
+    """Pyramid levels for a label image of *store*: the image's own count.
+
+    "the JSON array associated with the datasets key MUST have the same
+    number of entries (scale levels) as the original unlabeled image" (the
+    OME-Zarr spec, image-label section). *requested* only applies when the
+    image has no multiscales to follow.
+    """
+    try:
+        multiscales = read_ngff_attr(
+            zarr.open_group(store, mode="r").attrs, "multiscales"
+        )
+        count = len(multiscales[0]["datasets"]) if multiscales else 0
+    except Exception:
+        count = 0
+    if not count:
+        return 5 if requested is None else int(requested)
+    if requested is not None and int(requested) != count:
+        logger.info(
+            "labels/%s: %d pyramid level(s), as many as the image (not %d): "
+            "OME-Zarr requires a label image to match its image",
+            name,
+            count,
+            int(requested),
+        )
+    return count
+
+
+def fix_ngff_metadata(store: Union[str, Path]) -> list[str]:
+    """Repair, in place, what older patchworks versions wrote wrongly.
+
+    Metadata only, no voxel is rewritten:
+
+    - OME-Zarr 0.5 (zarr v3): every pyramid array's ``dimension_names``,
+      set to the multiscales axes, as the spec requires (patchworks wrote
+      none before).
+    - A label image with more pyramid levels than its image: the extra
+      (coarsest) levels are dropped, as the spec requires the counts equal.
+      One with fewer is reported, not changed: that needs levels computed
+      (re-register it with :func:`register_labels`).
+
+    Returns
+    -------
+    list of str
+        What was changed or found, one line each.
+    """
+    store = str(store).rstrip("/")
+    root = zarr.open_group(store, mode="r+")
+    done: list[str] = []
+
+    def fix(group, where: str) -> int:
+        ms = read_ngff_attr(group.attrs, "multiscales") or []
+        if not ms:
+            return 0
+        axes = "".join(a["name"] for a in ms[0]["axes"])
+        paths = [d["path"] for d in ms[0]["datasets"]]
+        if group.metadata.zarr_format == 3:
+            missing = [
+                p
+                for p in paths
+                if tuple(group[p].metadata.dimension_names or ()) != tuple(axes)
+            ]
+            if missing:
+                _set_dimension_names(group, missing, axes)
+                done.append(
+                    f"{where}: dimension_names {list(axes)} set on "
+                    f"{len(missing)} array(s)"
+                )
+        return len(paths)
+
+    n_image = fix(root, "image")
+    try:
+        names = read_ngff_attr(root["labels"].attrs, "labels", []) or []
+    except KeyError:
+        names = []
+    for name in names:
+        group = root["labels"][name]
+        n_label = fix(group, f"labels/{name}")
+        if n_image and n_label > n_image:
+            ms = read_ngff_attr(group.attrs, "multiscales")
+            extra = [d["path"] for d in ms[0]["datasets"][n_image:]]
+            entry = dict(ms[0], datasets=ms[0]["datasets"][:n_image])
+            write_ngff_attrs(group, multiscales=[entry, *ms[1:]])
+            for path in extra:
+                del group[path]
+            done.append(
+                f"labels/{name}: dropped {len(extra)} coarse level(s) "
+                f"({', '.join(extra)}) to match the image's {n_image}"
+            )
+        elif n_image and n_label and n_label < n_image:
+            done.append(
+                f"labels/{name}: {n_label} pyramid level(s) for the image's "
+                f"{n_image} -- OME-Zarr requires them equal; re-register it "
+                "(register_labels) to rebuild its pyramid"
+            )
+    return done
+
+
 def register_labels(
     image_store: Union[str, Path],
     name: str = "labels",
     *,
     axes: Union[str, None] = None,
     pixel_size: Union[PixelSize, tuple, None] = None,
-    n_levels: int = 5,
+    n_levels: Union[int, None] = None,
     downscale: int = 2,
     chunks: Union[tuple[int, ...], None] = None,
     shard: ShardSpec = False,
@@ -2319,8 +2456,10 @@ def register_labels(
         Physical voxel size in micrometers. ``None`` → inherited from the
         parent image's calibration at *level*.
     n_levels : int, optional
-        Maximum number of pyramid levels including full resolution
-        (default 5).
+        Pyramid levels including full resolution, when the image has no
+        pyramid to follow (default 5). With one, the labels get exactly as
+        many levels as the image -- the OME-Zarr spec requires it of a
+        label image -- whatever is asked here.
     downscale : int, optional
         Per-level X/Y downsampling factor (default 2).
     chunks : tuple of int, optional
@@ -2371,6 +2510,7 @@ def register_labels(
     with _writing_ngff(ngff_version), _compression_scope(compression):
         store = str(image_store)
         group = f"{store}/labels/{name}"
+        n_levels = _label_level_count(store, name, n_levels)
         if not pixel_size:
             arr0 = da.from_zarr(group, component="0")
             lab_axes = axes or _default_axes(arr0.ndim)
@@ -2416,7 +2556,7 @@ def write_labels(
     name: str = "labels",
     axes: Union[str, None] = None,
     pixel_size: Union[PixelSize, tuple, None] = None,
-    n_levels: int = 5,
+    n_levels: Union[int, None] = None,
     downscale: int = 2,
     chunks: Union[tuple[int, ...], None] = None,
     shard: ShardSpec = False,
@@ -2452,8 +2592,9 @@ def write_labels(
         Physical voxel size in micrometers. ``None`` → inherited from the
         parent image's own calibration.
     n_levels : int, optional
-        Maximum number of pyramid levels including full resolution
-        (default 5).
+        Pyramid levels when the image has no pyramid to follow (default
+        5); otherwise exactly as many as the image, as the OME-Zarr spec
+        requires of a label image.
     downscale : int, optional
         Per-level X/Y downsampling factor (default 2).
     chunks : tuple of int, optional
