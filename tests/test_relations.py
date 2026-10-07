@@ -76,7 +76,7 @@ def test_label_relations_reports_progress(caplog, monkeypatch):
         _relations.label_relations(a, b)
 
     text = caplog.text
-    assert "scanning 8 chunk(s)" in text
+    assert "8 of 8 chunk(s) hold child labels" in text
     # Periodic lines while it runs, including a final 100%.
     assert "label_relations: 1/8" in text
     assert "8/8 (100%)" in text
@@ -130,3 +130,61 @@ def test_label_relations_breaks_ties_to_the_lowest_b():
         da.from_array(a, chunks=(1, 2)), da.from_array(b, chunks=(1, 2))
     )
     assert table[1]["match"] == 3
+
+
+def test_many_children_read_the_parent_once_and_skip_unwritten_chunks(
+    tmp_path, monkeypatch
+):
+    """Children of one parent are related in one pass: each parent chunk is
+    read once, and only where some child wrote labels."""
+    import zarr
+
+    from patchworks import _relations
+
+    shape, chunks = (4, 32, 32), (4, 16, 16)
+    cells = np.zeros(shape, "int32")
+    cells[:, :16, :] = 1
+    cells[:, 16:, :] = 2
+    nuc = np.zeros(shape, "int32")
+    nuc[1:3, 2:6, 2:6] = 7  # in chunk (0, 0, 0) only
+    cil = np.zeros(shape, "int32")
+    cil[0, 20:22, 20:30] = 3  # spans chunks (0, 1, 1) and ... only (0,1,1)
+    paths = {}
+    for name, arr in (("cells", cells), ("nuc", nuc), ("cil", cil)):
+        z = zarr.create_array(
+            str(tmp_path / f"{name}.zarr"),
+            shape=shape,
+            chunks=chunks,
+            dtype="int32",
+        )
+        z[:] = arr  # all-zero chunks are not written
+        paths[name] = str(tmp_path / f"{name}.zarr")
+
+    reads = []
+    real = _relations._reader
+
+    def counting(arr, grid):
+        read = real(arr, grid)
+
+        def wrapped(idx):
+            reads.append((arr.store_path.store.root.name, idx))
+            return read(idx)
+
+        return wrapped
+
+    monkeypatch.setattr(_relations, "_reader", counting)
+    out = _relations.label_relations_many(
+        {"nuc": paths["nuc"], "cil": paths["cil"]}, paths["cells"]
+    )
+    assert out["nuc"] == {
+        7: {"match": 1, "overlap_voxels": 32, "overlap_fraction": 1.0}
+    }
+    assert out["cil"][3]["match"] == 2
+    parent_reads = [i for s, i in reads if s == "cells.zarr"]
+    assert sorted(parent_reads) == [(0, 0, 0), (0, 1, 1)]  # once each
+    assert ("nuc.zarr", (0, 1, 1)) not in reads  # never written: not read
+    # Same answer as one pair at a time
+    for name in ("nuc", "cil"):
+        assert out[name] == _relations.label_relations(
+            paths[name], paths["cells"], a_component="", b_component=""
+        )

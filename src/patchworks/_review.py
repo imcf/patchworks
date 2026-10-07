@@ -23,6 +23,7 @@ voxels, so everything is instant however large the image:
 from __future__ import annotations
 
 import datetime as _dt
+import json
 import logging
 import math
 from dataclasses import dataclass, field
@@ -73,7 +74,14 @@ def write_rules(store: Union[str, Path], rules: Mapping[str, Any]) -> None:
             "min_overlap, position"
         )
     group = zarr.open_group(f"{str(store).rstrip('/')}/labels", mode="r+")
-    group.attrs[RULES_KEY] = {k: v for k, v in rules.items() if v is not None}
+    new = {k: v for k, v in rules.items() if v is not None}
+    # Unchanged rules are not rewritten: every run_multi writes them, and a
+    # touched labels/zarr.json made the bundle look stale (hours of
+    # re-packing for nothing).
+    if json.loads(json.dumps(group.attrs.get(RULES_KEY))) != json.loads(
+        json.dumps(new)
+    ):
+        group.attrs[RULES_KEY] = new
 
 
 def read_rules(store: Union[str, Path]) -> dict[str, Any]:
