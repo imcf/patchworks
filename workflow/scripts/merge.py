@@ -282,6 +282,19 @@ settings.update(
         "n_objects": n_objects,
     },
 )
+if cfg.get("method", "cellpose") == "cellpose":
+    # Defaults cellpose_fn filled in (fragments, flow3D_smooth): recorded as
+    # what ran, though the config never named them.
+    try:
+        from patchworks.plugins.cellpose import applied_defaults
+
+        cp = cfg.get("cellpose") or {}
+        settings["resolved"]["cellpose"] = {
+            "normalize": cfg.get("normalize", "image"),
+            **applied_defaults(bool(cp.get("do_3D", False)), cp),
+        }
+    except ImportError:
+        pass
 record = provenance(**settings)
 
 group = register_labels(

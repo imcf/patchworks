@@ -189,3 +189,24 @@ def test_3d_cellpose_folds_fragments_and_smooths_flows(monkeypatch):
         np.zeros((10, 32, 32), "uint16")
     )
     assert set(np.unique(out)) == {0, 1, 2} and model.smooth == 0
+
+
+def test_applied_defaults_are_what_cellpose_fn_fills_in(monkeypatch):
+    """The workflow records these in the labels' provenance, so they must be
+    exactly what cellpose_fn applies -- explicit settings win."""
+    from patchworks.plugins import cellpose as cp
+
+    class Model:
+        def eval(self, img, flow3D_smooth=0): ...
+
+    monkeypatch.setattr(
+        cp, "_cellpose_models", type("M", (), {"CellposeModel": Model})
+    )
+    assert cp.applied_defaults(True, {}) == {
+        "fragments": 0.1,
+        "flow3D_smooth": 1,
+    }
+    assert cp.applied_defaults(False, {}) == {"fragments": None}
+    assert cp.applied_defaults(
+        True, {"fragments": None, "flow3D_smooth": 0}
+    ) == {"fragments": None}
