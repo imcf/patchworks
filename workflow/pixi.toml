@@ -39,14 +39,11 @@ cudadecon = ">=0.7.0,<0.8"
 # "dog" -> pycudadecon, for config_cilia.yaml's deconvolution step (part of
 # the shipped config/multi.yaml example).
 [pypi-dependencies]
-# From GitHub main, not PyPI: the scripts in this workflow are the
-# repository's own, so the library they call should be the same revision --
-# a fix reaches the cluster without a PyPI release. pixi locks the commit it
-# resolved: `pixi update patchworks` brings in a newer main. To go back to
-# releases, use a floor that covers what the scripts use, e.g.
-#   patchworks = { version = ">=3.2.1", extras = [...] }
-# (pixi keeps a locked version for as long as it satisfies the line).
-patchworks = { git = "https://github.com/imcf/patchworks.git", branch = "main", extras = ["workflow", "cellpose", "imaris", "bioio", "dog"] }
+# This clone's own patchworks, editable: the workflow's scripts and the
+# library they call are always the same revision, so `git pull` updates
+# both at once (an installed copy from GitHub or PyPI lagged behind the
+# scripts until `pixi update`, and prepare failed on a missing import).
+patchworks = { path = "..", editable = true, extras = ["workflow", "cellpose", "imaris", "bioio", "dog"] }
 
 # Cellpose-version-pinned features for explicit environments below.
 [feature.cp3.pypi-dependencies]
@@ -158,7 +155,7 @@ python = "3.12.*"
 # sent the bundle to bioio and failed with "reading .zip requires bioio"),
 # and 3.1.0 adds the object tables and `patchworks review`.
 [feature.viewer.pypi-dependencies]
-patchworks = { git = "https://github.com/imcf/patchworks.git", branch = "main", extras = ["napari"] }
+patchworks = { path = "..", editable = true, extras = ["napari"] }
 
 [feature.viewer.tasks]
 napari = "python scripts/view.py"

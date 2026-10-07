@@ -1406,13 +1406,19 @@ def test_pixi_manifests_require_the_patchworks_the_scripts_use():
     ]
     for spec in specs:
         assert _patchworks_is_recent(spec, (3, 1, 0)), spec
-    # The workflow's own environments run the scripts: same revision.
-    assert "git" in main["pypi-dependencies"]["patchworks"]
+    # The workflow's own environments run the scripts: the same revision,
+    # i.e. this clone itself -- a copy from GitHub lagged behind `git pull`
+    # until `pixi update`, and prepare failed on a missing import.
+    for spec in specs[:2]:
+        assert spec.get("path") == ".." and spec.get("editable") is True, spec
     assert "review" in viewer["tasks"]
 
 
 def _patchworks_is_recent(spec, floor):
-    """The manifest takes patchworks from GitHub main, or a release >= floor."""
+    """The manifest takes patchworks from this clone, GitHub main, or a
+    release >= floor."""
+    if spec.get("path") == "..":
+        return True
     if "git" in spec:
         return (
             spec["git"].rstrip("/").removesuffix(".git")
