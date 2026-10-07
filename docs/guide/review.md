@@ -152,23 +152,10 @@ the error rate. A cell without a nucleus cannot be oriented; its cilia are
 
 ## Cilia next to their cell, not on it
 
-A cilium can lie against its cell without overlapping it, and would then
-count as belonging to no cell. With `max_distance_um` on a relation, such
-an object gets the **nearest** cell within that distance. The distance is
-exact, in µm, with anisotropic voxels taken into account, and is recorded
-in `cyto_labels_distance_um`. These objects are flagged with a lower
-priority ("outside cell #12, 0.8 µm away").
-
-```yaml
-relations:
-- a: cilia_labels
-  b: cyto_labels
-  output: cilia_to_cell.xlsx
-  max_distance_um: 1.0
-```
-
-For an existing store:
-`patchworks tables image.zarr --relate cilia_labels:cyto_labels --max-distance 1`.
+A cilium lying against its cell without overlapping it belongs to no cell.
+With `max_distance_um: 1.0` on a relation (or `--max-distance 1` for
+`patchworks tables`), it gets the nearest cell within that distance,
+recorded in `cyto_labels_distance_um`, and is flagged with a lower priority.
 
 ## How good is the segmentation?
 
@@ -193,8 +180,7 @@ The workbooks and tables are always read *with* the decisions applied:
 - **Export** the corrected tables, one file per label image, from the
   panel or with `patchworks review image.zarr --export results/tables
   --format xlsx` (or `csv`, `parquet`). A csv loads straight into
-  [napari-chunked-regionprops](measurements.md) ("Reload previous
-  results").
+  [napari-chunked-regionprops](https://github.com/imcf/napari-chunked-regionprops).
 - **Write corrected labels** (panel button, or `--write-labels
   nuclei_labels`) writes `labels/nuclei_labels_reviewed`, the label image
   with the decisions applied to the voxels. You only need this for figures,
@@ -203,52 +189,18 @@ The workbooks and tables are always read *with* the decisions applied:
 `patchworks review image.zarr --summary` prints the counts and the error
 estimate without opening napari.
 
-## Where the tables come from
-
-Every label image the workflow writes gets an **object table**: one row per
-object with its size (`area_voxels`, `area_um3`), centroid, bounding box,
-its spread (`cov_*`, the second moments) and, for a multi run, the parent
-it sits in (`cyto_labels_id`, `cyto_labels_overlap`). The corrected view
-adds each object's shape from its spread: `length_um` (for a straight rod
-the true length; shorter for a curved one), `elongation` (1 round, large
-rod-like) and its main axis (`axis_z`, `axis_y`, `axis_x`). The table lives
-inside the label group:
-
-```text
-image.zarr/labels/cilia_labels/
-  0/ 1/ 2/ …     the label pyramid
-  table/         the object table (one zarr array per column)
-```
-
-So it travels with the labels, including in a zip bundle, and it is
-replaced whenever the labels are. A table computed from older labels is
-recognised and ignored, never shown against the wrong segmentation.
-The table costs no extra read of the labels: each segment job measures
-its tiles' objects as it writes them, and the merge adds those sums up per
-merged object (an object cut by tile boundaries gets exactly the values it
-would have measured whole). Intensity columns (`table_channels: [0, 2]`)
-need the image, so with them the merged labels are measured once instead.
-Turn tables off with `object_table: false` (see the
-[workflow config](snakemake.md)).
-
-For a store that has none, for example a run made before tables existed,
-or labels from elsewhere:
-
-```bash
-patchworks tables image.zarr --relate nuclei_labels:cyto_labels cilia_labels:cyto_labels
-```
-
-In Python:
+## In Python
 
 ```python
-from patchworks import Review, read_table
+from patchworks import Review
 
-cells = read_table("image.zarr/labels/cyto_labels")      # pandas, as computed
 rv = Review("image.zarr", expect={"cyto_labels": {"nuclei_labels": 1}})
-rv.flags("cyto_labels")[:5]                               # the worst five
+rv.flags("cyto_labels")[:5]                 # the worst five
 rv.decide("nuclei_labels", 17, "wrong")
-rv.effective("cyto_labels")                               # with corrections
+rv.effective("cyto_labels")                 # the table with corrections
 ```
+
+The tables themselves: [Tables and relations](tables.md).
 
 ## Where to review
 

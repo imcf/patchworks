@@ -1,78 +1,32 @@
 # Cellpose 3-D
 
-Run Cellpose in full 3-D mode (`do_3D=True`). Each tile contains the full
-z extent and a sub-region in y/x. Cellpose segments on all three orthogonal
-plane orientations and takes a 3-D consensus.
-
-!!! warning "Slow"
-    3-D mask reconstruction in Cellpose is CPU-bound. Expect minutes per tile
-    even with a fast GPU. Use `skip_empty=True` to skip background tiles.
-
-## Code
+`do_3D=True` segments the xy, xz and yz planes and combines them, so each
+tile holds a block of z as well. It is slower than 2-D: skip empty tiles.
 
 ```python
 from functools import partial
-from patchworks import auto_tile_shape_cellpose, make_local_cluster, tile_process
+from patchworks import auto_tile_shape_cellpose, tile_process
 from patchworks.plugins.cellpose import cellpose_fn
 from patchworks.plugins.ome_zarr import read_pixel_size
-
-IMAGE = "image.zarr"
-OUTPUT = "labels_3d.zarr"
-CHANNEL = 0
-DIAMETER = 20  # pixels
 
 fn = cellpose_fn(
     "cyto3",
     gpu=True,
     do_3D=True,
-    diameter=DIAMETER,
-    voxel_size=read_pixel_size(IMAGE),  # -> anisotropy = z / lateral
+    diameter=20,
+    voxel_size=read_pixel_size("image.zarr"),  # anisotropy = z / lateral
 )
 
-# Tile shape: full z, xy tiled for memory
-# The 3× plane orientation overhead is accounted for automatically
-tile_fn = partial(
-    auto_tile_shape_cellpose,
-    do_3D=True,
-    use_gpu=True,
-    diameter=DIAMETER,
+tile_process(
+    "image.zarr",
+    fn,
+    channel=0,
+    tile_shape=partial(auto_tile_shape_cellpose, do_3D=True, use_gpu=True, diameter=20),
+    overlap=[4, 20, 20],
+    skip_empty=True,
 )
-
-# Use a process-based cluster for distributed work
-# (in-process clients break the label merge — see Pitfalls)
-client, cluster = make_local_cluster(use_gpu=True)
-print("Dashboard:", client.dashboard_link)
-
-try:
-    tile_process(
-        IMAGE,
-        fn,
-        channel=CHANNEL,
-        tile_shape=tile_fn,
-        overlap=10,
-        skip_empty=True,
-        write_to=OUTPUT,
-        progress=True,
-    )
-finally:
-    client.close()
-    cluster.close()
 ```
 
-!!! tip "Anisotropy is derived from the calibration, not retyped"
-    `do_3D` without `anisotropy` assumes isotropic voxels, which fragments
-    objects across z for any real (anisotropic) dataset. Passing
-    `voxel_size` derives it as `z / lateral` via
-    [`cellpose_anisotropy`](../api/plugins/cellpose.md) instead of keeping a
-    second, driftable copy of the calibration in code. An explicit
-    `anisotropy=` still wins if you pass one. The Snakemake workflow does
-    this automatically — see [Configure the run](../guide/snakemake.md#3-configure-the-run).
-
-## Memory notes
-
-In `do_3D=True` mode, each tile has shape `(z_full, y_tile, x_tile)`.
-Cellpose internally runs 2-D segmentation on xy, xz, and yz planes —
-3× the raw tile bytes before the model overhead.
-
-`auto_tile_shape_cellpose(do_3D=True)` accounts for this 3× factor when
-sizing the y/x dimensions.
+Without `voxel_size` (or `anisotropy=`), Cellpose assumes isotropic voxels
+and fragments objects along z. The cluster workflow passes the calibration
+by itself ([Configure](../guide/snakemake.md#2-configure)).

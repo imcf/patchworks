@@ -1,152 +1,26 @@
-# patchworks Snakemake workflow
+# patchworks cluster workflow
 
-A SLURM-ready pipeline that segments an arbitrarily large image and spreads the
-expensive Cellpose step across **many GPUs** — one tile per SLURM job.
+Segments an image too large for memory on a SLURM cluster: the image is
+converted once, its tiles are segmented as parallel GPU jobs, and the
+results are merged into the image's OME-Zarr store with a table of every
+object. Several segmentations can run together and be related to each other.
 
-> **Full step-by-step guide:**
-> <https://imcf.one/patchworks/guide/snakemake/> — install, configure every
-> field, dry-run, local vs SLURM, monitoring, outputs and troubleshooting.
-
-```text
-convert ──▶ prepare (checkpoint) ──▶ segment {tile}  ──▶ merge
-                                     one GPU job/tile
-```
-
-## Why
-
-`tile_process` runs tiles serially on a single GPU. This workflow instead
-submits **one GPU job per (non-empty) tile**, so N GPUs cut the wall-time ~N×.
-Each job writes a disjoint chunk of a shared stage store; a final CPU job
-stitches labels across tile boundaries and writes them back into the image as a
-calibrated, multi-scale `labels/` group.
-
-## Steps
-
-1. **convert** — input (`.ims`, `.czi`, `.lif`, `.nd2`, OME-TIFF, `.zarr`) → a
-   pyramidal OME-ZARR (`image.zarr`).
-2. **prepare** (checkpoint) — validate the config, plan tiles, decide which
-   are background (from an exact max-pooled occupancy map, built once per
-   image), create the empty `stage.zarr`, and group the tiles into batches.
-3. **segment {batch}** — one GPU job per `tiles_per_job` tiles, processed
-   sequentially so they share a single CUDA init and model load: read tile +
-   halo, run Cellpose, trim, write into `image.zarr/labels/<name>/0` (or a
-   scratch store for oversized tiles). Scattered across the cluster.
-4. **merge** — zarr-native boundary stitch + renumber, applied **in place**
-   to that array, then pyramided. Chunks holding no labels are skipped
-   entirely, so background costs neither I/O nor disk.
-
-The label group is only registered in `labels/.zattrs` once the merge
-finishes, so a run that dies midway leaves a group NGFF readers won't list;
-re-running recreates it.
-
-## Install
+Full guide: <https://imcf.one/patchworks/guide/snakemake/>
 
 ```bash
-pip install "patchworks[workflow,cellpose,imaris,bioio]"
-# workflow → snakemake + the SLURM executor plugin
+pixi install
+# one segmentation: edit config/config.yaml and profile/slurm/config.yaml
+pixi run dry
+pixi run slurm
+# several, related: list them in a multi.yaml (see config/multi.yaml)
+pixi run multi-dry   --config my_multi.yaml
+pixi run multi-slurm --config my_multi.yaml
 ```
 
-Prefer pixi? No conda needed — a `pixi.toml` is included:
-
-```bash
-pixi install               # default env (latest compatible Cellpose)
-pixi install -e cellpose3  # pin to Cellpose 3.x
-pixi install -e cellpose4  # pin to Cellpose 4+
-
-pixi run dry               # dry-run (default env)
-pixi run go                # run locally (default env)
-pixi run slurm             # submit to SLURM (default env)
-
-# To run with a specific Cellpose version:
-pixi run -e cellpose3 go
-pixi run -e cellpose4 go
-```
-
-## Configure
-
-Edit `config/config.yaml` (input, output dir, channel, tile shape, Cellpose
-model/diameter/`do_3D`, …) and `profile/slurm/config.yaml` (partitions,
-account, GPU request).
-
-Channel indices are **0-based**. Set `nuclei_channel` alongside `channel` to
-hand Cellpose the nuclear stain as a second input, which usually improves
-cytoplasm segmentation — see
-[Giving Cellpose a nuclei channel](https://imcf.one/patchworks/guide/snakemake/#giving-cellpose-a-nuclei-channel).
-
-## Run
-
-```bash
-# locally (single machine) — mtime triggers => upgrades don't redo conversion
-snakemake --cores 8 --configfile config/config.yaml --rerun-triggers mtime
-
-# on SLURM — one GPU job per batch of tiles, up to `jobs:` in parallel
-# (the profile already sets --rerun-triggers mtime)
-snakemake --workflow-profile profile/slurm --configfile config/config.yaml
-```
-
-The GPU request lives in `profile/slurm/config.yaml` under
-`set-resources: segment:` (`--gres=gpu:1`). Raise `jobs:` to use more GPUs at
-once.
-
-## Multiple segmentations (nuclei + cytoplasm, …)
-
-Every intermediate path is namespaced under `work_dir/<label_name>/`, so
-running the workflow **twice with two configs** (different `label_name`,
-`channel`, `cellpose:`) against the **same `work_dir`** is safe — both reuse
-the one converted `image.zarr` and land side by side in
-`image.zarr/labels/<label_name>/`. See the
-[full guide](https://imcf.one/patchworks/guide/snakemake/#running-two-segmentations-eg-nuclei--cytoplasm)
-for the two-config recipe and `patchworks.label_relations()` for mapping one
-segmentation onto the other (e.g. nucleus → containing cell).
-
-One command instead of juggling several manual runs: list your configs (and
-which label pairs to relate) in `config/multi.yaml`, then:
-
-```bash
-pixi run multi-dry    # dry-run every segmentation config
-pixi run multi        # run locally
-pixi run multi-slurm  # submit every segmentation to SLURM
-```
-
-It converts once, then runs the configs **concurrently** (each with its own
-Snakemake state directory), so the GPU partition stays busy instead of idling
-through every config's `prepare` and `merge` in turn. Cross-config mistakes —
-mismatched `tile_shape`/`level`, a duplicated `label_name` — are rejected
-before anything is submitted, and one config failing does not abort the rest.
-Note that the profile's `jobs:` applies per config.
-
-## Output
-
-`<work_dir>/image.zarr` — the image plus `labels/<label_name>/` (multi-scale,
-calibrated). Open it directly:
-
-```python
-from patchworks.plugins.napari import view_in_napari
-view_in_napari("<work_dir>/image.zarr")   # auto-loads the labels
-```
-
-## Layout
-
-```text
-workflow/
-  Snakefile            # includes the rule files below
-  rules/               # convert.smk, segment.smk, merge.smk, common.smk
-  scripts/             # thin wrappers over patchworks' public API
-  config/config.yaml
-  profile/slurm/config.yaml
-```
-
-The rule scripts are intentionally thin — the work is done by patchworks'
-public API (`spatial_tiles`, `create_stage`, `stage_tile`, `merge_tile_labels`,
-`write_labels`), so the same per-tile distribution is available from your own
-code too.
-
-## Notes
-
-- Tiles overlap on read (halo) but write **disjoint** regions, so the per-tile
-  jobs are safe to run concurrently.
-- Background tiles are skipped (`skip_empty`), so only occupied tiles become
-  jobs.
-- `method:` selects `cellpose` (default) or a simple `threshold` (no GPU —
-  handy for testing or quick masks).
-- For very large stores, set `shard: true` in the config to cut the file count.
+| Path | What |
+| --- | --- |
+| `config/` | example configs: one segmentation (`config.yaml`), shared settings (`common.yaml`), several (`multi.yaml`) |
+| `profile/slurm/config.yaml` | partitions, GPU request, memory and time per step |
+| `Snakefile`, `rules/` | the steps: convert, prepare, segment, merge |
+| `scripts/` | what each step runs, plus `run_multi.py` (several configs) and `relate.py` |
+| `viewer/` | a small pixi workspace for napari on any OS |

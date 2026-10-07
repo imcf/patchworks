@@ -1,69 +1,25 @@
-# Example segmentation config: cilia channel, via method: "custom" ->
-# patchworks.plugins.dog.segment (deconvolution + difference-of-Gaussians).
-# Cilia are thin/small structures a cell-body model like Cellpose isn't
-# shaped for. Related to cyto/nuclei via config/multi.yaml to map each
-# cilium to its containing cell / nucleus.
-#
-# Only what differs from config/common.yaml — the input, work_dir, tiling and
-# conversion settings all live there and are merged in ahead of this file.
-#
-# pycudadecon is CUDA-only, so this segment job needs a GPU too — same
-# profile/slurm as the Cellpose configs already covers it.
+# Cilia: deconvolution, then difference of Gaussians (patchworks.plugins.dog).
+# Only what differs from common.yaml. Needs a GPU for the deconvolution.
 
-channel: 2 # cilia marker channel
-
-# Per-axis halo [z, y, x], covering the PSF support (decon) + the DoG's
-# high_sigma. Lateral 30 px at dxdata 0.1 = 3 um; at dzdata 0.2 that is 15
-# z-planes -- almost the whole 16-plane tile. Deconvolution genuinely wants a
-# deeper z tile than this: if cilia quality matters, raise tile_shape's z in
-# common.yaml (label_relations needs it identical across configs) rather than
-# pushing the halo up against the tile depth.
-overlap: [8, 30, 30]
-
+channel: 2 # cilia marker
+overlap: [8, 30, 30] # PSF support + high_sigma
 method: "custom"
-# dilate: 2       # optional: pixels to grow labels by after segmentation
-# dilate_gpu: true # optional: dilate via cupy instead of scipy, needs a GPU
-# min_volume: 5.0 # optional: drop objects smaller than this many µm³
-# max_volume: 500.0 # optional: drop objects larger than this many µm³
-#                 # (e.g. several cilia merged into one blob). Either or both
-#                 # -- runs once on the whole merged image (not per tile,
-#                 # where an object crossing a tile boundary would look
-#                 # smaller/larger than it really is) and needs image.zarr
-#                 # to carry a pixel size -- see common.yaml/convert.
 label_name: "cilia_labels"
+# min_volume: 0.1 # µm³: drop specks
+# max_volume: 100 # µm³
 custom:
   module: "patchworks.plugins.dog"
   function: "segment"
   kwargs:
-    low_sigma: 1.0
+    low_sigma: 1.0 # pixels; sigma_units: "um" for micrometres
     high_sigma: 3.0
-    # In pixels: on a 0.2 um z-step / 0.1 um pixel stack that blurs z twice
-    # as far (physically) as x/y. sigma_units: "um" states them as
-    # distances instead (e.g. low 0.1, high 0.3), converted per axis with
-    # the image's calibration.
-    # sigma_units: "um"
     threshold: 0.02
-    # use_gpu: true          # optional: also run the blur/label step on GPU
-    # connectivity: 3        # 1 (default): voxels joined across faces only,
-    #                        # so a thin oblique cilium -- a staircase of
-    #                        # voxels touching at edges/corners -- falls apart
-    #                        # into fragments. 2 adds edges, 3 corners; the
-    #                        # merge joins tiles the same way.
+    # connectivity: 3 # keep thin oblique cilia whole (edges and corners)
+    # use_gpu: true   # blur and label on the GPU too (needs cupy)
     decon_kwargs:
       psf: "/path/to/psf.tif"
-      # dxdata/dzdata (and dxpsf/dzpsf) are filled from image.zarr's own
-      # calibration -- the lateral size from X/Y, the axial one from Z -- so
-      # they cannot drift away from the image they describe. A wrong voxel
-      # size does not fail loudly; it just deconvolves incorrectly.
-      # Set any of them here only to override, e.g. when the PSF was sampled
-      # differently from the data:
-      #   dxpsf: 0.05
-      #   dzpsf: 0.1
       wavelength: 525
       na: 1.4
       nimm: 1.515
-      # cudaDecon's FFTs wrap in z: on a shallow tile, light from the top
-      # planes bleeds into the bottom ones -- faint ghost copies near both
-      # faces. "auto" mirrors the stack in z (2x the z-work) whenever the
-      # tile is shallower than 4 axial FWHMs of this PSF; true/false force it.
-      # dup_rev_z: "auto"
+      # voxel sizes come from the image's calibration; dxpsf/dzpsf if the
+      # PSF was sampled differently

@@ -1,18 +1,7 @@
-# Example segmentation config: nuclei channel.
-#
-# Only what differs from config/common.yaml — the input, work_dir, tiling and
-# conversion settings all live there and are merged in ahead of this file.
-# Run it via config/multi.yaml, or on its own with both files:
-#
-#   snakemake -s Snakefile --configfile config/common.yaml config/config_nuclei.yaml
+# Nuclei. Only what differs from common.yaml; listed in multi.yaml.
 
-channel: 1 # nuclear stain channel
-
-# Per-axis halo [z, y, x]. A scalar 30 would expand a [16, 1024, 1024] tile to
-# 76 x 1084 x 1084 = 5.3x the voxels it keeps, nearly all of it wasted z. The
-# z-halo only needs to cover one nucleus in z, not one nucleus in x/y.
-overlap: [4, 30, 30]
-
+channel: 1 # nuclear stain
+overlap: [4, 30, 30] # halo per axis: about one nucleus
 method: "cellpose"
 label_name: "nuclei_labels"
 cellpose:

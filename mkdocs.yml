@@ -36,21 +36,17 @@ nav:
 - Home: index.md
 - Getting Started: getting_started.md
 - User Guide:
-  - Tiling strategy: guide/tiling.md
-  - Merging labels: guide/merging.md
-  - Empty tile skipping: guide/skip_empty.md
-  - GPU & distributed: guide/gpu_distributed.md
-  - Performance & memory: guide/performance.md
+  - Cluster workflow: guide/snakemake.md
+  - Web launcher: guide/launcher.md
+  - Command line: guide/cli.md
   - Custom segmentation function: guide/custom_segmentation.md
   - Cells from a membrane stain: guide/membrane_cells.md
-  - Relating labels across segmentations: guide/label_relations.md
-  - Reviewing and correcting results: guide/review.md
-  - Measurements: guide/measurements.md
-  - OME-ZARR & napari: guide/ome_zarr_napari.md
-  - Cluster workflow (Snakemake): guide/snakemake.md
-  - Web launcher (Streamlit): guide/launcher.md
-  - Command line: guide/cli.md
-  - Pitfalls: guide/pitfalls.md
+  - Tables and relations: guide/tables.md
+  - Reviewing results: guide/review.md
+  - OME-Zarr & napari: guide/ome_zarr_napari.md
+  - Tiling: guide/tiling.md
+  - Merging: guide/merging.md
+  - Performance, GPUs, empty tiles: guide/performance.md
 - Examples:
   - Cellpose 2-D: examples/cellpose_2d.md
   - Cellpose 3-D: examples/cellpose_3d.md

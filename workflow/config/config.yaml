@@ -1,148 +1,65 @@
-# patchworks Snakemake workflow — configuration.
-# Copy and edit, then run:  snakemake --workflow-profile profile/slurm
-#
-# The expensive Cellpose step is split into SLURM jobs of `tiles_per_job`
-# tiles, so many GPUs run in parallel; the merge is a single CPU job.
+# patchworks workflow: one segmentation. Edit, then `pixi run dry` and
+# `pixi run slurm`. Guide: docs/guide/snakemake.md
 
 # ---- input / output ---------------------------------------------------------
-input: "/path/to/scan.ims" # .ims, .czi, .lif, .nd2, ome-tiff, .zarr, or a
-#                             glob (e.g. "/path/*.tif") when sequence_pattern
-#                             is set below
-work_dir: "/path/to/results" # everything is written under here
-# Final outputs (under work_dir):
-#   image.zarr            — converted, pyramidal OME-ZARR
-#   image.zarr/labels/<name>/  — the segmentation (multi-scale), in the image
+input: "/path/to/scan.ims" # .ims .czi .lif .nd2 OME-TIFF .zarr, or a TIFF glob
+work_dir: "/path/to/results" # everything is written here
+sequence_pattern: null # for a TIFF glob: regex with named axes, e.g. '_Z(?P<Z>\d+)_C(?P<C>\d+)'
 
-# ---- conversion -------------------------------------------------------------
-reuse_pyramid: false # for .ims: copy its own pyramid (fast); else rebuild
-convert_chunks: null # null → patchworks' bounded auto chunks; or [c,z,y,x]
-shard: false # true → pack chunks into shards (zarr v3; fewer files)
-# OME-ZARR (NGFF) version to write. "auto" follows the installed zarr: 0.5 on
-# zarr v3 (the default everywhere now), 0.4 on zarr v2. Pin "0.4" only if a
-# downstream tool cannot read 0.5 yet — it writes a zarr-v2 store, which has
-# no sharding codec, so `shard` stops working. 0.6 is released but nothing
-# reads it yet; see docs/guide/snakemake.md.
-ngff_version: "auto"
-# For a folder of single-plane TIFFs (input: a glob), set the filename regex
-# below; named groups become axes, e.g. one file per Z/C plane:
-# sequence_pattern: '_T(?P<T>\d+)_Z(?P<Z>\d+)_C(?P<C>\d+)_V\d+'
-sequence_pattern: null
-# Re-running reuses an existing image.zarr automatically (skips conversion).
-# To force a rebuild: delete image.zarr, or `snakemake --forcerun convert`.
+# ---- conversion (once; an existing image.zarr is reused) --------------------
+reuse_pyramid: false # .ims: copy its own pyramid instead of rebuilding
+convert_chunks: null # null: automatic
+shard: false # true: far fewer files, same data
+ngff_version: "auto" # "auto" (OME-Zarr 0.5) or "0.4" for older readers
+compression: "zstd" # or "zstd:3", "blosc", "blosc:lz4", "none"
 
 # ---- tiling -----------------------------------------------------------------
 channel: 0 # channel to segment
-level: 0 # pyramid level to segment (0 = full res)
-tile_shape: "auto" # "auto", or e.g. [16, 1024, 1024] (zyx)
-gpu_memory_gb: null # for "auto" on a CPU prepare node: your segment GPU's VRAM
-#                     (e.g. 24, 40, 80). null → 8 GiB guess + a harmless warning
-overlap: 30 # halo (≈ one object diameter); scalar, or per-axis [z, y, x]
-#             Prefer per-axis on anisotropic tiles: a scalar 30 on a
-#             [16, 1024, 1024] tile reads 5.3x the voxels it keeps, almost
-#             all of it wasted z. patchworks.auto_overlap(d, voxel_size=...)
-#             computes the per-axis values for you.
+level: 0 # pyramid level (0 = full resolution)
+tile_shape: "auto" # or [z, y, x], e.g. [16, 1024, 1024]
+gpu_memory_gb: null # the segment GPU's memory, for "auto" (default 8)
+overlap: [4, 30, 30] # halo per axis, about one object diameter
 skip_empty: true # skip background tiles
-# Tiles per SLURM job. Each job pays CUDA init + a Cellpose weight load (tens
-# of seconds) once, then reuses the cached model for the rest of its batch, so
-# at 1 that startup can dominate a fast tile. Tiles in a batch run
-# SEQUENTIALLY, so the job's wall time is roughly N x per-tile time: size N
-# from a measured tile (`seff <jobid>`) and keep it inside the profile's
-# runtime/QOS ceiling. A failed job retries the whole batch.
-tiles_per_job: 4
-empty_threshold: null # null → Otsu; or a number
+empty_threshold: null # null: Otsu
+tiles_per_job: 4 # tiles per GPU job, sharing one model load
 
 # ---- segmentation -----------------------------------------------------------
-method: "cellpose" # "cellpose" (GPU), "threshold" (no GPU; testing), "custom"
-# dilate: 2       # optional: pixels to grow labels by after segmentation, any method
-# dilate_gpu: true # optional: dilate via cupy instead of scipy, needs a GPU
-# Also namespaces this run's intermediate files under work_dir/<label_name>/,
-# so a second segmentation (different label_name, e.g. nuclei vs cytoplasm)
-# can safely target the same work_dir — see docs/guide/snakemake.md
-# "Running two segmentations".
-label_name: "cellpose_labels"
+label_name: "cellpose_labels" # the label image's name in image.zarr/labels/
+method: "cellpose" # "cellpose", "threshold" (CPU, testing) or "custom"
 cellpose:
-  model: "nuclei"
+  model: "nuclei" # Cellpose 3: cyto3, nuclei, ...; Cellpose 4: cpsam
   diameter: 30
   do_3D: true
   gpu: true
-  # extra kwargs forwarded to model.eval(), e.g.:
-  # flow_threshold: 0.4
-  # cellprob_threshold: 0.0
+  # any other model.eval() argument, e.g. flow_threshold: 0.4
 
-# Your own per-tile function (method: "custom"). See the "custom function"
-# section of docs/guide/snakemake.md.
+# method: "custom" runs any function from a tile to labels, e.g. a plugin:
 # custom:
-#   module: "my_seg"     # importable on the cluster (workflow/scripts/, PYTHONPATH, or pip-installed)
-#   function: "segment"  # def segment(tile: np.ndarray) -> np.ndarray (int32 labels)
-#   kwargs: {}           # optional extra keyword args
-# Shipped plugins (docs/guide/membrane_cells.md), e.g. cells from a membrane
-# stain with nuclei_channel set (both need stitch: "iou" below):
-#   module: "patchworks.plugins.watershed"   # one cell per nucleus
-#   kwargs: {nuclei_min_size: 200, foreground: "otsu"}
-# or grow them from a label image already in the store (e.g. Cellpose's
-# nuclei) instead of nuclei_channel; run_multi segments it first:
-# seed_labels: "nuclei_labels"
-# or PlantSeg (pixi install -e plantseg; run from that environment):
-#   module: "patchworks.plugins.plantseg"
-#   kwargs: {model: "generic_confocal_3D_unet", segmentation: "gasp"}
+#   module: "patchworks.plugins.watershed" # or plantseg, dog, your own module
+#   function: "segment"
+#   kwargs: {foreground: "otsu"}
+# nuclei_channel: 1           # a second channel (Cellpose, watershed, PlantSeg)
+# seed_labels: "nuclei_labels" # or grow cells from a label image in the store
+# connectivity: 1             # 3: also join voxels touching at edges/corners
+# denoise: {model: "n2v.ckpt"} # Noise2Void first (careamics environment)
 
-# Optional: denoise every tile with CAREamics (Noise2Void) before the method
-# segments it, whatever the method. Train the model once with
-#   pixi run -e careamics denoise-train <work_dir>/image.zarr --channel 0 --out n2v.ckpt
-# and run from the careamics environment (pixi run -e careamics ...).
-# denoise:
-#   model: "/path/to/n2v.ckpt"            # .ckpt or a BioImage.IO .zip
-#   nuclei_model: "/path/to/n2v_nuc.ckpt" # optional, for nuclei_channel
-
-# ---- pyramid for the labels -------------------------------------------------
-# The labels always get as many levels as the image: OME-Zarr requires it of
-# a label image. pyramid_levels only applies to an image without a pyramid.
-pyramid_levels: 5
-pyramid_downscale: 2
-sequential_labels: true # renumber merged labels to a contiguous 1..N range
-# How labels are joined across tile boundaries. "touch": any two labels that
-# touch there. "iou": only when both tiles' predictions of the overlap zone
-# agree (IoU >= iou_threshold), so two cells pressed together at a seam stay
-# two -- needs `overlap` > 0 to compare (2-D z-tiles fall back to the IoU of
-# adjacent planes, like Cellpose's stitch_threshold).
-# connectivity: 1 | 2 | 3 -- for method "threshold" (and the dog plugin, also
-#   as its own kwarg): voxels belong together across faces (1, default),
-#   also edges (2) or corners (3). Labelling and "touch" merging both use it,
-#   so the result is the whole image's labelling, whatever the tiling.
-# Post-processing per tile, before merging (in this order):
-# fill_holes: true | "per_plane" -- fill background enclosed by an object
-#   ("per_plane" fills each z-plane separately, the usual sense in a stack).
-# open_radius: N -- cut spurs/bridges thinner than ~2N+1 voxels from each
-#   object. Not for thin structures (cilia): it removes them outright.
-# fill_holes: false
-# open_radius: 0
-stitch: "touch"
+# ---- after segmenting -------------------------------------------------------
+# fill_holes: false           # true, or "per_plane"
+# open_radius: 0              # cut thin spurs (not for thin objects like cilia)
+# dilate: 0                   # grow labels by N pixels
+# dilate_gpu: false
+min_volume: null # µm³: drop smaller objects
+max_volume: null # µm³: drop larger objects
+stitch: "touch" # join across tile seams where labels touch; "iou": where both tiles agree
 iou_threshold: 0.5
-# `shard:` above can only reach the label pyramid's levels 1..N, because
-# level 0 is filled a chunk at a time by concurrent segment jobs and a shard
-# has to be written whole by one writer. Setting this rewrites level 0 sharded
-# once the merge is done — the same data and chunking in far fewer files, at
-# the cost of one extra read+write pass. Turn it on if the filesystem
-# struggles with file counts. `true` reuses `shard`'s spec; a list such as
-# [16, 512, 512] sets an explicit shard shape.
-shard_labels: false
-# After the merge, measure every object (size, centroid, bounding box) into
-# image.zarr/labels/<label_name>/table: what `patchworks review image.zarr`
-# (look at the likely mistakes, fix them) and the relation workbooks work
-# from. Built from what the segment jobs measured per tile -- no extra read
-# of the labels. table_channels adds each object's mean/std intensity in
-# those image channels, e.g. [0, 2] (then one read of the labels and of
-# each channel).
-object_table: true
-table_channels: []
+sequential_labels: true # number objects 1..N
+pyramid_levels: 5 # only for an image without a pyramid (labels follow the image)
+pyramid_downscale: 2
+shard_labels: false # also shard label level 0 after the merge (one extra pass)
+object_table: true # one row per object, stored with the labels
+table_channels: [] # add mean/std intensity of these channels
+merge_workers: null # null: from the job's CPUs and memory
 
-# ---- merge performance --------------------------------------------------
-# null -> size the pool from the job's real budget: the SLURM/cgroup memory
-# limit and cpus_per_task, not the node's totals. The merge logs what it
-# detected, so you can compare that line against `seff <jobid>`.
-merge_workers: null
-
-# --- notifications (optional) ---
-# Email on step completion/failure. Empty = off. See docs/guide/snakemake.md.
+# ---- email (optional) -------------------------------------------------------
 notify_email: ""
-notify_events: ["finish", "error"]
+notify_events: ["finish", "error"] # any of start, finish, error

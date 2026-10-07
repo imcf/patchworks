@@ -1,120 +1,40 @@
-# Tiling strategy
+# Tiling
 
-## Why tiles?
+The image is cut into tiles, each tile is read with a halo (`overlap`) of its
+neighbours for context, segmented, and the halo is trimmed off before the
+tiles are stitched. Peak memory is about one tile.
 
-Segmentation tools run on NumPy arrays in RAM. A 250 GB microscopy image can't
-fit in RAM (and wouldn't fit on a GPU either). Tiling solves this: split the
-image into manageable pieces, process each independently, stitch the results.
-
-patchworks uses **dask** to manage the tiling. Each dask chunk becomes one tile.
-Tiles are streamed one at a time through your function and written to disk —
-peak RAM during segmentation is approximately one tile's worth of data.
-
-## Choosing a tile size
-
-The right tile size depends on:
-
-- Your available RAM (or GPU VRAM)
-- The minimum context your segmentation method needs (objects should fit fully
-  inside a tile, or you need overlap)
-- Overhead: very small tiles mean many boundary merges; very large tiles may OOM
-
-### Fixed tile shape
+## Tile size
 
 ```python
-tile_process("image.zarr", fn, tile_shape=(1, 1024, 1024))
+tile_process("image.zarr", fn, tile_shape=(1, 1024, 1024))   # 2-D method: one plane per tile
+tile_process("image.zarr", fn, tile_shape=(120, 512, 512))   # 3-D method
+tile_process("image.zarr", fn, tile_shape="auto")            # fits free RAM (or VRAM with use_gpu=True)
 ```
 
-For 2-D methods (e.g. 2-D Cellpose), `z=1` makes each tile one z-slice.
-For 3-D methods, use the full z extent, e.g. `tile_shape=(120, 512, 512)`.
-
-### Auto sizing
-
-```python
-# General method (cubic tiles that fit in available RAM)
-tile_process("image.zarr", fn, tile_shape="auto")
-
-# GPU sizing (uses GPU VRAM instead of host RAM)
-tile_process("image.zarr", fn, tile_shape="auto", use_gpu=True)
-```
-
-### Callable sizing (Cellpose example)
-
-Cellpose's memory usage scales as `20× raw input bytes + 2 GB model`. The
-`auto_tile_shape_cellpose` function accounts for this:
+Larger tiles mean fewer seams; too large runs out of memory. For Cellpose,
+`auto_tile_shape_cellpose` knows the model's memory needs:
 
 ```python
 from functools import partial
-from patchworks import auto_tile_shape_cellpose, tile_process
-from patchworks.plugins.cellpose import cellpose_fn
+from patchworks import auto_tile_shape_cellpose
 
-fn = cellpose_fn("cyto3", gpu=True, diameter=30)
-tile_fn = partial(auto_tile_shape_cellpose, diameter=30, use_gpu=True)
-
-tile_process("image.zarr", fn, tile_shape=tile_fn)
+tile_process("image.zarr", fn, tile_shape=partial(auto_tile_shape_cellpose, diameter=30, use_gpu=True))
 ```
 
-The callable is called with `(shape, dtype)` at runtime, after the image is
-loaded — useful when you don't know the image shape in advance.
-
-### Multi-channel tiles
-
-Both sizers take `n_channels` (default 1) and charge it per voxel. Use it when
-a tile carries more than one channel while its *geometry* stays spatial — the
-case the Snakemake workflow's
-[`nuclei_channel`](snakemake.md#giving-cellpose-a-nuclei-channel) creates, where
-Cellpose is handed a cyto+nuclei pair but still returns one label per voxel:
-
-```python
-# Same VRAM budget, so each spatial side shrinks by ~1/√2
-auto_tile_shape_cellpose(shape, dtype, diameter=30, use_gpu=True, n_channels=2)
-```
-
-Leaving it at 1 for a 2-channel tile budgets for half the bytes the tile
-actually holds, which surfaces as an out-of-memory error in the first tile
-rather than as anything about channels.
+Pass `n_channels=2` to it when each tile carries two channels (a cyto stain
+with a nuclei channel), or the first tile runs out of memory.
 
 ## Overlap
 
-Methods that need spatial context (Cellpose, StarDist, U-Net) produce wrong
-results near tile edges: objects at the boundary are cut off. Overlap fixes this
-by expanding each tile by `overlap` voxels on every side.
+Methods that need context (Cellpose, StarDist, U-Nets) get objects wrong at a
+tile edge. The halo gives them the context; use about the diameter of the
+largest object.
 
-```text
-No overlap:        With overlap=20:
-┌──────────┐      ┌──────────────────┐
-│          │      │  ░░░░░░░░░░░░░░  │
-│  tile A  │      │░░│              │░░│
-│          │      │░░│  tile A core │░░│
-└──────────┘      │░░│              │░░│
-                  │  ░░░░░░░░░░░░░░  │
-                  └──────────────────┘
-                       halo (trimmed before merge)
-```
-
-!!! tip "How much overlap?"
-    Use the diameter of the largest object you expect. For Cellpose with
-    `diameter=30`, an overlap of 20-30 voxels is typically sufficient.
-    For StarDist 2D_versatile_fluo, 32 voxels is recommended.
-
-## Use a per-axis overlap on anisotropic tiles
-
-`overlap` takes a scalar **or one width per axis**. On anisotropic data the
-scalar is usually a bad deal, because it is applied to *every* axis:
-
-```text
-tile_shape [16, 1024, 1024], overlap 30       -> reads 76 x 1084 x 1084
-                                              -> keeps 16 x 1024 x 1024
-                                              -> 5.3x the voxels it uses
-tile_shape [16, 1024, 1024], overlap [4,30,30] -> 1.7x
-```
-
-A z-halo of 30 on a 16-plane tile does not even buy context — it spans the
-neighbouring tiles entirely, so each tile re-reads and re-segments its
-neighbours only to trim the result away. On a typical anisotropic stack, going
-per-axis is roughly **3× less GPU time for identical output**.
-
-Derive the values from the physical voxel size rather than guessing:
+On anisotropic stacks give one value per axis: a scalar applies to every
+axis, and a 30-plane z-halo on a 16-plane tile reads the neighbours entirely
+for nothing (5× the voxels, against 1.7× for `[4, 30, 30]`).
+`auto_overlap` derives it from the voxel size:
 
 ```python
 from patchworks import auto_overlap
@@ -122,15 +42,8 @@ from patchworks import auto_overlap
 auto_overlap(30, voxel_size=(2.0, 0.1, 0.1))   # -> (2, 30, 30)
 ```
 
-## Overlap and tile size interaction
+The halo is clipped to the tile size on each axis; the cluster workflow
+rejects `overlap >= tile_shape` and logs the read amplification up front.
 
-!!! warning
-    The overlap depth must be smaller than the tile dimension. patchworks
-    automatically clips the depth per axis, so z-tiles of size 1 (typical in
-    2-D Cellpose mode) get `depth=0` in z even if you pass `overlap=20`.
-
-    The Snakemake workflow goes further and **rejects** `overlap[i] >=
-    tile_shape[i]` in `prepare`, and logs the read amplification your choice
-    implies, so the cost is visible before the GPU jobs pay it.
-
-  Axes that are too small for the requested overlap simply get a smaller halo.
+To measure rather than guess, see
+[Choosing the overlap from the data](merging.md#choosing-the-overlap-from-the-data).

@@ -1,51 +1,19 @@
-# Example segmentation config: cells from a membrane stain, with PlantSeg's
-# boundary U-Net flooded from the nuclei Cellpose found -- one cell per
-# nucleus. See docs/guide/membrane_cells.md. Used by config/multi_plantseg.yaml.
-#
-# Needs the plantseg environment (PlantSeg is on conda-forge only):
-#
+# Cells from a membrane stain with PlantSeg, grown from the nuclei Cellpose
+# found: one cell per nucleus. docs/guide/membrane_cells.md
 #   pixi install -e plantseg
-#   pixi run -e plantseg plantseg-fetch generic_confocal_3D_unet  # once, with internet
-#
-# Only what differs from config/common.yaml, as for the other configs.
+#   pixi run -e plantseg plantseg-fetch generic_confocal_3D_unet # once
 
-channel: 0 # membrane channel
-
-# Grow the cells from the objects of this label image: each tile carries
-# them next to the membrane, global ids and all. run_multi segments
-# nuclei_labels first and starts this config once it has finished; run on
-# its own, the labels must already be in image.zarr. Both must be segmented
-# at the same `level` (run_multi enforces it).
-seed_labels: "nuclei_labels"
-# Alternatively, find the nuclei in an intensity channel instead (Otsu per
-# tile, nuclei_* kwargs below), independently of any nuclei segmentation:
-# nuclei_channel: 1  # and drop seed_labels
-
-# The halo must hold a whole cell: a cell cut by the tile edge has no seed
-# in the tile next door. [z, y, x], like the other configs.
-overlap: [4, 40, 40]
-# Every voxel goes to some cell, so neighbouring cells touch at each tile
-# seam; "touch" stitching would join them. "iou" joins two pieces only where
-# both tiles agree on the overlap -- required with this plugin.
-stitch: "iou"
-
+channel: 0 # membrane
+seed_labels: "nuclei_labels" # grow from this label image (segmented first)
+overlap: [4, 40, 40] # must hold a whole cell
+stitch: "iou" # required: cells touch at every tile seam
 method: "custom"
 label_name: "cyto_labels"
 custom:
   module: "patchworks.plugins.plantseg"
   function: "segment"
   kwargs:
-    # PlantSeg zoo U-Net predicting cell boundaries. Each tile is resampled
-    # to the voxel size it was trained at (from the image's calibration).
-    # generic_light_sheet_3D_unet for light-sheet data.
-    model: "generic_confocal_3D_unet"
-    # The U-Net's boundaries flooded from the nuclei. "lifted_multicut"
-    # also takes them; "gasp" does not use nuclei at all.
-    segmentation: "nuclei_watershed"
-    # (seeds: "labels" is set by the workflow because of seed_labels.)
-    # A boundary U-Net sees cells everywhere: keep the tissue only.
-    foreground: "otsu"
-    # max_radius_um: 15 # and/or: no further than this from the nucleus
+    model: "generic_confocal_3D_unet" # or generic_light_sheet_3D_unet
+    segmentation: "nuclei_watershed" # boundaries flooded from the nuclei
+    foreground: "otsu" # keep the tissue only
     device: "cuda"
-
-# min_volume: 100.0 # optional: drop cells smaller than this many µm³

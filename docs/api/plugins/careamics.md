@@ -1,6 +1,6 @@
 # CAREamics denoising plugin
 
-See [Denoising first](../../guide/membrane_cells.md#denoising-first-careamics).
+See [Denoising first](../../guide/membrane_cells.md#denoising-first).
 
 ::: patchworks.plugins.careamics.denoise_fn
 

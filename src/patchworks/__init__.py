@@ -62,7 +62,7 @@ from ._occupancy import (
 from ._postprocess import dilate_labels, fill_holes, open_labels
 from ._provenance import provenance, read_provenance
 from ._relabel import relabel_sequential_array, relabel_sequential_zarr
-from ._relations import label_relations
+from ._relations import label_relations, label_relations_many
 from ._review import Review
 from ._seams import seam_report
 from ._tables import (
@@ -104,6 +104,7 @@ __all__ = [
     "relabel_sequential_array",
     "relabel_sequential_zarr",
     "label_relations",
+    "label_relations_many",
     "measure_objects",
     "compute_table",
     "read_table",

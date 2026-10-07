@@ -8,7 +8,7 @@
 tile, so it can miss signal at a tile's edge. `build_occupancy_map` +
 `tile_occupancy` are **exact**: a brick maximum exceeds the threshold exactly
 when some voxel in that brick does. Use the latter pair when the result is
-used as a skip list. See [Skipping empty tiles](../guide/skip_empty.md).
+used as a skip list. See [Skipping empty tiles](../guide/performance.md#skip-empty-tiles).
 
 ::: patchworks.estimate_empty_tiles
 
