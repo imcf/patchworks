@@ -43,7 +43,23 @@ def provenance(**settings: Any) -> dict[str, Any]:
         ),
         "versions": {
             name: _version(name)
-            for name in ("patchworks", "zarr", "dask", "numpy", "scipy")
+            for name in (
+                "patchworks",
+                "zarr",
+                "dask",
+                "numpy",
+                "scipy",
+                "scikit-image",
+                # The segmentation tools, where installed: the same settings
+                # can segment differently from one of their versions to the
+                # next.
+                "cellpose",
+                "plantseg",
+                "plant-seg",
+                "careamics",
+                "torch",
+                "pycudadecon",
+            )
         },
         "python": platform.python_version(),
         "settings": settings,

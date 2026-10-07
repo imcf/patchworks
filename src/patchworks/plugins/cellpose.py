@@ -215,14 +215,11 @@ def cellpose_fn(
                 voxel_size.get("x") or voxel_size.get("y"),
             )
             cellpose_kwargs = {**cellpose_kwargs, "anisotropy": anisotropy}
-    if fragments == "auto":
-        fragments = 0.1 if do_3D else None
-    if (
-        do_3D
-        and "flow3D_smooth" not in cellpose_kwargs
-        and _accepts("flow3D_smooth")
-    ):
-        cellpose_kwargs = {**cellpose_kwargs, "flow3D_smooth": 1}
+    defaults = applied_defaults(
+        do_3D, {**cellpose_kwargs, "fragments": fragments}
+    )
+    fragments = defaults.pop("fragments", None)
+    cellpose_kwargs = {**cellpose_kwargs, **defaults}
     if intensity_range is not None:
         if "normalize" in cellpose_kwargs:
             raise ValueError(
@@ -237,6 +234,24 @@ def cellpose_fn(
         cfg["intensity_range"] = ranges.tolist()
     cfg["fragments"] = fragments
     return partial(_run, cellpose_dict=cfg)
+
+
+def applied_defaults(do_3D: bool, settings: dict[str, Any]) -> dict[str, Any]:
+    """What :func:`cellpose_fn` fills in that *settings* left open.
+
+    ``fragments`` (``"auto"`` or absent: 0.1 in 3-D, off in 2-D) and, in
+    3-D where the installed Cellpose takes it, ``flow3D_smooth=1``. Used by
+    ``cellpose_fn`` itself and by the workflow to record in the labels'
+    provenance what actually ran.
+    """
+    out: dict[str, Any] = {}
+    fragments = settings.get("fragments", "auto")
+    out["fragments"] = (
+        (0.1 if do_3D else None) if fragments == "auto" else fragments
+    )
+    if do_3D and "flow3D_smooth" not in settings and _accepts("flow3D_smooth"):
+        out["flow3D_smooth"] = 1
+    return out
 
 
 def _accepts(name: str) -> bool:
