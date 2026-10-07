@@ -23,7 +23,8 @@ pixi install
 ```
 
 Keep `workflow/` on a filesystem the compute nodes can read: jobs run the
-environment's Python directly.
+environment's Python directly. The environments use this clone's own
+patchworks, so `git pull` is all an update takes.
 
 Optional environments add methods; every task works in them (`pixi run -e
 <env> ...`):
