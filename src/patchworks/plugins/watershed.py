@@ -156,6 +156,35 @@ def missing_seeds_error(tile_shape) -> ValueError:
     )
 
 
+#: How far (pixels) the mask is mirrored past the tile's edges before its
+#: holes are filled: about the largest cell diameter.
+EDGE_MIRROR = 128
+
+
+def fill_holes_past_edges(
+    mask: np.ndarray, pad: int = EDGE_MIRROR
+) -> np.ndarray:
+    """Fill holes as if the image continued past the tile's edges.
+
+    A cell cut by the edge of the region a tile reads is open there, so a
+    plain hole fill leaves its interior empty -- and the cell is cut at
+    every tile seam. Mirroring the mask outward first closes such a cell
+    with its own reflection, while background that runs off the edge stays
+    connected to the (padded) border and is left alone.
+
+    >>> ring = np.zeros((5, 9), bool); ring[[0, 4], :] = True; ring[:, 0] = True
+    >>> fill_holes_past_edges(ring)[2].tolist()  # open to the right edge
+    [True, True, True, True, True, True, True, True, True]
+    """
+    from scipy import ndimage as ndi
+
+    widths = [(min(n - 1, pad),) * 2 for n in mask.shape]
+    padded = np.pad(mask, widths, mode="reflect")
+    filled = ndi.binary_fill_holes(padded)
+    inner = tuple(slice(w, w + n) for (w, _), n in zip(widths, mask.shape))
+    return filled[inner] | mask
+
+
 def foreground_mask(
     membrane: np.ndarray,
     seeds: np.ndarray,
@@ -189,10 +218,10 @@ def foreground_mask(
         mask = smooth > thr
         # Interiors: in 3-D and plane by plane, since a cell cut by the tile
         # edge is enclosed in its planes but open to the border in 3-D.
-        mask = ndi.binary_fill_holes(mask)
+        mask = fill_holes_past_edges(mask)
         if mask.ndim == 3:
             for z in range(mask.shape[0]):
-                mask[z] = ndi.binary_fill_holes(mask[z])
+                mask[z] = fill_holes_past_edges(mask[z])
     if max_radius is not None:
         # Distance in units of the radius per axis: <= 1 means within reach.
         near = (

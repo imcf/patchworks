@@ -88,12 +88,20 @@ def _build_fn(args: argparse.Namespace, image: Any) -> Callable:
     if args.method == "cellpose":
         from .plugins.cellpose import cellpose_fn
 
+        # One intensity range for every tile, not each tile's own percentiles
+        # (which give neighbouring tiles different contrast).
+        image_range = None
+        if args.normalize == "image" and args.channel is not None:
+            from ._intensity import intensity_range
+
+            image_range = intensity_range(args.image, args.channel)
         return cellpose_fn(
             args.model,
             gpu=args.gpu,
             diameter=args.diameter,
             do_3D=args.do_3d,
             voxel_size=voxel or None,
+            intensity_range=image_range,
         )
     if args.method == "dog":
         from .plugins.dog import dog_label_fn
@@ -510,6 +518,13 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--model", default="cyto3")
     g.add_argument("--diameter", type=float)
     g.add_argument("--do-3d", action="store_true")
+    g.add_argument(
+        "--normalize",
+        choices=("image", "tile"),
+        default="image",
+        help="scale every tile with the image's 1-99%% range (default), or "
+        "let Cellpose normalise each tile on its own",
+    )
     g = p.add_argument_group("custom")
     g.add_argument("--fn", help="module:function returning labels")
     g.add_argument("--fn-kwargs", help="JSON object of keyword arguments")

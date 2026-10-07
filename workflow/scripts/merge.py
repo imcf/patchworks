@@ -20,6 +20,7 @@ from patchworks import (
     set_compression,
 )
 from patchworks._chunks import _get_available_memory
+from patchworks._provenance import write_provenance
 from patchworks._volume_filter import (
     filter_labels_by_size,
     max_voxels_for_volume,
@@ -261,34 +262,27 @@ if shard_labels:
     spec = (cfg.get("shard") or True) if shard_labels is True else shard_labels
     reshard_level(label_group, "0", shard=spec, progress=True)
 
-# How these labels were made, stored with them (read_provenance()).
-_SETTINGS = (
-    "input",
-    "channel",
-    "nuclei_channel",
-    "seed_labels",
-    "level",
-    "method",
-    "cellpose",
-    "custom",
-    "denoise",
-    "dilate",
-    "min_volume",
-    "max_volume",
-    "stitch",
-    "iou_threshold",
-    "connectivity",
-    "sequential_labels",
-    "compression",
-    "skip_empty",
-    "empty_threshold",
-)
-record = provenance(
+# How these labels were made, stored with them (read_provenance()): the
+# whole effective config, plus what was only decided at run time.
+_PRIVATE = ("notify_email", "notify_events")
+settings = {k: v for k, v in cfg.items() if k not in _PRIVATE}
+settings.update(
     label_name=label_name,
+    # As prepare resolved them ("auto" tile shapes, scalar overlaps).
     tile_shape=manifest["tile_shape"],
     overlap=manifest["overlap"],
-    **{k: cfg.get(k) for k in _SETTINGS if k in cfg},
+    resolved={
+        "n_tiles": manifest.get("n_tiles"),
+        "tiles_segmented": len(manifest.get("occupied", [])),
+        "empty_threshold": manifest.get("empty_threshold"),
+        "intensity_range": manifest.get("intensity_range"),
+        "thresholds": manifest.get("kwargs_overrides"),
+        "min_voxels": min_voxels,
+        "max_voxels": max_voxels,
+        "n_objects": n_objects,
+    },
 )
+record = provenance(**settings)
 
 group = register_labels(
     image_store,
@@ -335,6 +329,12 @@ if cfg.get("seam_report", True):
     Path(work_dir, label_name, "seams.json").write_text(
         json.dumps(report, indent=2)
     )
+    # The verdict travels with the labels: seam vs interior orphan rate.
+    record["seams"] = {
+        ax: {k: row[k] for k in ("seam_rate", "interior_rate", "ratio")}
+        for ax, row in report["axes"].items()
+    }
+    write_provenance(zarr.open_group(str(group), mode="r+"), record)
     for ax, row in report["axes"].items():
         interior = row["interior_rate"]
         print(

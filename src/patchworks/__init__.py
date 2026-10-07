@@ -60,6 +60,7 @@ from ._occupancy import (
     tile_occupancy,
 )
 from ._postprocess import dilate_labels, fill_holes, open_labels
+from ._intensity import intensity_range
 from ._provenance import provenance, read_provenance
 from ._relabel import relabel_sequential_array, relabel_sequential_zarr
 from ._relations import label_relations, label_relations_many
@@ -113,6 +114,7 @@ __all__ = [
     "seam_report",
     "suggest_overlap",
     "object_f1",
+    "intensity_range",
     "provenance",
     "read_provenance",
     "normalize_overlap",

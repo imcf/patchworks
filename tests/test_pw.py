@@ -660,3 +660,91 @@ def test_connectivity_is_one_value_shared_by_labelling_and_merge(tmp_path):
         }
     )
     assert fn.keywords["connectivity"] == 3
+
+
+def test_cellpose_scales_tiles_with_one_image_range_by_default():
+    """Cellpose would stretch each tile from its own percentiles, giving
+    neighbouring tiles different contrast; the workflow measures one range
+    unless told otherwise."""
+    from _pw import uses_image_range
+
+    cp = {"model": "cpsam"}
+    assert uses_image_range({"method": "cellpose", "cellpose": cp})
+    assert not uses_image_range(
+        {"method": "cellpose", "cellpose": cp, "normalize": "tile"}
+    )
+    # Cellpose's own normalize, set explicitly, is respected.
+    assert not uses_image_range(
+        {
+            "method": "cellpose",
+            "cellpose": {**cp, "normalize": {"percentile": [1, 99]}},
+        }
+    )
+    assert not uses_image_range({"method": "custom"})
+
+
+def test_validate_config_rejects_an_unknown_normalize():
+    import pytest
+    from _pw import validate_config
+
+    with pytest.raises(ValueError, match="normalize"):
+        validate_config({"method": "threshold", "normalize": "global"})
+
+
+def _two_channel_store(path, membrane_level):
+    """Membrane (ch 0) bright on the left half only, nuclei (ch 1) spots."""
+    from patchworks.plugins.ome_zarr import to_ome_zarr
+
+    rng = np.random.default_rng(0)
+    img = rng.normal(100, 10, (2, 8, 64, 64)).clip(1).astype("uint16")
+    img[0, :, :, :32] += membrane_level
+    img[1, 2:6, 10:20, 10:20] += 2000
+    to_ome_zarr(img, str(path), axes="czyx", n_levels=1, progress=False)
+
+
+def test_image_thresholds_resolve_per_tile_otsu_once(tmp_path):
+    """foreground: "otsu" and an unset nuclei_threshold are each measured
+    once over the image, so every tile gets the same number -- per tile they
+    move with each tile's content and the mask changes at every seam."""
+    from _pw import image_thresholds
+
+    store = tmp_path / "image.zarr"
+    _two_channel_store(store, 1000)
+    cfg = {
+        "method": "custom",
+        "channel": 0,
+        "nuclei_channel": 1,
+        "custom": {"module": "patchworks.plugins.watershed", "kwargs": {}},
+    }
+    out = image_thresholds(cfg, str(store))
+    assert set(out) == {"foreground", "nuclei_threshold"}
+    assert 110 < out["foreground"] < 1100  # between the two halves
+    assert 110 < out["nuclei_threshold"] < 2100
+    # Explicit numbers, seeds from labels, other methods: nothing to do.
+    cfg["custom"]["kwargs"] = {"foreground": 500, "nuclei_threshold": 900}
+    assert image_thresholds(cfg, str(store)) == {}
+    assert image_thresholds({**cfg, "method": "cellpose"}, str(store)) == {}
+    plantseg = {**cfg, "seed_labels": "nuclei", "nuclei_channel": None}
+    plantseg["custom"] = {"module": "patchworks.plugins.plantseg", "kwargs": {}}
+    assert image_thresholds(plantseg, str(store)) == {}  # foreground off
+    plantseg["custom"]["kwargs"] = {"foreground": "otsu"}
+    assert set(image_thresholds(plantseg, str(store))) == {"foreground"}
+
+
+def test_build_fn_applies_the_image_thresholds(monkeypatch):
+    import _pw
+
+    seen = {}
+
+    def fake(cfg, intensity_range=None):
+        seen.update(cfg["custom"]["kwargs"])
+        return lambda tile: tile
+
+    monkeypatch.setattr(_pw, "_build_method_fn", fake)
+    cfg = {
+        "method": "custom",
+        "custom": {"module": "m", "kwargs": {"foreground": "otsu", "a": 1}},
+    }
+    _pw.build_fn(cfg, kwargs_overrides={"foreground": 812.5})
+    assert seen == {"foreground": 812.5, "a": 1}
+    assert cfg["custom"]["kwargs"]["foreground"] == "otsu"  # not mutated

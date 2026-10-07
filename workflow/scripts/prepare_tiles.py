@@ -17,6 +17,7 @@ from patchworks import (
     build_occupancy_map,
     capped_output_chunks,
     create_stage,
+    intensity_range,
     normalize_overlap,
     spatial_tiles,
     tile_occupancy,
@@ -28,7 +29,9 @@ from _pw import (
     open_image,
     stage_path,
     start_log,
+    image_thresholds,
     tile_channels,
+    uses_image_range,
     validate_config,
 )
 
@@ -143,6 +146,7 @@ print(f"[patchworks] halo read amplification: {amplification:.2f}x")
 
 tiles = spatial_tiles(image.shape, tile_shape)
 occupied = list(range(len(tiles)))
+threshold = None
 if cfg.get("skip_empty", True):
     # The occupancy map reduces every voxel of the image to per-brick maxima,
     # so testing a tile covers the whole tile instead of a centred sample. The
@@ -218,6 +222,37 @@ create_stage(
         else None
     ),
 )
+# One intensity range for the whole image, measured on a coarse level: the
+# segment jobs scale every tile with it, so neighbouring tiles see the same
+# contrast instead of each being stretched from its own percentiles.
+image_range = None
+if uses_image_range(cfg):
+    chans = [cfg["channel"]]
+    if cfg.get("nuclei_channel") is not None:
+        chans.append(cfg["nuclei_channel"])
+    # Sampled at full resolution inside the tiles that will be segmented,
+    # so background and pyramid averaging don't skew it.
+    image_range = [
+        list(r)
+        for r in intensity_range(
+            Path(work_dir) / "image.zarr",
+            chans,
+            level=cfg["level"],
+            regions=[tiles[i] for i in occupied],
+        )
+    ]
+    print(
+        f"[patchworks] intensity range (1-99%) of channels {chans}: {image_range}"
+    )
+
+# Per-tile Otsu thresholds (membrane plugins' foreground, nuclei found in a
+# stain) resolved once, the same way: one number for every tile.
+thresholds = image_thresholds(
+    cfg, str(Path(work_dir) / "image.zarr"), [tiles[i] for i in occupied]
+)
+if thresholds:
+    print(f"[patchworks] image-wide thresholds for every tile: {thresholds}")
+
 # Halo strips from an earlier run describe tiles that no longer exist.
 shutil.rmtree(halo_path(work_dir, label_name), ignore_errors=True)
 
@@ -228,6 +263,10 @@ Path(work_dir, label_name, "tiles.json").write_text(
             "overlap": list(overlap),
             "n_tiles": len(tiles),
             "occupied": occupied,
+            # The cutoff skip_empty actually used (Otsu when not configured).
+            "empty_threshold": None if threshold is None else float(threshold),
+            "intensity_range": image_range,
+            "kwargs_overrides": thresholds,
             "tiles_per_job": tiles_per_job,
             "batches": batches,
             "target_path": target_path,
@@ -240,4 +279,5 @@ Path(work_dir, label_name, "tiles.json").write_text(
 print(
     f"[patchworks] {len(occupied)}/{len(tiles)} tiles to segment "
     f"in {len(batches)} job(s) of up to {tiles_per_job}"
+    + ("" if threshold is None else f"; empty below {float(threshold):g}")
 )
