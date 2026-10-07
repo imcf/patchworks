@@ -160,3 +160,32 @@ def test_image_intensity_range_samples_full_resolution(tmp_path):
         np.zeros((4, 32, 32), "uint16"), blank, axes="zyx", progress=False
     )
     assert intensity_range(blank, None) == [(0.0, 1.0)]
+
+
+def test_3d_cellpose_folds_fragments_and_smooths_flows(monkeypatch):
+    """3-D Cellpose fragments cells; by default the slivers are folded back
+    into their cells, and the flows smoothed where Cellpose supports it."""
+    from patchworks.plugins import cellpose as cp
+
+    class Model:
+        def eval(self, img, flow3D_smooth=0, **kwargs):
+            self.smooth = flow3D_smooth
+            masks = np.zeros(img.shape, "int32")
+            masks[1:9, 2:30, 2:30] = 1
+            masks[1:9, 28:30, 2:30] = 2  # a sliver of cell 1
+            return (masks,)
+
+    model = Model()
+    monkeypatch.setattr(cp, "_require_cellpose", lambda: None)
+    monkeypatch.setattr(cp, "_get_model", lambda _cfg: model)
+    monkeypatch.setattr(
+        cp, "_cellpose_models", type("M", (), {"CellposeModel": Model})
+    )
+    out = cp.cellpose_fn("cpsam", do_3D=True)(np.zeros((10, 32, 32), "uint16"))
+    assert set(np.unique(out)) == {0, 1}
+    assert model.smooth == 1
+    # Off on request, and off by default in 2-D.
+    out = cp.cellpose_fn("cpsam", do_3D=True, fragments=None, flow3D_smooth=0)(
+        np.zeros((10, 32, 32), "uint16")
+    )
+    assert set(np.unique(out)) == {0, 1, 2} and model.smooth == 0

@@ -59,7 +59,12 @@ from ._occupancy import (
     occupancy_path,
     tile_occupancy,
 )
-from ._postprocess import dilate_labels, fill_holes, open_labels
+from ._postprocess import (
+    absorb_fragments,
+    dilate_labels,
+    fill_holes,
+    open_labels,
+)
 from ._intensity import intensity_range
 from ._provenance import provenance, read_provenance
 from ._relabel import relabel_sequential_array, relabel_sequential_zarr
@@ -121,6 +126,7 @@ __all__ = [
     "spatial_tiles",
     "create_stage",
     "stage_tile",
+    "absorb_fragments",
     "dilate_labels",
     "fill_holes",
     "open_labels",

@@ -809,7 +809,7 @@ def _cellpose_problems(cp: dict) -> list[str]:
         # than fail a config that may be perfectly fine.
         return problems
     unknown = _unknown_kwargs(
-        model.eval, extra, skip=("channels", "channel_axis")
+        model.eval, extra, skip=("channels", "channel_axis", "fragments")
     )
     if unknown:
         problems.append(

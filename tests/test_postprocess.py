@@ -97,3 +97,27 @@ def test_open_labels_cuts_spurs_and_keeps_neighbours_apart():
     assert (out[0, 5:10, 4:7] == 1).all()  # body kept
     assert (out[labels == 2] == 2).all()
     assert open_labels(lambda t: t, radius=0)(labels) is labels
+
+
+def test_absorb_fragments_folds_slivers_into_their_cells():
+    """3-D Cellpose splits cells into a body and slivers and leaves specks:
+    slivers join the cell they touch most, lone specks go, whole cells and
+    objects cut by the block's edge stay as they are."""
+    import numpy as np
+
+    from patchworks import absorb_fragments
+
+    cells = np.zeros((10, 40, 40), np.int32)
+    cells[1:9, 2:19, 2:38] = 1
+    cells[1:9, 21:38, 2:38] = 2
+    lab = cells.copy()
+    lab[1:9, 18, 2:38] = 3  # sliver of cell 1
+    lab[4, 30:32, 10:12] = 4  # speck inside cell 2
+    lab[5, 19:21, 38] = 5  # speck past the cells' end, touching nothing
+    lab[0, 0, 0] = 6  # tiny, but on the block's edge: kept
+    out = absorb_fragments(lab)
+    assert np.array_equal(out[1:9, 2:19, 2:38], np.ones((8, 17, 36)))
+    assert (out[1:9, 21:38, 2:38] == 2).all()
+    assert out[5, 19:21, 38].tolist() == [0, 0]
+    assert out[0, 0, 0] == 6
+    assert set(np.unique(out)) == {0, 1, 2, 6}

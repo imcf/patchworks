@@ -230,3 +230,108 @@ def _run_open(
         region = out[padded]
         region[kept] = i
     return out
+
+
+def typical_volume(labels: np.ndarray) -> float:
+    """The volume of the object a typical labelled voxel belongs to.
+
+    A voxel-weighted median: many small fragments barely move it, unlike
+    the plain median object size, so it stays the size of a whole object.
+    """
+    sizes = np.bincount(np.asarray(labels).ravel())[1:]
+    sizes = np.sort(sizes[sizes > 0])
+    if sizes.size == 0:
+        return 0.0
+    weight = np.cumsum(sizes)
+    return float(sizes[np.searchsorted(weight, weight[-1] / 2)])
+
+
+def _contacts(labels: np.ndarray) -> np.ndarray:
+    """``(a, b, n)`` rows: labels a != b, both non-zero, sharing n faces."""
+    pairs = []
+    for ax in range(labels.ndim):
+        lo = [slice(None)] * labels.ndim
+        hi = [slice(None)] * labels.ndim
+        lo[ax], hi[ax] = slice(None, -1), slice(1, None)
+        a, b = labels[tuple(lo)], labels[tuple(hi)]
+        touch = (a != b) & (a > 0) & (b > 0)
+        if touch.any():
+            a, b = a[touch].astype(np.int64), b[touch].astype(np.int64)
+            pairs.append(np.stack([a, b], 1))
+            pairs.append(np.stack([b, a], 1))
+    if not pairs:
+        return np.empty((0, 3), np.int64)
+    uniq, n = np.unique(np.vstack(pairs), axis=0, return_counts=True)
+    return np.column_stack([uniq, n])
+
+
+def absorb_fragments(
+    labels: np.ndarray,
+    min_voxels: float | None = None,
+    *,
+    fraction: float = 0.1,
+    rounds: int = 3,
+) -> np.ndarray:
+    """Merge small fragments into the object they touch most; drop the rest.
+
+    3-D segmentation often breaks a cell into one large piece and slivers
+    beside it, or leaves specks in dim regions. An object smaller than
+    *min_voxels* -- by default *fraction* of :func:`typical_volume` -- joins
+    the neighbour it shares the most surface with (a larger one when it has
+    any), so the cell keeps its full volume; one touching nothing is
+    removed. Repeated up to *rounds* times, for fragments touching only
+    other fragments; any small object left after that is removed. Objects
+    touching the array's border are left alone: they may be cells cut by
+    the tile edge, whose size is unknown here.
+
+    A sliver (2) beside cell 1, a speck (4) between it and cell 3, one
+    alone (5), and a small object on the border (6), which is kept:
+
+    >>> lab = np.zeros((8, 14), int)
+    >>> lab[1:7, 1:5] = 1; lab[1:7, 5] = 2; lab[1:7, 7:10] = 3
+    >>> lab[1, 6] = 4; lab[4, 12] = 5; lab[7, 12] = 6
+    >>> out = absorb_fragments(lab, 7)
+    >>> out[1].tolist(), out[4].tolist(), out[7].tolist()[12]
+    ([0, 1, 1, 1, 1, 1, 3, 3, 3, 3, 0, 0, 0, 0], [0, 1, 1, 1, 1, 1, 0, 3, 3, 3, 0, 0, 0, 0], 6)
+    """
+    labels = np.asarray(labels)
+    if min_voxels is None:
+        min_voxels = fraction * typical_volume(labels)
+    if min_voxels <= 1:
+        return labels
+    out = labels.copy()
+    edge = np.zeros(int(out.max()) + 1, bool)
+    for ax in range(out.ndim):
+        if out.shape[ax] > 1:  # a single plane is not an edge
+            edge[np.take(out, [0, -1], axis=ax).ravel()] = True
+    edge[0] = False
+    for _ in range(rounds):
+        sizes = np.bincount(out.ravel(), minlength=edge.size)
+        small = (sizes > 0) & (sizes < min_voxels) & ~edge
+        small[0] = False
+        if not small.any():
+            break
+        contacts = _contacts(out)
+        contacts = contacts[small[contacts[:, 0]]]
+        if contacts.size == 0:
+            break
+        # Prefer a neighbour that is itself whole, then the longest contact.
+        whole = ~small[contacts[:, 1]]
+        order = np.lexsort((-contacts[:, 2], ~whole, contacts[:, 0]))
+        contacts = contacts[order]
+        first = np.unique(contacts[:, 0], return_index=True)[1]
+        src, dst = contacts[first, 0], contacts[first, 1]
+        # A fragment pair choosing each other merges one way only.
+        keep = ~(small[dst] & (dst < src))
+        lut = np.arange(sizes.size, dtype=out.dtype)
+        lut[src[keep]] = dst[keep]
+        # Follow chains a -> b -> c.
+        for _ in range(rounds):
+            lut = lut[lut]
+        out = lut[out]
+    sizes = np.bincount(out.ravel(), minlength=edge.size)
+    small = (sizes > 0) & (sizes < min_voxels) & ~edge
+    small[0] = False
+    if small.any():
+        out[small[out]] = 0
+    return out
