@@ -132,9 +132,6 @@ def run_relations(
         defaults to ``<a>_to_<b>.xlsx``), matching ``multi.yaml``'s
         ``relations:`` list.
     """
-    import dask.array as da
-
-    from patchworks import label_relations
     from patchworks._review import Review, review_updated
     from patchworks._tables import (
         compute_table,
@@ -144,6 +141,7 @@ def run_relations(
         relation_current,
     )
 
+    pending: list = []
     for rel in relations:
         a_name, b_name = rel["a"], rel["b"]
         out_path = Path(work_dir) / rel.get(
@@ -193,81 +191,106 @@ def run_relations(
                 flush=True,
             )
             continue
-        print(f"[relate] relating {a_name} -> {b_name} …", flush=True)
+        pending.append((rel, out_path))
+
+    # One pass per parent: a parent several label images are related to is
+    # read once for all of them, and only where some child has labels.
+    by_parent: dict[str, list] = {}
+    for rel, out_path in pending:
+        by_parent.setdefault(rel["b"], []).append((rel, out_path))
+    for b_name, group in by_parent.items():
         started = time.monotonic()
-        a = da.from_zarr(image_store, component=f"labels/{a_name}/0")
-        b = da.from_zarr(image_store, component=f"labels/{b_name}/0")
-
-        # What this pair actually costs, before it starts costing it. A
-        # relation runs for hours on a real dataset, and until now the log
-        # said only "relating a -> b" and then nothing at all until it
-        # finished -- indistinguishable from a hang.
-        for name, arr in ((a_name, a), (b_name, b)):
-            print(
-                f"[relate]   {name}: shape={arr.shape} chunks="
-                f"{tuple(c[0] for c in arr.chunks)} "
-                f"({_num_chunks(arr):,} chunks, {_n_objects(image_store, name)})",
-                flush=True,
-            )
-
-        # label_relations() requires matching chunk layouts (it walks both
-        # arrays block-by-block at the same index) but two configs are free
-        # to have segmented at different tile_shape -- e.g. one already
-        # published before the other's config changed, or a cheaper method
-        # naturally sized its tile differently. Same shape, different
-        # chunking is a normal dask op (extra I/O reading across misaligned
-        # source chunks, not a correctness issue), so rechunk the finer side
-        # to the coarser one here rather than require identical tile_shape
-        # across every config up front.
-        if a.chunks != b.chunks:
-            a_n, b_n = _num_chunks(a), _num_chunks(b)
-            if a_n <= b_n:
-                print(
-                    f"[relate] {a_name} chunks {a.chunks} != {b_name} "
-                    f"chunks {b.chunks}; rechunking {b_name} to match "
-                    f"{a_name} (fewer chunks)",
-                    flush=True,
-                )
-                b = b.rechunk(a.chunks)
-            else:
-                print(
-                    f"[relate] {a_name} chunks {a.chunks} != {b_name} "
-                    f"chunks {b.chunks}; rechunking {a_name} to match "
-                    f"{b_name} (fewer chunks)",
-                    flush=True,
-                )
-                a = a.rechunk(b.chunks)
-
-        table = label_relations(a, b)
+        matches = _group_matches(
+            image_store, [rel["a"] for rel, _ in group], b_name
+        )
         print(
-            f"[relate] {a_name} -> {b_name}: matched {len(table):,} object(s) "
-            f"in {(time.monotonic() - started) / 60:.1f}m",
+            f"[relate] {', '.join(rel['a'] for rel, _ in group)} -> {b_name}: "
+            f"related in {(time.monotonic() - started) / 60:.1f}m",
             flush=True,
         )
-
         # The object tables carry every object -- unmatched ones included --
-        # and the review decisions; the workbook is written from them, so a
-        # correction made in `patchworks review` shows up in it.
-        for name in (a_name, b_name):
-            group = f"{image_store}/labels/{name}"
-            if not has_table(group) or is_stale(group):
+        # and the review decisions; the workbooks are written from them, so
+        # a correction made in `patchworks review` shows up in them.
+        for name in {b_name, *(rel["a"] for rel, _ in group)}:
+            g = f"{image_store}/labels/{name}"
+            if not has_table(g) or is_stale(g):
                 print(
                     f"[relate] measuring {name} for its object table",
                     flush=True,
                 )
                 compute_table(image_store, name)
-        relate_tables(
-            image_store,
-            a_name,
-            b_name,
-            matches=table,
-            max_distance_um=rel.get("max_distance_um"),
-        )
-        # Only these two tables: another relate job may be writing others.
+        for rel, _ in group:
+            relate_tables(
+                image_store,
+                rel["a"],
+                b_name,
+                matches=matches[rel["a"]],
+                max_distance_um=rel.get("max_distance_um"),
+            )
+    # Workbooks last: a position rule (cilia placed by the nuclei of their
+    # cell) needs its sibling relation in the tables first.
+    for rel, out_path in pending:
+        a_name, b_name = rel["a"], rel["b"]
+        # Only the tables these need: another relate job may write others.
         written = Review(image_store, names=[a_name, b_name]).relation_workbook(
             a_name, b_name, out_path
         )
         print(f"[relate] wrote {written}", flush=True)
+
+
+def _group_matches(
+    image_store: str, children: list[str], b_name: str
+) -> dict[str, dict]:
+    """label_relations of every child against *b_name*, reading it once.
+
+    A child chunked differently from the parent (segmented at another
+    tile_shape) is related on its own, the finer side rechunked to the
+    coarser: same shape, different chunking is extra I/O, not an error.
+    """
+    import dask.array as da
+    import zarr
+
+    from patchworks import label_relations
+    from patchworks._relations import label_relations_many
+
+    def array(name):
+        return zarr.open_array(image_store, path=f"labels/{name}/0", mode="r")
+
+    b = array(b_name)
+    print(
+        f"[relate]   {b_name}: shape={b.shape} chunks={b.chunks} "
+        f"({_n_objects(image_store, b_name)})",
+        flush=True,
+    )
+    same, other = [], []
+    for name in children:
+        a = array(name)
+        print(
+            f"[relate]   {name}: chunks={a.chunks} "
+            f"({_n_objects(image_store, name)})",
+            flush=True,
+        )
+        (same if a.chunks == b.chunks else other).append(name)
+    out = label_relations_many({n: array(n) for n in same}, b) if same else {}
+    for name in other:
+        a = da.from_zarr(image_store, component=f"labels/{name}/0")
+        bb = da.from_zarr(image_store, component=f"labels/{b_name}/0")
+        if _num_chunks(a) <= _num_chunks(bb):
+            print(
+                f"[relate] {name} chunks differ from {b_name}'s; rechunking "
+                f"{b_name} to match (fewer chunks)",
+                flush=True,
+            )
+            bb = bb.rechunk(a.chunks)
+        else:
+            print(
+                f"[relate] {name} chunks differ from {b_name}'s; rechunking "
+                f"{name} to match (fewer chunks)",
+                flush=True,
+            )
+            a = a.rechunk(bb.chunks)
+        out[name] = label_relations(a, bb)
+    return out
 
 
 def main() -> None:

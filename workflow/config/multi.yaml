@@ -42,7 +42,7 @@ segmentations:
 #                          # relate step uses them all, each holding only two
 #                          # chunks, so mem needs no raise; past ~16 the
 #                          # shared filesystem tends to set the pace.
-#   time: 180              # minutes, per pair; default: 180
+#   time: 180              # minutes, per job (one per parent); default: 180
 #   qos: "1day"            # default: your account's default QOS
 
 # What to flag for a look in `patchworks review image.zarr` (optional). Every

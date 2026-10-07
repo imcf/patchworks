@@ -52,6 +52,7 @@ bytes, just packaged.
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import subprocess
 import sys
@@ -77,12 +78,22 @@ def human(n: float) -> str:
 
 def tree_size(path: Path) -> tuple[int, int]:
     """Total bytes and file count under *path*."""
+    total, count, _ = tree_stats(path)
+    return total, count
+
+
+def tree_stats(path: Path) -> tuple[int, int, float]:
+    """Total bytes, file count and newest modification time under *path*,
+    in one walk (a stat per file, which the size needs anyway)."""
     total = count = 0
+    newest = 0.0
     for item in path.rglob("*"):
         if item.is_file():
-            total += item.stat().st_size
+            st = item.stat()
+            total += st.st_size
             count += 1
-    return total, count
+            newest = max(newest, st.st_mtime)
+    return total, count, newest
 
 
 def volume_id(name: str) -> str:
@@ -232,6 +243,12 @@ def main() -> int:
         action="store_true",
         help="replace an existing archive instead of refusing",
     )
+    parser.add_argument(
+        "--skip-unchanged",
+        action="store_true",
+        help="do nothing when the archive is newer than every file in the "
+        "store (rebuilding a large store's archive takes hours)",
+    )
     args = parser.parse_args()
 
     store = Path(args.store).resolve()
@@ -247,7 +264,14 @@ def main() -> int:
         # Fails here, with the full explanation, if nothing suitable exists.
         find_builder()
 
-    size, count = tree_size(store)
+    size, count, newest = tree_stats(store)
+    if (
+        args.skip_unchanged
+        and output.exists()
+        and output.stat().st_mtime > newest
+    ):
+        print(f"{output} is newer than everything in {store}: up to date")
+        return 0
     print(f"store  : {store}")
     print(f"content: {count:,} files, {human(size)}")
     print(f"output : {output}")
@@ -278,15 +302,23 @@ def main() -> int:
         print("\n--dry-run: nothing written.")
         return 0
 
+    # Under a temporary name, renamed when complete: an interrupted run
+    # (a job killed at its time limit) used to leave a truncated archive
+    # where the previous, intact one had been.
+    final, output = output, output.with_name(f".{output.name}.partial")
     if command is None:
         write_zip(store, output)
     else:
+        command = build_command(store, output)
         result = subprocess.run(command)
         if result.returncode != 0:
+            output.unlink(missing_ok=True)
             raise SystemExit(
                 f"{Path(command[0]).name} failed with exit code "
                 f"{result.returncode}"
             )
+    os.replace(output, final)
+    output = final
 
     made = output.stat().st_size
     print(f"\nwrote {output} ({human(made)})")

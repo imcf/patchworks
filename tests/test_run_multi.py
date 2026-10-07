@@ -1126,7 +1126,7 @@ def test_bundle_is_submitted_under_a_profile():
     assert cmd[0] == "srun"
     assert "--qos" in cmd and "1day" in cmd
     assert cmd[cmd.index("--time") + 1] == "720"
-    assert cmd[-1] == "--overwrite"
+    assert "--overwrite" in cmd and cmd[-1] == "--skip-unchanged"
     assert "--format" in cmd and "zip" in cmd
     assert str(_Path("/workflow/scripts/export_iso.py")) in cmd
 
@@ -2036,3 +2036,61 @@ def test_a_relation_written_as_csv_is_up_to_date_too(tmp_path):
         [{"a": "cilia", "b": "cells", "output": "rel.xlsx"}],
     )
     assert (work_dir / "rel_cilia.csv").read_text() == "sentinel\n"
+
+
+def test_zip_bundle_is_atomic_and_skipped_when_unchanged(tmp_path):
+    """Re-packing a large store takes hours: a re-run that changed nothing
+    skips it, and an archive is only ever replaced by a complete one."""
+    import zipfile
+
+    store = tmp_path / "image.zarr"
+    (store / "labels").mkdir(parents=True)
+    (store / "zarr.json").write_text("{}")
+    (store / "labels" / "zarr.json").write_text("{}")
+    script = _workflow_dir() / "scripts" / "export_iso.py"
+    cmd = [
+        sys.executable,
+        str(script),
+        "--store",
+        str(store),
+        "--format",
+        "zip",
+        "--overwrite",
+        "--skip-unchanged",
+    ]
+    out = tmp_path / "image.zarr.zip"
+
+    first = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    assert "wrote" in first.stdout
+    assert sorted(zipfile.ZipFile(out).namelist()) == [
+        "image.zarr/labels/zarr.json",
+        "image.zarr/zarr.json",
+    ]
+    assert not list(tmp_path.glob(".*.partial"))
+
+    again = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    assert "up to date" in again.stdout
+
+    # The store changed after the archive: re-packed
+    later = time.time() + 5
+    (store / "labels" / "new.json").write_text("{}")
+    os.utime(store / "labels" / "new.json", (later, later))
+    third = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    assert "wrote" in third.stdout
+    assert "image.zarr/labels/new.json" in zipfile.ZipFile(out).namelist()
+
+
+def test_one_relate_job_per_parent():
+    """The children of one parent go to one job, which reads it once."""
+    from run_multi import _relate_cmd
+
+    rels = [
+        {"a": "nuclei", "b": "cells", "output": "n.xlsx"},
+        {"a": "cilia", "b": "cells", "output": "c.xlsx"},
+    ]
+    cmd = _relate_cmd(rels, **_relate_kwargs())
+    assert cmd[cmd.index("--job-name") + 1].endswith("relate-to-cells")
+    assert json.loads(cmd[cmd.index("--relations") + 1]) == rels
+    assert cmd[cmd.index("--log") + 1].endswith("to_cells.log")
+    with pytest.raises(ValueError, match="one parent"):
+        _relate_cmd(rels + [{"a": "x", "b": "other"}], **_relate_kwargs())

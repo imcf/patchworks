@@ -822,9 +822,10 @@ results/image.zarr/labels/cyto_labels/
     rule, so it doesn't get a `log:` directive for free. Standalone (or
     under plain `multi`), it writes to `<work_dir>/logs/relate.log`
     (override with `relate.py --log`), the same tee-to-file-and-stdout
-    behaviour as the other steps. Under `multi-slurm`, where each pair is
-    its own concurrent job, `run_multi.py` points each one at its own file
-    instead — `<work_dir>/logs/relate/<a>_to_<b>.log` — so concurrent pairs
+    behaviour as the other steps. Under `multi-slurm`, where each parent's
+    relations are one concurrent job, `run_multi.py` points each job at its
+    own file instead — `<work_dir>/logs/relate/to_<parent>.log`, or
+    `<a>_to_<b>.log` for a parent with a single child — so concurrent jobs
     don't interleave into one log; check there instead of scrolling back
     through `srun`'s live output.
 
@@ -918,7 +919,7 @@ abort the others; you get a per-config status and a non-zero exit.
     # config/multi.yaml
     relate:
       qos: "1day"
-      time: 720        # minutes, per pair; must stay under that QOS's MaxWall
+      time: 720        # minutes, per job (one per parent); under the QOS's MaxWall
     ```
 
     A `--relate-*` flag overrides the block for that one key; anything the
@@ -927,18 +928,23 @@ abort the others; you get a per-config status and a non-zero exit.
     default you meant to replace. Under plain `multi` (no `--profile`), relations
     still run locally, in-process, one after another, as before.
 
-    Each pair logs its shape, chunk count and object count before it starts,
-    then a progress line roughly once a minute (`label_relations: 412/3,600
-    (11%) after 7m, ~55m left`), so a long relation is distinguishable from a
-    hung one in `logs/relate/<a>_to_<b>.log`.
+    The relations are grouped by parent: one job reads each parent label
+    image once for all its children (e.g. nuclei, cilia and the other cell
+    segmentation against `cyto_labels`), and only the chunks some child has
+    labels in. Each job logs its images' shape, chunking and object counts
+    before it starts, then a progress line roughly once a minute
+    (`label_relations: 412/3,600 (11%) after 7m, ~55m left`), so a long
+    relation is distinguishable from a hung one in `logs/relate/`.
 
-    Because every pair gets its own job, one running long no longer starves
-    the others out of a shared time budget, and a pair that gets killed no
-    longer takes an already-finished sibling's workbook down with it.
-    `relate.py` also skips a pair whose `.xlsx` is already newer than both
-    labels' merge marker, so **re-running the exact same `multi-slurm`
-    command only recomputes what's still missing or stale** — delete a
-    specific `.xlsx` yourself to force just that one to recompute.
+    Because each parent gets its own job, one running long does not starve
+    the others out of a shared time budget. `relate.py` skips a pair whose
+    workbook (the `.xlsx`, or the two `.csv` files a sheet too long for
+    Excel is written as) is already newer than both labels' merge marker,
+    and rewrites a missing workbook from the object tables when they
+    already hold the relation for the current labels, so **re-running the
+    exact same `multi-slurm` command only recomputes what's still missing
+    or stale** — delete a specific workbook to force just that one. The
+    bundle is likewise left alone when nothing in the store changed.
 
 !!! tip "After a killed run"
     Snakemake only releases its lock on a clean exit, so a run that was killed

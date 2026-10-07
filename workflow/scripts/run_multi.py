@@ -324,6 +324,8 @@ def _bundle_cmd(
         "--format",
         bundle["format"],
         "--overwrite",
+        # A re-run that changed nothing must not spend hours re-packing.
+        "--skip-unchanged",
     ]
     if bundle["output"]:
         inner += ["--output", str(Path(bundle["output"]).resolve())]
@@ -368,7 +370,7 @@ def _run_bundle(
 
 
 def _relate_cmd(
-    rel: dict,
+    rel: "dict | list[dict]",
     *,
     work_dir: str,
     image_store: str,
@@ -379,18 +381,22 @@ def _relate_cmd(
     relate_time: int,
     relate_qos: str | None,
 ) -> list[str]:
-    """Build one ``srun`` invocation of ``relate.py`` for a single relation pair.
+    """Build one ``srun`` invocation of ``relate.py`` for the relations of
+    one parent (a single pair, or several children of the same parent).
 
-    One job per pair, not one job for the whole ``relations:`` list: a
-    single shared ``srun`` time budget lets a slow pair (e.g. one needing a
-    chunk-layout rechunk first) starve the others out of a fixed
-    ``--relate-time``, and a kill that way loses everything not yet written
-    even though earlier pairs already finished. Separate jobs also run
-    concurrently instead of one after another, and ``relate.py`` itself
-    skips a pair whose workbook is already up to date, so retrying with the
-    same relations only redoes what actually failed.
+    One job per parent, not one for the whole ``relations:`` list: a single
+    shared ``srun`` time budget let a slow pair starve the others out of a
+    fixed ``--relate-time``, and a kill that way lost everything not yet
+    written. Not one per pair either: the children of one parent are
+    related in a single pass that reads the parent once. Jobs of different
+    parents run concurrently, and ``relate.py`` skips a pair whose workbook
+    is already up to date, so a retry only redoes what actually failed.
     """
-    a_name, b_name = rel["a"], rel["b"]
+    rels = [rel] if isinstance(rel, dict) else list(rel)
+    b_name = rels[0]["b"]
+    if any(r["b"] != b_name for r in rels):
+        raise ValueError("one relate job relates children of one parent")
+    a_name = rels[0]["a"] if len(rels) == 1 else None
     cmd = [
         "srun",
         "--partition",
@@ -406,7 +412,9 @@ def _relate_cmd(
         "--time",
         str(relate_time),
         "--job-name",
-        slurm_jobname_prefix(f"relate-{a_name}-to-{b_name}"),
+        slurm_jobname_prefix(
+            f"relate-{a_name}-to-{b_name}" if a_name else f"relate-to-{b_name}"
+        ),
         sys.executable,
         str(workflow_dir / "scripts" / "relate.py"),
         "--work-dir",
@@ -414,15 +422,19 @@ def _relate_cmd(
         "--image-store",
         image_store,
         "--relations",
-        json.dumps([rel]),
-        # Concurrent per-pair jobs sharing the default <work_dir>/logs/
-        # relate.log would interleave -- give each pair its own file.
+        json.dumps(rels),
+        # Concurrent jobs sharing the default <work_dir>/logs/relate.log
+        # would interleave -- give each its own file.
         "--log",
         str(
             Path(work_dir)
             / "logs"
             / "relate"
-            / f"{_safe_filename(a_name)}_to_{_safe_filename(b_name)}.log"
+            / (
+                f"{_safe_filename(a_name)}_to_{_safe_filename(b_name)}.log"
+                if a_name
+                else f"to_{_safe_filename(b_name)}.log"
+            )
         ),
     ]
     return cmd
@@ -1493,10 +1505,17 @@ def main() -> None:
         # relate.py itself now skips a pair whose workbook is already
         # up to date, so retrying this exact command only redoes what
         # actually failed.
+        # One job per parent: its children are related in one pass that
+        # reads it once. A position rule's two relations (cilia -> cells,
+        # nuclei -> cells) share the parent, so they are in the same job.
+        groups: dict[str, list[dict]] = {}
+        for rel in relations:
+            groups.setdefault(rel["b"], []).append(rel)
+        group_rels = list(groups.values())
+
         def _launch_relation(i):
-            rel = relations[i]
             cmd = _relate_cmd(
-                rel,
+                group_rels[i],
                 work_dir=work_dir,
                 image_store=image_store,
                 workflow_dir=workflow_dir,
@@ -1509,8 +1528,17 @@ def main() -> None:
             print(f"[run_multi] $ {' '.join(cmd)}", flush=True)
             return subprocess.Popen(cmd, cwd=workflow_dir)
 
-        names = [f"{rel['a']} -> {rel['b']}" for rel in relations]
-        rel_deps = relation_dependencies(relations, review_rules)
+        names = [
+            f"{', '.join(r['a'] for r in g)} -> {g[0]['b']}" for g in group_rels
+        ]
+        # Dependencies between jobs: a position rule's relations share a
+        # parent, so this is empty unless a rule spans two parents.
+        group_of = {id(r): k for k, g in enumerate(group_rels) for r in g}
+        rel_deps = {
+            group_of[id(relations[i])]: group_of[id(relations[j])]
+            for i, j in relation_dependencies(relations, review_rules).items()
+            if group_of[id(relations[i])] != group_of[id(relations[j])]
+        }
         for i, j in rel_deps.items():
             print(
                 f"[run_multi] relate {names[i]} starts after {names[j]} "
