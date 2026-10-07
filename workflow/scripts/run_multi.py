@@ -892,13 +892,16 @@ def run_after(
     deps: dict[int, int],
     launch,
     poll_seconds: float = 5.0,
+    *,
+    skip_after_failure: bool = True,
 ) -> list[tuple[str, str]]:
     """Run every job, each as soon as the one it depends on has succeeded.
 
     *launch(i)* starts job *i* and returns its ``Popen``. Jobs without a
     dependency start at once, side by side. One whose dependency failed is
-    not started (``"skipped"``); a failure does not stop the others, which
-    are independent and may hold hours of finished GPU work.
+    not started (``"skipped"``) unless *skip_after_failure* is False; a
+    failure does not stop the others, which are independent and may hold
+    hours of finished GPU work.
 
     Returns
     -------
@@ -914,7 +917,11 @@ def run_after(
     while pending or running:
         for i in list(pending):
             dep = deps.get(i)
-            if dep is None or status.get(dep) == "ok":
+            if (
+                dep is None
+                or status.get(dep) == "ok"
+                or (dep in status and not skip_after_failure)
+            ):
                 running[i] = launch(i)
                 pending.remove(i)
             elif dep in status:
@@ -926,6 +933,30 @@ def run_after(
         if running and not finished:
             time.sleep(poll_seconds)
     return [(names[i], status[i]) for i in range(len(names))]
+
+
+def relation_dependencies(
+    relations: list[dict], review_rules: dict | None
+) -> dict[int, int]:
+    """Relations to wait for: ``{i: j}``, relation *i* after relation *j*.
+
+    A position rule orienting the cells by their nuclei (``cilia_labels:
+    {parent: cells, apical: nuclei}``) classifies the cilia in the cilia ->
+    cells workbook from the nuclei -> cells relation; run side by side, the
+    cilia job could finish first and find no nuclei related yet.
+    """
+    rules = (review_rules or {}).get("position") or {}
+    index = {(r.get("a"), r.get("b")): j for j, r in enumerate(relations)}
+    deps = {}
+    for i, rel in enumerate(relations):
+        rule = rules.get(rel.get("a")) or {}
+        if rule.get("parent") != rel.get("b"):
+            continue
+        ref = str(rule.get("apical", "")).removeprefix("towards:")
+        j = index.get((ref, rel.get("b")))
+        if j is not None and j != i:
+            deps[i] = j
+    return deps
 
 
 #: Marks the run_multi driving a work_dir: {"host", "pid", "started", "config"}.
@@ -1448,8 +1479,8 @@ def main() -> None:
         # relate.py itself now skips a pair whose workbook is already
         # up to date, so retrying this exact command only redoes what
         # actually failed.
-        procs = []
-        for rel in relations:
+        def _launch_relation(i):
+            rel = relations[i]
             cmd = _relate_cmd(
                 rel,
                 work_dir=work_dir,
@@ -1462,17 +1493,25 @@ def main() -> None:
                 relate_qos=relate["qos"],
             )
             print(f"[run_multi] $ {' '.join(cmd)}", flush=True)
-            procs.append(
-                (
-                    f"{rel['a']} -> {rel['b']}",
-                    subprocess.Popen(cmd, cwd=workflow_dir),
-                )
-            )
+            return subprocess.Popen(cmd, cwd=workflow_dir)
 
-        failed = [name for name, p in procs if p.wait() != 0]
-        for name, p in procs:
-            status = "FAILED" if p.returncode else "ok"
-            print(f"[run_multi] relate {name}: {status}", flush=True)
+        names = [f"{rel['a']} -> {rel['b']}" for rel in relations]
+        rel_deps = relation_dependencies(relations, review_rules)
+        for i, j in rel_deps.items():
+            print(
+                f"[run_multi] relate {names[i]} starts after {names[j]} "
+                "(its position rule needs it)",
+                flush=True,
+            )
+        # A failed dependency still lets the other run: its relation is
+        # hours of work, and only the positions would be unknown.
+        procs = run_after(
+            names, rel_deps, _launch_relation, skip_after_failure=False
+        )
+
+        failed = [name for name, st in procs if st != "ok"]
+        for name, st in procs:
+            print(f"[run_multi] relate {name}: {st}", flush=True)
         if failed:
             print(
                 f"[run_multi] ERROR: {len(failed)} relation(s) failed: "
@@ -1489,7 +1528,13 @@ def main() -> None:
 
     from relate import run_relations
 
-    run_relations(work_dir, image_store, relations)
+    # One after another here: the ones a position rule depends on first.
+    waiting = relation_dependencies(relations, review_rules)
+    run_relations(
+        work_dir,
+        image_store,
+        sorted(relations, key=lambda r: relations.index(r) in waiting),
+    )
     _finish()
 
 

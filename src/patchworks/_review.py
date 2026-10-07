@@ -195,7 +195,23 @@ class Review:
         self.meta: dict[str, dict[str, Any]] = {}
         self.tables: dict[str, pd.DataFrame] = {}
         self.stale: list[str] = []
+        rules = read_rules(self.store)
         wanted = None if names is None else set(names)
+        if wanted is not None:
+            # A position rule reads its parent's table and, for an apical
+            # reference ("away from the nuclei"), that one's too: asked for
+            # the cilia and cell tables only, the workbook then had no
+            # nuclei to orient the cells by.
+            for child, rule in {
+                **(rules.get("position") or {}),
+                **(position or {}),
+            }.items():
+                if child in wanted and rule:
+                    spec = str(rule.get("apical", ""))
+                    wanted |= {
+                        str(rule.get("parent")),
+                        spec.removeprefix("towards:"),
+                    } - {""}
         for name in table_names(self.store):
             if wanted is not None and name not in wanted:
                 continue
@@ -230,7 +246,6 @@ class Review:
             n: [c for c in self.names if n in self.parents[c]]
             for n in self.names
         }
-        rules = read_rules(self.store)
         self.expect: dict[str, dict[str, tuple[int, int]]] = {}
         for n, rules_n in (rules.get("expect") or {}).items():
             for child, rng in rules_n.items():
@@ -630,11 +645,19 @@ class Review:
         ref = spec.split(":", 1)[1] if towards else spec
         parent = rule["parent"]
         if ref not in self.tables or parent not in self.parents.get(ref, []):
-            raise ValueError(
-                f"apical {spec!r} for {name}: needs {ref!r} related to "
-                f"{parent!r} (its objects inside the parent objects), or a "
-                f"direction like '+z'"
+            # Not an error: the relation may simply not be computed yet (a
+            # concurrent relate job). Positions stay "unknown"; the rest of
+            # the workbook is still worth writing.
+            logger.warning(
+                "apical %r for %s: needs %r related to %r (its objects inside "
+                "the parent objects), or a direction like '+z'; positions "
+                "left unknown",
+                spec,
+                name,
+                ref,
+                parent,
             )
+            return np.full((n, len(axes)), np.nan)
         re = self._corrected(ref)
         re = re[re[f"{parent}_id"].isin(pe.index)]
         weights = re["area_voxels"].to_numpy(dtype=float)

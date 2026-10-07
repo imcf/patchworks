@@ -1957,3 +1957,42 @@ def test_relations_on_labels_a_run_left_missing_are_skipped(
         run_multi.main()
     assert done.value.code == 1
     assert [r["a"] for r in ran] == ["nuclei"]
+
+
+def test_a_position_rule_orders_its_relations():
+    """cilia -> cells is classified by nuclei -> cells: run side by side,
+    the cilia job finished first and found no nuclei related."""
+    from run_multi import relation_dependencies, run_after
+
+    rels = [
+        {"a": "cilia", "b": "cells_ps"},
+        {"a": "nuclei", "b": "cells_cp"},
+        {"a": "nuclei", "b": "cells_ps"},
+        {"a": "cilia", "b": "cells_cp"},
+    ]
+    rules = {
+        "position": {
+            "cilia": {"parent": "cells_ps", "apical": "towards:nuclei"}
+        }
+    }
+    deps = relation_dependencies(rels, rules)
+    assert deps == {0: 2}  # cilia -> cells_cp has no rule: free
+    assert relation_dependencies(rels, None) == {}
+
+    log = []
+    names = [f"{r['a']}>{r['b']}" for r in rels]
+    status = run_after(
+        names,
+        deps,
+        lambda i: _FakeProc(log, names[i], 1 if i == 2 else 0),
+        poll_seconds=0,
+        skip_after_failure=False,
+    )
+    # Started after its dependency, and still run although it failed
+    assert log.index(("start", names[0])) > log.index(("end", names[2]))
+    assert dict(status) == {
+        names[0]: "ok",
+        names[1]: "ok",
+        names[2]: "FAILED",
+        names[3]: "ok",
+    }

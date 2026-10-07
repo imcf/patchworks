@@ -110,13 +110,14 @@ def test_fixed_direction_and_corrections(store):
     assert cilia.loc[4, "position"] == "basal" and cilia.loc[4, "qc"] == "fixed"
     with pytest.raises(ValueError):
         rv.decide("cilia_labels", 4, "position", position="upside")
-    with pytest.raises(ValueError, match="needs"):
-        Review(
-            store,
-            position={
-                "cilia_labels": {"parent": "cyto_labels", "apical": "lumen"}
-            },
-        ).effective("cilia_labels")
+    # A reference that is no label image: positions unknown, not a crash
+    # (run_multi refuses such a rule up front)
+    lumen = Review(
+        store,
+        position={"cilia_labels": {"parent": "cyto_labels", "apical": "lumen"}},
+    ).effective("cilia_labels")
+    assert set(lumen.loc[[1, 2, 3], "position"]) == {"unknown"}
+    assert lumen.loc[4, "position"] == "basal"  # the decision stands
 
 
 def test_merged_cells_keep_exact_spread(store):
@@ -192,3 +193,48 @@ def test_tables_from_before_moments_classify_as_unknown(store, caplog):
     assert set(cilia["position"]) == {"unknown"}
     assert "length_um" not in cilia
     assert "recompute" in caplog.text
+
+
+def test_pair_workbook_loads_the_apical_reference(store, tmp_path):
+    """relate writes each pair's workbook from just its two tables; the
+    position rule's nuclei must come along, or the job died after hours."""
+    from patchworks._review import write_rules
+
+    write_rules(store, {"position": RULE})
+    rv = Review(store, names=["cilia_labels", "cyto_labels"])
+    assert "nuclei_labels" in rv.tables
+    path = rv.relation_workbook(
+        "cilia_labels", "cyto_labels", tmp_path / "c.xlsx"
+    )
+    sheet = pd.read_excel(path, sheet_name="cilia_labels", index_col=0)
+    assert sheet.loc[1, "position"] == "apical"
+
+
+def test_unrelated_apical_reference_leaves_positions_unknown(tmp_path, caplog):
+    """The nuclei not yet related to the cells (another relate job still
+    running): positions unknown and a warning, not a crash."""
+    store = polarity_scene(tmp_path / "q.zarr")
+    from patchworks._tables import _label_group, table_meta, write_table
+    from patchworks._tables import read_columns
+
+    group = _label_group(store, "nuclei_labels")
+    cols = {
+        k: v
+        for k, v in read_columns(group, check=False).items()
+        if not k.startswith("cyto_labels_")
+    }
+    meta = table_meta(group)
+    write_table(
+        group,
+        cols,
+        attrs={
+            k: v
+            for k, v in meta.items()
+            if k not in ("labels", "columns", "version")
+        },
+    )
+    rv = Review(store, position=RULE)
+    with caplog.at_level("WARNING"):
+        cilia = rv.effective("cilia_labels")
+    assert set(cilia.loc[[1, 2, 3, 4], "position"]) == {"unknown"}
+    assert "positions left unknown" in caplog.text
