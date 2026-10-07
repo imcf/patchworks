@@ -51,7 +51,11 @@ stacked = nuclei_channel is not None or bool(seed_labels)
 indices = manifest["batches"][batch]
 
 # Built once for the whole batch: this is what makes the model load amortize.
-fn = build_fn(cfg)
+fn = build_fn(
+    cfg,
+    intensity_range=manifest.get("intensity_range"),
+    kwargs_overrides=manifest.get("kwargs_overrides"),
+)
 # prepare decides where tiles land: the label group's level 0 directly when
 # the tile fits the chunk cap (the merge then relabels it in place), else a
 # scratch stage store.

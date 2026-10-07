@@ -122,3 +122,22 @@ def test_seeds_from_labels_renumbers_compactly():
     )
     with pytest.raises(ValueError, match="seeds must be"):
         ws.watershed_fn(seeds="nuclei")
+
+
+def test_foreground_fills_a_cell_cut_by_the_tile_edge():
+    """A cell the tile's read region cuts is open at that edge; filled
+    plainly its interior stayed empty, so it was masked out and cut at every
+    seam. Background running off the edge must stay background."""
+    import numpy as np
+
+    from patchworks.plugins.watershed import foreground_mask
+
+    membrane = np.full((40, 60), 10.0)
+    membrane[5, 20:] = membrane[30, 20:] = 1000.0  # a cell from x=20 ...
+    membrane[5:31, 20] = 1000.0  # ... open past the right edge
+    mask = foreground_mask(
+        membrane, np.zeros(membrane.shape, "int32"), foreground=500.0, sigma=0
+    )
+    assert mask[6:30, 21:].all()  # the cut cell's interior
+    assert not mask[:5].any() and not mask[31:].any()  # outside it
+    assert not mask[10, :20].any()

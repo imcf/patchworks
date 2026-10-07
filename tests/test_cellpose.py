@@ -11,6 +11,8 @@ _with_voxel_size) is covered in tests/test_pw.py.
 
 import inspect
 
+import numpy as np
+
 
 def test_cellpose_anisotropy_from_calibration():
     from patchworks.plugins.cellpose import cellpose_anisotropy
@@ -71,3 +73,90 @@ def test_v4_gets_the_model_name_as_pretrained_model():
     v4_branch = src.split("if _CELLPOSE_V4:")[1].split("else:")[0]
     assert "pretrained_model=model_type" in v4_branch
     assert "model_type=model_type" not in v4_branch
+
+
+class _FakeModel:
+    def __init__(self):
+        self.seen = None
+
+    def eval(self, img, **kwargs):
+        self.seen = (np.array(img), kwargs)
+        spatial = (
+            img.shape[1:] if kwargs.get("channel_axis") == 0 else img.shape
+        )
+        return (np.ones(spatial, dtype="int32"),)
+
+
+def test_intensity_range_scales_every_tile_alike(monkeypatch):
+    """With an image-wide range, two tiles of different brightness reach
+    Cellpose scaled by the same numbers, and Cellpose's own per-input
+    normalisation is off -- else each tile gets its own contrast."""
+    from patchworks.plugins import cellpose as cp
+
+    fake = _FakeModel()
+    monkeypatch.setattr(cp, "_require_cellpose", lambda: None)
+    monkeypatch.setattr(cp, "_get_model", lambda _cfg: fake)
+    fn = cp.cellpose_fn("cpsam", do_3D=True, intensity_range=(100, 300))
+    for level in (100, 200):
+        fn(np.full((2, 4, 4), level, dtype="uint16"))
+        img, kwargs = fake.seen
+        assert kwargs["normalize"] is False
+        np.testing.assert_allclose(img, (level - 100) / 200)
+
+
+def test_intensity_range_per_channel(monkeypatch):
+    from patchworks.plugins import cellpose as cp
+
+    fake = _FakeModel()
+    monkeypatch.setattr(cp, "_require_cellpose", lambda: None)
+    monkeypatch.setattr(cp, "_get_model", lambda _cfg: fake)
+    fn = cp.cellpose_fn(
+        "cpsam",
+        do_3D=True,
+        channel_axis=0,
+        intensity_range=[(0, 10), (100, 200)],
+    )
+    tile = np.stack([np.full((2, 3, 3), 5), np.full((2, 3, 3), 150)])
+    assert fn(tile).shape == (2, 3, 3)
+    img, _ = fake.seen
+    np.testing.assert_allclose(img[0], 0.5)
+    np.testing.assert_allclose(img[1], 0.5)
+
+
+def test_intensity_range_and_normalize_are_exclusive(monkeypatch):
+    import pytest
+
+    from patchworks.plugins import cellpose as cp
+
+    monkeypatch.setattr(cp, "_require_cellpose", lambda: None)
+    with pytest.raises(ValueError, match="not both"):
+        cp.cellpose_fn("cpsam", intensity_range=(0, 1), normalize=True)
+
+
+def test_image_intensity_range_samples_full_resolution(tmp_path):
+    """Sampled at full resolution, in the given regions, ignoring the
+    exact-zero padding of unacquired regions."""
+    from patchworks import intensity_range
+    from patchworks.plugins.ome_zarr import to_ome_zarr
+
+    rng = np.random.default_rng(0)
+    img = np.zeros((2, 4, 64, 64), dtype="uint16")
+    img[0, :, :, :32] = rng.integers(100, 201, (4, 64, 32))
+    img[0, :, :, 32:] = 5000  # outside the regions sampled
+    img[1] = 1000
+    store = str(tmp_path / "s.zarr")
+    to_ome_zarr(img, store, axes="czyx", n_levels=3, progress=False)
+    left = [
+        (slice(0, 4), slice(y, y + 16), slice(0, 32)) for y in range(0, 64, 16)
+    ]
+    (lo0, hi0), (lo1, hi1) = intensity_range(
+        store, [0, 1], regions=left, sample_shape=(4, 16, 16)
+    )
+    assert 100 <= lo0 < 105 and 195 < hi0 <= 200
+    assert lo1 == 1000 and hi1 == 1001  # flat channel: a unit-wide range
+    # Without regions, random crops; zeros alone give the identity range.
+    blank = str(tmp_path / "b.zarr")
+    to_ome_zarr(
+        np.zeros((4, 32, 32), "uint16"), blank, axes="zyx", progress=False
+    )
+    assert intensity_range(blank, None) == [(0.0, 1.0)]

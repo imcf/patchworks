@@ -118,6 +118,7 @@ def cellpose_fn(
     channels: list[int] | None = None,
     channel_axis: int | None = None,
     voxel_size: dict[str, float] | None = None,
+    intensity_range: "list | tuple | None" = None,
     **cellpose_kwargs: Any,
 ) -> Callable[[np.ndarray], np.ndarray]:
     """Return a ready-to-use Cellpose function for ``tile_process``.
@@ -151,6 +152,13 @@ def cellpose_fn(
         automatically; from the API,
         :func:`patchworks.plugins.ome_zarr.read_pixel_size` reads it from a
         store.
+    intensity_range:
+        ``(low, high)``, or one per channel, mapped to 0 and 1 in every
+        tile before Cellpose sees it, with Cellpose's own per-input
+        normalisation turned off. Without it, each tile is stretched from
+        its own percentiles, so neighbouring tiles get different contrast
+        and cells are cut at the seams. Measure it once with
+        :func:`patchworks.intensity_range`; the workflow does by default.
     **cellpose_kwargs:
         Extra kwargs forwarded to ``model.eval()``
         (e.g. ``flow_threshold``, ``cellprob_threshold``, ``anisotropy``).
@@ -197,9 +205,18 @@ def cellpose_fn(
                 voxel_size.get("x") or voxel_size.get("y"),
             )
             cellpose_kwargs = {**cellpose_kwargs, "anisotropy": anisotropy}
+    if intensity_range is not None:
+        if "normalize" in cellpose_kwargs:
+            raise ValueError(
+                "give either intensity_range or Cellpose's normalize, not both"
+            )
+        cellpose_kwargs = {**cellpose_kwargs, "normalize": False}
     cfg = _make_config(
         model, gpu, channels, channel_axis, diameter, do_3D, **cellpose_kwargs
     )
+    if intensity_range is not None:
+        ranges = np.asarray(intensity_range, dtype=float).reshape(-1, 2)
+        cfg["intensity_range"] = ranges.tolist()
     return partial(_run, cellpose_dict=cfg)
 
 
@@ -378,6 +395,12 @@ def _run(block: np.ndarray, cellpose_dict: dict[str, Any]) -> np.ndarray:
     do_3D = cellpose_dict["do_3D"]
     channel_axis = cellpose_dict.get("channel_axis")
     n_channels = block.shape[channel_axis] if channel_axis is not None else 1
+    if cellpose_dict.get("intensity_range") is not None:
+        from .._intensity import scale_intensity
+
+        block = scale_intensity(
+            block, cellpose_dict["intensity_range"], channel_axis
+        )
 
     kwargs: dict[str, Any] = dict(
         channel_axis=channel_axis,

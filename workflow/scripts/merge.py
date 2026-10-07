@@ -275,6 +275,8 @@ settings.update(
         "n_tiles": manifest.get("n_tiles"),
         "tiles_segmented": len(manifest.get("occupied", [])),
         "empty_threshold": manifest.get("empty_threshold"),
+        "intensity_range": manifest.get("intensity_range"),
+        "thresholds": manifest.get("kwargs_overrides"),
         "min_voxels": min_voxels,
         "max_voxels": max_voxels,
         "n_objects": n_objects,

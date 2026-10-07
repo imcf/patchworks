@@ -597,6 +597,10 @@ def validate_config(cfg) -> None:
     elif method == "custom":
         problems.extend(_custom_problems(cfg.get("custom")))
 
+    if cfg.get("normalize", "image") not in ("image", "tile"):
+        problems.append(
+            f'normalize: {cfg.get("normalize")!r} must be "image" or "tile"'
+        )
     if cfg.get("denoise") is not None:
         problems.extend(_denoise_problems(cfg["denoise"]))
     problems.extend(environment_problems(cfg))
@@ -869,7 +873,107 @@ def _custom_problems(spec) -> list[str]:
     return []
 
 
-def build_fn(cfg):
+def uses_image_range(cfg) -> bool:
+    """Whether tiles are scaled with one image-wide intensity range.
+
+    Cellpose otherwise stretches every tile from its own percentiles, so
+    neighbouring tiles get different contrast and cells are cut at the
+    seams. On by default for ``method: "cellpose"``; ``normalize: "tile"``
+    (or an explicit ``cellpose.normalize``) keeps Cellpose's own.
+    """
+    if cfg.get("method", "cellpose") != "cellpose":
+        return False
+    if "normalize" in (cfg.get("cellpose") or {}):
+        return False
+    return cfg.get("normalize", "image") == "image"
+
+
+#: Plugins whose per-tile Otsu thresholds are resolved once for the image.
+IMAGE_OTSU_PLUGINS = (
+    "patchworks.plugins.watershed",
+    "patchworks.plugins.plantseg",
+)
+
+
+def image_thresholds(cfg, store, regions=None) -> dict:
+    """Per-tile Otsu thresholds of the membrane plugins, measured once.
+
+    ``foreground: "otsu"`` and an unset ``nuclei_threshold`` make the
+    watershed and PlantSeg plugins threshold every tile on its own, so the
+    tissue mask and the nuclei found change at every seam with the tile's
+    content. The same Otsu computed on full-resolution crops of the tiles
+    being segmented gives every tile the same number.
+
+    Returns
+    -------
+    dict
+        ``custom.kwargs`` overrides, e.g. ``{"foreground": 812.5}``; empty
+        when nothing is thresholded per tile.
+    """
+    import importlib
+    import inspect
+
+    import numpy as np
+
+    from patchworks._intensity import otsu_threshold
+
+    spec = cfg.get("custom") or {}
+    if (
+        cfg.get("method") != "custom"
+        or spec.get("module") not in IMAGE_OTSU_PLUGINS
+    ):
+        return {}
+    fn = getattr(
+        importlib.import_module(spec["module"]), spec.get("function", "segment")
+    )
+    params = inspect.signature(
+        getattr(fn, "patchworks_kwargs_target", fn)
+    ).parameters
+    given = spec.get("kwargs") or {}
+
+    def value(name):
+        if name in given:
+            return given[name]
+        return params[name].default if name in params else None
+
+    def sigma_px(name):
+        sigma = np.asarray(value(name) or 0.0, dtype=float)
+        if value("sigma_units") == "um":
+            from patchworks.plugins.ome_zarr import read_pixel_size
+
+            cal = read_pixel_size(store, level=int(cfg.get("level", 0)))
+            ndim = 3 if sigma.ndim == 0 else sigma.size
+            sizes = np.array([cal.get(a, 1.0) for a in "zyx"[-ndim:]])
+            sigma = sigma / sizes
+        return sigma.tolist()
+
+    sampling = {"level": int(cfg.get("level", 0)), "regions": regions}
+    out = {}
+    if value("foreground") == "otsu":
+        out["foreground"] = otsu_threshold(
+            store,
+            cfg["channel"],
+            sigma=sigma_px("foreground_sigma"),
+            **sampling,
+        )
+    seeded_by_stain = cfg.get("nuclei_channel") is not None and not cfg.get(
+        "seed_labels"
+    )
+    if (
+        seeded_by_stain
+        and "nuclei_threshold" in params
+        and value("nuclei_threshold") is None
+    ):
+        out["nuclei_threshold"] = otsu_threshold(
+            store,
+            cfg["nuclei_channel"],
+            sigma=sigma_px("nuclei_sigma"),
+            **sampling,
+        )
+    return out
+
+
+def build_fn(cfg, intensity_range=None, kwargs_overrides=None):
     """Build the per-tile segmentation function from the config.
 
     Parameters
@@ -888,12 +992,26 @@ def build_fn(cfg):
         tile with CAREamics before segmenting it
         (:func:`patchworks.plugins.careamics.denoise_fn`).
 
+    intensity_range : list, optional
+        One ``(low, high)`` per channel the tile carries, measured once over
+        the image by ``prepare`` (:func:`uses_image_range`). Cellpose then
+        scales every tile alike instead of from its own percentiles.
+    kwargs_overrides : dict, optional
+        ``custom.kwargs`` values resolved once by ``prepare``
+        (:func:`image_thresholds`), e.g. a per-tile ``"otsu"`` replaced by
+        the image's own Otsu threshold.
+
     Returns
     -------
     callable
         ``(ndarray) -> ndarray`` returning integer labels.
     """
-    fn = _build_method_fn(cfg)
+    if kwargs_overrides:
+        # Thresholds prepare measured once for the image (image_thresholds).
+        custom = dict(cfg["custom"])
+        custom["kwargs"] = {**(custom.get("kwargs") or {}), **kwargs_overrides}
+        cfg = {**cfg, "custom": custom}
+    fn = _build_method_fn(cfg, intensity_range)
 
     # Pre-processing: denoise each tile before the method sees it.
     if cfg.get("denoise"):
@@ -924,7 +1042,7 @@ def build_fn(cfg):
     return fn
 
 
-def _build_method_fn(cfg):
+def _build_method_fn(cfg, intensity_range=None):
     """Build the per-tile segmentation function for ``cfg["method"]``.
 
     Parameters
@@ -1004,6 +1122,8 @@ def _build_method_fn(cfg):
         # function's voxel_size gets filled in, unless the config already
         # set anisotropy explicitly.
         extra = _with_voxel_size(cellpose_fn, extra, cfg)
+        if intensity_range is not None:
+            extra["intensity_range"] = intensity_range
         return cellpose_fn(
             cp.get("model", "cyto3"),
             gpu=cp.get("gpu", True),

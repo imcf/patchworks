@@ -26,6 +26,7 @@ tiles_per_job: 4 # tiles per GPU job, sharing one model load
 # ---- segmentation -----------------------------------------------------------
 label_name: "cellpose_labels" # the label image's name in image.zarr/labels/
 method: "cellpose" # "cellpose", "threshold" (CPU, testing) or "custom"
+normalize: "image" # one intensity range for every tile; "tile": Cellpose's own per tile
 cellpose:
   model: "nuclei" # Cellpose 3: cyto3, nuclei, ...; Cellpose 4: cpsam
   diameter: 30

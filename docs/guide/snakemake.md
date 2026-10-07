@@ -158,6 +158,15 @@ refused before anything runs. For 3-D, the anisotropy is taken from the
 image's calibration; set `cellpose: {anisotropy: 1}` if results show rings
 along z (faster, slightly less exact at the top and bottom).
 
+**Same contrast in every tile** — Cellpose rescales each input from its
+own percentiles, which gives every tile its own contrast and cuts cells at
+the seams. The workflow measures the image's 1–99% range once, from
+full-resolution samples of the tiles to segment, and scales every tile with
+it. `normalize: "tile"` restores Cellpose's per-tile behaviour. The same
+goes for the membrane plugins' `foreground: "otsu"` and nuclei threshold:
+one Otsu threshold for the whole image, not one per tile. The values used
+are in the labels' provenance.
+
 **Size filter** — `min_volume` / `max_volume` (µm³) drop objects outside
 that range after the merge, judged on whole objects, not tile fragments.
 
@@ -172,7 +181,9 @@ cilia stay whole. Tiles are joined the same way.
 model load. Keep the batch's run time under the job's `runtime`.
 
 **Empty tiles** — `skip_empty: true` (default) skips background tiles,
-found from a low-resolution occupancy map.
+found from a low-resolution occupancy map. If tiles inside the tissue come
+out empty (`seams.json` lists cells ending against nothing), lower
+`empty_threshold:` or set `skip_empty: false`.
 
 **Fewer files** — `shard: true` packs chunks into shards: far fewer files
 on a filesystem that dislikes many small ones. `shard_labels: true` also
