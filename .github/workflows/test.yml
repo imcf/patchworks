@@ -32,11 +32,9 @@ jobs:
         run: pytest -q --doctest-modules src
 
   other-platforms:
-    # Not yet verified on macOS or Windows (no CI ran there before), so this
-    # job reports without failing the build; promote it into the matrix
-    # above once it is green.
+    # Green on macOS and Windows since 2026-10-07: a failure there now fails
+    # the build like any other.
     runs-on: ${{ matrix.os }}
-    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
