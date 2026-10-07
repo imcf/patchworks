@@ -9,94 +9,39 @@
 ```text
 ┌──────┬──────┬──────┐                    ┌──────┬──────┬──────┐
 │      │      │      │   fn(tile) → IDs   │  1   │  2   │  3   │
-│      │      │      │  ───────────────►  │      │      │      │
-│      │ 20GB │      │                    │      │      │      │
-├──────┼──────┼──────┤                    ├──────┼──────┼──────┤
-│      │ IMG  │      │                    │  4   │  5   │  6   │
-│      │      │      │                    │      │      │      │
+├──────┼──────┼──────┤  ───────────────►  ├──────┼──────┼──────┤
+│      │ 2 TB │      │                    │  4   │  5   │  6   │
 ├──────┼──────┼──────┤                    ├──────┼──────┼──────┤
 │      │      │      │                    │  7   │  8   │  9   │
 └──────┴──────┴──────┘                    └──────┴──────┴──────┘
          tiles                               globally consistent labels
 ```
 
-patchworks splits a large image into tiles, runs **any callable** on each tile
-in parallel, and merges the results into a globally consistent label array.
-It handles terabyte-scale images without loading them into RAM.
+Segmentation tools assume the image fits in memory; a light-sheet or
+whole-slide volume does not. patchworks splits it into tiles, runs any
+segmentation function on each, and stitches the results so that an object
+crossing a tile boundary keeps one label. The labels are stored with the
+image in one OME-Zarr, with a table of every object.
 
-## Why patchworks?
+## Where to start
 
-Modern fluorescence microscopy produces images in the hundreds of GB to several TB
-range. Instance segmentation tools (Cellpose, StarDist, threshold methods, your
-own model) all assume the image fits in memory. They don't scale.
+| You want to | Read |
+| --- | --- |
+| Try it on an image from Python | [Getting started](getting_started.md) |
+| Segment a large image on a SLURM cluster, maybe several stains related to each other | [Cluster workflow](guide/snakemake.md) |
+| Run one step from a terminal | [Command line](guide/cli.md) |
+| Use your own model or function | [Custom segmentation function](guide/custom_segmentation.md) |
+| Cells from a membrane stain | [Membrane cells](guide/membrane_cells.md) |
+| Check and correct the results | [Reviewing](guide/review.md) |
 
-The naive approach — split the image into tiles, segment each tile, stitch the
-labels — creates **split objects**: any cell spanning a tile boundary gets two
-different label IDs. patchworks solves this with a zarr-native boundary merge:
+## Building blocks
 
-1. Tiles are segmented independently and streamed to disk
-2. Thin slabs at each tile boundary are scanned for touching label pairs
-3. scipy connected components on the pairs → globally consistent relabeling
-4. No tile is ever loaded fully into RAM more than once
+Each step is a function you can use on its own:
 
-This approach scales to thousands of tiles and terabyte images. It is the same
-strategy used by
-[skeleplex](https://github.com/kevinyamauchi/skeleplex) and
-[cellpose distributed](https://github.com/MouseLand/cellpose/tree/main/cellpose).
-
-## Quick example
-
-```python
-from patchworks import tile_process
-
-
-def my_fn(tile):
-    from skimage.filters import threshold_otsu
-    from skimage.measure import label
-
-    return label(tile > threshold_otsu(tile)).astype("int32")
-
-
-result = tile_process("image.zarr", my_fn)
-```
-
-Any function. Any image.
-
-## Method agnostic
-
-patchworks doesn't care what's inside `fn`:
-
-```python
-# Cellpose
-from patchworks.plugins.cellpose import cellpose_fn
-
-fn = cellpose_fn("cyto3", gpu=True, diameter=30)
-
-# StarDist
-from stardist.models import StarDist2D
-
-model = StarDist2D.from_pretrained("2D_versatile_fluo")
-fn = lambda tile: model.predict_instances(tile)[0].astype("int32")
-
-# Your own PyTorch model
-fn = lambda tile: my_model(torch.from_numpy(tile)).argmax(0).numpy()
-
-# All work identically with tile_process
-tile_process(
-    "image.zarr",
-    fn,
-    tile_shape=(1, 1024, 1024),
-    overlap=20,
-    write_to="labels.zarr",
-    progress=True,
-)
-```
-
-## Installation
-
-```bash
-pip install patchworks
-```
-
-See [Getting Started](getting_started.md) for installation options and
-your first run.
+| Step | Function |
+| --- | --- |
+| Convert any image to a pyramidal, calibrated OME-Zarr | `to_ome_zarr` |
+| Segment tile by tile, with a halo for context | `tile_process`, `stage_tile` |
+| Stitch tiles into consistent labels | `merge_tile_labels` |
+| Measure every object; relate two label images | `measure_objects`, `label_relations` |
+| View and review in napari | `view_in_napari`, `patchworks review` |

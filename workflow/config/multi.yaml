@@ -1,91 +1,17 @@
-# Drives `pixi run multi` / `scripts/run_multi.py`: runs several segmentation
-# configs (in order) against the same work_dir, then relates their labels by
-# voxel overlap (patchworks.label_relations) and writes an Excel workbook per
-# pair (two sheets: one row per a-object incl. unmatched ones, one row per
-# b-object incl. ones with zero matches — see docs/guide/snakemake.md).
-#
-# All listed segmentation configs must share the same work_dir/image.zarr and
-# the same tile_shape/level, so the resulting label arrays are directly
-# comparable — see docs/guide/snakemake.md "Running two segmentations".
-#
-# Both lists are plain lists: 3+ segmentations work the same way — add more
-# entries to `segmentations`, then list whichever pairs you want related in
-# `relations` (there's no automatic "chain"; list every pair explicitly, e.g.
-# nuclei->cyto, nuclei->membrane, cyto->membrane).
+# Several segmentations of one image, and how their label images relate.
+#   pixi run multi-dry   --config this.yaml   # check first
+#   pixi run multi-slurm --config this.yaml
+# Guide: docs/guide/snakemake.md
 
-# Settings every segmentation shares — the input, the work_dir, the tiling,
-# everything `convert` reads. Merged in ahead of each config below, so a
-# per-config file carries only what differs. Optional: drop this line and each
-# config can be self-contained again.
-common: config/common.yaml
+common: config/common.yaml # settings every segmentation shares
 
 segmentations:
 - config/config_nuclei.yaml
 - config/config_cyto.yaml
 - config/config_cilia.yaml
 
-# SLURM settings for the relate step under --profile. Optional: omit the block
-# and the defaults below apply. They live here rather than only as --relate-*
-# flags so `pixi run multi-slurm` -- a fixed command -- still works on a
-# cluster whose default QOS caps the wall time below `time`. A --relate-*
-# flag overrides whatever is set here.
-#
-# `time` bounds ONE relation (each pair is its own job), and must stay under
-# the MaxWall of `qos`, or srun refuses the job before it starts. List what
-# you may use with:
-#   sacctmgr show assoc user=$USER format=partition,qos%40
-#   sacctmgr show qos format=name,maxwall
-# relate:
-#   partition: "scicore"   # default: scicore
-#   mem: "32G"             # default: 32G
-#   cpus: 16               # default: 8. Threads reading chunk pairs: the
-#                          # relate step uses them all, each holding only two
-#                          # chunks, so mem needs no raise; past ~16 the
-#                          # shared filesystem tends to set the pace.
-#   time: 180              # minutes, per job (one per parent); default: 180
-#   qos: "1day"            # default: your account's default QOS
-
-# What to flag for a look in `patchworks review image.zarr` (optional). Every
-# child less than `min_overlap` inside its parent, or in none, is always
-# flagged; `expect` adds how many of each child a parent should hold -- a
-# number, or [min, max]. Checked before anything runs.
-# review:
-#   expect:
-#     cyto_labels:
-#       nuclei_labels: 1
-#       cilia_labels: [0, 2]
-#   min_overlap: 0.5       # or per pair: {cilia_labels: {cyto_labels: 0.3}}
-#   # Classify each cilium as apical, basal, lateral or central in its cell:
-#   # the cell surface its base is nearest to. `apical` is a direction (+z:
-#   # apical is up the stack) or a label image to point away from (the
-#   # nuclei, for epithelia with basal nuclei; needs nuclei -> cyto below).
-#   position:
-#     cilia_labels:
-#       parent: cyto_labels
-#       apical: nuclei_labels   # or "+z", "-z", "towards:<label image>"
-#       central_depth: 0.5      # deeper than half-way from every surface
-
-# Pack the finished store into ONE file, as the last step, once every
-# segmentation and relation has succeeded. Off unless `format` is set.
-# A failed relation skips it: a bundle of a half-finished run would look
-# complete while missing workbooks.
-#
-# zip needs nothing beyond Python, and patchworks reads a store straight out
-# of one -- `pixi run -e viewer napari image.zarr.zip` works. iso mounts as a
-# read-only drive instead, but needs xorriso/genisoimage/mkisofs installed.
-#
-# Under --profile it is submitted as its own job (it reads everything the run
-# produced, which a login node kills silently). `time` must stay under the
-# MaxWall of `qos`, same trap as the relate step.
-# bundle:
-#   format: "zip"        # "zip", "iso", or omit for no bundle
-#   output: null         # default: <image.zarr>.zip beside the store
-#   partition: "scicore" # default: scicore
-#   mem: "8G"            # default: 8G -- xorriso/zipfile both stream
-#   cpus: 2              # default: 2
-#   time: 720            # minutes; default: 720
-#   qos: "1day"          # default: your account's default QOS
-
+# One workbook per pair: each child's parent (a in b), and each parent's
+# number of children. List every pair you want.
 relations:
 - a: nuclei_labels
   b: cyto_labels
@@ -93,9 +19,33 @@ relations:
 - a: cilia_labels
   b: cyto_labels
   output: cilia_to_cell.xlsx
-  # A cilium touching no cell gets the nearest one within this distance
-  # (exact, in micrometres); the workbook gets a distance column.
-  # max_distance_um: 1.0
+  # max_distance_um: 1.0 # a cilium touching no cell gets the nearest one
 - a: cilia_labels
   b: nuclei_labels
   output: cilia_to_nucleus.xlsx
+
+# Optional: what `patchworks review image.zarr` flags.
+# review:
+#   expect:                  # children per parent: a number or [min, max]
+#     cyto_labels:
+#       nuclei_labels: 1
+#       cilia_labels: [0, 2]
+#   min_overlap: 0.5         # a child less inside its parent than this
+#   position:                # apical / basal / lateral / central in the cell
+#     cilia_labels:
+#       parent: cyto_labels
+#       apical: nuclei_labels # away from the nuclei; or "+z", "-z"
+
+# Optional: SLURM settings of the relate jobs (one per parent label image).
+# relate:
+#   partition: "scicore"
+#   mem: "32G"
+#   cpus: 16               # default: 8
+#   time: 180              # minutes, under the qos's limit
+#   qos: "1day"
+
+# Optional: pack the finished store into one file at the end.
+# bundle:
+#   format: "zip"          # or "iso"
+#   time: 720
+#   qos: "1day"

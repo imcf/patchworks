@@ -1,292 +1,89 @@
-# OME-ZARR conversion & napari viewing
+# OME-Zarr and napari
 
-Two optional plugins close the loop around `tile_process`: convert any input
-to a fast, pyramidal OME-ZARR, then inspect the image and its labels in napari.
+patchworks keeps everything in one OME-Zarr: the image as a pyramid, and each
+segmentation under `labels/<name>/` as a pyramid of its own with its
+[table](tables.md). napari, Fiji/MoBIE and NGFF validators read it as is.
 
-## Everything in one OME-ZARR (the default)
-
-When you call `tile_process` on a `.zarr` store **without** `write_to`, the
-labels are written **back into that same store** under the NGFF
-`labels/<name>/` group, as their own multi-scale pyramid:
-
-```python
-from patchworks import tile_process
-
-# labels land in scan.zarr/labels/labels/ with a pyramid — nothing else needed
-tile_process("scan.zarr", fn)
-```
-
-After this, `scan.zarr` holds both the image and its segmentation, each
-pyramidal, in a single NGFF store that napari, Fiji and validators read
-natively. Pass `write_to="other.zarr"` to instead write a separate
-single-resolution label store, or `output_component="cells"` to name the label
-image.
-
-The label pyramid is streamed chunk by chunk, so it stays OOM-safe even for
-terabyte volumes. Control it with `pyramid_levels` and `pyramid_downscale`.
-
-!!! note "NGFF version"
-    The metadata layout follows the zarr format being written: **NGFF 0.5**
-    (keys nested under an `ome` attribute) on zarr v3, **0.4** (keys at the
-    top level) on v2. Writing v3 data with 0.4's top-level layout — which
-    earlier versions did — matches neither revision, and a strict 0.5 reader
-    finds nothing there.
-
-    Reading accepts **both** layouts, so stores written by any patchworks
-    version still load. Use `read_ngff_attr()` if you need to inspect the
-    metadata yourself rather than indexing `attrs["multiscales"]` directly.
-
-    patchworks' own hints (`n_objects`, `sequential_labels`) are not NGFF
-    keys, so they stay at the top level where a consumer finds them without
-    knowing the layout.
-
-## Why a pyramid?
-
-A single full-resolution array is slow to browse: every pan or zoom touches the
-whole plane. A **pyramid** stores progressively downsampled copies, so a viewer
-only reads the resolution it needs. Pyramids here downsample **X and Y only** —
-`Z` (and channel/time) stay at full resolution, matching anisotropic microscopy
-stacks. Images are **block-averaged** (each pixel of a level is the mean of the
-2×2 block below it), which keeps overviews free of the aliasing and noise
-speckle plain subsampling gives fluorescence data; label images are
-**nearest-neighbour** subsampled, since averaging label values would invent
-objects that never existed. Pass `downsample="nearest"` to `to_ome_zarr` for
-the old behaviour on an image.
-
-## Convert any image to OME-ZARR
-
-`to_ome_zarr` accepts a dask/NumPy array, an existing `.zarr` store, an
-**Imaris `.ims`** file, **any format** readable by
-[bioio](https://github.com/bioio-devs/bioio) (CZI, LIF, ND2, OME-TIFF, …), or
-a **folder of single-plane TIFFs** (see below). File inputs are read
-**lazily**.
+## Convert
 
 ```python
 from patchworks.plugins.ome_zarr import to_ome_zarr
 
-to_ome_zarr("scan.czi", "scan.zarr", n_levels=5)   # via bioio
-to_ome_zarr("scan.ims", "scan.zarr")               # Imaris, native HDF5
+to_ome_zarr("scan.czi", "scan.zarr")   # CZI, LIF, ND2, OME-TIFF, ... via bioio
+to_ome_zarr("scan.ims", "scan.zarr")   # Imaris
+to_ome_zarr(array, "scan.zarr", axes="czyx", pixel_size={"z": 2.0, "y": 0.32, "x": 0.32})
 ```
+
+Inputs are read lazily and the pyramid is written level by level, so any size
+converts in bounded memory. The voxel size is read from the file and stored
+in µm. Useful options:
+
+| Option | Does |
+| --- | --- |
+| `n_levels=5` | pyramid levels (X and Y halved each time; Z kept) |
+| `axes=` | axis order of a bare array; from 4-D it is otherwise guessed (with a warning) |
+| `reuse_pyramid=True` | copy an Imaris file's own pyramid instead of rebuilding it |
+| `shard=True` | pack chunks into ~512 MB shard files: ~100× fewer files |
+| `ngff_version="0.4"` | zarr v2 / NGFF 0.4 for older readers (default: 0.5 on zarr v3) |
+| `compression=` | see [Performance](performance.md#compression) |
+
+Install the readers you need: `patchworks[bioio]` (plus a native reader such
+as `bioio-czi` for speed), `patchworks[imaris]`.
 
 ### A folder of single-plane TIFFs
 
-Some acquisitions/stitching tools save **one TIFF per Z/C plane** instead of a
-single multi-page file, e.g.:
-
-```text
-sample_T0_Z000_C0_V0.tif
-sample_T0_Z000_C1_V0.tif
-sample_T0_Z001_C0_V0.tif
-sample_T0_Z001_C1_V0.tif
-...
-```
-
-Pass `sequence_pattern=` and let `source` be a glob over the folder instead of
-one file path. The pattern is a regex whose **named groups** map to axis
-labels — one file per group of indices:
+One file per plane, such as `sample_T0_Z000_C0_V0.tif`: give a glob and a
+regex whose named groups are the axes. A constant axis (`T0`) is dropped.
 
 ```python
 to_ome_zarr(
-    "sample/*.tif",
-    "sample.zarr",
+    "sample/*.tif", "sample.zarr",
     sequence_pattern=r"_T(?P<T>\d+)_Z(?P<Z>\d+)_C(?P<C>\d+)_V\d+",
-    shard=True,  # recommended for large sequences, see Sharding below
+    shard=True,
 )
 ```
 
-You don't need to order the named groups to match how the axes should come
-out: the result is always reordered to patchworks' `c, z, y, x` convention —
-required for `channel=` selection (`load_ome_zarr`/`tile_process` always read
-the channel from axis 0) — and a constant axis like `T0` above (one value, no
-real time series) is dropped automatically, the same way the bioio/Imaris
-readers already drop a singleton time axis.
+On the cluster: `sequence_pattern:` in the config, with `input:` the glob.
 
-Each file becomes exactly **one dask chunk**, decoded lazily on access — no
-data is duplicated or eagerly loaded, so this scales to huge (multi-TB)
-sequences (built on `tifffile.TiffSequence`, the same mechanism Cellpose's
-own distributed pipeline uses). Pixel calibration is read automatically from
-the first file's own metadata — see [Pixel calibration](#pixel-calibration)
-below.
+## Labels in the store
 
-Available on the cluster too: the Snakemake `convert` rule reads a
-`sequence_pattern:` key from the config (`input:` then being the glob), so a
-folder-of-TIFFs conversion runs through the same SLURM profile as any other
-input — see [Cluster usage](snakemake.md).
-
-!!! note "Imaris pyramids: rebuild (default) or reuse"
-    `.ims` files carry their own resolution pyramid. By default `to_ome_zarr`
-    reads only the **full-resolution** level and **builds a fresh NGFF pyramid**
-    (XY-only, block-averaged, calibrated) for consistency. Pass
-    `reuse_pyramid=True` to instead **copy the Imaris levels** as-is — faster,
-    no recompute, keeping each level's native scale:
-
-    ```python
-    to_ome_zarr("scan.ims", "scan.zarr", reuse_pyramid=True)
-    ```
-
-### Axis names
-
-For a file, axes come from the reader's own dimension metadata (bioio's
-`dims.order`, Imaris, or the `sequence_pattern` groups) — not guessed. Only
-non-spatial singleton axes are dropped, so a genuine `z=1` survives.
-
-For a **bare array** there is nothing to read, so axes are inferred from the
-number of dimensions (`yx`, `zyx`, `czyx`, `tczyx`). That is unambiguous up to
-3-D; from 4-D the leading axis could be channel or time, and patchworks logs a
-warning saying what it guessed. Pass `axes=` to settle it:
+`tile_process("scan.zarr", fn)` writes the labels into
+`scan.zarr/labels/labels` (name it with `output_component="cells"`), with a
+pyramid matching the image's. To add your own label array, or a pyramid to a
+flat store:
 
 ```python
-to_ome_zarr(arr, "out.zarr", axes="tzyx")   # not the czyx it would assume
-```
+from patchworks.plugins.ome_zarr import add_pyramid, write_labels
 
-### Pixel calibration
-
-The physical voxel size is read from the input — bioio's `physical_pixel_sizes`,
-the Imaris resolution metadata, an existing OME-ZARR's scale, or (for a TIFF
-sequence) the first file's own ImageJ metadata (`spacing`/`unit`) or
-`XResolution`/`YResolution` tags — and written into the NGFF
-`coordinateTransformations` (in micrometers), so calibration is preserved
-regardless of input. Override or supply it for bare arrays with
-`pixel_size={"z": 2.0, "y": 0.32, "x": 0.32}`.
-
-### Won't OOM
-
-Each pyramid level is built by reading the **previous level back from disk**
-and streaming the downsampled result out through dask with bounded chunks. The
-graph never chains level-on-level and no whole plane/volume is held in RAM, so
-terabyte images convert in bounded memory.
-
-### Sharding (fewer files)
-
-A big array becomes tens of thousands of tiny chunk files, which strain
-filesystems and object stores. Sharding packs many chunks into one **shard**
-file (zarr v3), cutting the file count ~100×:
-
-```python
-to_ome_zarr("scan.ims", "scan.zarr", shard=True)        # auto ~512 MB shards
-to_ome_zarr("scan.ims", "scan.zarr", shard=(1, 16, 2048, 2048))  # explicit
-```
-
-Default is `shard=False` for maximum reader compatibility — sharding is
-zarr-v3-only, so older tools may not read it (your zarr/napari stack does).
-A sharded write holds ~one shard per worker in RAM, so very large shards cost
-memory.
-
-### Progress
-
-All write steps show a dask progress bar **by default** (`progress=True`), so
-you can see how long a conversion will take. Pass `progress=False` to silence
-it.
-
-!!! note "Install the readers you need"
-    `pip install "patchworks[bioio]"` pulls `bioio` plus the `bioio-bioformats`
-    catch-all reader (needs a JVM). For speed, add native readers for your
-    formats, e.g. `bioio-ome-tiff`, `bioio-czi`, `bioio-lif`, `bioio-nd2`.
-
-## Add a pyramid to an existing store
-
-Already have a flat (single-resolution) zarr? `add_pyramid` writes the missing
-levels in place, lazily:
-
-```python
-from patchworks.plugins.ome_zarr import add_pyramid
-
+write_labels("scan.zarr", my_labels, name="nuclei")
 add_pyramid("flat.zarr", base="0", n_levels=5)
 ```
 
-And `write_labels` stores any label array inside an existing OME-ZARR under the
-`labels/` group (the same thing `tile_process` does by default):
+A store written by an older version, or edited by hand, can be checked and
+repaired with `patchworks fix-metadata scan.zarr`.
 
-```python
-from patchworks.plugins.ome_zarr import write_labels
-
-write_labels("scan.zarr", my_labels, name="nuclei")
-```
-
-## View image + labels in napari
-
-`view_in_napari` opens the image and overlays the labels as a proper *Labels*
-layer in one call. OME-ZARR pyramids are handed to napari as a lazy multi-scale
-list, so even huge stores open instantly and only on-screen data is fetched.
-
-Because `tile_process` writes labels **into** the store by default, you usually
-need no `labels=` argument at all — `view_in_napari` auto-loads every label
-image found under `scan.zarr/labels/`:
+## View in napari
 
 ```python
 from patchworks.plugins.napari import view_in_napari
 
-# auto-loads scan.zarr/labels/* as Labels layers, all image channels shown:
-view_in_napari("scan.zarr")
-
-# or point at a separate plain label store written with write_to=:
-view_in_napari("scan.zarr", labels="labels.zarr")
+view_in_napari("scan.zarr")              # every channel and every label image
+view_in_napari("scan.zarr", channel=0)   # one channel
 ```
 
-By default every channel of the image is shown (`channel=None`), independent
-of which one you segmented on — Cellpose might run on channel 0 while you
-still want to see the whole multi-channel acquisition. Pass an int to view
-just one channel instead: `view_in_napari("scan.zarr", channel=0)`.
+Only what is on screen is read, so it opens at once even for terabytes.
+From the cluster workflow: `pixi run -e viewer napari <work_dir>/image.zarr`
+(needs a display). To check and correct the results, see
+[Reviewing](review.md).
 
-!!! note
-    napari ships in `patchworks[all]`, or install just it with
-    `pip install "patchworks[napari]"`.
+## Remote stores
 
-!!! tip "From the cluster workflow"
-    `workflow/pixi.toml` has a separate `viewer` environment (napari's Qt/GUI
-    dependencies are kept out of the default headless workflow env on
-    purpose):
-
-    ```bash
-    pixi install -e viewer
-    pixi run -e viewer napari /path/to/work_dir/image.zarr
-    ```
-
-    This wraps `view_in_napari` with its `labels=` argument left at the
-    default, so every label group in the store loads automatically — needs a
-    display (`ssh -X`, or a remote-desktop/VNC session).
-
-!!! tip "Measuring all the objects"
-    Once labels are loaded, use
-    [napari-chunked-regionprops](https://github.com/imcf/napari-chunked-regionprops)'s
-    "Measure" dock widget for area/centroid/intensity stats — it works
-    out-of-core straight off the Labels layer's backing dask/zarr array, so
-    it scales to the same huge label images `tile_process` writes, unlike
-    plain `skimage.measure.regionprops`. Bundled in `patchworks[napari]`. See
-    [Measurements](measurements.md)
-    for the non-interactive/headless equivalent.
-
-## End-to-end
-
-```python
-from patchworks import tile_process
-from patchworks.plugins.napari import view_in_napari
-
-# 1. segment — labels are written into scan.zarr with a pyramid, by default
-tile_process("scan.zarr", fn, progress=True)
-
-# 2. inspect image + labels together, straight from the one store
-view_in_napari("scan.zarr")  # labels auto-loaded from scan.zarr/labels/
-```
-
-Plugging in a different segmentation method is just swapping `fn` — any
-callable taking a tile and returning an integer label array works (see the
-Cellpose and StarDist examples).
-
-## Remote stores (S3, GCS, HTTP)
-
-Any fsspec URL works wherever a store path does — `s3://bucket/scan.zarr`,
-`gs://…`, `https://…` — for reading, segmenting and writing labels back into
-the store (`pip install "patchworks[remote]"` for the S3/GCS/HTTP backends;
-credentials come from the usual AWS/GCP environment variables or config
-files):
+Any fsspec URL works where a path does, for reading and for writing labels
+back (`pip install "patchworks[remote]"`; credentials from the usual
+AWS/GCP settings):
 
 ```python
 tile_process("s3://bucket/scan.zarr", fn, tile_shape=(16, 1024, 1024))
-view_in_napari("https://example.org/data/scan.zarr")
 ```
 
-Scratch data (the stage store, the merge's lookup table) always stays on local
-disk — in the system temp directory, or `stage_dir=` — so only the final
-labels travel. `reshard_level` needs a local store: it swaps directories by
-renaming, which object stores cannot do.
+Scratch data stays on local disk, so only the final labels travel.

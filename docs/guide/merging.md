@@ -1,151 +1,39 @@
-# Merging labels
+# Merging
 
-## The split-label problem
-
-After segmenting each tile independently, labels are only locally unique:
-tile A has labels 1-500, tile B also has labels 1-500. Worse, an object
-spanning the A-B boundary gets label 247 in tile A and label 83 in tile B,
-even though it's the same cell.
-
-patchworks solves this with a zarr-native merge algorithm:
+Each tile is segmented on its own, so its labels are only locally unique and
+an object crossing a seam gets one id on each side. The merge gives every
+object one global id. `tile_process` does it for you; this page covers the
+options.
 
 ```text
-Tile A labels:        Tile B labels:        After merge:
-┌────────────┐        ┌────────────┐        ┌──────────────────────┐
-│  3   1   2 │        │  1   4   2 │        │  3   1   2 │ 501 5 502│
-│  3   1   1 │   +    │  1   1   2 │   →    │  3   1   1 │ 501 1  502│
-│  1   5   5 │        │  5   5   3 │        │  1   5   5 │  5  5   3 │
-└────────────┘        └────────────┘        └──────────────────────┘
-                                             cell "1" is now one object
+tile A │ tile B           merged
+ 2 1 1 │ 1 1 2             2 1 1 │ 1 1 3
+ 2 1 1 │ 1 1 2     →       2 1 1 │ 1 1 3
 ```
 
-## The algorithm
+How it works, in short: ids are offset per tile, only the voxels on either
+side of each seam are read, touching labels are joined (connected components)
+and one lookup table relabels every chunk in parallel. It is linear in the
+volume, never needs it in memory, and skips chunks holding no labels.
 
-The merge is **zarr-native** — no dask task graph, scales to thousands of tiles.
-This is the same approach used by
-[skeleplex](https://github.com/kevinyamauchi/skeleplex) and
-[cellpose distributed](https://github.com/MouseLand/cellpose).
+## Keeping touching cells apart: IoU stitching
 
-### Step 1: stage
-
-Each tile's labels are written to zarr once. This is critical: without
-staging, any downstream operation that reads the label array re-runs your
-segmentation function. The merge internally reads labels multiple times.
-
-```text
-tile_process calls fn once per tile → staged zarr
-                                         │
-                         merge reads from staged zarr (no fn calls)
-```
-
-The Snakemake workflow goes further and stages **directly into**
-`image.zarr/labels/<name>/0`, then has the merge rewrite that array in place
-— saving a whole extra write of the volume plus the scratch store's disk. It
-falls back to a separate store when the tile is larger than the label chunk
-cap, since in place the chunking cannot be changed and level 0 has to stay
-pageable for a viewer.
-
-### Step 2: make the ids globally unique
-
-Tiles write local `1..n`, which collide, so the boundary scan could not
-otherwise tell two different objects apart. If each tile's label **count** is
-known, this is just an exclusive cumulative sum — global id is
-`offset[tile] + local`, computed in `O(n_tiles)` with no read of the volume
-at all. `stage_tile` returns that count for exactly this purpose; pass the
-counts as `label_counts=`.
-
-Without counts, the merge falls back to streaming every chunk and renumbering
-it in place — correct, but a full read **and write** of the volume.
-
-### Step 3: boundary scan
-
-Only the two voxels on either side of each tile boundary are read. For any
-pair of touching non-zero labels `(a, b)`, they must be the same object. The
-per-tile offsets are applied here, on the fly.
-
-I/O cost: `O(n_boundaries × face_area)`, not `O(full_volume)`. The columns
-are read in parallel, and a boundary next to a chunk that holds no labels is
-skipped outright — a pair needs a non-zero label on *both* sides, so it could
-never produce one.
-
-### Step 4: connected components
-
-scipy sparse connected components on the touching pairs produces a relabeling
-lookup table. All labels that transitively touch each other are mapped to the
-same canonical label.
-
-Cost: `O(n_touching_pairs)`.
-
-With `sequential_labels=True` the contiguous renumbering is folded into this
-same LUT. Because the id domain is dense by construction, the surviving ids
-are exactly the distinct LUT values — a `np.unique` over an array the length
-of the object count, with no scan of the volume.
-
-### Step 5: parallel relabel
-
-The LUT is applied to every tile in parallel via `multiprocessing.Pool`. The
-LUT is shared via process initializer to avoid re-pickling it for every chunk
-(LUTs can be hundreds of MB for dense label volumes).
-
-Chunks whose tile wrote no labels are skipped entirely — not read, and not
-written. Zarr never materialises an unwritten chunk and reads it back as the
-fill value, so background regions cost neither I/O nor disk. On a sparse
-image that is most of the volume.
-
-When the merge's output *is* its input, this pass rewrites the array in
-place. That is safe because the boundary scan (step 3) has already finished,
-so nothing still needs the original ids.
-
-Because an in-place merge destroys its own input, it records how far it got
-on the array itself, and refuses to guess on a re-run:
-
-| State found | What happens |
-| --- | --- |
-| nothing recorded | fresh tile-local ids — merge normally |
-| `running` | a previous attempt died mid-relabel, so the array is part local and part global. **Refuses**: re-segment to rebuild it. |
-| `done` | already merged — a no-op, so a failure *after* the relabel (the pyramid, say) can simply be retried |
-
-Without that, a second pass would add each tile's offset to ids that are
-already global, which can land two unrelated objects on the same id.
-
-## IoU stitching: keeping touching cells apart
-
-Touching-label merging joins *any* two labels that touch across a tile
-boundary. That is right for one object cut in two by the seam, and wrong for
-two different cells pressed against each other exactly there: they become one
-object.
-
-`stitch="iou"` asks the tiles instead. Each tile already predicts labels in
-its halo, the strip it reads beyond its own edge; those predictions are kept
-(one small `.npz` per tile) rather than thrown away. Across every boundary,
-both tiles have then labelled the same overlap zone, and a pair of labels is
-joined only when their IoU over that zone reaches `iou_threshold` (default
-0.5) — when both tiles agree they saw the same object.
+By default any two labels touching across a seam are joined. That is right
+for one object cut by the seam, wrong for two cells pressed together exactly
+there. `stitch="iou"` joins them only when both tiles labelled the same
+object in their shared halo (IoU ≥ `iou_threshold`, default 0.5):
 
 ```python
-tile_process(
-    "image.zarr", fn, tile_shape=(16, 1024, 1024), overlap=30, stitch="iou"
-)
+tile_process("image.zarr", fn, tile_shape=(16, 1024, 1024), overlap=30, stitch="iou")
 ```
 
-It needs `overlap > 0`: without a halo there is no shared zone to compare.
-An axis with no halo — 2-D tiles one plane thick, stacked in z — falls back to
-the IoU of the two boundary slices, which is Cellpose's own `stitch_threshold`
-rule for building 3-D objects out of 2-D planes. On the cluster, set
-`stitch: "iou"` (and optionally `iou_threshold:`) in the config.
-
-With `merge_tile_labels`, pass the `halo_dir` that
-[`stage_tile`](../api/tile_process.md)`(..., halo_dir=...)` wrote.
+It needs `overlap > 0`. On the cluster: `stitch: "iou"` in the config.
 
 ## Checking the seams
 
-A well-stitched result does not care where the tiles were. One that does
-shows it at the seams: objects ending abruptly on a tile boundary, because
-the tile on the other side decided differently or the pieces were not
-joined. [`seam_report`](../api/seams.md) measures exactly that, without
-ground truth: at each seam, the fraction of labels with nothing continuing
-on the other side, against the same fraction on planes halfway through the
-tiles, where nothing was stitched.
+[`seam_report`](../api/seams.md) compares how often objects end at a seam
+with how often they end on planes inside the tiles, where nothing was
+stitched:
 
 ```python
 from patchworks import seam_report
@@ -154,19 +42,15 @@ report = seam_report("scan.zarr/labels/cells", tile_shape=(16, 1024, 1024))
 report["axes"][2]  # {'seam_rate': 0.04, 'interior_rate': 0.05, 'ratio': 0.8, ...}
 ```
 
-A ratio near 1 means the seams are invisible. Well above it (a warning is
-logged past 2×), the tiling shows: raise `overlap` to about one object, or
-try `stitch="iou"`. `worst_seams` lists the faces to look at in the viewer.
-The cluster workflow runs it after every merge and writes
-`<work_dir>/<label_name>/seams.json` (`seam_report: false` turns it off).
+A ratio near 1 means the tiling does not show; well above it, raise `overlap`
+or try `stitch="iou"`. The cluster workflow writes it to
+`<work_dir>/<label_name>/seams.json` after every merge.
 
 ## Choosing the overlap from the data
 
-The halo exists so that tiling does not change the result — and that is
-testable. [`suggest_overlap`](../api/seams.md) segments a crop spanning 2×2
-tiles once *without* tiling, then tiled at increasing overlaps, and returns
-the smallest overlap whose result matches the untiled one (object-level F1
-≥ 0.99):
+[`suggest_overlap`](../api/seams.md) segments a crop once untiled, then tiled
+at increasing overlaps, and returns the smallest overlap that gives the same
+result:
 
 ```python
 from patchworks import load_ome_zarr, suggest_overlap
@@ -176,117 +60,43 @@ suggest_overlap(image, fn, tile_shape=(16, 512, 512))
 # {'overlap': 16, 'scores': {0: 0.91, 4: 0.95, 8: 0.97, 16: 0.995}, ...}
 ```
 
-Pass `region=` to test a crop with typical objects (an empty one agrees at
-any overlap). On the command line: `patchworks segment ... --tile-shape
-16,512,512 --overlap auto`.
+Pass `region=` to pick a crop with typical objects. Command line:
+`patchworks segment ... --overlap auto`.
 
-## Resuming an interrupted run
+## Size filter and numbering
 
-`tile_process(..., resume=True)` stages into a store named after the run's
-inputs (image, tiling, overlap, `fn` and its bound arguments, output) and
-records each finished tile. If the run dies, the store is kept; rerunning the
-same call skips every tile already done. It is removed once the run succeeds.
-The pipeline does the same per SLURM batch, so a retried job continues from
-its last finished tile.
-
-## Using the merge step standalone
-
-You can call the merge step directly on any existing label array or zarr:
+Objects can only be judged by size after the merge, once they are whole:
 
 ```python
-import dask.array as da
-import numpy as np
-from patchworks import merge_tile_labels
-
-# From a dask array (your own tiling pipeline)
-image = da.from_zarr("image.zarr").rechunk((1, 1024, 1024))
-labeled = image.map_blocks(
-    my_fn, dtype="int32", meta=np.empty((0,) * image.ndim, dtype="int32")
-)
-merged = merge_tile_labels(labeled, write_to="labels.zarr")
-
-# From a zarr your pipeline already wrote
-merged = merge_tile_labels(
-    "my_staged_labels.zarr",
-    input_component="raw_labels",
-    write_to="merged.zarr",
-    sequential_labels=True,
-)
-```
-
-## Filtering by size after merge
-
-Once labels are globally consistent, [`filter_labels_by_size`](../api/volume_filter.md)
-can drop objects outside a voxel-count range, in place — too small, too large,
-or both:
-
-```python
-from patchworks import filter_labels_by_size, merge_tile_labels
-
-merged = merge_tile_labels("stage.zarr", write_to="labels.zarr", sequential_labels=True)
-# drop anything under 500 voxels, over 50000, or both -- give either bound alone
-n_kept, n_removed = filter_labels_by_size(
-    "labels.zarr", "labels", min_voxels=500, max_voxels=50000
-)
-```
-
-This has to run **after** the merge, not per tile: a tile only sees whatever
-fragment of an object landed inside its own bounds, so a per-tile filter would
-judge (and possibly drop) an object crossing a tile boundary as if it were
-only that fragment's size — including judging it too *large*, for a
-`max_voxels` filter, when several separate objects in one tile would in fact
-merge back into one across the boundary.
-
-Like the merge itself, it is a two-pass streaming zarr scan — the array never
-has to fit in RAM. `relabel=True` (the default) folds the size filter into
-the same lookup table that renumbers survivors to a contiguous `1..N` range,
-so dropping out-of-range objects costs no extra pass over the volume beyond
-the scan that already counts them.
-
-Physical thresholds (µm³) convert to a voxel count via
-[`min_voxels_for_volume`](../api/volume_filter.md)/[`max_voxels_for_volume`](../api/volume_filter.md),
-using the same `{"z": .., "y": .., "x": ..}` calibration deconvolution and
-Cellpose's `anisotropy` are derived from. The two round in opposite
-directions — `min_voxels_for_volume` rounds up (an object must *reach* the
-threshold), `max_voxels_for_volume` rounds down (an object must not *exceed*
-it):
-
-```python
-from patchworks import max_voxels_for_volume, min_voxels_for_volume
+from patchworks import filter_labels_by_size, min_voxels_for_volume
 from patchworks.plugins.ome_zarr import read_pixel_size
 
-voxel_size = read_pixel_size("image.zarr")
-min_voxels = min_voxels_for_volume(5.0, voxel_size)
-max_voxels = max_voxels_for_volume(500.0, voxel_size)
-n_kept, n_removed = filter_labels_by_size(
-    "labels.zarr", "labels", min_voxels, max_voxels
-)
+min_voxels = min_voxels_for_volume(5.0, read_pixel_size("image.zarr"))  # µm³ → voxels
+filter_labels_by_size("labels.zarr", "labels", min_voxels=min_voxels, max_voxels=50000)
 ```
 
-On the cluster, set `min_volume: 5.0`/`max_volume: 500.0` in the config
-instead — see [Configure the run](snakemake.md#3-configure-the-run). Either
-or both run automatically between `merge` and the pyramid build.
+It streams the array and renumbers the survivors `1..N`. On the cluster,
+`min_volume:` / `max_volume:` (µm³) in the config do the same.
 
-## Sequential label numbering
+Merged ids are unique but may have gaps; `sequential_labels=True` numbers
+them `1..N` at no extra cost.
 
-By default, merged labels are globally unique but may be **gappy** — boundary
-merging fuses ids, leaving holes where the absorbed ones were. This is fine
-for counting, `regionprops`, and measurement — the IDs just aren't
-consecutive.
+## Resuming
 
-For contiguous 1..N numbering, use `sequential_labels=True`:
+`tile_process(..., resume=True)` keeps finished tiles if the run dies;
+rerunning the same call continues from there. The cluster workflow does this
+per job.
+
+## Merging your own tiles
+
+`merge_tile_labels` works on any tiled label array: a dask array or a zarr
+your own pipeline wrote.
 
 ```python
-tile_process("image.zarr", fn, write_to="labels.zarr", sequential_labels=True)
+from patchworks import merge_tile_labels
+
+merge_tile_labels("my_tiles.zarr", input_component="raw_labels",
+                  write_to="merged.zarr", sequential_labels=True)
 ```
 
-This is free: it composes into the relabel LUT the merge already applies, so
-it costs a `np.unique` over the object count rather than another pass over
-the volume.
-
-!!! warning "Do not use dask's built-in sequential relabel"
-    `dask_image.ndmeasure.merge_labels_across_chunk_boundaries` has a
-    `produce_sequential_labels=True` option that builds a task graph of O(n²)
-    in the number of tiles. At 64 tiles this takes 54 seconds; at 2200 tiles
-    it would take hours — just for graph construction. patchworks's approach
-    is always linear in the number of voxels.
+See also the [standalone merge example](../examples/standalone_merge.md).

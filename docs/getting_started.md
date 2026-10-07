@@ -1,216 +1,84 @@
-# Getting Started
+# Getting started
 
-## Installation
+## Install
 
-patchworks can be installed from PyPI on all operating systems, for Python ≥ 3.11.
+```bash
+pip install patchworks
+```
 
-!!! tip "Virtual environment (recommended)"
-    We recommend creating a dedicated environment:
+Python 3.11 or later. Add what you need:
 
-    ```bash
-    conda create -n patchworks python=3.12
-    conda activate patchworks
-    ```
-    or with pixi:
-    ```bash
-    pixi init patchworks && cd patchworks
-    pixi add python=3.12
-    ```
+| Extra | For |
+| --- | --- |
+| `cellpose` (`cellpose3`, `cellpose4` to pin) | the Cellpose plugin |
+| `bioio`, `imaris` | converting CZI, LIF, ND2, TIFF, `.ims` to OME-Zarr |
+| `napari` | viewing and reviewing results |
+| `review` | object tables as pandas, Excel export |
+| `dog` | deconvolution before the difference-of-Gaussians plugin |
+| `careamics` | Noise2Void denoising |
+| `workflow` | the cluster workflow (Snakemake) |
+| `gpu`, `distributed`, `remote` | GPU memory sizing; Dask clusters; S3/GCS/HTTP stores |
+| `all` | everything |
 
-=== "Minimal"
+```bash
+pip install "patchworks[cellpose,bioio,napari]"
+```
 
-    ```bash
-    pip install patchworks
-    ```
+GPU options of the DoG plugin and of label dilation need `cupy` for your
+CUDA version (`pip install cupy-cuda12x`). PlantSeg is on conda-forge only
+(`conda install -c conda-forge plant-seg`).
 
-=== "With GPU VRAM sizing"
+## Your first run
 
-    ```bash
-    pip install "patchworks[gpu]"
-    ```
-    Installs `nvidia-ml-py` to query free GPU VRAM when auto-sizing tiles.
+```python
+from patchworks import tile_process
+from patchworks.plugins.ome_zarr import to_ome_zarr
+from patchworks.plugins.cellpose import cellpose_fn
 
-=== "With Cellpose plugin"
+to_ome_zarr("scan.czi", "scan.zarr")  # once: a pyramidal OME-Zarr
 
-    ```bash
-    pip install "patchworks[cellpose]"
-    ```
+tile_process(
+    "scan.zarr",
+    cellpose_fn("cyto3", gpu=True, diameter=30),
+    channel=0,
+    tile_shape=(1, 2048, 2048),  # or "auto", sized to your memory
+    overlap=20,                  # halo: about one object diameter
+)
+```
 
-=== "With deconvolution + DoG plugin"
+The labels are written into `scan.zarr/labels/labels`, next to the image.
+Look at them:
 
-    ```bash
-    pip install "patchworks[dog]"
-    ```
+```python
+from patchworks.plugins.napari import view_in_napari
 
-=== "Everything"
+view_in_napari("scan.zarr")
+```
 
-    ```bash
-    pip install "patchworks[all]"
-    ```
+## Any function
 
-!!! note "cupy is always a manual install"
-    `use_gpu=True` (the `dog` plugin, `dilate_labels`) needs `cupy`, but it's
-    never pulled in automatically — unlike Cellpose, which gets GPU support
-    for free via PyTorch's self-contained CUDA wheels, `cupy` ships one wheel
-    per CUDA major version. Install the one matching your CUDA version
-    yourself, e.g. `pip install cupy-cuda12x`.
+`fn` is any callable from a tile (a NumPy array) to integer labels of the
+same shape:
 
----
-
-## The one function you need
-
-    ```python
-    from patchworks import tile_process
-
-    result = tile_process(image, fn)
-    ```
-
-`tile_process(image, fn)` splits `image` into tiles, runs `fn` on each tile,
-and returns a globally consistent label array.
-
-- **`image`** — a dask array or a path to an OME-ZARR store
-- **`fn`** — any callable `(ndarray) -> ndarray` returning integer labels
-
----
-
-## Step 1: write your function
-
-patchworks is method-agnostic. Your function receives a NumPy array (one tile)
-and must return an integer label array of the same shape:
-
-    ```python
-    import numpy as np
+```python
+from skimage.filters import threshold_otsu
+from skimage.measure import label
 
 
-    def my_fn(tile: np.ndarray) -> np.ndarray:
-        from skimage.filters import threshold_otsu
-        from skimage.measure import label
+def my_fn(tile):
+    return label(tile > threshold_otsu(tile)).astype("int32")
 
-        binary = tile > threshold_otsu(tile)
-        return label(binary).astype("int32")
-    ```
 
-The function is called independently on every tile. patchworks ensures that
-objects spanning tile boundaries are merged into a single label.
+tile_process("scan.zarr", my_fn)
+```
 
----
+Each tile is segmented independently; objects crossing tile boundaries are
+joined into one label afterwards.
 
-## Step 2: run it
+## Next
 
-=== "From a zarr path"
-
-    ```python
-    from patchworks import tile_process
-
-    # returns a lazy dask array; labels are also written into image.zarr by
-    # default (image.zarr/labels/labels/, as a pyramid)
-    result = tile_process("image.zarr", my_fn)
-    print(result.shape)  # (z, y, x)
-    print(int(result.max().compute()))  # number of objects found
-    ```
-
-=== "From a dask array"
-
-    ```python
-    import dask.array as da
-    from patchworks import tile_process
-
-    arr = da.from_zarr("image.zarr")
-    result = tile_process(arr, my_fn)
-    ```
-
-=== "Stream to zarr (recommended for large images)"
-
-    ```python
-    from patchworks import tile_process
-
-    tile_process(
-        "image.zarr",
-        my_fn,
-        write_to="labels.zarr",
-        progress=True,
-    )
-    ```
-    The output is written tile by tile — peak RAM is one tile, not the whole image.
-
----
-
-## Set the tile size
-
-=== "Fixed tile shape"
-
-    ```python
-    result = tile_process("image.zarr", my_fn, tile_shape=(1, 1024, 1024))
-    ```
-
-=== "Auto from available memory"
-
-    ```python
-    result = tile_process(
-        "image.zarr", my_fn, tile_shape="auto", use_gpu=True
-    )  # sizes against GPU VRAM
-    ```
-
-=== "Callable (computed at runtime)"
-
-    ```python
-    from functools import partial
-    from patchworks import auto_tile_shape_cellpose, tile_process
-
-    tile_fn = partial(auto_tile_shape_cellpose, diameter=30, use_gpu=True)
-    result = tile_process("image.zarr", my_fn, tile_shape=tile_fn)
-    ```
-
----
-
-## Add overlap
-
-Methods like Cellpose and StarDist need spatial context at tile boundaries.
-Use `overlap` (in voxels) so boundary objects are fully visible:
-
-    ```python
-    result = tile_process(
-        "image.zarr",
-        my_fn,
-        tile_shape=(1, 2048, 2048),
-        overlap=20,  # 20-voxel halo on every side
-    )
-    ```
-
-!!! info "How overlap works"
-    Each tile is expanded by `overlap` voxels on every side before calling `fn`.
-    The halo is trimmed before merging — the final output has the original shape.
-    Objects near boundaries have enough context to be segmented correctly.
-
----
-
-## Use Cellpose
-
-    ```python
-    from patchworks import tile_process
-    from patchworks.plugins.cellpose import cellpose_fn
-
-    fn = cellpose_fn("cyto3", gpu=True, diameter=30)
-
-    tile_process(
-        "image.zarr",
-        fn,
-        channel=0,
-        tile_shape=(1, 2048, 2048),
-        overlap=20,
-        write_to="labels.zarr",
-        progress=True,
-    )
-    ```
-
-See the [Cellpose 2-D example](examples/cellpose_2d.md) for the full workflow.
-
----
-
-## What's next?
-
-- [Tiling strategy](guide/tiling.md) — how tiles are sized and overlapped
-- [Merging labels](guide/merging.md) — how cross-boundary labels become one
-- [Skip empty tiles](guide/skip_empty.md) — speed up sparse volumes
-- [GPU & distributed](guide/gpu_distributed.md) — Dask clusters for GPU workloads
-- [Common pitfalls](guide/pitfalls.md) — GIL traps, recompute traps, memory traps
+- Large images on a cluster, several segmentations related to each other:
+  [Cluster workflow](guide/snakemake.md)
+- How tiles and halos are sized: [Tiling](guide/tiling.md)
+- Your own model: [Custom segmentation function](guide/custom_segmentation.md)
+- The same steps without Python: [Command line](guide/cli.md)

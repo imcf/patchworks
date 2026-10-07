@@ -1,100 +1,11 @@
-# Performance & memory safety
+# Performance, GPUs and empty tiles
 
-`tile_process` is built so a run **adapts to whatever machine it lands on** and
-can't run out of RAM/VRAM or freeze the box — without you tuning anything.
+`tile_process` sizes itself to the machine it runs on: concurrency from the
+CPUs and memory **this job** may use (SLURM allocation, cgroup limit), not
+the node's totals; one tile at a time on a GPU; tiles sized to free memory
+or VRAM with `tile_shape="auto"`. You rarely need to tune anything.
 
-## Automatic, allocation-aware concurrency
-
-The staging step (running your `fn` once per tile to a temp store) and the
-merge step are sized automatically:
-
-- **GPU** (`use_gpu=True`) → **one tile at a time**, so concurrent evaluations
-  can never exhaust VRAM.
-- **CPU** → as many tiles in flight as fit **80 % of available RAM** (estimated
-  from the tile size), and always **leaving one core free** so the machine
-  stays responsive — it never pins every core.
-
-"Available" means available **to this process**, not to the machine. On a
-shared cluster node those differ wildly — a 32-core, 128 GB job on a 128-core,
-512 GB node would otherwise size itself for the whole box and get OOM-killed
-while its own accounting said it had room. patchworks takes the smallest of
-`SLURM_MEM_PER_NODE`, `SLURM_MEM_PER_CPU × cpus`, the cgroup limit (the one
-that actually triggers the kill) and `psutil`'s free RAM, and reads the core
-count from `SLURM_CPUS_PER_TASK` or the process' CPU affinity mask.
-
-Without any of those signals, a conservative default is used instead of
-guessing high.
-
-## Live progress dashboard (GPU runs)
-
-A single-GPU run still gets a **Dask dashboard**: patchworks spins up a tiny
-1-worker / 1-thread in-process cluster, which keeps GPU evaluations serial (no
-VRAM contention) while exposing the dashboard so you can watch tiles stream
-through. The URL is logged at the start of staging:
-
-```text
-INFO:patchworks._core:Dask dashboard for this run: http://127.0.0.1:8787/status
-```
-
-This needs `distributed` (and `bokeh` for the UI) installed —
-`pip install "patchworks[distributed]"` brings both; if they are
-missing, patchworks logs a warning and falls back to the threaded scheduler
-(no dashboard, same result). A cluster you start yourself
-(`make_local_cluster`) is used as-is instead.
-
-## Overriding the worker count
-
-```python
-from patchworks import tile_process
-
-# let patchworks pick (recommended)
-tile_process("scan.zarr", fn)
-
-# or cap it yourself (staging threads + merge processes)
-tile_process("scan.zarr", fn, max_workers=8)
-```
-
-`max_workers` bounds both staging and merging. A running **distributed client**
-manages its own concurrency, so the override is skipped there — configure the
-cluster's memory limits instead.
-
-## Why it won't OOM or freeze
-
-| Resource | Guard |
-|----------|-------|
-| RAM | concurrent tiles × tile size × overhead ≤ 80 % of available RAM |
-| VRAM | GPU path runs one tile at a time |
-| CPU | always leaves at least one core free |
-| Disk I/O | each pyramid/stage level is streamed chunk-by-chunk; no whole volume in memory |
-
-The staging graph itself is kept small — a single fused `map_overlap`
-(halo → `fn` → trim) rather than three separate passes — and there is **no**
-extra read-back of the staged data.
-
-## Getting more speed
-
-- `tile_shape="auto"` sizes tiles to free RAM (or VRAM with `use_gpu=True`).
-- `skip_empty=True` with `estimate_empty_tiles()` skips background tiles.
-  That preview samples a centred window, so use `build_occupancy_map()` +
-  `tile_occupancy()` when the result becomes an authoritative skip list —
-  they are exact, and it is what the Snakemake workflow uses.
-- A Dask **distributed** cluster (`make_local_cluster`) parallelises across
-  workers/GPUs; patchworks then defers concurrency to the cluster.
-
-!!! note "What doesn't help here"
-    The merge and relabel steps are already vectorised NumPy + SciPy (C-level)
-    with no per-voxel Python loop, and the pipeline is I/O-bound — so `numba`,
-    `cupy`, `arrow` and `xarray` bring essentially nothing. The real levers are
-    tile size, concurrency (above) and zarr chunking.
-
-## Planning a run before submitting it
-
-`dry_run=True` returns what a run would do without segmenting or writing
-anything: tile count and grid, how many tiles hold signal (with
-`skip_empty`), the worker pool, bytes read per tile, and the size of the
-labels. `plan_sample=N` also runs the method on N real tiles and
-extrapolates a duration — catch a tile shape that is too big, or a run that
-would outlast its SLURM time limit, before it waits in the queue.
+## Plan before running
 
 ```python
 plan = tile_process("scan.zarr", fn, tile_shape=(16, 1024, 1024),
@@ -102,25 +13,53 @@ plan = tile_process("scan.zarr", fn, tile_shape=(16, 1024, 1024),
 plan["tiles_with_signal"], plan["estimated_seconds"] / 3600
 ```
 
-From the command line: `patchworks segment scan.zarr ... --plan --plan-sample 3`.
+`dry_run=True` reports the tiles, how many hold signal, memory and output
+size without segmenting anything; `plan_sample=3` times the method on three
+real tiles and extrapolates. From the command line: `patchworks segment
+... --plan --plan-sample 3`.
+
+## Skip empty tiles
+
+Microscopy volumes are often mostly background. `skip_empty=True` returns
+empty labels for a tile without signal instead of running the method on it,
+and the merge never writes it:
+
+```python
+from patchworks import estimate_empty_tiles, tile_process
+
+info = estimate_empty_tiles("scan.zarr", tile_shape=(16, 1024, 1024))
+print(f"{info['empty_fraction']:.0%} of tiles are background")
+tile_process("scan.zarr", fn, tile_shape=(16, 1024, 1024), skip_empty=True)
+```
+
+The threshold is Otsu's unless you give `empty_threshold=`.
+`estimate_empty_tiles` is a quick preview from each tile's centre; the
+exact decision (what the cluster workflow uses) comes from a max-pooled
+occupancy map: `build_occupancy_map` and `tile_occupancy`.
+
+## GPUs
+
+- **One GPU**: `use_gpu=True` runs one tile at a time and sizes tiles to
+  the free VRAM (`pip install "patchworks[gpu]"` for an exact reading).
+- **Several GPUs on one node**: `gpus=4` runs one worker per GPU (Linux):
+
+  ```python
+  tile_process("scan.zarr", fn, tile_shape=(16, 1024, 1024), use_gpu=True, gpus=4)
+  ```
+
+- **Many nodes**: the [cluster workflow](snakemake.md) runs tile batches
+  as separate SLURM jobs.
+- **A shared GPU**: an out-of-memory error is retried after freeing this
+  process' GPU memory, rather than moving the tile to the CPU.
+- **A Dask cluster**: use `make_local_cluster(use_gpu=True)`, never
+  `Client(processes=False)`. A model holding the GIL starves an in-process
+  worker and the run fails with `FutureCancelledError: lost dependencies`;
+  patchworks refuses such a client up front.
 
 ## Compression
 
-Every array patchworks writes uses one codec, zstd level 1 by default. Change
-it for one call with `with compression(...)`, per writer with
-`to_ome_zarr(..., compression=...)` / `write_labels(..., compression=...)`, or
-for a pipeline run with the `compression:` config key.
-
-Measured on scikit-image's `cells3d` (real fluorescence) and a watershed
-segmentation of it — ratio and write speed:
-
-| Codec | Image (uint16) | Labels (int32) |
-| --- | --- | --- |
-| `zstd` (default) | 1.24× · 630 MB/s | **64.9×** · 1962 MB/s |
-| `zstd:3` | **1.37×** · 381 MB/s | 64.9× · 2107 MB/s |
-| `blosc` (zstd, shuffle) | 1.25× · 535 MB/s | 44.4× · 1439 MB/s |
-| `blosc:lz4` | 1.00× · 621 MB/s | 21.1× · 2048 MB/s |
-
-Blosc buys nothing here and costs a lot on labels; reach for it only when a
-reader needs it (some older Java-based OME-Zarr viewers lack zstd).
-`zstd:3` is worth it for raw images when disk matters more than write time.
+Everything is written with zstd (level 1) by default: labels compress about
+65×, images about 1.25×. `compression="zstd:3"` makes images ~10% smaller at
+half the write speed; `"blosc"` only for old readers without zstd. Set it
+per call (`to_ome_zarr(..., compression=)`), with `with
+patchworks.compression("zstd:3"):`, or with the workflow's `compression:`.

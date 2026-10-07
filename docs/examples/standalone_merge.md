@@ -25,7 +25,6 @@ labeled = image.map_blocks(
     meta=np.empty((0,) * image.ndim, dtype="int32"),
 )
 
-# Merge: boundary scan → connected components → relabel
 merged = merge_tile_labels(labeled, write_to="labels.zarr", progress=True)
 ```
 
@@ -54,19 +53,4 @@ from patchworks import merge_tile_labels
 
 # labeled was computed with da.overlap.overlap(depth=20)
 merged = merge_tile_labels(labeled, write_to="labels.zarr", overlap=20)
-```
-
-## Integration with other frameworks
-
-patchworks's merge step is framework-agnostic. Any pipeline that produces a
-dask array of integer labels (one value per voxel, distinct per tile) can
-use `merge_tile_labels`:
-
-```python
-# zarr → your pipeline → per-tile labels
-labeled = your_pipeline(da.from_zarr("image.zarr"))  # dask.array.Array
-
-from patchworks import merge_tile_labels
-
-merged = merge_tile_labels(labeled, write_to="final.zarr")
 ```

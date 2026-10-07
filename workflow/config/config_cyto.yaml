@@ -1,58 +1,21 @@
-# Example segmentation config: cytoplasm/membrane channel.
-#
-# Only what differs from config/common.yaml — the input, work_dir, tiling and
-# conversion settings all live there and are merged in ahead of this file.
-# Run it via config/multi.yaml, or on its own with both files:
-#
-#   snakemake -s Snakefile --configfile config/common.yaml config/config_cyto.yaml
+# Cells (cytoplasm or membrane). Only what differs from common.yaml.
 
-channel: 0 # cytoplasm/membrane channel
-
-# Optional second channel handed to Cellpose as the nucleus input, which
-# usually improves cytoplasm segmentation. Channel indices are 0-based, same
-# as `channel`. Leave it out (or null) for a single-channel run.
-#
-# Only the segment step reads it: the tile geometry, the occupancy map and the
-# staged labels all stay exactly as they are for a single channel -- the pair
-# is stacked on a leading axis that is carried into each tile, not tiled.
-#
-# It does double the bytes a tile holds. `tile_shape: "auto"` is told about
-# that and shrinks each spatial side by ~1/sqrt(2) to fit the same VRAM
-# budget; the hand-set tile_shape in common.yaml is not, so halve it yourself.
-#
-# Cellpose 3 turns this into channels: [1, 2]; Cellpose 4 (cpsam) dropped
-# `channels` and just reads both. Override either by setting `channels:` or
-# `channel_axis:` in the cellpose: block below.
-nuclei_channel: 1
-
-# Per-axis halo [z, y, x]. A scalar 30 would expand a [16, 1024, 1024] tile to
-# 76 x 1084 x 1084 = 5.3x the voxels it keeps, nearly all of it wasted z. The
-# z-halo only needs to cover one cell in z, not one cell in x/y.
+channel: 0 # cytoplasm or membrane
+nuclei_channel: 1 # Cellpose's second input; null for one channel
 overlap: [4, 30, 30]
-
 method: "cellpose"
 label_name: "cyto_labels"
-# min_volume: 100.0 # optional: drop objects smaller than this many µm³
-# max_volume: 5000.0 # optional: drop objects larger than this many µm³
-#                 # (e.g. several cells merged into one blob). Either or both
-#                 # -- runs once on the whole merged image (not per tile,
-#                 # where an object crossing a tile boundary would look
-#                 # smaller/larger than it really is) and needs image.zarr
-#                 # to carry a pixel size -- see common.yaml/convert.
+# min_volume: 100.0 # µm³
 cellpose:
   model: "cyto3"
   diameter: 30
   do_3D: true
   gpu: true
+
 # With a membrane stain, Cellpose 4 (cpsam) may segment the nuclei instead of
-# the cells. Alternatives that use the nuclei as seeds, one cell each
-# (docs/guide/membrane_cells.md) -- replace `method` and `cellpose` above:
+# the cells. One cell per nucleus instead (docs/guide/membrane_cells.md):
 # method: "custom"
-# stitch: "iou"   # required: these fill space, cells touch at every seam
+# stitch: "iou"
 # custom:
-#   module: "patchworks.plugins.watershed"
-#   kwargs: {nuclei_min_size: 200, foreground: "otsu"}
-# or, with PlantSeg's boundary U-Net (pixi install -e plantseg):
-# custom:
-#   module: "patchworks.plugins.plantseg"
-#   kwargs: {model: "generic_confocal_3D_unet", segmentation: "nuclei_watershed", foreground: "otsu"}
+#   module: "patchworks.plugins.watershed"   # or patchworks.plugins.plantseg
+#   kwargs: {foreground: "otsu"}

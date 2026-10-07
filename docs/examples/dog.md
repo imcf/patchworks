@@ -1,90 +1,35 @@
-# Difference of Gaussians (blobs, threads, cilia, …)
+# Difference of Gaussians (spots, cilia, fibres)
 
-A lightweight blob/thread detector for structures Cellpose isn't shaped for
-(cilia, spots, fibres): blur twice at different sigmas, subtract, threshold,
-label the connected components. CPU (scipy) by default, GPU (cupy) optional.
-Optionally deconvolve each tile first with
-[pycudadecon](https://github.com/tlambert03/pycudadecon).
+For small structures Cellpose is not made for: blur at two sigmas, subtract,
+threshold, label. CPU by default, GPU with `use_gpu=True` (needs `cupy`);
+optionally deconvolve each tile first with
+[pycudadecon](https://github.com/tlambert03/pycudadecon)
+(`pip install "patchworks[dog]"`, CUDA only).
 
 > Cilia DoG + deconvolution approach courtesy of
 > [angelo-angonezi](https://github.com/angelo-angonezi).
 
-## Installation
-
-`dog_label_fn` itself only needs patchworks' core deps (scipy). The
-deconvolution step needs pycudadecon:
-
-```bash
-pip install "patchworks[dog]"
-```
-
-GPU blur/label (`use_gpu=True`) needs `cupy` too, matching your CUDA version
-(e.g. `pip install cupy-cuda12x`) — not bundled in the `dog` extra since it's
-CUDA-version-specific.
-
-## Code
-
 ```python
-import numpy as np
 from patchworks import tile_process
 from patchworks.plugins.dog import dog_label_fn
 
-IMAGE = "image.zarr"
-OUTPUT = "labels_dog.zarr"
-
 fn = dog_label_fn(low_sigma=1.0, high_sigma=3.0, threshold=0.02)
-
-tile_process(
-    IMAGE,
-    fn,
-    channel=1,
-    tile_shape=(1, 1024, 1024),
-    overlap=8,  # just needs to cover one object + high_sigma
-    write_to=OUTPUT,
-    progress=True,
-)
+tile_process("image.zarr", fn, channel=1, tile_shape=(16, 1024, 1024), overlap=[4, 8, 8])
 ```
 
-## Picking `low_sigma` / `high_sigma` / `threshold`
+## Parameters
 
-`dog = blur(low_sigma) - blur(high_sigma)`. `low_sigma` should be about the
-object's radius (denoises without erasing it); `high_sigma` a few times
-larger (models the background to subtract out). `threshold` is applied
-directly to the DoG image — start near the DoG's typical peak value on a
-known-positive region and adjust from there; there's no auto (Otsu-style)
-option, since the DoG image isn't bimodal the way a raw intensity image is.
+- `low_sigma`: about the object's radius; `high_sigma`: a few times larger
+  (the background to subtract).
+- `threshold` applies to the DoG image: start near its peak value on a
+  known object and adjust.
+- `connectivity=3` (3-D) joins voxels touching at an edge or corner, so an
+  oblique cilium is one object rather than a row of fragments. With the API,
+  pass the same value to `merge_tile_labels`; the workflow does it for you.
+- `dilate_labels(fn, iterations=2)` grows thin labels
+  ([Growing labels](../guide/custom_segmentation.md#growing-labels)).
 
-## Thin, oblique objects: `connectivity`
-
-The thresholded voxels are joined into objects across shared **faces** by
-default. A cilium lying obliquely is a staircase of voxels touching only
-along edges or at corners, and comes out as a row of fragments.
-`connectivity=2` also joins voxels sharing an edge, `connectivity=3` (3-D)
-also a corner:
-
-```python
-fn = dog_label_fn(low_sigma=1.0, high_sigma=3.0, threshold=0.02, connectivity=3)
-```
-
-The merge has to join tiles the same way, or objects crossing a tile
-boundary diagonally are split there: the workflow does this by itself; with
-the API, pass the same value to `merge_tile_labels(..., connectivity=3)`.
-The merged result is then exactly that of labelling the whole image at once,
-whatever the tile size.
-
-## GPU
-
-```python
-fn = dog_label_fn(low_sigma=1.0, high_sigma=3.0, threshold=0.02, use_gpu=True)
-```
-
-Requires `cupy` (matching your CUDA version, e.g. `pip install cupy-cuda12x`)
-— not a patchworks dependency, install it separately.
-
-## With deconvolution first
-
-Let the voxel sizes come from the image rather than retyping them — the
-lateral ones from X/Y, the axial ones from Z:
+## Deconvolution first
 
 ```python
 from patchworks.plugins.ome_zarr import read_pixel_size
@@ -92,170 +37,38 @@ from patchworks.plugins.ome_zarr import read_pixel_size
 fn = dog_label_fn(
     low_sigma=1.0, high_sigma=3.0, threshold=0.02,
     decon_kwargs=dict(psf=psf, wavelength=525, na=1.4, nimm=1.515),
-    voxel_size=read_pixel_size(IMAGE),   # -> dxdata/dzdata/dxpsf/dzpsf
+    voxel_size=read_pixel_size("image.zarr"),   # fills dxdata/dzdata/dxpsf/dzpsf
 )
-result = tile_process(IMAGE, fn, tile_shape=(1, 1024, 1024), overlap=32)
 ```
 
-Anything you set in `decon_kwargs` yourself wins, so a PSF sampled
-differently from the data keeps its own sizes:
+Anything set in `decon_kwargs` wins, such as `dxpsf`/`dzpsf` for a PSF sampled
+differently from the data. A wrong voxel size does not fail, it gives a
+subtly wrong image, so let it come from the image. Make `overlap` cover the
+PSF as well as `high_sigma`.
 
-```python
-decon_kwargs=dict(psf=psf, dxpsf=0.05, dzpsf=0.1, wavelength=525, ...)
-```
+## On the cluster
 
-!!! warning "A wrong voxel size does not fail loudly"
-    Deconvolution given the wrong sampling still runs and still returns an
-    image — just a subtly wrong one. That is the reason to derive these from
-    the store's own calibration instead of keeping a second copy in a config
-    that can drift.
-
-    `read_pixel_size` returns `{}` for an uncalibrated store; then nothing is
-    filled in and you must supply the sizes yourself.
-
-!!! note "Deconvolution always needs a GPU"
-    `pycudadecon` is CUDA-only, independent of `dog_label_fn`'s own `use_gpu`
-    flag (which only picks the backend for the blur/label steps). A SLURM job
-    running this needs a GPU allocated. Widen `overlap` past the PSF support
-    so edge tiles keep enough context (a plain intensity/threshold halo is
-    too thin).
-
-!!! note "cudaDecon can return a smaller volume than it was given"
-    It rounds each axis down to an FFT-efficient length — e.g. a
-    `(32, 1084, 1084)` tile comes back `(32, 1080, 1080)`, because
-    `1080 = 2³·3³·5` while `1084 = 4·271` — and trims the excess off the
-    **high end**, leaving voxel `(0, 0, 0)` where it was. patchworks restores
-    the input shape before the DoG step (one label per input voxel is
-    required) anchored at that origin, and logs a WARNING with both shapes.
-
-    Anchoring matters: restoring it *centred* instead moves every voxel by
-    `excess // 2` — a 2 px y/x shift for the tile above, identical on every
-    tile. That is invisible on a cell tens of voxels wide and obvious on a
-    cilium a few voxels wide, which is how it was eventually caught. If the
-    logged difference is more than a few voxels, the PSF or the voxel sizes
-    are wrong.
-
-## Growing the labels afterwards
-
-DoG spots/threads are often thin — grow each label by a few pixels with
-[`dilate_labels`](../api/postprocess.md):
-
-```python
-from patchworks import tile_process, dilate_labels
-from patchworks.plugins.dog import dog_label_fn
-
-fn = dog_label_fn(low_sigma=1.0, high_sigma=3.0, threshold=0.02)
-fn = dilate_labels(fn, iterations=2)
-tile_process(IMAGE, fn, tile_shape=(1, 1024, 1024), overlap=8, write_to=OUTPUT)
-```
-
-On the cluster, set `dilate: 2` in the YAML config instead — it applies to
-`method: "custom"` (this plugin) the same way it does for `cellpose`/
-`threshold`, see [Growing labels afterwards](../guide/custom_segmentation.md#growing-labels-afterwards-dilation).
-
-## Using it in the Snakemake workflow
-
-No dedicated wiring needed — `patchworks.plugins.dog` exposes a `segment(tile, **kwargs)`
-adapter for the documented [`"custom"` method](../guide/custom_segmentation.md):
+`workflow/config/config_cilia.yaml` is a complete example:
 
 ```yaml
-method: "custom"
-label_name: "cilia_labels"
-custom:
-  module: "patchworks.plugins.dog"
-  function: "segment"
-  kwargs:
-    low_sigma: 1.0
-    high_sigma: 3.0
-    threshold: 0.02
-```
-
-See `workflow/config/config_cilia.yaml` for a full example, including
-deconvolution.
-
-### With deconvolution, on SLURM
-
-Add `decon_kwargs` under `custom.kwargs` — same keys as the plain-Python
-example above — and the segment job deconvolves each tile with
-`pycudadecon` before running the DoG detector:
-
-```yaml
-# config/config_cilia.yaml (excerpt) — only what differs from common.yaml,
-# which supplies the input, work_dir, tile_shape and skip_empty
 channel: 2
-# Per-axis halo [z, y, x], covering the PSF support (decon) + the DoG's
-# high_sigma. A scalar 30 would expand a [16, 1024, 1024] tile to 5.3x the
-# voxels it keeps, nearly all of it wasted z.
 overlap: [8, 30, 30]
-
 method: "custom"
 label_name: "cilia_labels"
 custom:
   module: "patchworks.plugins.dog"
-  function: "segment"
   kwargs:
     low_sigma: 1.0
     high_sigma: 3.0
     threshold: 0.02
-    decon_kwargs:
+    connectivity: 3          # keep oblique cilia whole
+    decon_kwargs:            # optional; voxel sizes come from the image
       psf: "/path/to/psf.tif"
       wavelength: 525
       na: 1.4
       nimm: 1.515
 ```
 
-No voxel sizes: the workflow reads `image.zarr`'s own calibration and fills
-in `dxdata`/`dxpsf` from X/Y and `dzdata`/`dzpsf` from Z. Set any of them in
-`decon_kwargs` to override — for instance a PSF sampled finer than the data:
-
-```yaml
-      dxpsf: 0.05
-      dzpsf: 0.1
-```
-
-!!! tip "This works for your own methods too"
-    The injection is not DoG-specific. Any `custom` function that declares a
-    `voxel_size` parameter receives `{"z": .., "y": .., "x": ..}` from the
-    store, so a method needing physical units never has to keep a second copy
-    of the calibration in its config. If the store is uncalibrated the
-    workflow says so and passes nothing.
-
-Run it exactly like a Cellpose config — the shared settings come from
-`config/common.yaml`, merged in ahead of this one:
-
-```bash
-python -m snakemake --workflow-profile profile/slurm --configfile config/common.yaml config/config_cilia.yaml
-```
-
-Checklist specific to this config:
-
-- **Env:** the segment job's environment needs `patchworks[dog]`
-  (`pip install "patchworks[dog]"`) on top of whatever else it uses — plain
-  `dog_label_fn` only needs scipy, but `decon_kwargs` pulls in
-  `pycudadecon`.
-- **GPU always required:** `pycudadecon` is CUDA-only regardless of the
-  detector's own `use_gpu` flag, so `set-resources: segment:` in
-  `profile/slurm/config.yaml` must request a GPU (`slurm_extra:
-  "'--gres=gpu:1'"`) the same as for Cellpose.
-- **`overlap`:** widen it past the PSF support, not just past `high_sigma` —
-  a thin intensity/threshold halo isn't enough once deconvolution is in the
-  loop.
-- **`skip_empty`:** the `prepare` rule (`workflow/scripts/prepare_tiles.py`)
-  builds a max-pooled occupancy map and reduces it over each tile's **full**
-  footprint (`build_occupancy_map` + `tile_occupancy`) before submitting any
-  `segment` jobs, regardless of `method`. Cilia are small and often sit near
-  a tile's edge, which is precisely where the older centred-window preview
-  could miss them — this decides every tile exactly. No extra config needed
-  beyond `skip_empty: true` (the default), and the map is built once and
-  shared by every config against that store.
-- Run alongside `config_cyto.yaml`/`config_nuclei.yaml` via `config/multi.yaml`
-  to also get the cilia→cell/nucleus relation — see *Relating cilia to their
-  cell*, below.
-
-## Relating cilia to their cell
-
-Segment the cell body with Cellpose and the cilia with `dog_label_fn` as two
-separate `tile_process` runs (same image, same `tile_shape`), then use
-[`label_relations`](../guide/label_relations.md)
-to map each cilium to the cell it belongs to — see
-`workflow/config/multi.yaml` for the same thing wired up as a cluster job.
+Deconvolution needs a GPU in the segment jobs. List it in a multi config
+next to the cells to get each cilium's cell
+([Tables and relations](../guide/tables.md#relating-two-label-images)).
