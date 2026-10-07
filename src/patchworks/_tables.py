@@ -746,7 +746,56 @@ def relate_tables(
                 pid[i], dist[i] = found[lab]
         cols[f"{parent}_distance_um"] = dist
     add_columns(cpath, cols)
+    # Which parent labels these columns describe, on the id column itself:
+    # its own metadata, so concurrent relations of one child (each writing
+    # their own columns) cannot overwrite each other's. relation_current()
+    # reads it.
+    from ._io import open_group_any
+
+    id_col = zarr.open_group(cpath, mode="r+")[TABLE_GROUP][f"{parent}_id"]
+    id_col.attrs[RELATION_KEY] = {
+        "parent_labels": label_fingerprint(
+            open_group_any(_label_group(store, parent))
+        ),
+        "max_distance_um": max_distance_um,
+    }
     return dict(matches)
+
+
+#: Attrs key on a ``<parent>_id`` column: the parent labels it was made from.
+RELATION_KEY = "patchworks_relation"
+
+
+def relation_current(
+    store: Union[str, Path],
+    child: str,
+    parent: str,
+    max_distance_um: float | None = None,
+) -> bool:
+    """Whether *child*'s table holds its relation to *parent*'s current
+    labels: both tables current, and the ``<parent>_id`` column computed
+    from the parent labels there now (and the same *max_distance_um*).
+
+    False for columns from before this was recorded: unknown, not current.
+    """
+    from ._io import open_group_any
+
+    try:
+        cgroup = _label_group(store, child)
+        pgroup = _label_group(store, parent)
+        if is_stale(cgroup) or is_stale(pgroup):
+            return False
+        table = open_group_any(f"{cgroup}/{TABLE_GROUP}")
+        info = dict(table[f"{parent}_id"].attrs).get(RELATION_KEY)
+        if not info:
+            return False
+        if info.get("max_distance_um") != max_distance_um:
+            return False
+        return info.get("parent_labels") == label_fingerprint(
+            open_group_any(pgroup)
+        )
+    except Exception:
+        return False
 
 
 def nearest_parents(

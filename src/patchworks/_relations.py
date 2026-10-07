@@ -43,14 +43,20 @@ def _chunk_pairs(
     if not a_fg.any():
         empty = np.empty((0, 3), dtype=np.int64)
         return empty, np.empty((0, 2), dtype=np.int64)
-    a_ids, a_counts = np.unique(a_block[a_fg], return_counts=True)
-    sizes = np.stack([a_ids, a_counts], axis=1).astype(np.int64)
-    mask = a_fg & (b_block > 0)
-    if not mask.any():
+    a_vals = a_block[a_fg].astype(np.int64)
+    a_ids, a_counts = np.unique(a_vals, return_counts=True)
+    sizes = np.stack([a_ids, a_counts], axis=1)
+    b_vals = b_block[a_fg].astype(np.int64)
+    both = b_vals > 0
+    if not both.any():
         return np.empty((0, 3), dtype=np.int64), sizes
-    pairs = np.stack([a_block[mask], b_block[mask]], axis=1).astype(np.int64)
-    uniq, counts = np.unique(pairs, axis=0, return_counts=True)
-    return np.concatenate([uniq, counts[:, None]], axis=1), sizes
+    a_vals, b_vals = a_vals[both], b_vals[both]
+    # One int64 key per pair, so the count is a 1-D unique: np.unique over
+    # rows (axis=0) is a lexsort of structured rows, ~20x slower on a full
+    # chunk, and it was the bulk of a relation's hours.
+    base = int(b_vals.max()) + 1
+    keys, counts = np.unique(a_vals * base + b_vals, return_counts=True)
+    return np.stack([keys // base, keys % base, counts], axis=1), sizes
 
 
 def label_relations(
@@ -82,7 +88,9 @@ def label_relations(
         Zarr array name inside *a*/*b* when they're store paths (default
         ``"labels"``).
     n_workers : int or None, optional
-        Parallel chunk workers. Default ``min(4, cpu_count)``.
+        Parallel chunk workers. Default: the CPUs this process may use (the
+        SLURM allocation on a cluster). Each holds two chunks and their
+        pairs at a time.
 
     Returns
     -------
@@ -116,7 +124,7 @@ def label_relations(
 
     n_blocks = a.numblocks
     total = int(np.prod(n_blocks))
-    nw = n_workers if n_workers is not None else min(4, cpu_allocation())
+    nw = n_workers if n_workers is not None else cpu_allocation()
 
     logger.info(
         "label_relations: scanning %d chunk(s) of %s with %d worker(s)",
@@ -127,9 +135,12 @@ def label_relations(
 
     def _one(flat_idx: int) -> tuple[np.ndarray, np.ndarray]:
         idx = np.unravel_index(flat_idx, n_blocks)
-        return _chunk_pairs(
-            np.asarray(a.blocks[idx]), np.asarray(b.blocks[idx])
-        )
+        a_block = np.asarray(a.blocks[idx])
+        if not a_block.any():
+            # Nothing of a here: b's chunk is not even read. For a sparse a
+            # (cilia, nuclei) that is most of the volume.
+            return _chunk_pairs(a_block, a_block)
+        return _chunk_pairs(a_block, np.asarray(b.blocks[idx]))
 
     # as_completed, not ex.map: map returns an iterator that yields in
     # submission order, so one slow early chunk withholds every later result

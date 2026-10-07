@@ -2006,3 +2006,33 @@ def test_a_position_rule_orders_its_relations():
         names[2]: "FAILED",
         names[3]: "ok",
     }
+
+
+def test_a_relation_written_as_csv_is_up_to_date_too(tmp_path):
+    """A sheet too long for Excel is written as two csv files; only the
+    .xlsx counted, so such relations were recomputed (hours) on every run."""
+    from relate import _relation_up_to_date, run_relations
+
+    work_dir = tmp_path / "work"
+    for name in ("cilia", "cells"):
+        (work_dir / name).mkdir(parents=True)
+        (work_dir / name / "labels.done").touch()
+    out = work_dir / "rel.xlsx"
+    later = time.time() + 60
+    for name in ("cilia", "cells"):
+        csv = work_dir / f"rel_{name}.csv"
+        csv.write_text("sentinel\n")
+        os.utime(csv, (later, later))
+    assert _relation_up_to_date(str(work_dir), "cilia", "cells", out)
+    # One of the two missing: not written completely
+    (work_dir / "rel_cells.csv").unlink()
+    assert not _relation_up_to_date(str(work_dir), "cilia", "cells", out)
+    (work_dir / "rel_cells.csv").write_text("sentinel\n")
+    os.utime(work_dir / "rel_cells.csv", (later, later))
+    # No image.zarr at all: anything but a skip would raise
+    run_relations(
+        str(work_dir),
+        str(tmp_path / "image.zarr"),
+        [{"a": "cilia", "b": "cells", "output": "rel.xlsx"}],
+    )
+    assert (work_dir / "rel_cilia.csv").read_text() == "sentinel\n"
