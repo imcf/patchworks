@@ -2357,6 +2357,8 @@ def fix_ngff_metadata(store: Union[str, Path]) -> list[str]:
     - OME-Zarr 0.5 (zarr v3): every pyramid array's ``dimension_names``,
       set to the multiscales axes, as the spec requires (patchworks wrote
       none before).
+    - The ``labels`` list: entries without a label image (one deleted by
+      hand) removed, label images missing from it added.
     - A label image with more pyramid levels than its image: the extra
       (coarsest) levels are dropped, as the spec requires the counts equal.
       One with fewer is reported, not changed: that needs levels computed
@@ -2393,9 +2395,30 @@ def fix_ngff_metadata(store: Union[str, Path]) -> list[str]:
 
     n_image = fix(root, "image")
     try:
-        names = read_ngff_attr(root["labels"].attrs, "labels", []) or []
+        labels_grp = root["labels"]
     except KeyError:
-        names = []
+        return done
+    listed = list(read_ngff_attr(labels_grp.attrs, "labels", []) or [])
+    images = {
+        k
+        for k, g in labels_grp.groups()
+        if read_ngff_attr(g.attrs, "multiscales")
+    }
+    # The list must name label images that exist (readers open each one),
+    # and should name all of them.
+    names = [n for n in listed if n in images]
+    names += sorted(images - set(names))
+    if names != listed:
+        write_ngff_attrs(labels_grp, labels=names)
+        gone = [n for n in listed if n not in images]
+        added = [n for n in names if n not in listed]
+        if gone:
+            done.append(
+                f"labels: removed {', '.join(gone)} from the list "
+                "(no such label image)"
+            )
+        if added:
+            done.append(f"labels: listed {', '.join(added)}")
     for name in names:
         group = root["labels"][name]
         n_label = fix(group, f"labels/{name}")
@@ -2543,6 +2566,10 @@ def register_labels(
 
         labels_grp = _open_group(f"{store}/labels")
         registered = list(read_ngff_attr(labels_grp.attrs, "labels", []) or [])
+        # Entries whose group was deleted (an rm -r of a label image) would
+        # send every reader to open something that is not there.
+        present = {k for k, _ in labels_grp.groups()}
+        registered = [n for n in registered if n in present]
         if name not in registered:
             registered.append(name)
         write_ngff_attrs(labels_grp, labels=registered)

@@ -257,7 +257,13 @@ def _cmd_info(args: argparse.Namespace) -> int:
         labels = []
     for name in labels or []:
         path = f"{args.store}/labels/{name}"
-        n = dict(open_group_any(path).attrs).get("n_objects")
+        try:
+            n = dict(open_group_any(path).attrs).get("n_objects")
+        except (KeyError, FileNotFoundError, ValueError):
+            print(
+                f"labels/{name}  (listed, but missing: patchworks fix-metadata)"
+            )
+            continue
         print(f"labels/{name}" + (f"  ({n} objects)" if n is not None else ""))
         describe(path, "  ")
     return 0
