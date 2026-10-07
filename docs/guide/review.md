@@ -223,9 +223,13 @@ image.zarr/labels/cilia_labels/
 So it travels with the labels, including in a zip bundle, and it is
 replaced whenever the labels are. A table computed from older labels is
 recognised and ignored, never shown against the wrong segmentation.
-Measuring costs one read of the labels, after the merge. Add intensity
-columns with `table_channels: [0, 2]`, or turn tables off with
-`object_table: false` (see the [workflow config](snakemake.md)).
+The table costs no extra read of the labels: each segment job measures
+its tiles' objects as it writes them, and the merge adds those sums up per
+merged object (an object cut by tile boundaries gets exactly the values it
+would have measured whole). Intensity columns (`table_channels: [0, 2]`)
+need the image, so with them the merged labels are measured once instead.
+Turn tables off with `object_table: false` (see the
+[workflow config](snakemake.md)).
 
 For a store that has none, for example a run made before tables existed,
 or labels from elsewhere:

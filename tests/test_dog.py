@@ -276,3 +276,20 @@ def test_sigma_units_um_segments_like_the_equivalent_pixels():
     np.testing.assert_array_equal(um, px)
     with pytest.raises(ValueError, match="voxel_size"):
         dog_label_fn(0.1, 0.3, 0.02, sigma_units="um")
+
+
+def test_connectivity_keeps_a_thin_oblique_object_whole():
+    """A one-voxel staircase touches itself only along edges and corners:
+    one object at connectivity 3, a fragment per voxel at 1."""
+    from patchworks.plugins.dog import dog_label_fn
+
+    tile = np.zeros((12, 12, 12), "float32")
+    for i in range(2, 10):
+        tile[i, i, i] = 1000.0  # a diagonal line through z, y and x
+    kw = dict(low_sigma=0.0, high_sigma=3.0, threshold=100.0)
+    corners = dog_label_fn(**kw, connectivity=3)(tile)
+    faces = dog_label_fn(**kw)(tile)
+    assert len(np.unique(corners[corners > 0])) == 1
+    assert len(np.unique(faces[faces > 0])) == 8
+    with pytest.raises(ValueError, match="connectivity"):
+        dog_label_fn(**kw, connectivity=4)

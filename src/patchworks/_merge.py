@@ -158,6 +158,37 @@ def _boundary_face_specs(
     return specs
 
 
+def _transverse_shifts(n_face_axes: int, connectivity: int) -> list:
+    """In-plane offsets to a neighbour across a face, for *connectivity*.
+
+    One step across the face plus ``k`` steps within it is a neighbour when
+    ``1 + k <= connectivity`` (:func:`scipy.ndimage.generate_binary_structure`).
+    """
+    from itertools import product
+
+    return [
+        d
+        for d in product((-1, 0, 1), repeat=n_face_axes)
+        if 1 + sum(map(abs, d)) <= connectivity
+    ]
+
+
+def _face_neighbours(grid, ax, face_axes, n_per_dim) -> list:
+    """Flat indices of the far-side chunk and its neighbours across the face
+    (one step along any face axes, inside the grid)."""
+    from itertools import product
+
+    out = []
+    for d in product((-1, 0, 1), repeat=len(face_axes)):
+        g = list(grid)
+        g[ax] += 1  # *grid* was moved to the near side
+        for a, k in zip(face_axes, d):
+            g[a] += k
+        if all(0 <= g[a] < n_per_dim[a] for a in face_axes):
+            out.append(int(np.ravel_multi_index(tuple(g), n_per_dim)))
+    return out
+
+
 def _scan_touching_pairs(
     zarr_path: str,
     component: str,
@@ -166,6 +197,7 @@ def _scan_touching_pairs(
     n_workers: int = 1,
     has_labels: "np.ndarray | None" = None,
     progress: bool = False,
+    connectivity: int = 1,
 ) -> np.ndarray:
     """Scan chunk-boundary slabs; return (N, 2) int64 array of touching pairs.
 
@@ -197,6 +229,13 @@ def _scan_touching_pairs(
         an empty chunk can never produce a touching pair, so those columns are
         not read at all. On a sparse image (``skip_empty``) that is most of
         them.
+    connectivity : int
+        Which neighbours touch, as :func:`scipy.ndimage.generate_binary_structure`
+        counts them: 1 across faces only; 2 also across edges; 3 (in 3-D)
+        also across corners. Must match the connectivity the tiles were
+        labelled with. Above 1, each slab is read one voxel wider on every
+        side across the face, so voxels touching diagonally across the
+        boundary -- into a diagonal neighbour chunk too -- are paired.
 
     Returns
     -------
@@ -226,11 +265,16 @@ def _scan_touching_pairs(
             a_idx = int(np.ravel_multi_index(tuple(grid), n_per_dim))
             # A pair needs a non-zero label on *both* sides, so a boundary
             # touching an empty chunk cannot produce one -- don't read it.
-            if has_labels is not None and not (
-                has_labels[a_idx] and has_labels[b_idx]
-            ):
-                skipped += 1
-                continue
+            # Diagonally, the far side is b and its neighbours across the face.
+            if has_labels is not None:
+                far = (
+                    [b_idx]
+                    if connectivity <= 1
+                    else _face_neighbours(grid, ax, face_axes, n_per_dim)
+                )
+                if not (has_labels[a_idx] and has_labels[far].any()):
+                    skipped += 1
+                    continue
             tasks.append((ax, pos, offsets, a_idx, b_idx))
     if skipped:
         logger.info(
@@ -239,23 +283,80 @@ def _scan_touching_pairs(
             skipped + len(tasks),
         )
 
+    shifts = _transverse_shifts(arr.ndim - 1, connectivity)
+
     def _one(task: tuple) -> "np.ndarray | None":
         ax, pos, offsets, a_idx, b_idx = task
         face_axes = [a for a in range(arr.ndim) if a != ax]
-        sl: list = [slice(None)] * arr.ndim
-        sl[ax] = slice(pos - 1, pos + 1)
+        if connectivity <= 1:
+            sl: list = [slice(None)] * arr.ndim
+            sl[ax] = slice(pos - 1, pos + 1)
+            for a, off in zip(face_axes, offsets):
+                sl[a] = slice(off, min(off + chunk_shape[a], shape[a]))
+            slab = np.moveaxis(np.asarray(arr[tuple(sl)]), ax, 0)
+            a_vals = slab[0].ravel().astype(np.int64)
+            b_vals = slab[1].ravel().astype(np.int64)
+            if label_offsets is not None:
+                a_vals[a_vals > 0] += label_offsets[a_idx]
+                b_vals[b_vals > 0] += label_offsets[b_idx]
+            mask = (a_vals > 0) & (b_vals > 0) & (a_vals != b_vals)
+            if not mask.any():
+                return None
+            pairs = np.sort(
+                np.stack([a_vals[mask], b_vals[mask]], axis=1), axis=1
+            )
+            return np.unique(pairs, axis=0)
+        # Diagonal neighbours: the near plane over this chunk column, the far
+        # plane one voxel wider on every face axis (zero beyond the array),
+        # compared at every in-plane shift the connectivity allows. The far
+        # margin lies in other chunks, so its offsets are per voxel.
+        near_sl: list = [slice(None)] * arr.ndim
+        far_sl: list = [slice(None)] * arr.ndim
+        near_sl[ax] = slice(pos - 1, pos)
+        far_sl[ax] = slice(pos, pos + 1)
+        pads, sizes, starts = [], [], []
         for a, off in zip(face_axes, offsets):
-            sl[a] = slice(off, min(off + chunk_shape[a], shape[a]))
-        slab = np.moveaxis(np.asarray(arr[tuple(sl)]), ax, 0)
-        a_vals = slab[0].ravel().astype(np.int64)
-        b_vals = slab[1].ravel().astype(np.int64)
+            stop = min(off + chunk_shape[a], shape[a])
+            lo, hi = max(off - 1, 0), min(stop + 1, shape[a])
+            near_sl[a] = slice(off, stop)
+            far_sl[a] = slice(lo, hi)
+            pads.append((1 - (off - lo), 1 - (hi - stop)))
+            sizes.append(stop - off)
+            starts.append(off - 1)
+        near = np.moveaxis(np.asarray(arr[tuple(near_sl)]), ax, 0)[0]
+        far = np.moveaxis(np.asarray(arr[tuple(far_sl)]), ax, 0)[0]
+        near = near.astype(np.int64)
+        far = np.pad(far.astype(np.int64), pads)
         if label_offsets is not None:
-            a_vals[a_vals > 0] += label_offsets[a_idx]
-            b_vals[b_vals > 0] += label_offsets[b_idx]
-        mask = (a_vals > 0) & (b_vals > 0) & (a_vals != b_vals)
-        if not mask.any():
+            near[near > 0] += label_offsets[a_idx]
+            far_grid = [
+                np.clip(
+                    (s0 + np.arange(n + 2)) // chunk_shape[a],
+                    0,
+                    n_per_dim[a] - 1,
+                )
+                for a, s0, n in zip(face_axes, starts, sizes)
+            ]
+            coords = [0] * arr.ndim
+            coords[ax] = pos // chunk_shape[ax]
+            for a, g in zip(face_axes, far_grid):
+                coords[a] = g
+            idx = np.ravel_multi_index(
+                tuple(np.ix_(*[np.atleast_1d(c) for c in coords])), n_per_dim
+            )
+            far_off = np.asarray(label_offsets)[np.squeeze(idx, axis=ax)]
+            far = np.where(far > 0, far + far_off, 0)
+        found = []
+        for d in shifts:
+            window = tuple(slice(1 + k, 1 + k + n) for k, n in zip(d, sizes))
+            b_vals = far[window].ravel()
+            a_vals = near.ravel()
+            mask = (a_vals > 0) & (b_vals > 0) & (a_vals != b_vals)
+            if mask.any():
+                found.append(np.stack([a_vals[mask], b_vals[mask]], axis=1))
+        if not found:
             return None
-        pairs = np.sort(np.stack([a_vals[mask], b_vals[mask]], axis=1), axis=1)
+        pairs = np.sort(np.vstack(found), axis=1)
         return np.unique(pairs, axis=0)
 
     nw = max(1, min(n_workers, len(tasks)))
@@ -812,6 +913,78 @@ def _lut_scratch_dir(lut_nbytes: int, fallback: str) -> str:
     return tempfile.mkdtemp(prefix="_pws_lut_", dir=parent)
 
 
+def _combine_tile_parts(
+    parts_dir: str,
+    offsets: np.ndarray,
+    counts: np.ndarray,
+    lut: np.ndarray,
+) -> dict:
+    """Every tile's object sums under its merged id, combined per object.
+
+    Memory: about 136 bytes per (object, tile) piece, a few times over while
+    sorting -- ~1.5 GB for 2.7 M cilia, against the LUT's 8 bytes per id
+    already held. Tiles are read one at a time.
+    """
+    from ._tables import combine_partials
+
+    parts = []
+    missing = []
+    for i in np.flatnonzero(counts > 0):
+        path = os.path.join(parts_dir, f"{int(i)}.npz")
+        try:
+            with np.load(path) as f:
+                part = {k: f[k] for k in f.files}
+        except FileNotFoundError:
+            missing.append(int(i))
+            continue
+        part["ids"] = lut[part["ids"] + int(offsets[i])]
+        parts.append(part)
+    if missing:
+        raise FileNotFoundError(
+            f"no object sums for {len(missing)} tile(s) with labels in "
+            f"{parts_dir} (e.g. {missing[:3]}); measure the merged labels "
+            "instead"
+        )
+    rows = sum(len(p["ids"]) for p in parts)
+    logger.info(
+        "zarr_native_merge: combining %d object piece(s) from %d tile(s)",
+        rows,
+        len(parts),
+    )
+    objects = combine_partials(parts)
+    if objects is None:
+        objects = {
+            "label": np.empty(0, np.int64),
+            "count": np.empty(0, np.int64),
+        }
+    return objects
+
+
+def _size_filter_lut(lut, objects, min_voxels, max_voxels):
+    """Drop merged objects outside ``[min_voxels, max_voxels]`` from *lut*
+    (they become background) and from *objects*."""
+    count = objects["count"]
+    keep = np.ones(len(count), bool)
+    if min_voxels is not None:
+        keep &= count >= int(min_voxels)
+    if max_voxels is not None:
+        keep &= count <= int(max_voxels)
+    dropped = objects["label"][~keep]
+    if dropped.size:
+        gone = np.zeros(len(lut), bool)
+        gone[dropped] = True
+        lut = np.where(gone[lut], 0, lut)
+    logger.info(
+        "zarr_native_merge: size filter drops %d of %d object(s) "
+        "outside [%s, %s] voxels",
+        int((~keep).sum()),
+        len(count),
+        min_voxels if min_voxels is not None else 0,
+        max_voxels if max_voxels is not None else "inf",
+    )
+    return lut, {k: v[keep] for k, v in objects.items()}
+
+
 def zarr_native_merge(
     staged_path: str,
     staged_component: str,
@@ -824,6 +997,11 @@ def zarr_native_merge(
     output_chunks: "Sequence[int] | None" = None,
     halo_dir: "str | Path | None" = None,
     iou_threshold: float = 0.5,
+    connectivity: int = 1,
+    parts_dir: "str | Path | None" = None,
+    min_voxels: "int | None" = None,
+    max_voxels: "int | None" = None,
+    objects_out: "dict | None" = None,
 ) -> "int | None":
     """Zarr-native label merge: boundary scan → scipy CC → parallel relabel.
 
@@ -872,6 +1050,25 @@ def zarr_native_merge(
         instead of whenever they touch. See :func:`_scan_iou_pairs`.
     iou_threshold : float
         Minimum IoU to join two labels in that mode (default 0.5).
+    connectivity : int
+        Neighbourhood the tiles were labelled with (1 faces, 2 edges, 3
+        corners); labels touching across a boundary that way are joined.
+        Ignored in IoU mode, which joins by agreement, not by touch.
+    parts_dir : str or Path, optional
+        Per-tile object sums saved by :func:`patchworks.stage_tile`
+        (``parts_dir=``), one ``<index>.npz`` per tile holding labels. They
+        are combined through the merge's own lookup table into one row per
+        merged object -- the object table, without reading the labels again
+        -- and put in *objects_out*. Needs *label_counts*.
+    min_voxels, max_voxels : int, optional
+        With *parts_dir*: drop merged objects outside this size, decided
+        from the combined counts and folded into the same lookup table, so
+        the one relabel pass writes the filtered labels (no separate filter
+        pass over the volume).
+    objects_out : dict, optional
+        Filled with the combined sums (``label``, ``count``, ``mean``,
+        ``m2``, ``lo``, ``hi``; see :func:`patchworks._tables.table_columns`),
+        under the final ids, when *parts_dir* was used and the merge ran.
 
     Returns
     -------
@@ -952,6 +1149,7 @@ def zarr_native_merge(
             n_workers=n_workers,
             has_labels=has_labels,
             progress=show_progress,
+            connectivity=connectivity,
         )
     logger.info(
         "zarr_native_merge: %d touching pairs → building LUT", len(pairs)
@@ -962,6 +1160,16 @@ def zarr_native_merge(
     logger.info(
         "zarr_native_merge: %d labels remapped across boundaries", n_remapped
     )
+
+    objects = None
+    if parts_dir is not None:
+        if offsets is None:
+            raise ValueError("parts_dir needs label_counts")
+        objects = _combine_tile_parts(str(parts_dir), offsets, counts_arr, lut)
+        if min_voxels is not None or max_voxels is not None:
+            lut, objects = _size_filter_lut(
+                lut, objects, min_voxels, max_voxels
+            )
 
     n_objects = None
     if sequential:
@@ -974,6 +1182,8 @@ def zarr_native_merge(
         logger.info(
             "zarr_native_merge: renumbered to 1..%d in the same LUT", n_objects
         )
+        if objects is not None:
+            objects["label"] = np.searchsorted(uniq, objects["label"])
 
     # Relabelling straight back into the source array saves writing the whole
     # volume a second time. It is safe because the boundary scan has already
@@ -1131,6 +1341,8 @@ def zarr_native_merge(
         arr.attrs[_MERGE_COUNT] = n_objects
         arr.attrs[_MERGE_STATE] = "done"
 
+    if objects_out is not None and objects is not None:
+        objects_out.update(objects)
     return n_objects
 
 
@@ -1156,6 +1368,11 @@ def merge_tile_labels(
     output_chunks: "Sequence[int] | None" = None,
     halo_dir: "str | Path | None" = None,
     iou_threshold: float = 0.5,
+    connectivity: int = 1,
+    parts_dir: "str | Path | None" = None,
+    min_voxels: "int | None" = None,
+    max_voxels: "int | None" = None,
+    objects_out: "dict | None" = None,
 ) -> Union["da.Array", tuple["da.Array", Union[int, None]]]:
     """Merge per-tile labels into a globally consistent label array.
 
@@ -1215,6 +1432,17 @@ def merge_tile_labels(
         stay two. ``None`` (default) joins whatever touches.
     iou_threshold:
         Minimum IoU for that join (default 0.5).
+    connectivity:
+        Neighbourhood the tiles were labelled with: 1 (default) faces, 2
+        also edges, 3 also corners (``scipy.ndimage.generate_binary_structure``).
+        Labels touching across a tile boundary that way are joined, so the
+        result is that of labelling the whole image at once.
+    parts_dir, min_voxels, max_voxels, objects_out:
+        Object sums saved per tile by :func:`stage_tile` (``parts_dir=``),
+        combined into one row per merged object in *objects_out* -- the
+        object table without a second read of the labels -- and an optional
+        size filter applied in the same relabel pass. See
+        :func:`zarr_native_merge`. Needs *label_counts*.
     n_workers:
         Parallel workers for the relabel step. Default ``min(4, cpu_count)``.
     stage_dir:
@@ -1335,6 +1563,11 @@ def merge_tile_labels(
             output_chunks=output_chunks,
             halo_dir=halo_dir,
             iou_threshold=iou_threshold,
+            connectivity=connectivity,
+            parts_dir=parts_dir,
+            min_voxels=min_voxels,
+            max_voxels=max_voxels,
+            objects_out=objects_out,
         )
     finally:
         # -- Cleanup temp stage (only when we created it), even on failure:

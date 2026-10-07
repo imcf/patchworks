@@ -147,6 +147,7 @@ def dog_label_fn(
     decon_kwargs: dict[str, Any] | None = None,
     voxel_size: dict[str, float] | None = None,
     sigma_units: str = "px",
+    connectivity: int = 1,
 ) -> Callable[[np.ndarray], np.ndarray]:
     """Return a ready-to-use DoG labeler for ``tile_process``.
 
@@ -186,12 +187,23 @@ def dog_label_fn(
         physical distances, converted per axis with *voxel_size* -- so a
         cilium is blurred by the same distance along z as across it, however
         coarse the z-step.
+    connectivity:
+        Which voxels of the thresholded mask belong together: 1 (default)
+        sharing a face; 2 also an edge; 3 also a corner (in 3-D, 6-, 18- and
+        26-neighbours). A thin oblique cilium is a staircase of voxels that
+        touch along edges or corners, and breaks into fragments at 1. The
+        merge must join tiles with the same value: the workflow passes it on
+        by itself; from the API, give ``merge_tile_labels(connectivity=)``.
 
     Returns
     -------
     Callable[[ndarray], ndarray]
         Picklable function ready for ``tile_process``.
     """
+    if connectivity not in (1, 2, 3):
+        raise ValueError(
+            f"connectivity must be 1, 2 or 3, got {connectivity!r}"
+        )
     if sigma_units not in ("px", "um"):
         raise ValueError(
             f'sigma_units must be "px" or "um", got {sigma_units!r}'
@@ -229,6 +241,7 @@ def dog_label_fn(
         "threshold": threshold,
         "use_gpu": use_gpu,
         "decon_kwargs": decon_kwargs,
+        "connectivity": connectivity,
     }
     return partial(_run, dog_dict=cfg)
 
@@ -510,6 +523,8 @@ def _segment_once(
             # an unreadable broadcast error from inside zarr.
             img = _restore_shape(img, before)
 
+    from scipy.ndimage import generate_binary_structure
+
     if use_gpu:
         import cupy as cp
         from cupyx.scipy.ndimage import gaussian_filter, label
@@ -530,7 +545,12 @@ def _segment_once(
         low_blur = high_blur = None  # peak is here; drop what's already used
         mask = dog_image > dog_dict["threshold"]
         dog_image = None
-        labels, _ = label(mask)
+        # Up to the tile's own dimensions (a 2-D tile caps at 2).
+        conn = min(int(dog_dict.get("connectivity", 1)), mask.ndim)
+        structure = generate_binary_structure(mask.ndim, conn)
+        if use_gpu:
+            structure = cp.asarray(structure)
+        labels, _ = label(mask, structure=structure)
         mask = None
         labels = labels.astype("int32")
         out = cp.asnumpy(labels) if use_gpu else labels

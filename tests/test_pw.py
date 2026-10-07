@@ -611,3 +611,52 @@ def test_pin_slurm_gpus_only_where_the_node_does_not_isolate():
     step = {"SLURM_STEP_GPUS": "1,2", "SLURM_JOB_GPUS": "1,2"}
     assert pin_slurm_gpus(step, visible=8)
     assert step["CUDA_VISIBLE_DEVICES"] == "1,2"
+
+
+def test_connectivity_is_one_value_shared_by_labelling_and_merge(tmp_path):
+    """The tiles and the merge must use the same neighbourhood: one value
+    per config, from the DoG kwargs or the top level, checked up front."""
+    import _pw
+    import numpy as np
+    import pytest
+
+    assert _pw.merge_connectivity({"method": "threshold"}) == 1
+    assert _pw.merge_connectivity({"connectivity": 3}) == 3
+    dog = {
+        "method": "custom",
+        "custom": {
+            "module": "patchworks.plugins.dog",
+            "kwargs": {"connectivity": 2},
+        },
+    }
+    assert _pw.merge_connectivity(dog) == 2
+    with pytest.raises(ValueError, match="disagree"):
+        _pw.validate_config({**dog, "connectivity": 3})
+    with pytest.raises(ValueError, match="1, 2 or 3"):
+        _pw.validate_config({"method": "threshold", "connectivity": 5})
+
+    # The threshold method labels with it: a diagonal pair of voxels
+    tile = np.zeros((4, 4), "float32")
+    tile[1, 1] = tile[2, 2] = 10.0
+    faces = _pw.build_fn({"method": "threshold"})(tile)
+    corners = _pw.build_fn({"method": "threshold", "connectivity": 2})(tile)
+    assert faces.max() == 2 and corners.max() == 1
+
+    # ... and so does the DoG plugin, given it at the top level
+    fn = _pw.build_fn(
+        {
+            "method": "custom",
+            "connectivity": 3,
+            "work_dir": str(tmp_path),
+            "custom": {
+                "module": "patchworks.plugins.dog",
+                "kwargs": {
+                    "low_sigma": 0,
+                    "high_sigma": 2,
+                    "threshold": 1,
+                    "voxel_size": {"z": 1.0, "y": 1.0, "x": 1.0},
+                },
+            },
+        }
+    )
+    assert fn.keywords["connectivity"] == 3

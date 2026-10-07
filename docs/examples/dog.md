@@ -54,6 +54,24 @@ directly to the DoG image — start near the DoG's typical peak value on a
 known-positive region and adjust from there; there's no auto (Otsu-style)
 option, since the DoG image isn't bimodal the way a raw intensity image is.
 
+## Thin, oblique objects: `connectivity`
+
+The thresholded voxels are joined into objects across shared **faces** by
+default. A cilium lying obliquely is a staircase of voxels touching only
+along edges or at corners, and comes out as a row of fragments.
+`connectivity=2` also joins voxels sharing an edge, `connectivity=3` (3-D)
+also a corner:
+
+```python
+fn = dog_label_fn(low_sigma=1.0, high_sigma=3.0, threshold=0.02, connectivity=3)
+```
+
+The merge has to join tiles the same way, or objects crossing a tile
+boundary diagonally are split there: the workflow does this by itself; with
+the API, pass the same value to `merge_tile_labels(..., connectivity=3)`.
+The merged result is then exactly that of labelling the whole image at once,
+whatever the tile size.
+
 ## GPU
 
 ```python

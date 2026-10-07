@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import itertools
 import logging
+import os
 from pathlib import Path
 from typing import Callable, Sequence, Union
 
@@ -168,6 +169,7 @@ def stage_tile(
     component: str = "staged",
     channel_axis: int | None = None,
     halo_dir: Union[str, Path, None] = None,
+    parts_dir: Union[str, Path, None] = None,
 ) -> int:
     """Run *fn* on a single tile and write it into the shared stage store.
 
@@ -208,6 +210,13 @@ def stage_tile(
         (keys ``"<axis>+"``/``"<axis>-"``), labelled with the same ``1..n``
         ids as the staged core. An object seen only in the halo is 0 there:
         it has no id in this tile. ``None`` (default) keeps nothing.
+    parts_dir : str or Path, optional
+        Also measure the tile's objects as written (size, centroid, spread,
+        bounding box; :func:`patchworks._tables.tile_partial`) into
+        ``<parts_dir>/<index>.npz``, keyed by the staged ``1..n`` ids. The
+        merge combines them into the object table without reading the
+        labels again (``merge_tile_labels(..., parts_dir=...)``). A tile
+        without labels writes none.
 
     Returns
     -------
@@ -272,7 +281,27 @@ def stage_tile(
     n_labels = int(trimmed.max())
     dst = zarr.open_group(str(stage_path), mode="r+")[component]
     dst[sl] = trimmed.astype(dst.dtype)
+    if parts_dir is not None and n_labels:
+        _save_partial(trimmed, sl, parts_dir, index)
     return n_labels
+
+
+def _save_partial(trimmed, sl, parts_dir, index) -> None:
+    """Write one tile's per-object sums to ``<parts_dir>/<index>.npz``.
+
+    Through a temporary name and a rename, so a job killed mid-write leaves
+    no truncated file for the merge to trust.
+    """
+    from ._tables import tile_partial
+
+    part = tile_partial(trimmed, [s.start for s in sl])
+    if part is None:
+        return
+    parts_dir = Path(parts_dir)
+    parts_dir.mkdir(parents=True, exist_ok=True)
+    tmp = parts_dir / f".{int(index)}.tmp.npz"
+    np.savez(tmp, **part)
+    os.replace(tmp, parts_dir / f"{int(index)}.npz")
 
 
 def _core_lut(core: np.ndarray, max_id: int) -> np.ndarray:

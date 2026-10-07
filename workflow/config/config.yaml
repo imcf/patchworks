@@ -103,6 +103,10 @@ sequential_labels: true # renumber merged labels to a contiguous 1..N range
 # agree (IoU >= iou_threshold), so two cells pressed together at a seam stay
 # two -- needs `overlap` > 0 to compare (2-D z-tiles fall back to the IoU of
 # adjacent planes, like Cellpose's stitch_threshold).
+# connectivity: 1 | 2 | 3 -- for method "threshold" (and the dog plugin, also
+#   as its own kwarg): voxels belong together across faces (1, default),
+#   also edges (2) or corners (3). Labelling and "touch" merging both use it,
+#   so the result is the whole image's labelling, whatever the tiling.
 # Post-processing per tile, before merging (in this order):
 # fill_holes: true | "per_plane" -- fill background enclosed by an object
 #   ("per_plane" fills each z-plane separately, the usual sense in a stack).
@@ -123,8 +127,10 @@ shard_labels: false
 # After the merge, measure every object (size, centroid, bounding box) into
 # image.zarr/labels/<label_name>/table: what `patchworks review image.zarr`
 # (look at the likely mistakes, fix them) and the relation workbooks work
-# from. One read of the labels. table_channels adds each object's mean/std
-# intensity in those image channels, e.g. [0, 2] (one read of each).
+# from. Built from what the segment jobs measured per tile -- no extra read
+# of the labels. table_channels adds each object's mean/std intensity in
+# those image channels, e.g. [0, 2] (then one read of the labels and of
+# each channel).
 object_table: true
 table_channels: []
 

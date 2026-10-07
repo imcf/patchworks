@@ -16,6 +16,7 @@ from patchworks import stage_tile
 from _pw import (
     build_fn,
     halo_path,
+    parts_path,
     load_segment_progress,
     load_tiles_json,
     open_image,
@@ -90,6 +91,9 @@ for n, index in enumerate(indices, 1):
             if cfg.get("stitch", "touch") == "iou"
             else None
         ),
+        # Each tile's object sums: the merge combines them into the object
+        # table (and decides the size filter) without reading labels again.
+        parts_dir=parts_path(work_dir, label_name),
     )
     # The per-tile time is what `tiles_per_job` has to be sized from: a job's
     # wall time is roughly N x this, and it must stay inside the QOS ceiling.
