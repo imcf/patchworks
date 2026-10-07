@@ -31,7 +31,13 @@ from patchworks.plugins.ome_zarr import (
     reshard_level,
 )
 
-from _pw import halo_path, load_tiles_json, stage_path, start_log
+from _pw import (
+    halo_path,
+    load_tiles_json,
+    merge_connectivity,
+    stage_path,
+    start_log,
+)
 
 start_log(snakemake.log[0])  # noqa: F821
 # Codec for every array this step creates (config `compression:`).
@@ -119,6 +125,8 @@ _, n_objects = merge_tile_labels(
         else None
     ),
     iou_threshold=float(cfg.get("iou_threshold", 0.5)),
+    # The neighbourhood the tiles were labelled with (DoG / threshold).
+    connectivity=merge_connectivity(cfg),
 )
 shutil.rmtree(halo_path(work_dir, label_name), ignore_errors=True)
 
@@ -231,6 +239,7 @@ _SETTINGS = (
     "max_volume",
     "stitch",
     "iou_threshold",
+    "connectivity",
     "sequential_labels",
     "compression",
     "skip_empty",

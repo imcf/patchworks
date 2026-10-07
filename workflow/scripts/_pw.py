@@ -332,6 +332,16 @@ def load_tiles_json(path):
     return json.loads(Path(path).read_text())
 
 
+def merge_connectivity(cfg) -> int:
+    """The neighbourhood a config labels with, so the merge joins tiles the
+    same way: ``custom: kwargs: connectivity`` (the DoG plugin), else the
+    top-level ``connectivity`` (the threshold method), else 1 (faces)."""
+    kwargs = (cfg.get("custom") or {}).get("kwargs") or {}
+    if cfg.get("method") == "custom" and "connectivity" in kwargs:
+        return int(kwargs["connectivity"])
+    return int(cfg.get("connectivity", 1))
+
+
 def _with_voxel_size(fn, kwargs, cfg):
     """Pass the image's calibration to a function that asks for it.
 
@@ -544,6 +554,25 @@ def validate_config(cfg) -> None:
     stitch = cfg.get("stitch", "touch")
     if stitch not in ("touch", "iou"):
         problems.append(f'stitch must be "touch" or "iou"; got {stitch!r}')
+    # Labelling and merging must agree on it, so it has one value per config.
+    conn_kwarg = ((cfg.get("custom") or {}).get("kwargs") or {}).get(
+        "connectivity"
+    )
+    for where, value in (
+        ("connectivity", cfg.get("connectivity")),
+        ("custom: kwargs: connectivity", conn_kwarg),
+    ):
+        if value is not None and value not in (1, 2, 3):
+            problems.append(f"{where} must be 1, 2 or 3; got {value!r}")
+    if (
+        cfg.get("connectivity") is not None
+        and conn_kwarg is not None
+        and cfg["connectivity"] != conn_kwarg
+    ):
+        problems.append(
+            f"connectivity {cfg['connectivity']!r} and custom: kwargs: "
+            f"connectivity {conn_kwarg!r} disagree; set one"
+        )
     thr = cfg.get("iou_threshold", 0.5)
     if not isinstance(thr, (int, float)) or not 0 < thr <= 1:
         problems.append(f"iou_threshold must be in (0, 1]; got {thr!r}")
@@ -917,19 +946,35 @@ def _build_method_fn(cfg):
         )
         kwargs = dict(spec.get("kwargs") or {})
         kwargs = _with_voxel_size(fn, kwargs, cfg)
+        if cfg.get("connectivity") is not None and "connectivity" not in kwargs:
+            import inspect
+
+            target = getattr(fn, "patchworks_kwargs_target", fn)
+            try:
+                if "connectivity" in inspect.signature(target).parameters:
+                    kwargs["connectivity"] = int(cfg["connectivity"])
+            except (TypeError, ValueError):
+                pass
         if cfg.get("seed_labels"):
             # The tile's second channel is a label image, not intensities.
             kwargs.setdefault("seeds", "labels")
         return partial(fn, **kwargs) if kwargs else fn
 
     if method == "threshold":
+        conn = merge_connectivity(cfg)
 
         def fn(tile):
+            from scipy.ndimage import generate_binary_structure, label
             from skimage.filters import threshold_otsu
-            from skimage.measure import label
 
             thr = threshold_otsu(tile) if tile.max() > tile.min() else 0
-            return label(tile > thr).astype("int32")
+            # The same neighbourhood the merge joins tiles by: skimage's
+            # default (corners) against the merge's faces split objects
+            # crossing a tile boundary diagonally.
+            structure = generate_binary_structure(
+                tile.ndim, min(conn, tile.ndim)
+            )
+            return label(tile > thr, structure=structure)[0].astype("int32")
 
         return fn
 

@@ -638,3 +638,66 @@ def test_iou_stitching_needs_the_tile_counts(tmp_path):
             input_component="staged",
             halo_dir=tmp_path / "missing",
         )
+
+
+@pytest.mark.parametrize("overlap", [0, 2])
+def test_tiled_labels_match_whole_image_labelling_for_every_connectivity(
+    tmp_path, overlap
+):
+    """Whatever the tiling, merging tiles labelled at a connectivity gives
+    the whole image's scipy labelling at that connectivity: objects
+    touching across a tile boundary only along an edge or at a corner
+    (a thin oblique cilium) are joined too."""
+    from scipy import ndimage as ndi
+
+    def canonical(a):
+        _, first = np.unique(a.ravel(), return_index=True)
+        order = np.argsort(np.argsort(first))
+        ids = np.unique(a.ravel())
+        lut = dict(zip(ids.tolist(), order.tolist()))
+        zero = lut.get(0)
+        out = np.vectorize(lut.get)(a)
+        return out if zero is None else np.where(a == 0, -1, out)
+
+    rng = np.random.default_rng(7)
+    run = 0
+    for ndim in (2, 3):
+        for _ in range(4):
+            shape = tuple(int(n) for n in rng.integers(9, 21, ndim))
+            tile = tuple(int(n) for n in rng.integers(3, 8, ndim))
+            mask = rng.random(shape) < 0.25
+            for conn in range(1, ndim + 1):
+                struct = ndi.generate_binary_structure(ndim, conn)
+
+                def fn(t, struct=struct):
+                    return ndi.label(t, structure=struct)[0].astype("int32")
+
+                run += 1
+                stage = str(tmp_path / f"s{run}.zarr")
+                create_stage(stage, shape, tile)
+                counts = {
+                    i: stage_tile(
+                        mask.astype("uint8"),
+                        fn,
+                        stage,
+                        i,
+                        tile_shape=tile,
+                        overlap=overlap,
+                    )
+                    for i in range(len(spatial_tiles(shape, tile)))
+                }
+                merged = merge_tile_labels(
+                    stage,
+                    write_to=str(tmp_path / f"o{run}.zarr"),
+                    input_component="staged",
+                    sequential_labels=True,
+                    label_counts=counts,
+                    connectivity=conn,
+                    n_workers=2,
+                ).compute()
+                whole = ndi.label(mask, structure=struct)[0]
+                assert np.array_equal(canonical(merged), canonical(whole)), (
+                    shape,
+                    tile,
+                    conn,
+                )

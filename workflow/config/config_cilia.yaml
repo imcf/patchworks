@@ -44,6 +44,11 @@ custom:
     # sigma_units: "um"
     threshold: 0.02
     # use_gpu: true          # optional: also run the blur/label step on GPU
+    # connectivity: 3        # 1 (default): voxels joined across faces only,
+    #                        # so a thin oblique cilium -- a staircase of
+    #                        # voxels touching at edges/corners -- falls apart
+    #                        # into fragments. 2 adds edges, 3 corners; the
+    #                        # merge joins tiles the same way.
     decon_kwargs:
       psf: "/path/to/psf.tif"
       # dxdata/dzdata (and dxpsf/dzpsf) are filled from image.zarr's own

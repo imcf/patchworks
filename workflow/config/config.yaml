@@ -103,6 +103,10 @@ sequential_labels: true # renumber merged labels to a contiguous 1..N range
 # agree (IoU >= iou_threshold), so two cells pressed together at a seam stay
 # two -- needs `overlap` > 0 to compare (2-D z-tiles fall back to the IoU of
 # adjacent planes, like Cellpose's stitch_threshold).
+# connectivity: 1 | 2 | 3 -- for method "threshold" (and the dog plugin, also
+#   as its own kwarg): voxels belong together across faces (1, default),
+#   also edges (2) or corners (3). Labelling and "touch" merging both use it,
+#   so the result is the whole image's labelling, whatever the tiling.
 # Post-processing per tile, before merging (in this order):
 # fill_holes: true | "per_plane" -- fill background enclosed by an object
 #   ("per_plane" fills each z-plane separately, the usual sense in a stack).
