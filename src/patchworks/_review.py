@@ -262,7 +262,12 @@ class Review:
             self.position[child] = dict(rule)
         for child, rule in list(self.position.items()):
             if child not in self.tables or "parent" not in rule:
-                logger.warning("position rule for %s ignored: %s", child, rule)
+                # A rule for a label image left out on purpose (names=, as
+                # each relate job loads just its pair) is no news.
+                if "parent" not in rule or wanted is None or child in wanted:
+                    logger.warning(
+                        "position rule for %s ignored: %s", child, rule
+                    )
                 del self.position[child]
         self.decisions: dict[str, dict[int, dict[str, Any]]] = {}
         self.seed: dict[str, int] = {}

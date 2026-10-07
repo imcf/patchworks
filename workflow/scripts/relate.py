@@ -48,6 +48,21 @@ def _n_objects(image_store: str, name: str) -> str:
     return f"{int(n):,} objects" if n is not None else "object count unknown"
 
 
+def written_outputs(out_path: Path, a_name: str, b_name: str) -> list[Path]:
+    """What a relation's workbook was written as: the ``.xlsx``, or -- a
+    sheet too long for Excel -- its two csv files (``<stem>_<name>.csv``).
+
+    Only the .xlsx used to count, so every relation of more than a million
+    objects was recomputed from scratch on each run: hours each.
+    """
+    if out_path.exists():
+        return [out_path]
+    csvs = [
+        out_path.with_name(f"{out_path.stem}_{n}.csv") for n in (a_name, b_name)
+    ]
+    return csvs if all(p.exists() for p in csvs) else []
+
+
 def _relation_up_to_date(
     work_dir: str, a_name: str, b_name: str, out_path: Path
 ) -> bool:
@@ -61,10 +76,11 @@ def _relation_up_to_date(
     one, or a nonstandard ``image_store`` layout -- are treated as "unknown,
     recompute" rather than raise, since staleness can't be judged without them.
     """
-    if not out_path.exists():
+    outputs = written_outputs(out_path, a_name, b_name)
+    if not outputs:
         return False
     try:
-        out_mtime = out_path.stat().st_mtime
+        out_mtime = min(p.stat().st_mtime for p in outputs)
         for name in (a_name, b_name):
             marker = Path(work_dir) / name / "labels.done"
             if not marker.exists() or marker.stat().st_mtime > out_mtime:
@@ -125,6 +141,7 @@ def run_relations(
         has_table,
         is_stale,
         relate_tables,
+        relation_current,
     )
 
     for rel in relations:
@@ -136,7 +153,11 @@ def run_relations(
             reviewed = max(
                 review_updated(image_store, n) or 0 for n in (a_name, b_name)
             )
-            if reviewed <= out_path.stat().st_mtime:
+            written_at = min(
+                p.stat().st_mtime
+                for p in written_outputs(out_path, a_name, b_name)
+            )
+            if reviewed <= written_at:
                 print(
                     f"[relate] {out_path} is already up to date with "
                     f"{a_name}/{b_name}; skipping",
@@ -157,6 +178,21 @@ def run_relations(
                     flush=True,
                 )
                 continue
+        elif relation_current(
+            image_store, a_name, b_name, rel.get("max_distance_um")
+        ):
+            # The tables already hold this relation for the labels there
+            # now (recorded with it): the workbook was deleted, or never
+            # written. Rewrite it; the labels need not be read again.
+            written = Review(
+                image_store, names=[a_name, b_name]
+            ).relation_workbook(a_name, b_name, out_path)
+            print(
+                f"[relate] {a_name} -> {b_name} is already in the tables; "
+                f"wrote {written} from them",
+                flush=True,
+            )
+            continue
         print(f"[relate] relating {a_name} -> {b_name} …", flush=True)
         started = time.monotonic()
         a = da.from_zarr(image_store, component=f"labels/{a_name}/0")

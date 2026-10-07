@@ -238,3 +238,40 @@ def test_unrelated_apical_reference_leaves_positions_unknown(tmp_path, caplog):
         cilia = rv.effective("cilia_labels")
     assert set(cilia.loc[[1, 2, 3, 4], "position"]) == {"unknown"}
     assert "positions left unknown" in caplog.text
+
+
+def test_a_relation_records_the_parent_labels_it_was_made_from(
+    tmp_path, caplog
+):
+    """Without its workbook, a relation already in the tables is reused
+    only if it was computed from the parent labels there now."""
+    from patchworks._tables import RELATION_KEY, relation_current
+    from patchworks._review import write_rules
+
+    store = polarity_scene(tmp_path / "r.zarr")
+    assert relation_current(store, "cilia_labels", "cyto_labels")
+    assert not relation_current(store, "cilia_labels", "cyto_labels", 1.0)
+    assert not relation_current(store, "cyto_labels", "nuclei_labels")
+
+    # The parent re-segmented: a new provenance record, so a new fingerprint
+    import zarr
+
+    grp = zarr.open_group(f"{store}/labels/cyto_labels", mode="r+")
+    attrs = dict(grp.attrs)
+    attrs["n_objects"] = 99
+    grp.attrs.update(attrs)
+    assert not relation_current(store, "cilia_labels", "cyto_labels")
+
+    # A column from before this was recorded: unknown, not current
+    store2 = polarity_scene(tmp_path / "s.zarr")
+    col = zarr.open_array(
+        f"{store2}/labels/cilia_labels/table/cyto_labels_id", mode="r+"
+    )
+    del col.attrs[RELATION_KEY]
+    assert not relation_current(store2, "cilia_labels", "cyto_labels")
+
+    # A pair's Review does not warn about a rule for a child it left out
+    write_rules(store2, {"position": RULE})
+    with caplog.at_level("WARNING"):
+        Review(store2, names=["nuclei_labels", "cyto_labels"])
+    assert "position rule" not in caplog.text
