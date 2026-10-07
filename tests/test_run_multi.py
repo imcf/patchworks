@@ -1886,9 +1886,10 @@ def test_relations_must_name_labels_this_run_makes_or_has(tmp_path):
     assert "'cilia_labels'" in problems[0] and "cilia_dog" in problems[0]
 
 
-def test_a_done_run_whose_labels_are_gone_is_reported(tmp_path):
+def test_a_done_run_whose_labels_are_gone_is_found(tmp_path):
     """labels.done in the run directory, labels/<name> missing from the
-    store: Snakemake reported the config ok and nothing re-made it."""
+    store: the labels were deleted to be redone, and the marker would tell
+    Snakemake they are done."""
     import run_multi
 
     store = _label_store(tmp_path, ["nuclei"])
@@ -1900,10 +1901,7 @@ def test_a_done_run_whose_labels_are_gone_is_reported(tmp_path):
     for name in ("nuclei", "cilia_labels"):
         (work / name).mkdir()
         (work / name / "labels.done").touch()
-    problems = run_multi.stale_runs(cfgs, store)
-    assert len(problems) == 1
-    assert problems[0].startswith("cilia_labels:")
-    assert f"Remove {work / 'cilia_labels'}" in problems[0]
+    assert run_multi.stale_runs(cfgs, store) == [work / "cilia_labels"]
 
 
 def test_relations_on_labels_a_run_left_missing_are_skipped(

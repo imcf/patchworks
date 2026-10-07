@@ -32,6 +32,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -663,29 +664,25 @@ def relation_problems(
     return problems
 
 
-def stale_runs(cfgs: list[dict], image_store: str | Path) -> list[str]:
-    """Configs Snakemake would call done whose labels are not in the store.
+def stale_runs(cfgs: list[dict], image_store: str | Path) -> list[Path]:
+    """Run directories that say done while their labels are gone.
 
     A run is done for Snakemake once ``<work_dir>/<label_name>/labels.done``
     exists; the labels themselves live in ``image.zarr/labels/<label_name>``.
-    Delete or replace the label group (or image.zarr) and the marker still
-    says done: the run reports ok and only the relations fail, on labels
-    that are not there.
+    Deleting the label group is how a segmentation is redone, but with the
+    marker still there nothing would re-make it: the run would report ok and
+    only the relations fail, on labels that are not there. The caller clears
+    these directories (everything in them is made again by the run).
     """
-    problems = []
+    stale = []
     for cfg in cfgs:
         name = str(cfg.get("label_name"))
         run = Path(str(cfg.get("work_dir"))) / name
         if (run / "labels.done").exists() and not label_ready(
             image_store, name
         ):
-            problems.append(
-                f"{name}: {run}/labels.done says this segmentation is done, "
-                f"but {image_store}/labels/{name} is missing or unfinished, "
-                f"so nothing would re-make it. Remove {run} to segment it "
-                "again (or point label_name at the labels you meant)."
-            )
-    return problems
+            stale.append(run)
+    return stale
 
 
 def zarr_root_file(cfg: dict) -> str:
@@ -1389,12 +1386,28 @@ def main() -> None:
         print(f"[run_multi] $ {' '.join(cmd)}", flush=True)
         return subprocess.Popen(cmd, cwd=workflow_dir)
 
-    stale = stale_runs(seg_cfgs, image_store)
-    stale += relation_problems(
+    # Labels deleted from image.zarr: segment them again. Their run
+    # directories hold only what the run makes (markers, logs, tiles.json),
+    # and would otherwise tell Snakemake the labels are done.
+    for run in stale_runs(seg_cfgs, image_store):
+        if args.dry_run:
+            print(
+                f"[run_multi] {run.name}: labels missing from the store; a "
+                f"real run removes {run} and segments them again",
+                flush=True,
+            )
+        else:
+            print(
+                f"[run_multi] {run.name}: labels missing from the store; "
+                f"removing {run} to segment them again",
+                flush=True,
+            )
+            shutil.rmtree(run)
+    problems = relation_problems(
         multi_cfg.get("relations") or [], seg_cfgs, image_store
     )
-    if stale:
-        for p in stale:
+    if problems:
+        for p in problems:
             print(f"[run_multi] ERROR: {p}", file=sys.stderr)
         sys.exit(1)
 
