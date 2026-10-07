@@ -167,6 +167,13 @@ goes for the membrane plugins' `foreground: "otsu"` and nuclei threshold:
 one Otsu threshold for the whole image, not one per tile. The values used
 are in the labels' provenance.
 
+**Fragments in 3-D** — 3-D Cellpose often splits a cell into a body and
+slivers, and leaves specks in dim regions. With `do_3D`, each tile's
+objects smaller than a tenth of a typical cell are merged into the cell they
+touch most (or dropped when they touch nothing), and the flows are smoothed
+(`flow3D_smooth: 1`). Change the share with `cellpose: {fragments: 0.05}`,
+or turn it off with `fragments: null`.
+
 **Size filter** — `min_volume` / `max_volume` (µm³) drop objects outside
 that range after the merge, judged on whole objects, not tile fragments.
 

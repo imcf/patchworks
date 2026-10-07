@@ -119,6 +119,7 @@ def cellpose_fn(
     channel_axis: int | None = None,
     voxel_size: dict[str, float] | None = None,
     intensity_range: "list | tuple | None" = None,
+    fragments: "float | None | str" = "auto",
     **cellpose_kwargs: Any,
 ) -> Callable[[np.ndarray], np.ndarray]:
     """Return a ready-to-use Cellpose function for ``tile_process``.
@@ -159,6 +160,15 @@ def cellpose_fn(
         its own percentiles, so neighbouring tiles get different contrast
         and cells are cut at the seams. Measure it once with
         :func:`patchworks.intensity_range`; the workflow does by default.
+    fragments:
+        Merge objects smaller than this fraction of a typical cell into the
+        neighbour they touch most, and drop those touching nothing
+        (:func:`patchworks.absorb_fragments`), per tile before the halo is
+        trimmed. 3-D Cellpose often splits a cell into a body and slivers,
+        and leaves specks in dim regions. ``"auto"`` (default): 0.1 with
+        ``do_3D``, off in 2-D; ``None`` turns it off. 3-D runs also smooth
+        the flows (``flow3D_smooth=1``) unless told otherwise, Cellpose's own
+        remedy for fragmentation along z.
     **cellpose_kwargs:
         Extra kwargs forwarded to ``model.eval()``
         (e.g. ``flow_threshold``, ``cellprob_threshold``, ``anisotropy``).
@@ -205,6 +215,14 @@ def cellpose_fn(
                 voxel_size.get("x") or voxel_size.get("y"),
             )
             cellpose_kwargs = {**cellpose_kwargs, "anisotropy": anisotropy}
+    if fragments == "auto":
+        fragments = 0.1 if do_3D else None
+    if (
+        do_3D
+        and "flow3D_smooth" not in cellpose_kwargs
+        and _accepts("flow3D_smooth")
+    ):
+        cellpose_kwargs = {**cellpose_kwargs, "flow3D_smooth": 1}
     if intensity_range is not None:
         if "normalize" in cellpose_kwargs:
             raise ValueError(
@@ -217,7 +235,21 @@ def cellpose_fn(
     if intensity_range is not None:
         ranges = np.asarray(intensity_range, dtype=float).reshape(-1, 2)
         cfg["intensity_range"] = ranges.tolist()
+    cfg["fragments"] = fragments
     return partial(_run, cellpose_dict=cfg)
+
+
+def _accepts(name: str) -> bool:
+    """Whether the installed Cellpose's ``eval`` takes *name*."""
+    import inspect
+
+    cls = getattr(_cellpose_models, "CellposeModel", None)
+    try:
+        return (
+            cls is not None and name in inspect.signature(cls.eval).parameters
+        )
+    except (TypeError, ValueError):
+        return False
 
 
 def _make_config(
@@ -422,7 +454,7 @@ def _run(block: np.ndarray, cellpose_dict: dict[str, Any]) -> np.ndarray:
     if do_3D:
         kwargs["z_axis"] = z_axis
         masks = _eval_with_oom_fallback(block, kwargs, cellpose_dict)
-        return masks.astype("int32")
+        return _clean(masks.astype("int32"), cellpose_dict)
     else:
         # Squeeze singleton z so Cellpose gets a clean 2-D image
         spatial = list(block.shape)
@@ -444,8 +476,18 @@ def _run(block: np.ndarray, cellpose_dict: dict[str, Any]) -> np.ndarray:
         else:
             img = block
         masks = _eval_with_oom_fallback(img, kwargs, cellpose_dict)
-        masks = masks.astype("int32")
+        masks = _clean(masks.astype("int32"), cellpose_dict)
         return masks[np.newaxis] if squeeze else masks
+
+
+def _clean(masks: np.ndarray, cellpose_dict: dict[str, Any]) -> np.ndarray:
+    """Fold fragments into the cells they belong to (``fragments=``)."""
+    fraction = cellpose_dict.get("fragments")
+    if not fraction:
+        return masks
+    from .._postprocess import absorb_fragments
+
+    return absorb_fragments(masks, fraction=float(fraction))
 
 
 # Keep the lower-level names available for advanced users
