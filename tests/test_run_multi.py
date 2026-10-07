@@ -273,7 +273,9 @@ def test_relate_cmd_gives_each_pair_its_own_log():
     ]
     logs = [cmd[cmd.index("--log") + 1] for cmd in cmds]
     assert len(set(logs)) == 2
-    assert all(log.startswith("/w/logs/relate/") for log in logs)
+    assert all(
+        Path(log).as_posix().startswith("/w/logs/relate/") for log in logs
+    )
 
 
 def test_relate_cmd_omits_qos_by_default():
@@ -830,7 +832,9 @@ def test_iso_export_command_preserves_a_zarr_tree(monkeypatch):
     assert cmd[cmd.index("-iso-level") + 1] == "3"
     # The store must land as its own directory inside the image, not as a
     # bare 0/ 1/ labels/ at the root.
-    assert cmd[-1] == "/image.zarr=/data/image.zarr"
+    # (graft-points name the image path POSIX-style, the source path the
+    # platform's way)
+    assert cmd[-1] == f"/image.zarr={_Path('/data/image.zarr')}"
 
 
 def test_iso_volume_id_is_always_acceptable():
@@ -1174,7 +1178,7 @@ def test_bundle_store_path_is_made_absolute():
     output = cmd[cmd.index("--output") + 1]
     assert _Path(store).is_absolute(), store
     assert _Path(output).is_absolute(), output
-    assert store.endswith("results/image.zarr")
+    assert _Path(store).as_posix().endswith("results/image.zarr")
 
 
 def test_manifest_declares_exactly_one_platform():
