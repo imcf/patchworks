@@ -50,7 +50,7 @@ from typing import Any, Callable
 import numpy as np
 
 from .._gpu import free_gpu_caches, is_oom, retry_on_oom
-from .._postprocess import fill_small_holes, typical_volume
+from .._postprocess import fill_enclosed_holes
 from .watershed import (
     SEED_MODES,
     _sigma,
@@ -765,8 +765,8 @@ def _run(tile: np.ndarray, cfg: dict[str, Any]) -> np.ndarray:
     labels = np.asarray(partition(pmaps, cfg, seeds, mask)).astype("int32")
     if mask is not None:
         labels[~mask] = 0
-        # Small gaps the mask punched into cells go back to them.
-        labels = fill_small_holes(labels, 0.1 * typical_volume(labels))
+        # Holes the mask punched into cells go back to them.
+        labels = fill_enclosed_holes(labels)
     return labels
 
 
