@@ -329,9 +329,14 @@ def build_multi(
     relate = {k: v for k, v in (relate or {}).items() if v not in (None, "")}
     if relate:
         multi["relate"] = relate
-    bundle = {k: v for k, v in (bundle or {}).items() if v not in (None, "")}
-    if bundle.get("format"):
-        multi["bundle"] = bundle
+    if bundle is not None and not bundle.get("format"):
+        multi["bundle"] = False  # asked for none; the default is a zip
+    else:
+        bundle = {
+            k: v for k, v in (bundle or {}).items() if v not in (None, "")
+        }
+        if bundle:
+            multi["bundle"] = bundle
     review = {
         k: v for k, v in (review or {}).items() if v not in (None, {}, "")
     }

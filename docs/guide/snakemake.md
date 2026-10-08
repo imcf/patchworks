@@ -97,7 +97,7 @@ relations:
   - {a: cilia_labels, b: cyto_labels, output: cilia_to_cyto.xlsx, max_distance_um: 1.0}
 review:                           # optional: what `patchworks review` flags
   expect: {cyto_labels: {nuclei_labels: 1}}
-bundle: {format: zip}             # optional: one file of the whole store at the end
+# bundle: false                   # the store is zipped at the end unless told not to
 ```
 
 ```bash
@@ -118,7 +118,9 @@ What it does:
   child (its parent, the overlap) and one per parent (how many children); a
   sheet too long for Excel is written as `.csv`. `max_distance_um` gives a
   child touching no parent the nearest one within that distance.
-- **Bundles** the store into one `.zip` when everything succeeded.
+- **Bundles** the store into one `image.zarr.zip` when everything
+  succeeded (`bundle: false` skips it; `bundle: {format: iso}` makes a disk
+  image instead).
 
 Re-running the same command redoes only what is missing or out of date.
 Only one run can drive a `work_dir` at a time. A relative `--config` is
@@ -136,7 +138,7 @@ work_dir/
   image.zarr/labels/<name>/      each label image (pyramid, calibrated)
   image.zarr/labels/<name>/table one row per object: size, position, shape, relations
   <relation>.xlsx                one workbook per relation
-  image.zarr.zip                 with `bundle:`
+  image.zarr.zip                 the whole store in one file (multi runs)
   <name>/logs/                   one log per step and per tile batch
 ```
 
@@ -202,9 +204,9 @@ image.zarr`.
 **OME-Zarr version** — `ngff_version: "auto"` writes 0.5 (zarr v3). Set
 `"0.4"` (zarr v2, no sharding) for a reader that cannot read 0.5 yet.
 
-**One file to copy** — `pixi run zip --store image.zarr` (or `bundle:` in
-the multi config). zarr, napari and patchworks read the store straight out
-of the zip. `pixi run iso` makes a read-only disk image instead, if
+**One file to copy** — a multi run ends with `image.zarr.zip`; for a single
+run, `pixi run zip --store image.zarr`. zarr, napari and patchworks read
+the store straight out of the zip. `pixi run iso` makes a read-only disk image instead, if
 `xorriso`, `genisoimage` or `mkisofs` is installed.
 
 **Email** — `notify_email: "you@example.org"` mails you when the long steps

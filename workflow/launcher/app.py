@@ -354,7 +354,7 @@ def multi_form() -> tuple[list[dict], list[dict], dict, dict, dict]:
             or None,
             "qos": c5.text_input("relate qos", ""),
         }
-        fmt = st.selectbox("bundle the finished store", ["none", "zip", "iso"])
+        fmt = st.selectbox("bundle the finished store", ["zip", "iso", "none"])
         bundle = {"format": None if fmt == "none" else fmt}
     with st.expander("Review rules (what `patchworks review` flags)"):
         st.caption(

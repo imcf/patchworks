@@ -1079,11 +1079,20 @@ class _NoBundleFlags:
     bundle_qos = None
 
 
-def test_bundling_is_off_unless_asked():
-    """It is a full read of everything the run produced."""
+def test_a_zip_is_made_unless_turned_off():
+    """The one file to copy off the cluster comes by default; `bundle:
+    false` (or format none) skips it."""
     from run_multi import _bundle_settings
 
-    assert _bundle_settings({}, _NoBundleFlags())["format"] is None
+    assert _bundle_settings({}, _NoBundleFlags())["format"] == "zip"
+    for off in (False, "none", {"format": None}, {"format": "none"}):
+        assert (
+            _bundle_settings({"bundle": off}, _NoBundleFlags())["format"]
+            is None
+        )
+    flags = _NoBundleFlags()
+    flags.bundle_format = "none"
+    assert _bundle_settings({}, flags)["format"] is None
 
 
 def test_bundle_settings_read_the_multi_config():
@@ -1541,6 +1550,7 @@ def test_main_runs_with_an_explicit_tile_shape_seeds_first(
     )
     log = []
     monkeypatch.setattr(run_multi, "_run", lambda cmd, wd: 0)  # convert
+    monkeypatch.setattr(run_multi, "_run_bundle", lambda *a: 0)
 
     def popen(cmd, cwd=None):
         name = Path(cmd[cmd.index("--configfile") + 2]).stem
@@ -1585,6 +1595,7 @@ def test_config_option_resolves_from_where_pixi_runs(tmp_path, monkeypatch):
     )
     started = []
     monkeypatch.setattr(run_multi, "_run", lambda cmd, wd: 0)
+    monkeypatch.setattr(run_multi, "_run_bundle", lambda *a: 0)
     monkeypatch.setattr(
         run_multi.subprocess,
         "Popen",

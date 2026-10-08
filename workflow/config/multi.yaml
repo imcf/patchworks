@@ -44,8 +44,9 @@ relations:
 #   time: 180              # minutes, under the qos's limit
 #   qos: "1day"
 
-# Optional: pack the finished store into one file at the end.
+# The finished store is packed into one image.zarr.zip at the end.
+# bundle: false            # to skip it
 # bundle:
-#   format: "zip"          # or "iso"
+#   format: "iso"          # or a disk image instead
 #   time: 720
 #   qos: "1day"
