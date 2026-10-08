@@ -238,7 +238,8 @@ def test_build_multi_writes_what_run_multi_accepts(tmp_path):
         for n in ("nuclei_labels", "cyto_labels", "cilia_labels")
     ]
     assert multi["relate"] == {"partition": "rtx4090"}  # blanks dropped
-    assert "bundle" not in multi and "common" not in multi
+    # "none" picked: written out, since a run zips by default.
+    assert multi["bundle"] is False and "common" not in multi
     assert len(multi["relations"]) == 2
     assert run_multi._relate_settings(multi, argparse_ns()) is not None
 

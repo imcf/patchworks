@@ -254,11 +254,10 @@ def _relate_settings(multi_cfg: dict, args) -> dict:
     return resolved
 
 
-# Packing the finished store into one file. Off by default: it is a full
-# read of everything the run produced, which only makes sense when the
-# result is about to leave the cluster.
+# Packing the finished store into one file: a zip by default, the one file
+# to copy off the cluster. `bundle: false` (or --bundle none) skips it.
 BUNDLE_DEFAULTS = {
-    "format": None,  # None = don't bundle; "zip" or "iso"
+    "format": "zip",  # "zip", "iso", or None = don't bundle
     "output": None,  # None = <store>.<format> beside it
     "partition": "scicore",
     "mem": "8G",
@@ -281,7 +280,10 @@ def _bundle_settings(multi_cfg: dict, args) -> dict:
         For an unknown key or an unsupported format, rather than silently
         not bundling after a run that took hours.
     """
-    block = multi_cfg.get("bundle", {}) or {}
+    block = multi_cfg.get("bundle", {})
+    if block is False or block in ("none", "off"):
+        block = {"format": None}
+    block = block or {}
     if not isinstance(block, dict):
         raise ValueError(
             "`bundle:` in the multi config must be a mapping of "
@@ -297,6 +299,8 @@ def _bundle_settings(multi_cfg: dict, args) -> dict:
     for key, fallback in BUNDLE_DEFAULTS.items():
         flag = getattr(args, f"bundle_{key}", None)
         resolved[key] = flag if flag is not None else block.get(key, fallback)
+    if resolved["format"] in ("none", False):
+        resolved["format"] = None
     if resolved["format"] not in (None, "zip", "iso"):
         raise ValueError(
             f'bundle format must be "zip" or "iso"; got {resolved["format"]!r}'
@@ -1205,12 +1209,12 @@ def main() -> None:
     parser.add_argument(
         "--bundle",
         dest="bundle_format",
-        choices=("zip", "iso"),
+        choices=("zip", "iso", "none"),
         help=(
             "after everything succeeds, pack the finished store into one "
-            "file. Overrides `bundle:` in the multi config. zip needs "
-            "nothing extra; iso needs xorriso/genisoimage/mkisofs and "
-            "mounts as a drive."
+            "file (default zip; none to skip). Overrides `bundle:` in the "
+            "multi config. iso needs xorriso/genisoimage/mkisofs and mounts "
+            "as a drive."
         ),
     )
     parser.add_argument(
