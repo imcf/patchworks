@@ -295,9 +295,15 @@ def _bundle_settings(multi_cfg: dict, args) -> dict:
             f"unknown key(s) in `bundle:`: {', '.join(sorted(unknown))}; "
             f"expected any of {', '.join(sorted(BUNDLE_DEFAULTS))}"
         )
+    # Where the relate jobs were allowed to run, the bundle job is too: a
+    # partition or QOS set only under `relate:` would otherwise leave this
+    # one on the cluster's default QOS, whose time limit can be far shorter.
+    relate = _relate_settings(multi_cfg, args)
     resolved = {}
     for key, fallback in BUNDLE_DEFAULTS.items():
         flag = getattr(args, f"bundle_{key}", None)
+        if key in ("partition", "qos"):
+            fallback = relate[key] or fallback
         resolved[key] = flag if flag is not None else block.get(key, fallback)
     if resolved["format"] in ("none", False):
         resolved["format"] = None

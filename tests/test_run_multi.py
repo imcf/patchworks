@@ -2113,3 +2113,25 @@ def test_one_relate_job_per_parent():
     assert cmd[cmd.index("--log") + 1].endswith("to_cells.log")
     with pytest.raises(ValueError, match="one parent"):
         _relate_cmd(rels + [{"a": "x", "b": "other"}], **_relate_kwargs())
+
+
+def test_the_bundle_job_runs_where_the_relate_jobs_may(monkeypatch):
+    """A QOS set only under `relate:` left the bundle job on the default
+    QOS, whose wall-time limit refused its 12 hours."""
+    from run_multi import _bundle_settings
+
+    flags = _NoBundleFlags()
+    for name in (
+        "relate_partition",
+        "relate_mem",
+        "relate_cpus",
+        "relate_time",
+        "relate_qos",
+    ):
+        setattr(flags, name, None)
+    cfg = {"relate": {"qos": "1day", "partition": "gpu"}}
+    out = _bundle_settings(cfg, flags)
+    assert out["qos"] == "1day" and out["partition"] == "gpu"
+    # Its own block still wins.
+    cfg["bundle"] = {"qos": "6hours"}
+    assert _bundle_settings(cfg, flags)["qos"] == "6hours"
