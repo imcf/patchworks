@@ -29,13 +29,18 @@ Voxel size is read from the TIFF tags (ImageJ or resolution tags) when it
 is there; pass ``--voxel-size X Y Z`` (in µm) to set or override it -- the
 z step is rarely stored in single-plane files.
 
-The file names carry no stage coordinates, so by default every tile sits
-at the origin. Either arrange them afterwards in BigStitcher (Arrange
-Views > Move Tiles to Regular Grid), or give the layout here with
-``--grid-columns`` / ``--overlap`` / ``--snake``.
+Tile positions come from the stage coordinates in the TIFF metadata of
+each position's first plane: OME-XML, Micro-Manager, key/value text such
+as ``XPosition = 1234.5`` in the description tags, or the baseline TIFF
+XPosition/YPosition tags. If the tiles land mirrored or rotated, the
+stage axes differ from the camera's: try ``--flip-x``, ``--flip-y`` and
+``--swap-xy``. ``--dump-metadata`` prints every tag of one file, to see
+what is there. Without positions, ``--grid-columns`` / ``--overlap`` /
+``--snake`` lay the tiles out on a regular grid instead.
 
 Usage
 -----
+    uv run scripts/tifs_to_bdv.py /data/scan --dump-metadata
     uv run scripts/tifs_to_bdv.py /data/scan --dry-run
     uv run scripts/tifs_to_bdv.py /data/scan --voxel-size 0.325 0.325 2
     uv run scripts/tifs_to_bdv.py /data/scan -o /out/scan.xml \\
@@ -76,13 +81,41 @@ MAX_LEVELS = 8
 
 @dataclass
 class Stack:
-    """All planes of one (tile, channel, timepoint)."""
+    """All planes of one (tile, channel, timepoint).
+
+    Attributes
+    ----------
+    planes : dict of int to Path
+        TIFF file of each z index, as numbered in the file names.
+    """
 
     planes: dict[int, Path] = field(default_factory=dict)  # z -> file
 
 
 @dataclass
 class Setup:
+    """One BDV view setup: a tile in one channel.
+
+    Attributes
+    ----------
+    id : int
+        Setup id, also its ``s##`` group in the HDF5 file.
+    tile : int
+        Index of the tile attribute.
+    channel : int
+        Index of the channel attribute.
+    name : str
+        Display name, e.g. ``P00082_405nm``.
+    size_xyz : tuple of int
+        Full-resolution size in pixels, x, y, z.
+    z_min : int
+        Lowest z index in the file names; plane 0 of the stack.
+    factors : list of tuple of int
+        Downsampling factors of each pyramid level, x, y, z.
+    chunks : list of tuple of int
+        HDF5 chunk shape of each pyramid level, x, y, z.
+    """
+
     id: int
     tile: int
     channel: int
@@ -99,7 +132,19 @@ class Setup:
 
 
 def scan(folder: Path):
-    """Group the TIFFs by tile, channel and timepoint."""
+    """Group the TIFFs of a folder by tile, channel and timepoint.
+
+    Parameters
+    ----------
+    folder : Path
+        Folder holding the ``A1--W#--P#--Z#--T#--<channel>.tif`` files.
+        Files that do not match the pattern are skipped with a note.
+
+    Returns
+    -------
+    dict
+        Maps ``((well, field, position), channel, t)`` to a `Stack`.
+    """
     stacks: dict[tuple, Stack] = defaultdict(Stack)
     skipped = []
     for path in sorted(folder.iterdir()):
@@ -126,13 +171,36 @@ def scan(folder: Path):
 
 
 def channel_sort_key(name: str):
-    """Sort channels by wavelength when there is a number in the name."""
+    """Sort key putting channels in wavelength order.
+
+    Parameters
+    ----------
+    name : str
+        Channel name from the file name, e.g. ``488nm``.
+
+    Returns
+    -------
+    tuple
+        Names with a number sort by that number, the others after them.
+    """
     m = re.search(r"\d+(\.\d+)?", name)
     return (0, float(m.group()), name) if m else (1, 0.0, name)
 
 
 def tile_names(tiles):
-    """P00082, or A1-W00001-P00082 when well/field are not constant."""
+    """Short, unique display name of each tile.
+
+    Parameters
+    ----------
+    tiles : list of tuple
+        ``(well, field, position)`` of every tile.
+
+    Returns
+    -------
+    dict of tuple to str
+        ``P00082``, prefixed with the well and field only where those
+        vary, e.g. ``A1-W00001-P00082``.
+    """
     wells = {t[0] for t in tiles}
     fields = {t[1] for t in tiles}
     names = {}
@@ -153,7 +221,24 @@ def tile_names(tiles):
 
 
 def read_plane_info(path: Path):
-    """Shape, dtype and (if stored) pixel size in µm of one TIFF."""
+    """Read the shape, type and pixel size of one TIFF plane.
+
+    Parameters
+    ----------
+    path : Path
+        A single-plane TIFF.
+
+    Returns
+    -------
+    shape : tuple of int
+        Plane shape, (y, x).
+    dtype : numpy.dtype
+        Pixel type.
+    pixel : tuple of float or None
+        Pixel size (x, y) in µm, if the resolution tags give one.
+    z_step : float or None
+        Z spacing in µm from the ImageJ metadata, if present.
+    """
     with tifffile.TiffFile(path) as tif:
         page = tif.pages[0]
         shape, dtype = page.shape, page.dtype
@@ -180,13 +265,183 @@ def read_plane_info(path: Path):
     return shape, dtype, pixel, z_step
 
 
+NUM = r"(-?\d+(?:\.\d*)?(?:[eE][-+]?\d+)?)"
+# "XPositionUm": 12.3, X position = 12.3, <PosX>12.3</PosX>, posX="12.3"...
+KV_RE = {
+    axis: re.compile(
+        rf"(?:\b|_)(?:stage[ _]?)?(?:{axis}[ _-]?pos(?:ition)?|"
+        rf"pos(?:ition)?[ _-]?{axis})(?:[ _]?\(?(?:um|µm|micron)\)?)?"
+        rf"[\"']?\s*[=:>]\s*[\"']?{NUM}",
+        re.IGNORECASE,
+    )
+    for axis in "xyz"
+}
+OME_TO_UM = {"µm": 1.0, "um": 1.0, "nm": 1e-3, "mm": 1e3, "cm": 1e4, "m": 1e6}
+
+
+def _ome_position(xml: str):
+    """Stage position from an OME-XML document.
+
+    Parameters
+    ----------
+    xml : str
+        The OME-XML of the file.
+
+    Returns
+    -------
+    list of float or None
+        x, y, z in µm (z may be None) from the first ``Plane`` with a
+        position, else the first ``StageLabel``; None if neither exists.
+    """
+    root = ET.fromstring(xml)
+    for el in root.iter():
+        tag = el.tag.rsplit("}", 1)[-1]
+        if tag == "Plane" and "PositionX" in el.attrib:
+            keys = ("PositionX", "PositionY", "PositionZ")
+        elif tag == "StageLabel" and "X" in el.attrib:
+            keys = ("X", "Y", "Z")
+        else:
+            continue
+        out = []
+        for k in keys:
+            v = el.attrib.get(k)
+            unit = el.attrib.get(f"{k}Unit", "µm")
+            out.append(
+                None if v is None else float(v) * OME_TO_UM.get(unit, 1.0)
+            )
+        return out
+    return None
+
+
+def read_stage_position(path: Path):
+    """Read the stage position stored in one TIFF.
+
+    Tries, in order: OME-XML, Micro-Manager metadata, key/value text in
+    any string tag (``XPosition = 1.5``, ``"XPositionUm": 1.5``,
+    ``<PosX>1.5</PosX>``...), and the baseline XPosition/YPosition tags.
+
+    Parameters
+    ----------
+    path : Path
+        A TIFF file.
+
+    Returns
+    -------
+    position : tuple of float or None
+        Stage x, y, z in µm; z may be None. None if nothing was found.
+    source : str or None
+        Which kind of metadata the position came from.
+    """
+    with tifffile.TiffFile(path) as tif:
+        page = tif.pages[0]
+        tags = page.tags
+
+        if tif.ome_metadata:
+            try:
+                pos = _ome_position(tif.ome_metadata)
+            except ET.ParseError:
+                pos = None
+            if pos and pos[0] is not None and pos[1] is not None:
+                return tuple(pos), "OME-XML"
+
+        mm = tags.get("MicroManagerMetadata")
+        if mm and isinstance(mm.value, dict):
+            v = mm.value
+            if "XPositionUm" in v and "YPositionUm" in v:
+                z = v.get("ZPositionUm")
+                return (
+                    float(v["XPositionUm"]),
+                    float(v["YPositionUm"]),
+                    None if z is None else float(z),
+                ), "Micro-Manager"
+
+        # Free text: ImageDescription, ImageJ Info, vendor XML/JSON tags.
+        texts = []
+        for tag in tags:
+            if isinstance(tag.value, str):
+                texts.append(tag.value)
+            elif isinstance(tag.value, bytes):
+                texts.append(tag.value.decode("latin-1", "replace"))
+        texts.append(str((tif.imagej_metadata or {}).get("Info", "")))
+        for text in texts:
+            found = {a: r.search(text) for a, r in KV_RE.items()}
+            if found["x"] and found["y"]:
+                z = found["z"]
+                return (
+                    float(found["x"].group(1)),
+                    float(found["y"].group(1)),
+                    None if z is None else float(z.group(1)),
+                ), "key/value text in the TIFF tags (assumed µm)"
+
+        # Baseline TIFF tags, in ResolutionUnit (inch or cm).
+        xp, yp = tags.get("XPosition"), tags.get("YPosition")
+        if xp and yp:
+            res_unit = tags.get("ResolutionUnit")
+            scale = {2: 25400.0, 3: 10000.0}.get(
+                int(res_unit.value) if res_unit else 2, 25400.0
+            )
+            x = xp.value[0] / xp.value[1] * scale
+            y = yp.value[0] / yp.value[1] * scale
+            return (x, y, None), "TIFF XPosition/YPosition tags"
+    return None, None
+
+
+def dump_metadata(path: Path, limit: int = 4000):
+    """Print every tag of one TIFF and the position read from it.
+
+    Parameters
+    ----------
+    path : Path
+        A TIFF file.
+    limit : int, optional
+        Truncate each tag value to this many characters.
+    """
+    print(f"Metadata of {path}")
+    with tifffile.TiffFile(path) as tif:
+        for tag in tif.pages[0].tags:
+            value = tag.value
+            if isinstance(value, bytes):
+                value = value.decode("latin-1", "replace")
+            text = str(value)
+            if len(text) > limit:
+                text = text[:limit] + f" ... [{len(text) - limit} more chars]"
+            print(f"--- {tag.code} {tag.name}\n{text}")
+        if tif.imagej_metadata:
+            print(f"--- ImageJ metadata\n{tif.imagej_metadata}")
+    pos, source = read_stage_position(path)
+    print("===")
+    if pos:
+        print(f"Stage position found ({source}): {pos}")
+    else:
+        print("No stage position recognised.")
+
+
 # --------------------------------------------------------------------------
 # Pyramid layout
 # --------------------------------------------------------------------------
 
 
 def plan_pyramid(size_xyz, voxel_xyz):
-    """Per-level downsampling factors and chunk sizes (both xyz)."""
+    """Plan the multiresolution pyramid of one stack.
+
+    Each level halves x and y; z is halved only once its voxel edge is
+    within a factor of 2 of the finest axis, so levels tend to isotropy.
+    Levels stop once every dimension is at most ``MIN_LEVEL_SIZE``.
+
+    Parameters
+    ----------
+    size_xyz : tuple of int
+        Full-resolution size in pixels, x, y, z.
+    voxel_xyz : tuple of float
+        Voxel size, x, y, z.
+
+    Returns
+    -------
+    factors : list of tuple of int
+        Downsampling factors of each level, x, y, z.
+    chunks : list of tuple of int
+        HDF5 chunk shape of each level, x, y, z.
+    """
     factors = [(1, 1, 1)]
     while len(factors) < MAX_LEVELS:
         prev = factors[-1]
@@ -223,6 +478,18 @@ def plan_pyramid(size_xyz, voxel_xyz):
 
 
 def to_uint16(plane: np.ndarray) -> np.ndarray:
+    """Convert a plane to uint16, the type BDV HDF5 stores.
+
+    Parameters
+    ----------
+    plane : numpy.ndarray
+        A uint8 or uint16 plane; other types stop the script.
+
+    Returns
+    -------
+    numpy.ndarray
+        The plane as uint16.
+    """
     if plane.dtype == np.uint16:
         return plane
     if plane.dtype == np.uint8:
@@ -231,7 +498,25 @@ def to_uint16(plane: np.ndarray) -> np.ndarray:
 
 
 def write_level0(ds, stack: Stack, setup: Setup, pool, chunk_z: int):
-    """Read the planes in batches of one z chunk and write them."""
+    """Write the full-resolution level of one stack.
+
+    Planes are read in parallel, one z chunk at a time, so memory holds
+    a single chunk rather than the whole stack. A z index without a file
+    is written as zeros.
+
+    Parameters
+    ----------
+    ds : h5py.Dataset
+        The level-0 ``cells`` dataset, (z, y, x) int16.
+    stack : Stack
+        The planes to write.
+    setup : Setup
+        The setup the stack belongs to.
+    pool : concurrent.futures.Executor
+        Pool reading the TIFFs.
+    chunk_z : int
+        Planes per batch, the dataset's z chunk.
+    """
     nx, ny, nz = setup.size_xyz
     zs = list(range(nz))
     blank = np.zeros((ny, nx), np.uint16)
@@ -252,7 +537,19 @@ def write_level0(ds, stack: Stack, setup: Setup, pool, chunk_z: int):
 
 
 def downsample(src, dst, rel_zyx):
-    """Mean-downsample one level into the next, a z slab at a time."""
+    """Mean-downsample one pyramid level into the next.
+
+    Works a z slab at a time to bound memory.
+
+    Parameters
+    ----------
+    src : h5py.Dataset
+        The finer level, (z, y, x) int16 holding uint16 data.
+    dst : h5py.Dataset
+        The coarser level to fill.
+    rel_zyx : tuple of int
+        Downsampling factor from `src` to `dst`, z, y, x (1 or 2 each).
+    """
     rz, ry, rx = rel_zyx
     nz, ny, nx = dst.shape
     slab = max(1, dst.chunks[0])
@@ -265,6 +562,15 @@ def downsample(src, dst, rel_zyx):
 
 
 def write_setup_meta(h5, setup: Setup):
+    """Write the pyramid description of one setup.
+
+    Parameters
+    ----------
+    h5 : h5py.File
+        The output file.
+    setup : Setup
+        Setup whose ``resolutions`` and ``subdivisions`` to write.
+    """
     grp = h5.require_group(f"s{setup.id:02d}")
     for name in ("resolutions", "subdivisions"):
         if name in grp:
@@ -278,6 +584,23 @@ def write_setup_meta(h5, setup: Setup):
 
 
 def write_stack(h5, stack, setup, tp, pool, compression):
+    """Write every pyramid level of one stack at one timepoint.
+
+    Parameters
+    ----------
+    h5 : h5py.File
+        The output file.
+    stack : Stack
+        The planes to write.
+    setup : Setup
+        The setup the stack belongs to.
+    tp : int
+        Timepoint.
+    pool : concurrent.futures.Executor
+        Pool reading the TIFFs.
+    compression : str or None
+        HDF5 compression filter, e.g. ``"gzip"``.
+    """
     grp = h5.require_group(f"t{tp:05d}/s{setup.id:02d}")
     prev = None
     prev_f = None
@@ -311,6 +634,24 @@ def write_stack(h5, stack, setup, tp, pool, compression):
 
 
 def sub(parent, tag, text=None, **attrib):
+    """Append a child element.
+
+    Parameters
+    ----------
+    parent : xml.etree.ElementTree.Element
+        Element to append to.
+    tag : str
+        Tag of the new element.
+    text : object, optional
+        Text content, converted with `str`.
+    **attrib
+        XML attributes.
+
+    Returns
+    -------
+    xml.etree.ElementTree.Element
+        The new element.
+    """
     el = ET.SubElement(parent, tag, attrib)
     if text is not None:
         el.text = str(text)
@@ -318,6 +659,18 @@ def sub(parent, tag, text=None, **attrib):
 
 
 def fmt(v: float) -> str:
+    """Format a number for the XML.
+
+    Parameters
+    ----------
+    v : float
+        The number.
+
+    Returns
+    -------
+    str
+        Its shortest round-tripping representation.
+    """
     return repr(float(v))
 
 
@@ -332,6 +685,29 @@ def write_xml(
     voxel,
     tile_offsets,
 ):
+    """Write the BDV/BigStitcher XML describing the HDF5 file.
+
+    Parameters
+    ----------
+    xml_path : Path
+        Output XML.
+    h5_path : Path
+        The HDF5 file, referenced relative to the XML.
+    setups : list of Setup
+        All view setups.
+    tiles : list of str
+        Tile names, by tile index.
+    channels : list of str
+        Channel names, by channel index.
+    timepoints : list of int
+        All timepoints.
+    missing : list of tuple of int
+        ``(timepoint, setup id)`` of views without data.
+    voxel : tuple of float
+        Voxel size in µm, x, y, z.
+    tile_offsets : list of tuple of float or None
+        Location in µm (x, y, z) of each tile, or None for all at origin.
+    """
     root = ET.Element("SpimData", version="0.2")
     sub(root, "BasePath", ".", type="relative")
     seq = sub(root, "SequenceDescription")
@@ -439,8 +815,102 @@ def write_xml(
     ET.ElementTree(root).write(xml_path, encoding="utf-8", xml_declaration=True)
 
 
+def metadata_offsets(stacks, tiles, channels, flip_x, flip_y, swap_xy):
+    """Tile locations from the stage positions in the TIFF metadata.
+
+    The position of each tile is read from its first plane (lowest T,
+    first channel, lowest Z) and shifted so the smallest is 0.
+
+    Parameters
+    ----------
+    stacks : dict
+        Output of `scan`.
+    tiles : list of tuple
+        ``(well, field, position)`` of every tile, in tile order.
+    channels : list of str
+        Channel names, in channel order.
+    flip_x, flip_y : bool
+        Negate the stage x or y axis.
+    swap_xy : bool
+        Exchange the stage x and y axes, before any flip.
+
+    Returns
+    -------
+    offsets : list of tuple of float or None
+        Location in µm (x, y, z=0) of each tile; None if no file has a
+        position. Stops the script if only some tiles have one.
+    source : str or None
+        Which kind of metadata the positions came from.
+    """
+    first_planes = []
+    for tile in tiles:
+        keys = sorted(
+            (k for k in stacks if k[0] == tile),
+            key=lambda k: (k[2], channels.index(k[1])),
+        )
+        planes = stacks[keys[0]].planes
+        first_planes.append(planes[min(planes)])
+
+    positions, sources = [], set()
+    for path in first_planes:
+        pos, source = read_stage_position(path)
+        positions.append(pos)
+        sources.add(source)
+    found = sum(p is not None for p in positions)
+    if found == 0:
+        print(
+            "WARNING: no stage position in the TIFF metadata; all tiles "
+            "are at the origin. Run with --dump-metadata to see what the "
+            "files contain, or give --grid-columns."
+        )
+        return None, None
+    if found < len(positions):
+        missing = [p.name for p, q in zip(first_planes, positions) if q is None]
+        sys.exit(
+            f"Stage position missing in {len(missing)} of {len(positions)} "
+            f"tiles, e.g. {missing[0]}. Use --grid-columns or "
+            "--ignore-positions."
+        )
+
+    xy = np.array([p[:2] for p in positions], dtype=float)
+    if swap_xy:
+        xy = xy[:, ::-1]
+    if flip_x:
+        xy[:, 0] *= -1
+    if flip_y:
+        xy[:, 1] *= -1
+    xy -= xy.min(axis=0)
+    if len(xy) > 1 and np.ptp(xy, axis=0).max() == 0:
+        print("WARNING: every tile has the same stage position.")
+    offsets = [(float(x), float(y), 0.0) for x, y in xy]
+    return offsets, ", ".join(sorted(s for s in sources if s))
+
+
 def grid_offsets(n_tiles, cols, overlap, snake, column_major, tile_xy, voxel):
-    """Physical (µm) xyz location of each tile on a regular grid."""
+    """Tile locations on a regular grid, in position order.
+
+    Parameters
+    ----------
+    n_tiles : int
+        Number of tiles.
+    cols : int
+        Grid columns.
+    overlap : float
+        Overlap between neighbouring tiles, in percent.
+    snake : bool
+        Reverse every other row (or column, if `column_major`).
+    column_major : bool
+        Fill columns first.
+    tile_xy : tuple of int
+        Tile size in pixels, x, y.
+    voxel : tuple of float
+        Voxel size in µm, x, y, z.
+
+    Returns
+    -------
+    list of tuple of float
+        Location in µm (x, y, z=0) of each tile.
+    """
     step_x = tile_xy[0] * voxel[0] * (1 - overlap / 100)
     step_y = tile_xy[1] * voxel[1] * (1 - overlap / 100)
     rows = -(-n_tiles // cols)
@@ -464,6 +934,13 @@ def grid_offsets(n_tiles, cols, overlap, snake, column_major, tile_xy, voxel):
 
 
 def main(argv=None):
+    """Run the conversion from the command line.
+
+    Parameters
+    ----------
+    argv : list of str, optional
+        Arguments; defaults to ``sys.argv[1:]``.
+    """
     p = argparse.ArgumentParser(
         description=__doc__.split("\n\n")[0],
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -497,10 +974,35 @@ def main(argv=None):
         help="threads reading TIFFs (default 8)",
     )
     p.add_argument(
+        "--ignore-positions",
+        action="store_true",
+        help="do not read stage positions from the TIFF metadata",
+    )
+    p.add_argument(
+        "--flip-x",
+        action="store_true",
+        help="stage x runs opposite to image x",
+    )
+    p.add_argument(
+        "--flip-y",
+        action="store_true",
+        help="stage y runs opposite to image y",
+    )
+    p.add_argument(
+        "--swap-xy",
+        action="store_true",
+        help="stage x is image y and vice versa (applied before flips)",
+    )
+    p.add_argument(
+        "--dump-metadata",
+        action="store_true",
+        help="print every tag of the first TIFF and exit",
+    )
+    p.add_argument(
         "--grid-columns",
         type=int,
-        help="place the tiles on a grid this many columns wide, "
-        "in position order",
+        help="place the tiles on a grid this many columns wide, in "
+        "position order, instead of using the stage positions",
     )
     p.add_argument(
         "--grid-rows", type=int, help="rows of the grid, with --column-major"
@@ -540,6 +1042,10 @@ def main(argv=None):
     h5_path = xml_path.with_suffix(".h5")
 
     stacks = scan(folder)
+    if args.dump_metadata:
+        planes = stacks[min(stacks)].planes
+        dump_metadata(planes[min(planes)])
+        return
     tiles = sorted({k[0] for k in stacks})
     channels = sorted({k[1] for k in stacks}, key=channel_sort_key)
     timepoints = sorted({k[2] for k in stacks})
@@ -604,6 +1110,19 @@ def main(argv=None):
                 gaps += s.size_xyz[2] - len(st.planes)
 
     tile_offsets = None
+    if not (args.grid_columns or args.grid_rows or args.ignore_positions):
+        tile_offsets, source = metadata_offsets(
+            stacks, tiles, channels, args.flip_x, args.flip_y, args.swap_xy
+        )
+        if tile_offsets is not None:
+            xs = [o[0] for o in tile_offsets]
+            ys = [o[1] for o in tile_offsets]
+            print(
+                f"Tile positions from {source}: "
+                f"x 0..{max(xs):.1f} µm, y 0..{max(ys):.1f} µm "
+                f"(one tile is {shape[1] * voxel[0]:.1f} x "
+                f"{shape[0] * voxel[1]:.1f} µm)"
+            )
     if args.grid_columns or args.grid_rows:
         if args.column_major:
             if not args.grid_rows:
