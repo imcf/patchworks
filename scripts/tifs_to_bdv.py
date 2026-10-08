@@ -60,6 +60,7 @@ import xml.etree.ElementTree as ET
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 
 import h5py
@@ -235,9 +236,10 @@ def read_plane_info(path: Path):
     dtype : numpy.dtype
         Pixel type.
     pixel : tuple of float or None
-        Pixel size (x, y) in µm, if the resolution tags give one.
+        Pixel size (x, y) in µm from the resolution tags, else from a
+        companion OME-XML; None if neither has it.
     z_step : float or None
-        Z spacing in µm from the ImageJ metadata, if present.
+        Z spacing in µm from the ImageJ metadata or a companion OME-XML.
     """
     with tifffile.TiffFile(path) as tif:
         page = tif.pages[0]
@@ -260,6 +262,12 @@ def read_plane_info(path: Path):
                 if scale is not None and not (rx == 1 and ry == 1):
                     pixel = (scale / rx, scale / ry)
         z_step = ij.get("spacing")
+        comp = companion_of(tif, path)
+        if comp is not None and comp.voxel is not None:
+            if pixel is None and None not in comp.voxel[:2]:
+                pixel = comp.voxel[:2]
+            if z_step is None:
+                z_step = comp.voxel[2]
     if len(shape) != 2:
         sys.exit(f"{path.name}: expected a single 2D plane, got {shape}")
     return shape, dtype, pixel, z_step
@@ -279,6 +287,32 @@ KV_RE = {
 OME_TO_UM = {"µm": 1.0, "um": 1.0, "nm": 1e-3, "mm": 1e3, "cm": 1e4, "m": 1e6}
 
 
+def _um(attrib, key):
+    """Read an OME length attribute in µm.
+
+    Parameters
+    ----------
+    attrib : dict
+        Attributes of an OME element.
+    key : str
+        Attribute name, e.g. ``PositionX``; its unit is ``<key>Unit``.
+
+    Returns
+    -------
+    float or None
+        The value in µm (OME's default unit), None if absent.
+    """
+    v = attrib.get(key)
+    if v is None:
+        return None
+    return float(v) * OME_TO_UM.get(attrib.get(f"{key}Unit", "µm"), 1.0)
+
+
+def _local(el):
+    """Tag of an XML element without its namespace."""
+    return el.tag.rsplit("}", 1)[-1]
+
+
 def _ome_position(xml: str):
     """Stage position from an OME-XML document.
 
@@ -295,28 +329,161 @@ def _ome_position(xml: str):
     """
     root = ET.fromstring(xml)
     for el in root.iter():
-        tag = el.tag.rsplit("}", 1)[-1]
+        tag = _local(el)
         if tag == "Plane" and "PositionX" in el.attrib:
             keys = ("PositionX", "PositionY", "PositionZ")
         elif tag == "StageLabel" and "X" in el.attrib:
             keys = ("X", "Y", "Z")
         else:
             continue
-        out = []
-        for k in keys:
-            v = el.attrib.get(k)
-            unit = el.attrib.get(f"{k}Unit", "µm")
-            out.append(
-                None if v is None else float(v) * OME_TO_UM.get(unit, 1.0)
-            )
-        return out
+        return [_um(el.attrib, k) for k in keys]
     return None
+
+
+@dataclass
+class CompanionOME:
+    """Metadata from a companion ``.ome.xml`` file (e.g. ScanR's).
+
+    Attributes
+    ----------
+    path : Path
+        The companion file.
+    positions : dict of str to tuple
+        Stage position (x, y, z) in µm of each TIFF, by file name.
+    voxel : tuple of float or None
+        Voxel size (x, y, z) in µm; an entry is None if not stored.
+    """
+
+    path: Path
+    positions: dict[str, tuple]
+    voxel: tuple | None
+
+
+_COMPANIONS: dict[Path, CompanionOME] = {}
+
+
+def find_companion(tif_path: Path, description: str):
+    """Locate the companion OME-XML a ``BinaryOnly`` TIFF points to.
+
+    Parameters
+    ----------
+    tif_path : Path
+        The TIFF.
+    description : str
+        Its ImageDescription.
+
+    Returns
+    -------
+    Path or None
+        The companion file, looked for next to the TIFF and up to two
+        folders above it; None if the TIFF names none or it is missing.
+    """
+    m = re.search(r"<BinaryOnly[^>]*MetadataFile=\"([^\"]+)\"", description)
+    if not m:
+        return None
+    return _locate(tif_path.resolve().parent, m.group(1))
+
+
+@lru_cache
+def _locate(folder: Path, name: str):
+    """Find `name` in `folder` or up to two folders above, warn once."""
+    for d in (folder, *list(folder.parents)[:2]):
+        if (d / name).is_file():
+            return d / name
+    print(f"WARNING: the TIFFs point to {name}, not found near {folder}.")
+    return None
+
+
+def load_companion(path: Path) -> CompanionOME:
+    """Parse a companion OME-XML once and cache it.
+
+    Each ``TiffData`` names its file in ``UUID/@FileName`` and its plane
+    with ``FirstZ``/``FirstC``/``FirstT``; that plane's ``Plane`` element
+    gives the stage position. Without a matching ``Plane`` the first
+    plane of the image is used.
+
+    Parameters
+    ----------
+    path : Path
+        The companion ``.ome.xml``.
+
+    Returns
+    -------
+    CompanionOME
+        Positions by file name, and the voxel size.
+    """
+    if path in _COMPANIONS:
+        return _COMPANIONS[path]
+    print(f"Reading {path} ...", flush=True)
+    root = ET.parse(path).getroot()
+    positions = {}
+    voxel = None
+    for pixels in root.iter():
+        if _local(pixels) != "Pixels":
+            continue
+        a = pixels.attrib
+        planes = {}
+        for el in pixels:
+            if _local(el) == "Plane" and "PositionX" in el.attrib:
+                key = tuple(
+                    int(el.attrib.get(k, 0)) for k in ("TheZ", "TheC", "TheT")
+                )
+                planes[key] = tuple(
+                    _um(el.attrib, k)
+                    for k in ("PositionX", "PositionY", "PositionZ")
+                )
+        if voxel is None and "PhysicalSizeX" in a:
+            z = _um(a, "PhysicalSizeZ")
+            if z is None:
+                # No PhysicalSizeZ: take the step between planes 0 and 1.
+                z0, z1 = planes.get((0, 0, 0)), planes.get((1, 0, 0))
+                if z0 and z1 and z0[2] is not None and z1[2] is not None:
+                    z = abs(z1[2] - z0[2]) or None
+            voxel = (_um(a, "PhysicalSizeX"), _um(a, "PhysicalSizeY"), z)
+        first = planes[min(planes)] if planes else None
+        for td in pixels:
+            if _local(td) != "TiffData":
+                continue
+            uuid = next((u for u in td if _local(u) == "UUID"), None)
+            if uuid is None or "FileName" not in uuid.attrib:
+                continue
+            key = tuple(
+                int(td.attrib.get(k, 0)) for k in ("FirstZ", "FirstC", "FirstT")
+            )
+            pos = planes.get(key, first)
+            if pos is not None:
+                positions[Path(uuid.attrib["FileName"]).name] = pos
+    comp = CompanionOME(path=path, positions=positions, voxel=voxel)
+    _COMPANIONS[path] = comp
+    return comp
+
+
+def companion_of(tif, path: Path):
+    """Companion metadata of an open TIFF, if it has one.
+
+    Parameters
+    ----------
+    tif : tifffile.TiffFile
+        The open TIFF.
+    path : Path
+        Its path.
+
+    Returns
+    -------
+    CompanionOME or None
+    """
+    desc = tif.pages[0].tags.get("ImageDescription")
+    if desc is None or not isinstance(desc.value, str):
+        return None
+    comp_path = find_companion(path, desc.value)
+    return load_companion(comp_path) if comp_path else None
 
 
 def read_stage_position(path: Path):
     """Read the stage position stored in one TIFF.
 
-    Tries, in order: OME-XML, Micro-Manager metadata, key/value text in
+    Tries, in order: OME-XML, a companion OME-XML file the TIFF points
+    to (``BinaryOnly``, as ScanR writes), Micro-Manager metadata, key/value text in
     any string tag (``XPosition = 1.5``, ``"XPositionUm": 1.5``,
     ``<PosX>1.5</PosX>``...), and the baseline XPosition/YPosition tags.
 
@@ -343,6 +510,10 @@ def read_stage_position(path: Path):
                 pos = None
             if pos and pos[0] is not None and pos[1] is not None:
                 return tuple(pos), "OME-XML"
+
+        comp = companion_of(tif, path)
+        if comp is not None and path.name in comp.positions:
+            return comp.positions[path.name], f"OME companion {comp.path.name}"
 
         mm = tags.get("MicroManagerMetadata")
         if mm and isinstance(mm.value, dict):
@@ -408,6 +579,15 @@ def dump_metadata(path: Path, limit: int = 4000):
             print(f"--- {tag.code} {tag.name}\n{text}")
         if tif.imagej_metadata:
             print(f"--- ImageJ metadata\n{tif.imagej_metadata}")
+        comp = companion_of(tif, path)
+    if comp is not None:
+        print(f"--- Companion {comp.path}")
+        text = comp.path.read_text(errors="replace")
+        print(text[:limit] + (" ..." if len(text) > limit else ""))
+        print(
+            f"=== {len(comp.positions)} files with a position, "
+            f"voxel {comp.voxel}"
+        )
     pos, source = read_stage_position(path)
     print("===")
     if pos:
@@ -1060,13 +1240,13 @@ def main(argv=None):
     else:
         if pixel is None:
             print(
-                "WARNING: no pixel size in the TIFF tags; using 1 µm. "
+                "WARNING: no pixel size in the metadata; using 1 µm. "
                 "Pass --voxel-size X Y Z."
             )
             pixel = (1.0, 1.0)
         if z_step is None:
             print(
-                "WARNING: no z step in the TIFF tags; using 1 µm. "
+                "WARNING: no z step in the metadata; using 1 µm. "
                 "Pass --voxel-size X Y Z."
             )
             z_step = 1.0
