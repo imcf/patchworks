@@ -21,7 +21,9 @@ volume, never needs it in memory, and skips chunks holding no labels.
 By default any two labels touching across a seam are joined. That is right
 for one object cut by the seam, wrong for two cells pressed together exactly
 there. `stitch="iou"` joins them only when both tiles labelled the same
-object in their shared halo (IoU ≥ `iou_threshold`, default 0.5):
+object in their shared halo: each is the other's best match and they overlap
+on at least `iou_threshold` (default 0.5) of the smaller one, since a tile
+sees an object crossing the halo cut off where its read region ends.
 
 ```python
 tile_process("image.zarr", fn, tile_shape=(16, 1024, 1024), overlap=30, stitch="iou")
