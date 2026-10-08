@@ -367,3 +367,48 @@ def test_smallest_patch_failure_carries_the_gpu_report(
     with pytest.raises(RuntimeError, match="another process holds it") as err:
         pl.predict_boundaries(np.zeros((40, 100, 100), "float32"), _cfg())
     assert "19400 MiB" in str(err.value)
+
+
+def test_every_tile_is_standardized_with_the_image_stats(
+    fake_plantseg, monkeypatch
+):
+    """PlantSeg standardizes each input with its own mean and std, so
+    every tile got its own contrast; with intensity_stats all use the
+    image's. The real call pattern: unet_prediction looks up
+    get_test_augmentations in its module at call time."""
+    from patchworks.plugins.plantseg import plantseg_fn
+
+    sub = types.ModuleType("plantseg.functionals.prediction.prediction")
+    sub.get_test_augmentations = lambda raw, expand_dims=True: (
+        "own",
+        float(np.mean(raw)),
+    )
+    augs = types.ModuleType("plantseg.functionals.training.augs")
+    augs.Compose = list
+    augs.Standardize = lambda mean, std: ("fixed", mean, std)
+    augs.ToTensor = lambda expand_dims=True: "tensor"
+    monkeypatch.setitem(sys.modules, sub.__name__, sub)
+    monkeypatch.setitem(sys.modules, augs.__name__, augs)
+    monkeypatch.setitem(
+        sys.modules, "plantseg.functionals.training", types.ModuleType("t")
+    )
+    pkg = sys.modules["plantseg.functionals.prediction"]
+    pkg.prediction = sub
+    seen = []
+    fake_predict = pkg.unet_prediction
+
+    def unet_prediction(raw, *a, **kw):
+        seen.append(sub.get_test_augmentations(raw))
+        return fake_predict(raw, *a, **kw)
+
+    monkeypatch.setattr(pkg, "unet_prediction", unet_prediction)
+
+    tile = epithelium()[0][0].astype("float32")
+    plantseg_fn(rescale=False, device="cpu")(tile)
+    assert seen[-1][0] == "own"
+    plantseg_fn(rescale=False, device="cpu", intensity_stats=(500.0, 50.0))(
+        tile
+    )
+    assert seen[-1] == [("fixed", 500.0, 50.0), "tensor"]
+    # Restored afterwards.
+    assert sub.get_test_augmentations(tile)[0] == "own"

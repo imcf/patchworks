@@ -30,7 +30,7 @@ from _pw import (
     open_image,
     stage_path,
     start_log,
-    image_thresholds,
+    image_wide_kwargs,
     tile_channels,
     uses_image_range,
     validate_config,
@@ -204,7 +204,7 @@ if uses_image_range(cfg):
         f"[patchworks] intensity range (1-99%) of channels {chans}: {image_range}"
     )
 
-thresholds = image_thresholds(
+thresholds = image_wide_kwargs(
     cfg, str(Path(work_dir) / "image.zarr"), [tiles[i] for i in occupied]
 )
 if thresholds:
