@@ -29,22 +29,29 @@ not live in a terminal, and it never starts a run with a typo in a key.
 
     ```bash
     cd patchworks/workflow/launcher
-    pip install -r requirements.txt
-    streamlit run app.py      # http://localhost:8501
+    pixi run start            # http://localhost:8501
     ```
+
+    The launcher has its own small [pixi](https://pixi.sh) workspace, which
+    works on Linux, macOS and Windows. Without pixi:
+    `pip install -r requirements.txt && streamlit run app.py`.
 
 !!! warning
     The form takes real cluster passwords. Never host it publicly.
 
 ## Use it
 
-1. **Connect**: pick the cluster, log in, give the workflow directory.
-2. **Config**: one segmentation, or several with the relations between them
+1. **Connect**: pick the cluster, log in, and choose the workflow folder
+   (`~/patchworks/workflow` is found by itself). Every path field has a
+   folder button that browses the cluster, so you can pick the image, the
+   work_dir or a PSF instead of typing it.
+2. **Configure**: one segmentation, or several with the relations between them
    (the form of a [multi config](snakemake.md#several-segmentations-and-their-relations)).
    Settings mean the same as in the [config](snakemake.md#2-configure). The
    form validates as you type and shows the **effective config**, including
    any key inherited from the cluster's `config/config.yaml`.
-3. **Launch**: *Plan* reports tiles, memory and output size; *Dry run* first,
+3. **Plan & launch**: *Plan* reports tiles, memory and output size for
+   every segmentation of the run; *Dry run* first,
    then *Submit*. The controller runs as a small SLURM job (or on the login
    node), so you can close the browser. Launching the same settings again
    resumes.
@@ -60,5 +67,5 @@ configs you can also run from a terminal.
 | host key matches no pinned fingerprint / no pinned fingerprint | Check `host_key_fingerprints` with your admins. |
 | Login fails with the right password | The cluster needs 2FA or keys; only password login is supported. |
 | `snakemake` or `sbatch` not found | Fix the environment setup line; test it with `cd <dir> && <setup> && which snakemake sbatch`. |
-| Plan fails | It needs the converted image: launch once first. |
+| Plan: no converted image at `…/image.zarr` | Planning reads the converted image: launch once first, and check work_dir. |
 | Job `DONE` at once | The controller failed at startup; its log in **Jobs** says why. |

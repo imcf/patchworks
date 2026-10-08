@@ -7,8 +7,8 @@ Snakemake controller itself running as a small SLURM job. Jobs are recorded
 on the cluster, so the Jobs tab finds them again after a reload.
 
 Usage:
-    pip install -r requirements.txt
-    streamlit run app.py
+    pixi run start          # or: pip install -r requirements.txt
+                            #     streamlit run app.py
 
 The logic lives in launcher_core.py (no UI, tested); this file is the UI.
 See README.md for the security model before sharing a deployment.
@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import io
 import shlex
+import stat
 from datetime import datetime
 from pathlib import Path
 
@@ -27,7 +28,11 @@ import yaml
 
 import launcher_core as core
 
-st.set_page_config(page_title="patchworks launcher", layout="wide")
+st.set_page_config(
+    page_title="patchworks launcher",
+    page_icon=":material/grid_view:",
+    layout="wide",
+)
 
 CLUSTERS = core.load_clusters(Path(__file__).with_name("clusters.yaml"))
 
@@ -60,6 +65,23 @@ def connect(host, port, username, password, fingerprints, allow_unverified):
     )
     st.session_state["ssh_client"] = client
     st.session_state["ssh_target"] = f"{username}@{host}:{port}"
+    # A clone in the home folder is the usual place: fill it in if found.
+    try:
+        sftp = get_sftp()
+        guess = core.join_remote(sftp.normalize("."), "patchworks/workflow")
+        sftp.stat(f"{guess}/Snakefile")
+        st.session_state["wf_dir__picked"] = guess
+    except OSError:
+        pass
+
+
+def get_sftp() -> paramiko.SFTPClient:
+    """One SFTP channel per session, reopened if the server closed it."""
+    sftp = st.session_state.get("sftp")
+    if sftp is None or sftp.sock.closed:
+        sftp = get_client().open_sftp()
+        st.session_state["sftp"] = sftp
+    return sftp
 
 
 def run(client, command: str, *, login: bool = True, timeout: float = 120):
@@ -88,9 +110,188 @@ def write_remote(client, path: str, text: str, *, append=False) -> None:
             sftp.putfo(io.BytesIO(text.encode()), path)
 
 
+def remote_is_dir(path: str) -> bool:
+    try:
+        return stat.S_ISDIR(get_sftp().stat(path).st_mode or 0)
+    except OSError:
+        return False
+
+
+def list_remote(path: str) -> list[tuple[str, bool]]:
+    """``(name, is_dir)`` for each entry of a remote folder."""
+    sftp = get_sftp()
+    entries = []
+    for attr in sftp.listdir_attr(path):
+        mode = attr.st_mode or 0
+        is_dir = stat.S_ISDIR(mode)
+        if stat.S_ISLNK(mode):  # follow links to folders
+            is_dir = remote_is_dir(core.join_remote(path, attr.filename))
+        entries.append((attr.filename, is_dir))
+    return entries
+
+
+# ---------------------------------------------------------------------------
+# Remote path picker
+# ---------------------------------------------------------------------------
+
+ICONS = {
+    "dir": ":material/folder:",
+    "store": ":material/deployed_code:",
+    "image": ":material/image:",
+    "file": ":material/description:",
+}
+MAX_ENTRIES = 300
+
+
+def _go(cwd_key: str, path: str) -> None:
+    st.session_state[cwd_key] = path
+
+
+def _go_typed(cwd_key: str, typed_key: str) -> None:
+    path = st.session_state.get(typed_key, "").strip()
+    if path:
+        st.session_state[cwd_key] = path
+
+
+def _pick(key: str, path: str) -> None:
+    # Applied before the input is drawn on the next run: a widget's value
+    # cannot be changed once it is on the page.
+    st.session_state[f"{key}__picked"] = path
+    st.session_state[f"{key}__close"] = True
+
+
+def _start_dir(value: str, dirs_only: bool) -> str:
+    sftp = get_sftp()
+    value = value.strip()
+    if value.startswith("/"):
+        if dirs_only and remote_is_dir(value):
+            return value
+        parent = core.parent_dir(value)
+        if remote_is_dir(parent):
+            return parent
+    return sftp.normalize(".")
+
+
+@st.dialog("Choose on the cluster", width="large")
+def browse(key: str, label: str, dirs_only: bool) -> None:
+    if st.session_state.pop(f"{key}__close", False):
+        st.rerun()
+    cwd_key = f"{key}__cwd"
+    if not st.session_state.get(cwd_key):
+        st.session_state[cwd_key] = _start_dir(
+            st.session_state.get(key, ""), dirs_only
+        )
+    cwd = st.session_state[cwd_key]
+    home = get_sftp().normalize(".")
+
+    st.markdown(f"**{label}** — {'a folder' if dirs_only else 'a file'}")
+    st.code(cwd, language=None)
+    c1, c2, c3 = st.columns([1, 1, 3])
+    c1.button(
+        "Up",
+        icon=":material/arrow_upward:",
+        on_click=_go,
+        args=(cwd_key, core.parent_dir(cwd)),
+        disabled=cwd == "/",
+    )
+    c2.button(
+        "Home", icon=":material/home:", on_click=_go, args=(cwd_key, home)
+    )
+    if dirs_only:
+        c3.button(
+            "Use this folder",
+            icon=":material/check:",
+            type="primary",
+            on_click=_pick,
+            args=(key, cwd),
+        )
+    c1, c2 = st.columns(2)
+    c1.text_input(
+        "go to",
+        key=f"{key}__typed",
+        placeholder="/scratch/…",
+        on_change=_go_typed,
+        args=(cwd_key, f"{key}__typed"),
+    )
+    needle = c2.text_input("filter", key=f"{key}__filter").strip().lower()
+
+    try:
+        entries = core.browse_entries(list_remote(cwd), dirs_only=dirs_only)
+    except OSError as exc:
+        st.error(f"cannot list {cwd}: {exc}")
+        return
+    if needle:
+        entries = [e for e in entries if needle in e[0].lower()]
+    with st.container(height=380):
+        if not entries:
+            st.caption("(nothing here)")
+        for i, (name, kind) in enumerate(entries[:MAX_ENTRIES]):
+            path = core.join_remote(cwd, name)
+            # Folders open; stores, images and files are picked. In a
+            # folder picker a store is just a folder.
+            opens = kind == "dir" or dirs_only
+            st.button(
+                name,
+                key=f"{key}__e{i}",
+                icon=ICONS[kind],
+                type="tertiary",
+                on_click=_go if opens else _pick,
+                args=(cwd_key, path) if opens else (key, path),
+            )
+        if len(entries) > MAX_ENTRIES:
+            st.caption(
+                f"… {len(entries) - MAX_ENTRIES} more: type in *filter* "
+                "to narrow the list."
+            )
+    if dirs_only:
+        c1, c2 = st.columns([3, 1], vertical_alignment="bottom")
+        new = c1.text_input("or a new folder in here", key=f"{key}__new")
+        c2.button(
+            "Use it",
+            disabled=not new.strip(),
+            on_click=_pick,
+            args=(key, core.join_remote(cwd, new.strip().strip("/"))),
+        )
+
+
+def remote_path(
+    label: str,
+    key: str,
+    *,
+    dirs_only: bool = False,
+    help: str | None = None,
+    narrow: bool = False,
+) -> str:
+    """A path on the cluster: typed in, or chosen with *Browse*."""
+    picked = st.session_state.pop(f"{key}__picked", None)
+    if picked is not None:
+        st.session_state[key] = picked
+    c1, c2 = st.columns(
+        [3, 1] if narrow else [6, 1], vertical_alignment="bottom"
+    )
+    value = c1.text_input(label, key=key, help=help)
+    if c2.button(
+        ":material/folder_open:",
+        key=f"{key}__browse",
+        help="browse the cluster",
+    ):
+        st.session_state[f"{key}__cwd"] = None  # start from the value
+        browse(key, label, dirs_only)
+    return (value or "").strip()
+
+
 # ---------------------------------------------------------------------------
 # Config form
 # ---------------------------------------------------------------------------
+
+
+def section(title: str, caption: str | None = None):
+    """A bordered block of the page, with a heading."""
+    box = st.container(border=True)
+    box.markdown(f"#### {title}")
+    if caption:
+        box.caption(caption)
+    return box
 
 
 def _opt_float(label: str, container=st, help=None, key=None):
@@ -98,19 +299,26 @@ def _opt_float(label: str, container=st, help=None, key=None):
     return float(text) if text.strip() else None
 
 
-def shared_form() -> dict:
-    """Settings every segmentation of a run shares (image, tiling, merge)."""
+def image_form() -> dict:
+    """Where the image is, where results go, and how it is converted."""
     v: dict = {}
-    st.subheader("Input / output")
     c1, c2 = st.columns(2)
-    v["input"] = c1.text_input(
-        "input", help=".ims/.czi/.lif/.nd2/ome-tiff/.zarr, or a TIFF glob"
-    )
-    v["work_dir"] = c2.text_input(
-        "work_dir", help="everything is written under here, on the cluster"
-    )
-
-    with st.expander("Conversion"):
+    with c1:
+        v["input"] = remote_path(
+            "input image",
+            "input",
+            help=".ims/.czi/.lif/.nd2/ome-tiff/.zarr, or a TIFF glob "
+            "(type the glob in)",
+        )
+    with c2:
+        v["work_dir"] = remote_path(
+            "work_dir (results)",
+            "work_dir",
+            dirs_only=True,
+            help="everything is written under here, on the cluster; the "
+            "converted image goes to <work_dir>/image.zarr",
+        )
+    with st.expander("Conversion", icon=":material/transform:"):
         c1, c2, c3, c4 = st.columns(4)
         v["reuse_pyramid"] = c1.checkbox("reuse_pyramid", value=False)
         v["shard"] = c2.checkbox("shard", value=False)
@@ -121,14 +329,18 @@ def shared_form() -> dict:
             help="zstd: best for labels; zstd:3 ~10% smaller raw images; "
             "blosc for older Java viewers without zstd",
         )
-        v["convert_chunks"] = st.text_input(
+        c1, c2 = st.columns(2)
+        v["convert_chunks"] = c1.text_input(
             "convert_chunks (YAML, e.g. [8, 512, 512]; blank = auto)", ""
         )
-        v["sequence_pattern"] = st.text_input(
+        v["sequence_pattern"] = c2.text_input(
             "sequence_pattern (regex, only for a TIFF glob input)", ""
         )
+    return v
 
-    st.subheader("Tiling")
+
+def tiling_form() -> dict:
+    v: dict = {}
     c1, c2, c3, c4 = st.columns(4)
     v["level"] = c1.number_input("level", min_value=0, value=0, step=1)
     v["tile_shape"] = c2.text_input(
@@ -140,11 +352,16 @@ def shared_form() -> dict:
     v["gpu_memory_gb"] = c4.number_input(
         "gpu_memory_gb (0 = detect)", min_value=0, value=0
     )
-    c1, c2 = st.columns(2)
+    c1, c2, _, _ = st.columns(4)
     v["skip_empty"] = c1.checkbox("skip_empty", value=True)
     v["empty_threshold"] = _opt_float("empty_threshold (blank = Otsu)", c2)
+    return v
 
-    with st.expander("Merge and label pyramid"):
+
+def outputs_form() -> dict:
+    """Merging, the label pyramid, the object table and mail."""
+    v: dict = {}
+    with st.expander("Merge and label pyramid", icon=":material/join:"):
         c1, c2, c3 = st.columns(3)
         v["stitch"] = c1.selectbox(
             "stitch",
@@ -164,6 +381,9 @@ def shared_form() -> dict:
         )
         v["shard_labels"] = c3.checkbox("shard_labels", value=False)
         v["seam_report"] = c4.checkbox("seam_report", value=True)
+        workers = st.text_input("merge_workers (blank = auto)", "")
+        v["merge_workers"] = int(workers) if workers.strip() else None
+    with st.expander("Object table", icon=":material/table:"):
         c1, c2 = st.columns(2)
         v["object_table"] = c1.checkbox(
             "object table (for `patchworks review`)",
@@ -179,12 +399,10 @@ def shared_form() -> dict:
         v["table_channels"] = [
             int(c) for c in chans.replace(" ", "").split(",") if c
         ]
-        workers = st.text_input("merge_workers (blank = auto)", "")
-        v["merge_workers"] = int(workers) if workers.strip() else None
-
-    with st.expander("Notifications"):
-        v["notify_email"] = st.text_input("notify_email", "")
-        v["notify_events"] = st.multiselect(
+    with st.expander("Notifications", icon=":material/mail:"):
+        c1, c2 = st.columns(2)
+        v["notify_email"] = c1.text_input("notify_email", "")
+        v["notify_events"] = c2.multiselect(
             "notify_events",
             ["start", "finish", "error"],
             default=["finish", "error"],
@@ -198,6 +416,7 @@ def segmentation_form(k: str = "", label: str = "labels") -> dict:
     *k* prefixes every widget key, so several can sit on one page.
     """
     v: dict = {}
+    st.markdown("**What to segment**")
     c1, c2, c3, c4 = st.columns(4)
     v["label_name"] = c1.text_input("label_name", value=label, key=f"{k}lbl")
     v["channel"] = c2.number_input(
@@ -208,13 +427,19 @@ def segmentation_form(k: str = "", label: str = "labels") -> dict:
     v["overlap"] = c4.text_input(
         "overlap", value="30", help="N, or per axis [z, y, x]", key=f"{k}ov"
     )
-    v["method"] = st.selectbox(
-        "method",
-        ["cellpose", "dog", "threshold", "custom"],
-        format_func=lambda m: {
-            "dog": "dog (difference of Gaussians, optional deconvolution)"
-        }.get(m, m),
-        key=f"{k}method",
+
+    st.divider()
+    st.markdown("**Method**")
+    v["method"] = (
+        st.segmented_control(
+            "method",
+            ["cellpose", "dog", "threshold", "custom"],
+            default="cellpose",
+            format_func=lambda m: {"dog": "DoG (+ deconvolution)"}.get(m, m),
+            key=f"{k}method",
+            label_visibility="collapsed",
+        )
+        or "cellpose"
     )
     if v["method"] == "cellpose":
         c1, c2, c3, c4 = st.columns(4)
@@ -234,6 +459,7 @@ def segmentation_form(k: str = "", label: str = "labels") -> dict:
             "",
             help="e.g. flow_threshold: 0.4",
             key=f"{k}cpx",
+            height=68,
         )
     elif v["method"] == "dog":
         c1, c2, c3, c4 = st.columns(4)
@@ -251,10 +477,8 @@ def segmentation_form(k: str = "", label: str = "labels") -> dict:
         v["dog_use_gpu"] = st.checkbox(
             "blur/label on GPU (cupy)", False, key=f"{k}dg"
         )
-        v["dog_psf"] = st.text_input(
-            "deconvolution PSF path on the cluster (blank = no deconvolution)",
-            "",
-            key=f"{k}psf",
+        v["dog_psf"] = remote_path(
+            "deconvolution PSF (blank = no deconvolution)", f"{k}psf"
         )
         if v["dog_psf"]:
             c1, c2, c3, c4 = st.columns(4)
@@ -271,6 +495,8 @@ def segmentation_form(k: str = "", label: str = "labels") -> dict:
                 help="mirror in z against FFT wrap-around ghosts on thin tiles",
                 key=f"{k}dup",
             )
+    elif v["method"] == "threshold":
+        st.caption("Otsu threshold and connected components: no settings.")
     elif v["method"] == "custom":
         c1, c2 = st.columns(2)
         v["custom_module"] = c1.text_input("custom.module", "", key=f"{k}cm")
@@ -278,9 +504,11 @@ def segmentation_form(k: str = "", label: str = "labels") -> dict:
             "custom.function", "segment", key=f"{k}cf"
         )
         v["custom_kwargs"] = st.text_area(
-            "custom.kwargs (YAML mapping)", "", key=f"{k}ck"
+            "custom.kwargs (YAML mapping)", "", key=f"{k}ck", height=68
         )
 
+    st.divider()
+    st.markdown("**Clean-up**")
     c1, c2, c3, c4, c5 = st.columns(5)
     holes = c1.selectbox(
         "fill_holes", ["off", "3-D", "per plane"], key=f"{k}holes"
@@ -301,23 +529,32 @@ def segmentation_form(k: str = "", label: str = "labels") -> dict:
     return v
 
 
-def multi_form() -> tuple[list[dict], list[dict], dict, dict, dict]:
-    """Segmentations, relations, relate/bundle job settings, review rules."""
-    n = st.number_input(
-        "segmentations", min_value=1, max_value=8, value=2, step=1
+DEFAULT_LABELS = ["nuclei_labels", "cyto_labels", "cilia_labels"]
+
+
+def segmentations_form() -> list[dict]:
+    """Several segmentations, one tab each."""
+    n = st.columns(4)[0].number_input(
+        "how many segmentations", min_value=1, max_value=8, value=2, step=1
     )
+    defaults = [
+        DEFAULT_LABELS[i] if i < len(DEFAULT_LABELS) else f"labels_{i + 1}"
+        for i in range(int(n))
+    ]
+    # A tab is named after its label_name as typed on the previous run.
+    names = [
+        f"{i + 1} · {st.session_state.get(f's{i}_lbl', defaults[i])}"
+        for i in range(int(n))
+    ]
     segs = []
-    for i in range(int(n)):
-        default = ["nuclei_labels", "cyto_labels", "cilia_labels"]
-        with st.expander(f"Segmentation {i + 1}", expanded=i == 0):
-            segs.append(
-                segmentation_form(
-                    f"s{i}_",
-                    default[i] if i < len(default) else f"labels_{i + 1}",
-                )
-            )
-    labels = [s["label_name"] for s in segs]
-    st.subheader("Relations")
+    for i, tab in enumerate(st.tabs(names)):
+        with tab:
+            segs.append(segmentation_form(f"s{i}_", defaults[i]))
+    return segs
+
+
+def relations_form(labels: list[str]) -> tuple[list[dict], dict, dict]:
+    """Relations between segmentations, their jobs and the review rules."""
     st.caption(
         "Each row relates every object of `a` to the `b` object it overlaps "
         "most, written as a two-sheet Excel workbook in work_dir."
@@ -343,7 +580,7 @@ def multi_form() -> tuple[list[dict], list[dict], dict, dict, dict]:
     relations = [
         r for r in rows if r.get("a") and r.get("b") and r.get("output")
     ]
-    with st.expander("Relate and bundle jobs (SLURM)"):
+    with st.expander("Relate and bundle jobs (SLURM)", icon=":material/dns:"):
         c1, c2, c3, c4, c5 = st.columns(5)
         relate = {
             "partition": c1.text_input("relate partition", ""),
@@ -356,7 +593,10 @@ def multi_form() -> tuple[list[dict], list[dict], dict, dict, dict]:
         }
         fmt = st.selectbox("bundle the finished store", ["zip", "iso", "none"])
         bundle = {"format": None if fmt == "none" else fmt}
-    with st.expander("Review rules (what `patchworks review` flags)"):
+    with st.expander(
+        "Review rules (what `patchworks review` flags)",
+        icon=":material/rule:",
+    ):
         st.caption(
             "A child outside every parent, or less than min_overlap inside "
             "one, is always flagged. Add how many of each child a parent "
@@ -413,12 +653,74 @@ def multi_form() -> tuple[list[dict], list[dict], dict, dict, dict]:
                 "apical": pos_apical.removeprefix("away from "),
             }
         }
-    return segs, relations, relate, bundle, review
+    return relations, {"relate": relate, "bundle": bundle}, review
 
 
 # ---------------------------------------------------------------------------
-# Launch
+# Plan and launch
 # ---------------------------------------------------------------------------
+
+
+def plan_all(client, wf_dir, setup_cmd, cfgs: list[dict]) -> dict:
+    """``patchworks segment --plan`` for each segmentation of the run.
+
+    Every segmentation of a run reads the same converted image, so that is
+    checked once up front: without it there is nothing to plan.
+    """
+    store = core.image_store(cfgs[0])
+    _, out, _ = run(
+        client,
+        f"cd {shlex.quote(wf_dir)} && {core.store_exists_command(store)}",
+        login=False,
+        timeout=30,
+    )
+    if out.strip() != "YES":
+        return {"missing": store}
+    results = {}
+    progress = st.progress(0.0)
+    for i, cfg in enumerate(cfgs):
+        label = cfg["label_name"]
+        progress.progress(i / len(cfgs), text=f"planning {label}…")
+        rc, out, err = run(
+            client,
+            core.inner_command(wf_dir, setup_cmd, core.plan_command(cfg)),
+            timeout=300,
+        )
+        plan = core.parse_plan(out) if rc == 0 else None
+        results[label] = {"plan": plan, "rc": rc, "out": out, "err": err}
+    progress.empty()
+    return {"results": results}
+
+
+def show_plans(state: dict) -> None:
+    if "missing" in state:
+        st.warning(
+            f"There is no converted image at `{state['missing']}` yet, and "
+            "the plan reads it. Launch the run once (converting is its "
+            "first step), then plan. Check that work_dir is the one you "
+            "mean.",
+            icon=":material/hourglass_empty:",
+        )
+        return
+    results = state["results"]
+    rows = [
+        core.plan_row(label, r["plan"])
+        for label, r in results.items()
+        if r["plan"]
+    ]
+    if rows:
+        st.dataframe(rows, hide_index=True)
+    for label, r in results.items():
+        if r["plan"] is None:
+            reason = core.last_error_line(r["err"] or r["out"]) or (
+                f"exit code {r['rc']}"
+            )
+            st.error(f"**{label}**: plan failed — {reason}")
+        with st.expander(f"{label}: full output", icon=":material/terminal:"):
+            st.code(
+                ((r["out"] or "") + (r["err"] or ""))[-20000:] or "(no output)",
+                language="text",
+            )
 
 
 def launch(client, *, wf_dir, setup_cmd, files, name, mode, profile, slurm):
@@ -451,7 +753,9 @@ def launch(client, *, wf_dir, setup_cmd, files, name, mode, profile, slurm):
         with st.spinner("dry run…"):
             rc, out, err = run(client, inner, timeout=900)
         (st.success if rc == 0 else st.error)(f"dry run exited {rc}")
-        st.code((out + err)[-20000:] or "(no output)", language="text")
+        st.code(
+            (out + err)[-20000:] or "(no output)", language="text", height=400
+        )
         return
 
     label = name.rsplit("_", 1)[0]
@@ -492,17 +796,18 @@ def launch(client, *, wf_dir, setup_cmd, files, name, mode, profile, slurm):
         core.registry_line(job),
         append=True,
     )
-    st.caption(f"log: {log} · config: {job['config']}")
+    st.caption(f"log: {log} · config: {job['config']} — see the Jobs tab")
+
+
+STATE_COLORS = {"RUNNING": "green", "PENDING": "orange", "DONE": "gray"}
 
 
 # ---------------------------------------------------------------------------
 # Page
 # ---------------------------------------------------------------------------
 
-st.title("patchworks launcher")
-
 with st.sidebar:
-    st.header("Cluster")
+    st.markdown("### :material/dns: Cluster")
     if get_client() is None:
         name = st.selectbox("preset", ["Custom"] + sorted(CLUSTERS))
         preset = CLUSTERS.get(name, {})
@@ -540,173 +845,286 @@ with st.sidebar:
             except Exception as exc:  # shown, not raised: a UI
                 st.error(f"connection failed: {exc}")
     else:
-        st.success(f"connected as {st.session_state['ssh_target']}")
-        if st.button("Disconnect"):
+        st.success(
+            f"connected as **{st.session_state['ssh_target']}**",
+            icon=":material/link:",
+        )
+        if st.button("Disconnect", icon=":material/link_off:"):
             get_client().close()
-            for key in ("ssh_client", "preset", "base_cfg"):
+            for key in ("ssh_client", "sftp", "preset", "base_cfg", "plans"):
                 st.session_state.pop(key, None)
             st.rerun()
 
     st.divider()
-    st.header("Remote workflow")
+    st.markdown("### :material/folder_code: Workflow on the cluster")
     preset = st.session_state.get("preset", {})
-    wf_dir = st.text_input(
-        "workflow directory on the cluster",
-        help=f"e.g. {preset.get('workflow_dir_hint', '/path/to/patchworks/workflow')}",
-    )
+    hint = preset.get("workflow_dir_hint", "/path/to/patchworks/workflow")
+    if get_client() is None:
+        wf_dir = ""
+        st.caption("Connect first.")
+    else:
+        wf_dir = remote_path(
+            "workflow folder",
+            "wf_dir",
+            dirs_only=True,
+            help=f"the clone's workflow/ folder, e.g. {hint}",
+            narrow=True,
+        ).rstrip("/")
+        if wf_dir:
+            checked = st.session_state.setdefault("wf_checked", {})
+            if wf_dir not in checked:
+                try:
+                    get_sftp().stat(f"{wf_dir}/Snakefile")
+                    checked[wf_dir] = True
+                except OSError:
+                    checked[wf_dir] = False
+            if checked[wf_dir]:
+                st.caption(":green[:material/check_circle: Snakefile found]")
+            else:
+                st.warning(
+                    "No Snakefile in this folder: pick the clone's "
+                    "`workflow/` folder."
+                )
     setup_cmd = st.text_area(
         "environment setup (run before snakemake)",
         value=preset.get("setup_cmd", ""),
         help='e.g. eval "$(pixi shell-hook)"',
+        height=68,
     )
+
+st.title(":material/grid_view: patchworks launcher")
 
 client = get_client()
 if client is None:
-    st.info("Connect to a cluster in the sidebar to continue.")
+    st.info(
+        "Connect to a cluster in the sidebar to continue.",
+        icon=":material/arrow_back:",
+    )
     st.stop()
 if not wf_dir:
-    st.info("Set the workflow directory in the sidebar to continue.")
+    st.info(
+        "Choose the workflow folder in the sidebar to continue.",
+        icon=":material/arrow_back:",
+    )
     st.stop()
 
-tab_config, tab_launch, tab_jobs = st.tabs(["Config", "Launch", "Jobs"])
+st.caption(f"{st.session_state['ssh_target']} · `{wf_dir}`")
+
+tab_config, tab_launch, tab_jobs = st.tabs(
+    [
+        ":material/tune: 1 · Configure",
+        ":material/rocket_launch: 2 · Plan & launch",
+        ":material/monitor_heart: 3 · Jobs",
+    ]
+)
 
 with tab_config:
-    kind = st.radio(
-        "run",
-        ["One segmentation", "Several segmentations + relations (multi)"],
-        horizontal=True,
-    )
-    shared = shared_form()
+    with section(":material/alt_route: Run"):
+        kind = (
+            st.segmented_control(
+                "run",
+                ["One segmentation", "Several segmentations + relations"],
+                default="One segmentation",
+                label_visibility="collapsed",
+            )
+            or "One segmentation"
+        )
+    single = kind.startswith("One")
+
+    with section(
+        ":material/image: Image",
+        "The image to segment, and where every result goes.",
+    ):
+        shared = image_form()
+    with section(
+        ":material/grid_on: Tiling",
+        "How the image is cut into tiles for the GPU jobs.",
+    ):
+        shared |= tiling_form()
+
+    if single:
+        with section(":material/category: Segmentation"):
+            segs = [segmentation_form()]
+    else:
+        with section(
+            ":material/category: Segmentations",
+            "Each gets its own label name, channel and method; they share "
+            "the image and tiling above.",
+        ):
+            segs = segmentations_form()
+        labels = [s["label_name"] for s in segs]
+        with section(":material/hub: Relations and review"):
+            relations, jobs_cfg, review = relations_form(labels)
+
+    with section(":material/output: Outputs"):
+        shared |= outputs_form()
+
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     files: dict = {}
+    problems: list[str] = []
     try:
-        if kind.startswith("One"):
-            st.subheader("Segmentation")
-            seg = segmentation_form()
-            cfg = core.build_config({**shared, **seg})
+        if single:
+            cfg = core.build_config({**shared, **segs[0]})
             name = f"{core.safe_name(cfg['label_name'])}_{stamp}"
             files = {f"{wf_dir}/config/launcher_{name}.yaml": cfg}
         else:
-            segs, relations, relate, bundle, review = multi_form()
             name = f"multi_{stamp}"
             files = core.build_multi(
                 shared,
                 segs,
                 relations,
                 directory=f"{wf_dir}/config/launcher_{name}",
-                relate=relate,
-                bundle=bundle,
+                relate=jobs_cfg["relate"],
+                bundle=jobs_cfg["bundle"],
                 review=review,
             )
-            for problem in core.multi_problems(files):
-                st.error(problem)
-            if core.multi_problems(files):
-                files = {}
-        st.session_state["files"] = files
-        st.session_state["run_name"] = name
+            problems = core.multi_problems(files)
+        seg_cfgs = [c for p, c in files.items() if not p.endswith("multi.yaml")]
+        missing = sorted({m for c in seg_cfgs for m in core.missing_fields(c)})
+        if missing:
+            problems.insert(0, f"still to fill in: {', '.join(missing)}")
     except Exception as exc:
-        st.session_state.pop("files", None)
-        st.error(f"the config is not valid yet: {exc}")
-    if files:
-        cache = st.session_state.setdefault("base_cfg", {})
-        if wf_dir not in cache:
-            text = read_remote(client, f"{wf_dir}/config/config.yaml")
-            cache[wf_dir] = yaml.safe_load(text) if text else None
-        for path, content in files.items():
-            if path.endswith("/multi.yaml"):
-                with st.expander("multi.yaml"):
-                    st.code(yaml.safe_dump(content, sort_keys=False), "yaml")
-                continue
-            merged, inherited = core.effective_config(cache[wf_dir], content)
-            label = content["label_name"]
-            if inherited:
-                st.warning(
-                    f"{label}: not set by this form, so taken from the "
-                    f"cluster's config/config.yaml: {', '.join(inherited)}"
+        problems = [f"the config is not valid yet: {exc}"]
+
+    with section(":material/fact_check: Check"):
+        if problems:
+            files = {}
+            for problem in problems:
+                st.warning(problem, icon=":material/edit_note:")
+        else:
+            st.success(
+                "The config is complete: go to **2 · Plan & launch**.",
+                icon=":material/check_circle:",
+            )
+            cache = st.session_state.setdefault("base_cfg", {})
+            if wf_dir not in cache:
+                text = read_remote(client, f"{wf_dir}/config/config.yaml")
+                cache[wf_dir] = yaml.safe_load(text) if text else None
+            for path, content in files.items():
+                if path.endswith("/multi.yaml"):
+                    with st.expander("multi.yaml", icon=":material/code:"):
+                        st.code(
+                            yaml.safe_dump(content, sort_keys=False), "yaml"
+                        )
+                    continue
+                merged, inherited = core.effective_config(
+                    cache[wf_dir], content
                 )
-            with st.expander(f"Effective config: {label}"):
-                st.code(yaml.safe_dump(merged, sort_keys=False), "yaml")
+                label = content["label_name"]
+                if inherited:
+                    st.warning(
+                        f"{label}: not set by this form, so taken from the "
+                        f"cluster's config/config.yaml: {', '.join(inherited)}"
+                    )
+                with st.expander(
+                    f"Effective config: {label}", icon=":material/code:"
+                ):
+                    st.code(yaml.safe_dump(merged, sort_keys=False), "yaml")
+    st.session_state["files"] = files
+    st.session_state["run_name"] = name if files else None
 
 with tab_launch:
     files = st.session_state.get("files")
     if not files:
-        st.warning("Fix the config in the Config tab first.")
+        st.info(
+            "Finish the config in **1 · Configure** first.",
+            icon=":material/arrow_back:",
+        )
     else:
         seg_cfgs = [c for p, c in files.items() if not p.endswith("multi.yaml")]
-        plan_for = st.selectbox(
-            "plan for",
-            range(len(seg_cfgs)),
-            format_func=lambda i: seg_cfgs[i]["label_name"],
-        )
-        if st.button("Plan (tiles, memory, size -- no segmentation)"):
-            cmd = core.plan_command(seg_cfgs[plan_for])
-            rc, out, err = run(
-                client,
-                core.inner_command(wf_dir, setup_cmd, cmd),
-                timeout=300,
-            )
-            if rc:
-                st.error(
-                    "plan failed -- it needs the converted image, so run the "
-                    f"workflow (or a dry run + convert) once first.\n{err}"
+        many = len(seg_cfgs) > 1
+        with section(
+            ":material/straighten: Plan",
+            "Tiles, memory and output size, read from the converted image: "
+            "no segmentation runs, so it is safe on the login node."
+            + (" Every segmentation is planned." if many else ""),
+        ):
+            if st.button(
+                "Plan all segmentations" if many else "Plan",
+                icon=":material/play_arrow:",
+            ):
+                st.session_state["plans"] = plan_all(
+                    client, wf_dir, setup_cmd, seg_cfgs
                 )
-            else:
-                st.code(out, language="json")
+            if st.session_state.get("plans"):
+                show_plans(st.session_state["plans"])
 
-        mode = st.radio("run mode", core.RUN_MODES)
-        profile = "profile/slurm"
-        slurm: dict = {}
-        if mode != core.DRY_RUN:
-            profile = st.text_input("--workflow-profile", "profile/slurm")
-        if mode == core.SLURM_JOB:
-            st.caption(
-                "The controller only submits and watches jobs: one CPU, "
-                "little memory, but it must outlive the whole run."
-            )
-            c1, c2, c3, c4, c5 = st.columns(5)
-            slurm = {
-                "time": c1.text_input(
-                    "time", preset.get("controller_time", "3-00:00:00")
-                ),
-                "mem": c2.text_input("mem", preset.get("controller_mem", "4G")),
-                "partition": c3.text_input(
-                    "partition", preset.get("controller_partition", "")
-                ),
-                "qos": c4.text_input("qos", preset.get("controller_qos", "")),
-                "account": c5.text_input(
-                    "account", preset.get("controller_account", "")
-                ),
-            }
-        elif mode == core.LOGIN_NODE:
-            st.warning(
-                "The controller runs for the whole workflow on the login "
-                "node, where a reboot or a process reaper ends it. Prefer "
-                "the SLURM-job mode unless your cluster forbids it."
-            )
-        if st.button("Launch", type="primary"):
-            launch(
-                client,
-                wf_dir=wf_dir,
-                setup_cmd=setup_cmd,
-                files=files,
-                name=st.session_state["run_name"],
-                mode=mode,
-                profile=profile,
-                slurm=slurm,
-            )
+        with section(
+            ":material/rocket_launch: Launch",
+            "Uploads the config"
+            + (f"s of all {len(seg_cfgs)} segmentations" if many else "")
+            + " and starts the run. Launching the same settings again "
+            "resumes it.",
+        ):
+            mode = st.radio("run mode", core.RUN_MODES)
+            profile = "profile/slurm"
+            slurm: dict = {}
+            if mode != core.DRY_RUN:
+                profile = st.text_input("--workflow-profile", "profile/slurm")
+            if mode == core.SLURM_JOB:
+                st.caption(
+                    "The controller only submits and watches jobs: one CPU, "
+                    "little memory, but it must outlive the whole run."
+                )
+                c1, c2, c3, c4, c5 = st.columns(5)
+                slurm = {
+                    "time": c1.text_input(
+                        "time", preset.get("controller_time", "3-00:00:00")
+                    ),
+                    "mem": c2.text_input(
+                        "mem", preset.get("controller_mem", "4G")
+                    ),
+                    "partition": c3.text_input(
+                        "partition", preset.get("controller_partition", "")
+                    ),
+                    "qos": c4.text_input(
+                        "qos", preset.get("controller_qos", "")
+                    ),
+                    "account": c5.text_input(
+                        "account", preset.get("controller_account", "")
+                    ),
+                }
+            elif mode == core.LOGIN_NODE:
+                st.warning(
+                    "The controller runs for the whole workflow on the login "
+                    "node, where a reboot or a process reaper ends it. Prefer "
+                    "the SLURM-job mode unless your cluster forbids it."
+                )
+            with st.expander("Files to upload", icon=":material/upload:"):
+                st.code("\n".join(files), language=None)
+            if st.button(
+                "Dry run" if mode == core.DRY_RUN else "Launch",
+                type="primary",
+                icon=":material/rocket_launch:",
+            ):
+                launch(
+                    client,
+                    wf_dir=wf_dir,
+                    setup_cmd=setup_cmd,
+                    files=files,
+                    name=st.session_state["run_name"],
+                    mode=mode,
+                    profile=profile,
+                    slurm=slurm,
+                )
 
 with tab_jobs:
     text = read_remote(client, f"{wf_dir}/{core.REGISTRY}") or ""
     jobs = core.parse_registry(text)
     if not jobs:
-        st.caption("No jobs launched from this workflow directory yet.")
-    else:
-        pick = st.selectbox(
-            "job",
-            range(len(jobs)),
-            format_func=lambda i: f"{jobs[i]['name']} · {jobs[i]['mode']}",
+        st.info(
+            "No jobs launched from this workflow folder yet.",
+            icon=":material/inbox:",
         )
-        auto = st.toggle("auto-refresh every 15 s", value=False)
+    else:
+        with section(":material/monitor_heart: Job"):
+            c1, c2 = st.columns([3, 1], vertical_alignment="bottom")
+            pick = c1.selectbox(
+                "job",
+                range(len(jobs)),
+                format_func=lambda i: f"{jobs[i]['name']} · {jobs[i]['mode']}",
+            )
+            auto = c2.toggle("auto-refresh every 15 s", value=False)
 
         @st.fragment(run_every=15 if auto else None)
         def monitor(job=jobs[pick]):
@@ -721,19 +1139,29 @@ with tab_jobs:
                 login=bool(job.get("slurm_job")),
                 timeout=30,
             )
+            state = state.strip() or "unknown"
             ident = job.get("slurm_job") or job.get("pid")
-            st.write(
-                f"**{ident}** · {state.strip() or 'unknown'} · "
-                f"started {job['started']}"
-            )
+            kind = "SLURM job" if job.get("slurm_job") else "PID"
+            color = STATE_COLORS.get(state, "red")
+            with st.container(border=True):
+                c1, c2, c3, c4 = st.columns([1, 1, 1, 1])
+                c1.markdown(f"**state**  \n:{color}[**{state}**]")
+                c2.markdown(f"**{kind}**  \n{ident}")
+                c3.markdown(f"**started**  \n{job['started']}")
+                c4.button(
+                    "Refresh",
+                    icon=":material/refresh:",
+                    key="refresh_job",
+                )
+                st.caption(f"log: `{job['log']}` · config: `{job['config']}`")
             _, tail, _ = run(
                 client,
                 f"tail -n 300 {shlex.quote(job['log'])}",
                 login=False,
                 timeout=30,
             )
-            st.code(tail or "(log is empty so far)", language="text")
-            if st.button("refresh now"):
-                st.rerun(scope="fragment")
+            st.code(
+                tail or "(log is empty so far)", language="text", height=500
+            )
 
         monitor()
