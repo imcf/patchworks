@@ -52,7 +52,7 @@ it where only the people it's for can reach it.
    segmentations + relations*. The form is split into blocks: image, tiling,
    segmentation(s) (one tab each), relations and review, outputs, and a
    final *Check* that lists anything still missing (an empty input or
-   work_dir is refused) before it shows the effective config.
+   work_dir is refused) before it shows the configs it will upload.
    - Shared settings (input, work_dir, conversion, compression, tiling, GPU,
      merge/pyramid) are entered once.
    - Each segmentation gets its own label name, channel, method (cellpose,
@@ -60,18 +60,23 @@ it where only the people it's for can reach it.
      and post-processing.
    - A multi run adds a relations table (`a` → `b` → `.xlsx`), plus
      optional SLURM settings for the relate jobs and a bundle format.
-   - Each config is written in full, so nothing depends on what the
-     cluster's `config/config.yaml` holds. The app still reads that file
-     and shows the effective config, and flags any keys that would come
-     from it. A multi run is checked the way `run_multi.py` checks it
+   - Each config is complete: the workflow fills in its defaults and
+     reads nothing from the cluster's `config/config.yaml`. A multi run
+     is checked the way `run_multi.py` checks it
      before anything is uploaded: unique label names; one work_dir, input,
      tile shape and level; relations between known labels.
 2. **Plan & launch tab.**
+   - *Environment*: the workflow's pixi environment the run starts from,
+     read from its `pixi.toml`. The app picks the smallest one with what
+     the config needs (PlantSeg: `plantseg`; `use_gpu` or `dilate_gpu`:
+     cupy, `cuda12`; `denoise`: `careamics`) and swaps it into the
+     `pixi shell-hook` of the sidebar's setup line.
    - *Plan* runs `patchworks segment --plan` on the converted image, for
      every segmentation of the run, and shows tiles, memory and size in
-     one table, with no segmentation. It first checks that
-     `<work_dir>/image.zarr` exists: the conversion is the run's first
-     step, so launch once before planning.
+     one table, before any GPU time is spent. It needs
+     `<work_dir>/image.zarr`: launch with *Convert only* first (the same
+     conversion step a full run starts with, which a later run then
+     skips), or plan after a full run has converted.
    - Then pick a mode:
      - **Dry run**: `snakemake -n`, or `run_multi.py -n`. The output is
        shown right away.

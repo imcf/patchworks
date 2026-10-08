@@ -78,18 +78,91 @@ def test_dog_method_becomes_the_custom_plugin_with_decon():
     assert decon == {"psf": "/p.tif", "dup_rev_z": "auto"}
 
 
-def test_effective_config_flags_keys_inherited_from_the_cluster_file():
-    base = {
-        "work_dir": "/old",
-        "cellpose": {"model": "nuclei", "flow_threshold": 0.9},
-        "legacy_key": 1,
-    }
-    run = {"work_dir": "/new", "cellpose": {"model": "cyto3"}}
-    merged, inherited = core.effective_config(base, run)
-    assert merged["work_dir"] == "/new"
-    assert merged["cellpose"] == {"model": "cyto3", "flow_threshold": 0.9}
-    assert sorted(inherited) == ["cellpose.flow_threshold", "legacy_key"]
-    assert core.effective_config(None, run) == (run, [])
+def test_nothing_is_inherited_from_the_cluster_config_yaml():
+    """The Snakefile reads only the --configfile given (and its defaults).
+
+    The launcher used to warn about keys "taken from config/config.yaml";
+    if the Snakefile ever reads that file again, the warning is due back.
+    """
+    snakefile = (ROOT / "workflow" / "Snakefile").read_text()
+    assert "configfile:" not in snakefile
+
+
+PLANTSEG = {
+    "method": "custom",
+    "custom_module": "patchworks.plugins.plantseg",
+    "label_name": "cyto",
+}
+DOG_GPU = {"method": "dog", "dog_use_gpu": True, "label_name": "cilia"}
+
+
+def test_environment_matches_what_the_workflow_checks():
+    """needed_packages names what _pw.environment_problems would refuse."""
+    from _pw import environment_problems, has_module
+
+    for extra in (PLANTSEG, DOG_GPU):
+        cfg = core.build_config({**BASE, **extra})
+        needs = core.needed_packages(cfg)
+        assert needs
+        refused = " ".join(environment_problems(cfg))
+        for module in needs:
+            assert has_module(module) or repr(module) in refused
+
+
+def test_suggested_environment():
+    toml = (ROOT / "workflow" / "pixi.toml").read_text()
+    envs = core.pixi_environments(toml)
+    assert envs[0] == "default" and "plantseg" in envs and "cuda12" in envs
+    cfg = lambda extra: core.build_config({**BASE, **extra})  # noqa: E731
+    plain = cfg({"method": "threshold"})
+    assert core.suggest_environment([plain], envs) == ("default", [])
+    assert core.suggest_environment([cfg(DOG_GPU)], envs)[0] == "cuda12"
+    env, reasons = core.suggest_environment(
+        [plain, cfg(PLANTSEG), cfg(DOG_GPU)], envs
+    )
+    assert env == "plantseg" and len(reasons) == 2
+    assert core.suggest_environment([cfg(PLANTSEG)], ["default"])[0] is None
+
+
+def test_setup_line_gets_the_environment():
+    hook = 'eval "$(pixi shell-hook)"'
+    assert core.setup_with_environment(hook, "default") == hook
+    assert core.setup_with_environment(hook, "cuda12") == (
+        'eval "$(pixi shell-hook -e cuda12)"'
+    )
+    swapped = core.setup_with_environment(
+        'module load X && eval "$(pixi shell-hook -e cuda12)"', "plantseg"
+    )
+    assert swapped == (
+        "export CONDA_OVERRIDE_CUDA=12.0 && module load X && "
+        'eval "$(pixi shell-hook -e plantseg)"'
+    )
+    assert core.setup_with_environment("conda activate pw", "cuda12") is None
+
+
+def test_convert_only_command_matches_run_multi_phase_a():
+    import shlex
+
+    cfg = core.build_config({**BASE, "method": "threshold", "level": 1})
+    cmd = shlex.split(
+        core.convert_command(
+            "/w/c.yaml", cfg, core.SLURM_JOB, workflow_dir="/w"
+        )
+    )
+    assert (
+        cmd[cmd.index("--directory") + 1] == "/scratch/run/.snakemake_convert"
+    )
+    assert cmd[cmd.index("--workflow-profile") + 1] == "/w/profile/slurm"
+    assert cmd[cmd.index("--") + 1 :] == [
+        "/scratch/run/image.zarr/zarr.json",
+        "/scratch/run/image.occupancy.zarr/1/zarr.json",
+    ]
+    dry = core.convert_command(
+        "/w/c.yaml", cfg, core.DRY_RUN, workflow_dir="/w"
+    )
+    assert "-n" in shlex.split(dry)
+    assert core.config_problems({**cfg, "work_dir": "results"})
+    assert not core.config_problems(cfg)
 
 
 def test_host_key_rules():

@@ -695,10 +695,11 @@ def plan_all(client, wf_dir, setup_cmd, cfgs: list[dict]) -> dict:
 def show_plans(state: dict) -> None:
     if "missing" in state:
         st.warning(
-            f"There is no converted image at `{state['missing']}` yet, and "
-            "the plan reads it. Launch the run once (converting is its "
-            "first step), then plan. Check that work_dir is the one you "
-            "mean.",
+            f"No converted image at `{state['missing']}` yet. The plan "
+            "measures the run on it, so convert first: below, choose "
+            "**Convert only** and launch it; when that job is DONE "
+            "(Jobs tab), plan again. Or just launch the whole run, which "
+            "converts first.",
             icon=":material/hourglass_empty:",
         )
         return
@@ -723,13 +724,27 @@ def show_plans(state: dict) -> None:
             )
 
 
-def launch(client, *, wf_dir, setup_cmd, files, name, mode, profile, slurm):
+def launch(
+    client,
+    *,
+    wf_dir,
+    setup_cmd,
+    files,
+    name,
+    mode,
+    profile,
+    slurm,
+    convert_only=False,
+):
     """Upload *files* (remote path -> config dict) and start the run.
 
     A single config runs ``snakemake``; a multi run (whose files include a
     ``multi.yaml``) runs ``scripts/run_multi.py``, which segments, relates
-    and bundles.
+    and bundles. With *convert_only*, only the conversion runs (from the
+    first segmentation's config), as run_multi's first phase would.
     """
+    if convert_only:
+        name = f"convert_{name.rsplit('_', 1)[-1]}"
     log_dir = f"{wf_dir}/{core.LOG_DIR}"
     log = f"{log_dir}/{name}.log"
     rc, _, err = run(client, f"mkdir -p {shlex.quote(log_dir)}", login=False)
@@ -742,11 +757,19 @@ def launch(client, *, wf_dir, setup_cmd, files, name, mode, profile, slurm):
     for path, content in files.items():
         write_remote(client, path, yaml.safe_dump(content, sort_keys=False))
     multi = next((p for p in files if p.endswith("/multi.yaml")), None)
-    command = (
-        core.multi_command(multi, mode, profile=profile)
-        if multi
-        else core.snakemake_command(next(iter(files)), mode, profile=profile)
-    )
+    first = next(p for p in files if not p.endswith("/multi.yaml"))
+    if convert_only:
+        cfg = files[first]
+        state = f"{cfg['work_dir'].rstrip('/')}/.snakemake_convert"
+        run(client, f"mkdir -p {shlex.quote(state)}", login=False)
+        command = core.convert_command(
+            first, cfg, mode, workflow_dir=wf_dir, profile=profile
+        )
+        multi = None
+    elif multi:
+        command = core.multi_command(multi, mode, profile=profile)
+    else:
+        command = core.snakemake_command(first, mode, profile=profile)
     inner = core.inner_command(wf_dir, setup_cmd, command)
 
     if mode == core.DRY_RUN:
@@ -761,11 +784,11 @@ def launch(client, *, wf_dir, setup_cmd, files, name, mode, profile, slurm):
     label = name.rsplit("_", 1)[0]
     job = {
         "name": name,
-        "config": multi or next(iter(files)),
+        "config": multi or first,
         "log": log,
         "started": name.rsplit("_", 1)[-1],
         "mode": mode,
-        "kind": "multi" if multi else "single",
+        "kind": "convert" if convert_only else "multi" if multi else "single",
     }
     if mode == core.SLURM_JOB:
         script = f"{log_dir}/{name}.sbatch"
@@ -851,7 +874,7 @@ with st.sidebar:
         )
         if st.button("Disconnect", icon=":material/link_off:"):
             get_client().close()
-            for key in ("ssh_client", "sftp", "preset", "base_cfg", "plans"):
+            for key in ("ssh_client", "sftp", "preset", "pixi_envs", "plans"):
                 st.session_state.pop(key, None)
             st.rerun()
 
@@ -887,8 +910,9 @@ with st.sidebar:
                 )
     setup_cmd = st.text_area(
         "environment setup (run before snakemake)",
-        value=preset.get("setup_cmd", ""),
-        help='e.g. eval "$(pixi shell-hook)"',
+        value=preset.get("setup_cmd", 'eval "$(pixi shell-hook)"'),
+        help="puts snakemake, patchworks and sbatch on PATH. Which pixi "
+        "environment is chosen in *Plan & launch*, from the config.",
         height=68,
     )
 
@@ -981,6 +1005,9 @@ with tab_config:
             problems = core.multi_problems(files)
         seg_cfgs = [c for p, c in files.items() if not p.endswith("multi.yaml")]
         missing = sorted({m for c in seg_cfgs for m in core.missing_fields(c)})
+        problems += sorted(
+            {p for c in seg_cfgs for p in core.config_problems(c)}
+        )
         if missing:
             problems.insert(0, f"still to fill in: {', '.join(missing)}")
     except Exception as exc:
@@ -996,30 +1023,13 @@ with tab_config:
                 "The config is complete: go to **2 · Plan & launch**.",
                 icon=":material/check_circle:",
             )
-            cache = st.session_state.setdefault("base_cfg", {})
-            if wf_dir not in cache:
-                text = read_remote(client, f"{wf_dir}/config/config.yaml")
-                cache[wf_dir] = yaml.safe_load(text) if text else None
             for path, content in files.items():
-                if path.endswith("/multi.yaml"):
-                    with st.expander("multi.yaml", icon=":material/code:"):
-                        st.code(
-                            yaml.safe_dump(content, sort_keys=False), "yaml"
-                        )
-                    continue
-                merged, inherited = core.effective_config(
-                    cache[wf_dir], content
-                )
-                label = content["label_name"]
-                if inherited:
-                    st.warning(
-                        f"{label}: not set by this form, so taken from the "
-                        f"cluster's config/config.yaml: {', '.join(inherited)}"
-                    )
+                title = path.rsplit("/", 1)[-1]
                 with st.expander(
-                    f"Effective config: {label}", icon=":material/code:"
+                    f"Config to upload: {title}", icon=":material/code:"
                 ):
-                    st.code(yaml.safe_dump(merged, sort_keys=False), "yaml")
+                    st.caption(f"`{path}`")
+                    st.code(yaml.safe_dump(content, sort_keys=False), "yaml")
     st.session_state["files"] = files
     st.session_state["run_name"] = name if files else None
 
@@ -1034,9 +1044,53 @@ with tab_launch:
         seg_cfgs = [c for p, c in files.items() if not p.endswith("multi.yaml")]
         many = len(seg_cfgs) > 1
         with section(
+            ":material/deployed_code: Environment",
+            "The pixi environment of the workflow the run starts from; its "
+            "jobs inherit it. PlantSeg, CAREamics and GPU (cupy) steps "
+            "each need one that has them.",
+        ):
+            envs = st.session_state.setdefault("pixi_envs", {})
+            if wf_dir not in envs:
+                envs[wf_dir] = core.pixi_environments(
+                    read_remote(client, f"{wf_dir}/pixi.toml")
+                )
+            available = envs[wf_dir]
+            suggested, reasons = core.suggest_environment(seg_cfgs, available)
+            env = st.selectbox(
+                "pixi environment",
+                available,
+                index=available.index(suggested) if suggested else 0,
+                # A new suggestion (the config changed) resets the choice.
+                key=f"pixi_env_{suggested}",
+            )
+            for reason in reasons:
+                st.caption(f":material/info: {reason}")
+            if suggested is None:
+                st.warning(
+                    "No environment of the workflow's pixi.toml has every "
+                    "package this run needs; split it, or add one."
+                )
+            elif env != suggested:
+                st.warning(
+                    f"`{suggested}` is the one with what this run needs."
+                )
+            run_setup = core.setup_with_environment(setup_cmd, env)
+            if run_setup is None:
+                run_setup = setup_cmd
+                st.warning(
+                    "The environment setup line (sidebar) does not use "
+                    "`pixi shell-hook`, so the environment is not switched: "
+                    f"make sure it activates `{env}`."
+                )
+            st.caption("runs first, in the workflow folder:")
+            st.code(run_setup or "(nothing)", language="bash")
+
+        with section(
             ":material/straighten: Plan",
-            "Tiles, memory and output size, read from the converted image: "
-            "no segmentation runs, so it is safe on the login node."
+            "Before spending GPU hours: how many tiles, how many hold "
+            "signal, the memory per tile and the size of the result. It "
+            "reads the converted image and segments nothing, so it is "
+            "quick and safe on the login node."
             + (" Every segmentation is planned." if many else ""),
         ):
             if st.button(
@@ -1044,7 +1098,7 @@ with tab_launch:
                 icon=":material/play_arrow:",
             ):
                 st.session_state["plans"] = plan_all(
-                    client, wf_dir, setup_cmd, seg_cfgs
+                    client, wf_dir, run_setup, seg_cfgs
                 )
             if st.session_state.get("plans"):
                 show_plans(st.session_state["plans"])
@@ -1056,6 +1110,18 @@ with tab_launch:
             + " and starts the run. Launching the same settings again "
             "resumes it.",
         ):
+            what = (
+                st.segmented_control(
+                    "what to run",
+                    ["Everything", "Convert only"],
+                    default="Everything",
+                    help="Convert only: just the conversion to OME-Zarr (the "
+                    "run's first step), so you can plan before segmenting. A "
+                    "later full run goes straight on from it.",
+                )
+                or "Everything"
+            )
+            convert_only = what == "Convert only"
             mode = st.radio("run mode", core.RUN_MODES)
             profile = "profile/slurm"
             slurm: dict = {}
@@ -1100,12 +1166,13 @@ with tab_launch:
                 launch(
                     client,
                     wf_dir=wf_dir,
-                    setup_cmd=setup_cmd,
+                    setup_cmd=run_setup,
                     files=files,
                     name=st.session_state["run_name"],
                     mode=mode,
                     profile=profile,
                     slurm=slurm,
+                    convert_only=convert_only,
                 )
 
 with tab_jobs:
