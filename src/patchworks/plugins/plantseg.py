@@ -42,6 +42,7 @@ From the API:
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from functools import partial
 from typing import Any, Callable
@@ -49,6 +50,7 @@ from typing import Any, Callable
 import numpy as np
 
 from .._gpu import free_gpu_caches, is_oom, retry_on_oom
+from .._postprocess import fill_small_holes, typical_volume
 from .watershed import (
     SEED_MODES,
     _sigma,
@@ -328,6 +330,7 @@ def plantseg_fn(
     n_threads: int | None = None,
     seeds: str = "channel",
     voxel_size: dict[str, float] | None = None,
+    intensity_stats: "tuple[float, float] | None" = None,
 ) -> Callable[[np.ndarray], np.ndarray]:
     """Return a PlantSeg segmentation for ``tile_process``.
 
@@ -383,6 +386,12 @@ def plantseg_fn(
     voxel_size :
         ``{"z": .., "y": .., "x": ..}`` in micrometres; the workflow passes
         the image's own calibration.
+    intensity_stats :
+        ``(mean, std)`` of the membrane channel over the whole image, used
+        to standardize every tile. PlantSeg otherwise standardizes each input
+        with its own mean and std, so every tile gets its own contrast and
+        neighbouring tiles disagree at the seams. The workflow measures it
+        (:func:`patchworks._intensity.intensity_stats`).
 
     Returns
     -------
@@ -450,8 +459,37 @@ def plantseg_fn(
         n_threads=n_threads,
         seeds=seeds,
         voxel_size=voxel_size,
+        intensity_stats=(
+            tuple(float(v) for v in intensity_stats)
+            if intensity_stats
+            else None
+        ),
     )
     return partial(_run, cfg=cfg)
+
+
+@contextlib.contextmanager
+def _fixed_standardization(stats):
+    """Make PlantSeg standardize with *stats* instead of each input's own."""
+    if stats is None:
+        yield
+        return
+    from plantseg.functionals.prediction import prediction
+    from plantseg.functionals.training.augs import (
+        Compose,
+        Standardize,
+        ToTensor,
+    )
+
+    mean, std = stats
+    original = prediction.get_test_augmentations
+    prediction.get_test_augmentations = lambda raw, expand_dims=True: Compose(
+        [Standardize(mean=mean, std=std), ToTensor(expand_dims=expand_dims)]
+    )
+    try:
+        yield
+    finally:
+        prediction.get_test_augmentations = original
 
 
 def _zoom_to(img: np.ndarray, shape: tuple[int, ...], order: int = 1):
@@ -510,17 +548,18 @@ def predict_boundaries(membrane: np.ndarray, cfg: dict[str, Any]) -> np.ndarray:
         while True:
             oom = None
             try:
-                result = unet_prediction(
-                    img,
-                    input_layout=layout,
-                    model_name=cfg["model"],
-                    model_id=cfg["model_id"],
-                    patch=patch,
-                    device=cfg["device"],
-                    disable_tqdm=True,
-                    config_path=cfg["config_path"],
-                    model_weights_path=cfg["weights_path"],
-                )
+                with _fixed_standardization(cfg.get("intensity_stats")):
+                    result = unet_prediction(
+                        img,
+                        input_layout=layout,
+                        model_name=cfg["model"],
+                        model_id=cfg["model_id"],
+                        patch=patch,
+                        device=cfg["device"],
+                        disable_tqdm=True,
+                        config_path=cfg["config_path"],
+                        model_weights_path=cfg["weights_path"],
+                    )
                 if on_gpu:
                     _fitting_patch[fit_key] = patch
                 return result
@@ -726,6 +765,8 @@ def _run(tile: np.ndarray, cfg: dict[str, Any]) -> np.ndarray:
     labels = np.asarray(partition(pmaps, cfg, seeds, mask)).astype("int32")
     if mask is not None:
         labels[~mask] = 0
+        # Small gaps the mask punched into cells go back to them.
+        labels = fill_small_holes(labels, 0.1 * typical_volume(labels))
     return labels
 
 

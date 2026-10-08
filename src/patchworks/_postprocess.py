@@ -335,3 +335,33 @@ def absorb_fragments(
     if small.any():
         out[small[out]] = 0
     return out
+
+
+def fill_small_holes(labels: np.ndarray, max_voxels: float) -> np.ndarray:
+    """Give background patches smaller than *max_voxels* to the nearest
+    object: holes a voxel-wise mask punched into cells. Larger background
+    (outside the tissue, a lumen) stays background.
+
+    >>> lab = np.ones((5, 5), int); lab[2, 2] = 0
+    >>> int(fill_small_holes(lab, 4)[2, 2])
+    1
+    """
+    from scipy import ndimage as ndi
+
+    labels = np.asarray(labels)
+    background = labels == 0
+    if max_voxels <= 1 or not background.any() or background.all():
+        return labels
+    regions, _ = ndi.label(background)
+    sizes = np.bincount(regions.ravel())
+    small = sizes < max_voxels
+    small[0] = False
+    holes = small[regions]
+    if not holes.any():
+        return labels
+    nearest = ndi.distance_transform_edt(
+        background, return_distances=False, return_indices=True
+    )
+    out = labels.copy()
+    out[holes] = labels[tuple(ix[holes] for ix in nearest)]
+    return out
