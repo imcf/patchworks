@@ -48,10 +48,12 @@ not live in a terminal, and it never starts a run with a typo in a key.
 2. **Configure**: one segmentation, or several with the relations between them
    (the form of a [multi config](snakemake.md#several-segmentations-and-their-relations)).
    Settings mean the same as in the [config](snakemake.md#2-configure). The
-   form validates as you type and shows the **effective config**, including
-   any key inherited from the cluster's `config/config.yaml`.
-3. **Plan & launch**: *Plan* reports tiles, memory and output size for
-   every segmentation of the run; *Dry run* first,
+   form validates as you type and shows the configs it will upload.
+3. **Plan & launch**: the pixi **environment** is chosen from the config
+   (`plantseg` for PlantSeg, `cuda12` for GPU steps). *Plan* reports
+   tiles, memory and output size for every segmentation before any GPU
+   time is spent; it reads the converted image, so run *Convert only*
+   first. *Dry run* first,
    then *Submit*. The controller runs as a small SLURM job (or on the login
    node), so you can close the browser. Launching the same settings again
    resumes.
@@ -67,5 +69,6 @@ configs you can also run from a terminal.
 | host key matches no pinned fingerprint / no pinned fingerprint | Check `host_key_fingerprints` with your admins. |
 | Login fails with the right password | The cluster needs 2FA or keys; only password login is supported. |
 | `snakemake` or `sbatch` not found | Fix the environment setup line; test it with `cd <dir> && <setup> && which snakemake sbatch`. |
-| Plan: no converted image at `…/image.zarr` | Planning reads the converted image: launch once first, and check work_dir. |
+| Plan: no converted image at `…/image.zarr` | Planning reads the converted image: launch *Convert only*, wait for it to finish, and plan again. |
+| `needs 'plantseg'` / `needs 'cupy'` | The run starts in the wrong pixi environment: pick the one *Environment* suggests. |
 | Job `DONE` at once | The controller failed at startup; its log in **Jobs** says why. |

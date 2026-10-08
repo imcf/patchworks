@@ -7,7 +7,6 @@ on its own and reused by other front ends. ``app.py`` is the UI on top.
 from __future__ import annotations
 
 import base64
-import copy
 import hashlib
 import json
 import shlex
@@ -239,32 +238,107 @@ def missing_fields(cfg: dict[str, Any]) -> list[str]:
     return missing
 
 
-def effective_config(
-    base: dict[str, Any] | None, run: dict[str, Any]
-) -> tuple[dict[str, Any], list[str]]:
-    """What Snakemake will actually run with, and which keys come from *base*.
+def config_problems(cfg: dict[str, Any]) -> list[str]:
+    """What the form holds that the workflow would get wrong."""
+    work_dir = str(cfg.get("work_dir") or "").strip()
+    if work_dir and not work_dir.startswith("/"):
+        return [
+            f"work_dir must be an absolute path on the cluster: {work_dir!r}"
+        ]
+    return []
 
-    Mirrors Snakemake's overlay of ``--configfile`` on the Snakefile's own
-    ``configfile:`` -- nested mappings merge key by key, everything else is
-    replaced -- so a key present only in the cluster's ``config.yaml`` (say,
-    an old ``cellpose.flow_threshold``) shows up here, flagged, before it
-    changes a run.
+
+# ---------------------------------------------------------------------------
+# pixi environment
+# ---------------------------------------------------------------------------
+
+# What each environment of workflow/pixi.toml adds to the default one, in
+# the order to prefer them: the smallest that has everything wins.
+ENVIRONMENTS = {
+    "default": set(),
+    "cuda12": {"cupy"},
+    "cuda13": {"cupy"},
+    "plantseg": {"plantseg", "cupy"},
+    "careamics": {"careamics"},
+    "plantseg-careamics": {"plantseg", "cupy", "careamics"},
+    "cellpose4-cuda12": {"cupy"},
+    "cellpose4-cuda13": {"cupy"},
+}
+
+
+def needed_packages(cfg: dict[str, Any]) -> dict[str, str]:
+    """Optional packages a config needs, each with why.
+
+    Mirrors the workflow's own check (``_pw.environment_problems``), which
+    runs on the cluster and refuses to start without them.
     """
-    inherited: list[str] = []
+    needs: dict[str, str] = {}
+    custom = cfg.get("custom") or {}
+    if cfg.get("method") == "custom":
+        if str(custom.get("module", "")).endswith("plugins.plantseg"):
+            needs["plantseg"] = "PlantSeg"
+        if (custom.get("kwargs") or {}).get("use_gpu"):
+            needs["cupy"] = "use_gpu"
+    if cfg.get("dilate_gpu"):
+        needs["cupy"] = "dilate_gpu"
+    if cfg.get("denoise"):
+        needs["careamics"] = "denoise"
+    return needs
 
-    def merge(b: Any, r: Any, prefix: str) -> Any:
-        if isinstance(b, dict) and isinstance(r, dict):
-            out = copy.deepcopy(b)
-            for key in b:
-                if key not in r:
-                    inherited.append(f"{prefix}{key}")
-            for key, value in r.items():
-                out[key] = merge(b.get(key), value, f"{prefix}{key}.")
-            return out
-        return copy.deepcopy(r)
 
-    merged = merge(base or {}, run, "")
-    return merged, inherited
+def pixi_environments(toml_text: str | None) -> list[str]:
+    """The environments a workflow ``pixi.toml`` defines, default first."""
+    import tomllib
+
+    try:
+        data = tomllib.loads(toml_text or "")
+    except tomllib.TOMLDecodeError:
+        return ["default"]
+    return ["default", *(data.get("environments") or {})]
+
+
+def suggest_environment(
+    cfgs: list[dict[str, Any]], available: list[str]
+) -> tuple[str | None, list[str]]:
+    """The smallest environment with every package the run needs.
+
+    Returns it (None if no environment has them all) and one reason per
+    segmentation that needs something.
+    """
+    needs: set[str] = set()
+    reasons = []
+    for cfg in cfgs:
+        mine = needed_packages(cfg)
+        needs |= set(mine)
+        if mine:
+            what = ", ".join(f"{m} ({why})" for m, why in mine.items())
+            reasons.append(f"{cfg.get('label_name')} needs {what}")
+    for env, has in ENVIRONMENTS.items():
+        if env in available and needs <= has:
+            return env, reasons
+    return None, reasons
+
+
+def setup_with_environment(setup_cmd: str, env: str) -> str | None:
+    """*setup_cmd* activating pixi environment *env*.
+
+    None when the line does not use ``pixi shell-hook``, so the environment
+    cannot be swapped in.
+    """
+    import re
+
+    pattern = r"pixi shell-hook(\s+(-e|--environment)[\s=]+[\w.-]+)?"
+    if not re.search(pattern, setup_cmd):
+        return None
+    hook = (
+        "pixi shell-hook" if env == "default" else f"pixi shell-hook -e {env}"
+    )
+    line = re.sub(pattern, hook, setup_cmd, count=1)
+    if "plantseg" in env and "CONDA_OVERRIDE_CUDA" not in line:
+        # Its PyTorch asks for CUDA, which the login node and the
+        # controller's CPU node do not have (see workflow/pixi.toml).
+        line = f"export CONDA_OVERRIDE_CUDA=12.0 && {line}"
+    return line
 
 
 # ---------------------------------------------------------------------------
@@ -288,6 +362,46 @@ def snakemake_command(
         args += ["--cores", "1", "-n", "-p"]
     else:
         args += ["--workflow-profile", profile]
+    return " ".join(shlex.quote(a) for a in args)
+
+
+def convert_command(
+    config_path: str,
+    cfg: dict[str, Any],
+    mode: str,
+    *,
+    workflow_dir: str,
+    profile: str = "profile/slurm",
+) -> str:
+    """Snakemake for the conversion alone, as ``run_multi.py`` runs it.
+
+    The same targets and state directory as run_multi's first phase, so a
+    later run -- one segmentation or several -- finds the image converted
+    and goes straight on. *Plan* needs that image.
+    """
+    work = cfg["work_dir"].rstrip("/")
+    root = ".zgroup" if str(cfg.get("ngff_version")) == "0.4" else "zarr.json"
+    level = int(cfg.get("level", 0))
+    if not profile.startswith("/"):
+        profile = f"{workflow_dir}/{profile}"
+    args = [
+        "snakemake",
+        "-s",
+        f"{workflow_dir}/Snakefile",
+        "--configfile",
+        config_path,
+        "--directory",
+        f"{work}/.snakemake_convert",
+    ]
+    if mode == DRY_RUN:
+        args += ["--cores", "1", "-n", "-p"]
+    else:
+        args += ["--workflow-profile", profile]
+    args += [
+        "--",
+        f"{work}/image.zarr/{root}",
+        f"{work}/image.occupancy.zarr/{level}/zarr.json",
+    ]
     return " ".join(shlex.quote(a) for a in args)
 
 
