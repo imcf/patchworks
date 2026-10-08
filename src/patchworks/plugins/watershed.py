@@ -419,10 +419,10 @@ def _run(tile: np.ndarray, cfg: dict[str, Any]) -> np.ndarray:
         min_size=cfg["min_size"],
     )
     if mask is not None:
-        # Small gaps the mask punched into cells go back to them.
-        from .._postprocess import fill_small_holes, typical_volume
+        # Holes the mask punched into cells go back to them.
+        from .._postprocess import fill_enclosed_holes
 
-        labels = fill_small_holes(labels, 0.1 * typical_volume(labels))
+        labels = fill_enclosed_holes(labels)
     return labels
 
 
