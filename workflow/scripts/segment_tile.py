@@ -1,10 +1,7 @@
-"""Snakemake script: segment one BATCH of tiles into the shared stage.
+"""Snakemake script: segment one batch of tiles (one GPU job).
 
-Scattered over batches, so several batches run as separate SLURM jobs and many
-GPUs work in parallel. Within a batch the tiles run sequentially in this one
-process: CUDA is initialised once and the Cellpose model is loaded once (see
-``patchworks.plugins.cellpose._model_cache``), instead of once per tile. Each
-batch writes disjoint chunks of the stage store, so batches never collide.
+The tiles run one after the other, sharing one model load; each writes its
+own chunk, so batches never collide.
 """
 
 import json
@@ -37,12 +34,9 @@ work_dir = cfg["work_dir"]
 label_name = cfg.get("label_name", "labels")
 
 manifest = load_tiles_json(snakemake.input.tiles)  # noqa: F821
-# Optional second channel (Cellpose's nucleus input): open_image stacks it on
-# a leading axis that stage_tile carries through without tiling it, so the
-# tile geometry and the staged labels stay exactly as single-channel runs.
+# A second channel (nuclei_channel) or a label image to grow from
+# (seed_labels) rides along on a leading axis, untiled.
 nuclei_channel = cfg.get("nuclei_channel")
-# seed_labels stacks a label image the same way (e.g. Cellpose's nuclei, for
-# a method that grows cells from them).
 seed_labels = cfg.get("seed_labels")
 image = open_image(
     work_dir, cfg["channel"], cfg["level"], nuclei_channel, seed_labels
@@ -50,22 +44,16 @@ image = open_image(
 stacked = nuclei_channel is not None or bool(seed_labels)
 indices = manifest["batches"][batch]
 
-# Built once for the whole batch: this is what makes the model load amortize.
 fn = build_fn(
     cfg,
     intensity_range=manifest.get("intensity_range"),
     kwargs_overrides=manifest.get("kwargs_overrides"),
 )
-# prepare decides where tiles land: the label group's level 0 directly when
-# the tile fits the chunk cap (the merge then relabels it in place), else a
-# scratch stage store.
 stage = manifest["target_path"]
 component = manifest.get("target_component", "staged")
 tile_shape = tuple(manifest["tile_shape"])
 
-# Resume a retried batch where the last attempt stopped, rather than
-# re-segmenting every tile: a job killed at its time limit on tile 49 of 50
-# would otherwise redo all 50 on each of the profile's retries.
+# A retried batch continues where the last attempt stopped.
 progress_file = segment_progress_path(stage, batch)
 counts = load_segment_progress(progress_file, indices, tile_shape)
 if counts:
@@ -85,23 +73,16 @@ for n, index in enumerate(indices, 1):
         stage,
         index,
         tile_shape=tile_shape,
-        # Scalar (older manifests) or per-axis list; stage_tile normalizes both.
         overlap=manifest["overlap"],
         component=component,
         channel_axis=0 if stacked else None,
-        # stitch: iou keeps what fn predicted in the halo for the merge.
         halo_dir=(
             halo_path(work_dir, label_name)
             if cfg.get("stitch", "touch") == "iou"
             else None
         ),
-        # Each tile's object sums: the merge combines them into the object
-        # table (and decides the size filter) without reading labels again.
         parts_dir=parts_path(work_dir, label_name),
     )
-    # The per-tile time is what `tiles_per_job` has to be sized from: a job's
-    # wall time is roughly N x this, and it must stay inside the QOS ceiling.
-    # The first tile in a batch also carries the model load, so it runs long.
     save_segment_progress(progress_file, indices, tile_shape, counts)
     took = time.monotonic() - started
     print(
@@ -110,14 +91,9 @@ for n, index in enumerate(indices, 1):
         flush=True,
     )
 
-# The marker carries each tile's label count. That is what lets merge derive
-# every tile's global id range with a cumulative sum instead of streaming the
-# whole store to renumber it -- the counts are free here, we just write them
-# down instead of throwing them away.
+# Each tile's label count, for the merge's global ids.
 with open(snakemake.output[0], "w") as fh:  # noqa: F821
     json.dump({"batch": batch, "counts": counts}, fh)
-# The marker now carries the counts; the checkpoint must not linger inside
-# the label store (it would ship in an export).
 Path(progress_file).unlink(missing_ok=True)
 print(
     f"[patchworks] batch {batch}: {len(indices)} tile(s) done in "

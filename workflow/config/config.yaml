@@ -1,68 +1,19 @@
-# patchworks workflow: one segmentation. Edit, then `pixi run dry` and
-# `pixi run slurm`. Guide: docs/guide/snakemake.md
+# One segmentation: `pixi run dry`, then `pixi run slurm`.
+# Anything not set here has a default (all settings: docs/guide/snakemake.md).
 
-# ---- input / output ---------------------------------------------------------
 input: "/path/to/scan.ims" # .ims .czi .lif .nd2 OME-TIFF .zarr, or a TIFF glob
 work_dir: "/path/to/results" # everything is written here
-sequence_pattern: null # for a TIFF glob: regex with named axes, e.g. '_Z(?P<Z>\d+)_C(?P<C>\d+)'
 
-# ---- conversion (once; an existing image.zarr is reused) --------------------
-reuse_pyramid: false # .ims: copy its own pyramid instead of rebuilding
-convert_chunks: null # null: automatic
-shard: false # true: far fewer files, same data
-ngff_version: "auto" # "auto" (OME-Zarr 0.5) or "0.4" for older readers
-compression: "zstd" # or "zstd:3", "blosc", "blosc:lz4", "none"
-
-# ---- tiling -----------------------------------------------------------------
-channel: 0 # channel to segment
-level: 0 # pyramid level (0 = full resolution)
-tile_shape: "auto" # or [z, y, x], e.g. [16, 1024, 1024]
-gpu_memory_gb: null # the segment GPU's memory, for "auto" (default 8)
-overlap: [4, 30, 30] # halo per axis, about one object diameter
-skip_empty: true # skip background tiles
-empty_threshold: null # null: Otsu
-tiles_per_job: 4 # tiles per GPU job, sharing one model load
-
-# ---- segmentation -----------------------------------------------------------
-label_name: "cellpose_labels" # the label image's name in image.zarr/labels/
-method: "cellpose" # "cellpose", "threshold" (CPU, testing) or "custom"
-normalize: "image" # one intensity range for every tile; "tile": Cellpose's own per tile
+label_name: "nuclei_labels" # the label image in image.zarr/labels/
+channel: 0
+overlap: [4, 30, 30] # halo per axis (z, y, x): about one object
 cellpose:
-  model: "nuclei" # Cellpose 3: cyto3, nuclei, ...; Cellpose 4: cpsam
-  diameter: 30
+  model: "nuclei" # Cellpose 3: cyto3, nuclei; Cellpose 4: cpsam
+  diameter: 30 # pixels
   do_3D: true
-  gpu: true
-  # fragments: 0.1 # 3-D default: fold objects under 10% of a cell into it; null: off
-  # flow3D_smooth: 1 # 3-D default: smooth the flows; 0: off
-  # any other model.eval() argument, e.g. flow_threshold: 0.4
 
-# method: "custom" runs any function from a tile to labels, e.g. a plugin:
-# custom:
-#   module: "patchworks.plugins.watershed" # or plantseg, dog, your own module
-#   function: "segment"
-#   kwargs: {foreground: "otsu"}
-# nuclei_channel: 1           # a second channel (Cellpose, watershed, PlantSeg)
-# seed_labels: "nuclei_labels" # or grow cells from a label image in the store
-# connectivity: 1             # 3: also join voxels touching at edges/corners
-# denoise: {model: "n2v.ckpt"} # Noise2Void first (careamics environment)
-
-# ---- after segmenting -------------------------------------------------------
-# fill_holes: false           # true, or "per_plane"
-# open_radius: 0              # cut thin spurs (not for thin objects like cilia)
-# dilate: 0                   # grow labels by N pixels
-# dilate_gpu: false
-min_volume: null # µm³: drop smaller objects
-max_volume: null # µm³: drop larger objects
-stitch: "touch" # join across tile seams where labels touch; "iou": where both tiles agree
-iou_threshold: 0.5
-sequential_labels: true # number objects 1..N
-pyramid_levels: 5 # only for an image without a pyramid (labels follow the image)
-pyramid_downscale: 2
-shard_labels: false # also shard label level 0 after the merge (one extra pass)
-object_table: true # one row per object, stored with the labels
-table_channels: [] # add mean/std intensity of these channels
-merge_workers: null # null: from the job's CPUs and memory
-
-# ---- email (optional) -------------------------------------------------------
-notify_email: ""
-notify_events: ["finish", "error"] # any of start, finish, error
+# Often useful:
+# nuclei_channel: 1 # a second channel for Cellpose
+# min_volume: 50 # µm³: drop smaller objects
+# skip_empty: false # segment every tile, even ones that look empty
+# notify_email: "you@example.org"

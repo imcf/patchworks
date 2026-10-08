@@ -117,10 +117,7 @@ def relabel_sequential_zarr(store_path: str, component: str = "labels") -> int:
     z = root[component]
     z_shape, z_chunks = z.shape, z.chunks
 
-    # Iterate over actual zarr chunks in ALL dimensions. The z-slab approach
-    # (step = z_chunks[0], slice z[i0:i0+step]) reads the full y/x extent per
-    # step — for chunks like (120, 731, 731) that means (120, 37888, 27392)
-    # = 464 GiB in one allocation (MemoryError).
+    # One chunk at a time in every dimension, never a whole z-slab.
     slices = chunk_slices(z_shape, z_chunks)
 
     # Per-chunk unique arrays, merged by one np.unique -- no Python set of

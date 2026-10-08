@@ -49,11 +49,8 @@ _LUT_WARN_THRESHOLD = 100_000_000  # warn when max_label > 100 M (LUT > 800 MB)
 _MERGE_STATE = "patchworks_merge_state"
 _MERGE_COUNT = "patchworks_n_objects"
 
-# Per-worker globals set by _init_worker.
-# LUT is memory-mapped from disk so it is shared read-only across all workers
-# (OS page cache, no per-process copy). Passing the LUT directly via pickle
-# would deserialize N separate copies — e.g. 4 workers × 800 MB = 3.2 GB wasted.
-# The two arrays are opened once per worker, not once per chunk.
+# Per-worker globals set by _init_worker. The LUT is memory-mapped, so
+# workers share one copy instead of each unpickling its own.
 _merge_lut: "np.ndarray | None" = None
 _merge_src: "zarr.Array | None" = None
 _merge_dst: "zarr.Array | None" = None
@@ -1082,11 +1079,8 @@ def zarr_native_merge(
     n_per_dim = [(s + c - 1) // c for s, c in zip(shape, chunk_shape)]
     n_chunks = int(np.prod(n_per_dim))
 
-    # Tiles write labels 1..n that collide across tiles (every tile has a "1"),
-    # so they must be made globally unique before the boundary merge can tell
-    # unrelated objects apart. With per-tile counts that is a cumulative sum;
-    # without them, fall back to streaming every chunk and renumbering it in
-    # place -- correct, but a full read+write of the volume.
+    # Tile ids 1..n collide: offset them per tile (a cumulative sum of the
+    # counts), or, without counts, renumber every chunk in place.
     if halo_dir is not None and label_counts is None:
         # IoU mode needs each tile's ids placed exactly as the halo files
         # number them, i.e. by the counts the tiles recorded.
@@ -1185,10 +1179,8 @@ def zarr_native_merge(
         if objects is not None:
             objects["label"] = np.searchsorted(uniq, objects["label"])
 
-    # Relabelling straight back into the source array saves writing the whole
-    # volume a second time. It is safe because the boundary scan has already
-    # finished by this point, so nothing still needs the original ids, and
-    # each worker owns a disjoint, chunk-aligned region.
+    # Relabel in place when output is input: safe once the boundary scan
+    # is done, and each worker owns whole chunks.
     in_place = (staged_path, staged_component) == (out_path, out_component)
     if in_place:
         if _label_dtype(arr.dtype, max_label) != arr.dtype:
@@ -1204,10 +1196,7 @@ def zarr_native_merge(
                 "output_chunks cannot differ from the source chunking when "
                 "merging in place (the array is rewritten, not recreated)"
             )
-        # Running this twice over the same array would add the per-tile
-        # offsets to ids that are already global, which can land two unrelated
-        # objects on the same id. The source is destroyed as we go, so the
-        # state has to be recorded rather than inferred.
+        # A second in-place pass would offset global ids again: record the state.
         state = arr.attrs.get(_MERGE_STATE)
         if state == "running":
             raise RuntimeError(
@@ -1244,11 +1233,7 @@ def zarr_native_merge(
                 f"write whole chunks; axis/staged/output mismatches: {bad}"
             )
     if not in_place:
-        # Match the staged dtype: ids are already compact (dense by
-        # construction, and compacted again above when sequential), so a
-        # wider one is only needed when the global total outgrows it -- which
-        # per-tile counts on a narrow store can. Creating this in place would
-        # delete the very array we are about to read.
+        # The staged dtype, unless the global ids outgrow it.
         _create_zarr_label_array(
             out_root,
             out_component,

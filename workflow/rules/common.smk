@@ -1,83 +1,44 @@
-# Shared paths and helpers for the patchworks workflow.
+# Shared paths and helpers.
 
 WORK = config["work_dir"]
 IMAGE = f"{WORK}/image.zarr"
-# The store's own root metadata file, whose name is the zarr format's: v3
-# writes "zarr.json", v2 writes ".zgroup". `ngff_version: "0.4"` selects v2
-# (0.4 is defined over it), so hardcoding zarr.json would leave the convert
-# rule waiting for a file that is never written.
+# The store's root file marks it done: zarr.json (v3), or .zgroup for
+# ngff_version "0.4" (zarr v2).
 ZARR_ROOT_FILE = (
     ".zgroup" if str(config.get("ngff_version", "auto")) == "0.4" else "zarr.json"
 )
-# A single file inside the store, used as the convert rule's output and as the
-# dependency marker for downstream rules. Tracking a leaf file (not the
-# directory) lets Snakemake skip conversion when the store already exists and
-# avoids wiping the whole store on a re-run (same trick as imcf/sopa).
 IMAGE_OK = f"{IMAGE}/{ZARR_ROOT_FILE}"
 
-# Max-pooled occupancy summary, a sibling of the image (not a node inside it,
-# which zarr would refuse to walk). Shared by every config against this image,
-# so it is keyed on the image and the level rather than on label_name.
+# Per-brick maxima of the image (for skip_empty), shared by every config.
 OCCUPANCY = f"{WORK}/image.occupancy.zarr/{int(config.get('level', 0))}"
-# A private zarr v3 array, not part of the OME-Zarr image, so its marker does
-# not follow ngff_version (a 0.4 run waited for a .zgroup it never gets).
 OCCUPANCY_OK = f"{OCCUPANCY}/zarr.json"
 OCCUPANCYLOG = f"{WORK}/logs/occupancy.log"
 
-# Everything below is per-segmentation, namespaced under WORK/<label_name>/, so
-# running the workflow twice with two configs (different label_name, e.g.
-# "nuclei_labels" and "cell_labels") against the *same* work_dir never
-# collides — each gets its own tiles/stage/seg/model/labels.done, and both
-# read the *same* already-converted image.zarr. See docs/guide/snakemake.md
-# "Running two segmentations" for the two-config recipe.
+# Everything else is per segmentation, under WORK/<label_name>/.
 LABEL_NAME = config.get("label_name", "labels")
 RUN = f"{WORK}/{LABEL_NAME}"
 TILES = f"{RUN}/tiles.json"
 STAGE = f"{RUN}/stage.zarr"
-# Completion sentinel for the stage store. Tracking a touch()ed marker instead
-# of directory(STAGE) keeps Snakemake from deleting/recreating the store on a
-# re-run and avoids directory-mtime quirks (same touch() discipline as sopa).
 STAGE_OK = f"{STAGE}.done"
 
-
-# Logs: one file per step. They used to share a single steps.log, but
-# Snakemake clears a rule's declared log before the job runs, so each step
-# wiped the previous one's output -- by the time a run finished, only the last
-# step's log survived and a failure earlier on left nothing to read.
+# One log per step (a shared log would be cleared by each rule).
 LOGS = f"{RUN}/logs"
-# convert and occupancy are shared by every config, so their logs belong
-# beside the image, not under whichever config happened to run phase A.
 CONVERTLOG = f"{WORK}/logs/convert.log"
 PREPARELOG = f"{LOGS}/prepare.log"
 MERGELOG = f"{LOGS}/merge.log"
 
-# Marker that the segmentation model is cached locally. Produced by a local
-# rule (runs on the networked submit host) so offline GPU nodes never download.
-# Namespaced per-run too: two configs using different models must each fetch
-# their own, rather than the second silently reusing the first's marker.
+# The model is downloaded on the submit host: GPU nodes are often offline.
 MODEL_OK = f"{RUN}/model.ready"
 
 
 def batch_done(wildcards):
-    """Per-batch markers for the segment jobs (resolved after the checkpoint).
-
-    prepare groups the occupied tiles into batches of ``tiles_per_job``; one
-    marker is produced per batch, not per tile, so the fan-in shrinks with the
-    batch size.
-    """
+    """One marker per batch of tiles, known once prepare has run."""
     tiles = checkpoints.prepare.get().output.tiles
     manifest = json.loads(Path(tiles).read_text())
     return [f"{RUN}/seg/{i}.done" for i in range(len(manifest["batches"]))]
 
 
-# --- notifications -----------------------------------------------------
-# Per-job mail is SLURM's own --mail-type: the controller sends it, so it
-# still arrives when a job is OOM-killed or cancelled by the scheduler --
-# the cases most worth hearing about, and the ones a notification sent from
-# inside the job would miss. Empty when no address is configured.
-#
-# Deliberately NOT applied to `segment`: there is one job per tile batch, so
-# a thousand-tile run would mean hundreds of emails.
+# SLURM's own mail for the long steps (not segment: one job per batch).
 NOTIFY_EMAIL = config.get("notify_email") or ""
 NOTIFY_EVENTS = config.get("notify_events") or ["finish", "error"]
 

@@ -102,11 +102,8 @@ def volume_id(name: str) -> str:
     return cleaned[:_VOLID_MAX].strip("_") or "PATCHWORKS"
 
 
-# Every mkisofs-compatible builder, best first. They take the same options;
-# xorriso needs `-as mkisofs` to emulate them. None of these is installable
-# from conda-forge -- it carries no ISO-building C tool, only pycdlib, which
-# is pure Python, assembles the image in RAM and does not survive a store
-# with tens of thousands of files -- so this uses whatever the system has.
+# mkisofs-compatible builders, best first, from the system (conda-forge
+# has none).
 _BUILDERS = (
     ("xorriso", ["-as", "mkisofs"]),
     ("genisoimage", []),

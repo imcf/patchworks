@@ -196,10 +196,7 @@ def build_occupancy_map(
     store = str(image_store)
     out_path = occupancy_path(store, level)
     if not overwrite and Path(out_path).exists():
-        # Reuse only if it was built at the block we want. A map left over
-        # from a run with a different tile_shape is coarser (or finer) than
-        # this run needs, and silently reusing it would degrade every
-        # occupancy answer that follows.
+        # Reuse only a map built at this block size.
         try:
             existing = tuple(zarr.open_array(out_path, mode="r").attrs["block"])
         except Exception:

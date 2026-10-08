@@ -356,12 +356,7 @@ def _get_model(cellpose_dict: dict[str, Any]) -> Any:
         gpu = cellpose_dict.get("gpu", False)
         model_type = cellpose_dict["model"]
         if _CELLPOSE_V4:
-            # v4 renamed this: `model_type=` is accepted but explicitly
-            # ignored ("not used in v4.0.1+"), leaving pretrained_model at
-            # its "cpsam_v2" default -- so passing the configured name there
-            # silently segmented *every* config with the same default model,
-            # whatever `model:` said, with only a logger warning to show for
-            # it. `available_models()` rejects an unusable name up front.
+            # v4 ignores model_type=: the name goes to pretrained_model.
             _model_cache[key] = _cellpose_models.CellposeModel(
                 pretrained_model=model_type, gpu=gpu
             )

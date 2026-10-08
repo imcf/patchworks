@@ -1,25 +1,18 @@
-# Cilia: deconvolution, then difference of Gaussians (patchworks.plugins.dog).
-# Only what differs from common.yaml. Needs a GPU for the deconvolution.
+# Cilia: deconvolution, then difference of Gaussians. Needs a GPU.
 
-channel: 2 # cilia marker
-overlap: [8, 30, 30] # PSF support + high_sigma
-method: "custom"
 label_name: "cilia_labels"
-# min_volume: 0.1 # µm³: drop specks
-# max_volume: 100 # µm³
+channel: 2
+overlap: [8, 30, 30] # covers the PSF and high_sigma
+method: "custom"
 custom:
   module: "patchworks.plugins.dog"
-  function: "segment"
   kwargs:
-    low_sigma: 1.0 # pixels; sigma_units: "um" for micrometres
+    low_sigma: 1.0 # pixels
     high_sigma: 3.0
     threshold: 0.02
-    # connectivity: 3 # keep thin oblique cilia whole (edges and corners)
-    # use_gpu: true   # blur and label on the GPU too (needs cupy)
-    decon_kwargs:
+    connectivity: 3 # keep oblique cilia whole
+    decon_kwargs: # remove to skip deconvolution; voxel sizes come from the image
       psf: "/path/to/psf.tif"
       wavelength: 525
       na: 1.4
       nimm: 1.515
-      # voxel sizes come from the image's calibration; dxpsf/dzpsf if the
-      # PSF was sampled differently

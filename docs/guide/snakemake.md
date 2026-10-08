@@ -43,23 +43,24 @@ GPU; tell pixi a driver is there: `export CONDA_OVERRIDE_CUDA=12.0`.
 ## 2. Configure
 
 Edit `config/config.yaml` (or keep your own copy and add `--configfile
-my_config.yaml` to the commands below); set at least:
+my_config.yaml` to the commands below):
 
 ```yaml
 input: "/data/scan.ims"        # .ims/.czi/.lif/.nd2/OME-TIFF/.zarr
 work_dir: "/scratch/results"   # everything is written here
-channel: 0                     # channel to segment (0-based)
 label_name: "cells"            # becomes image.zarr/labels/cells
-method: "cellpose"             # "cellpose", "threshold" or "custom"
+channel: 0
+overlap: [4, 30, 30]           # halo: about one object diameter per axis
 cellpose:
   model: "cyto3"
   diameter: 30
   do_3D: true
-tile_shape: "auto"             # or e.g. [16, 1024, 1024] (z, y, x)
-overlap: [4, 30, 30]           # halo: about one object diameter per axis
 ```
 
-Every other setting is described in the file itself, next to it. Then edit
+Only `input` and `work_dir` are required. Every other setting has a
+default, listed with a one-line description in `DEFAULTS` at the top of
+`workflow/scripts/_pw.py`; the options most worth knowing are
+[below](#options-worth-knowing). Then edit
 `profile/slurm/config.yaml` for your cluster: partitions, the GPU request,
 `jobs:` (how many jobs at once).
 

@@ -190,11 +190,7 @@ def filter_labels_by_size(
     slices = chunk_slices(z.shape, z.chunks)
     n_threads = max(1, int(n_workers or cpu_allocation()))
 
-    # Pass 1, one chunk per task on a thread pool: zarr's decompression and
-    # numpy's unique release the GIL. A label image is mostly background, so
-    # an all-zero chunk is told by a cheap any() and never revisited -- a
-    # serial unique over every chunk of a 126 x 46k x 42k volume ran for
-    # over an hour in silence.
+    # Pass 1, one chunk per thread; an all-zero chunk is skipped at once.
     def _count(sl):
         block = np.asarray(z[sl])
         if not block.any():
@@ -232,10 +228,7 @@ def filter_labels_by_size(
     n_kept = int(kept.size)
     n_removed = int(ids.size) - n_kept
 
-    # Sized to the largest id *seen*, not just the largest surviving one --
-    # a removed object's id can still exceed every kept id and must stay
-    # in bounds so the LUT gather below maps it to 0 rather than indexing
-    # past the end.
+    # Up to the largest id seen, so removed ids map to 0.
     max_label = int(ids[-1]) if ids.size else 0
     if max_label > _LUT_WARN_THRESHOLD:
         logger.warning(

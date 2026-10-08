@@ -413,10 +413,7 @@ def view_in_napari(
             import numpy as np
             from napari.utils.colormaps import CyclicLabelColormap
 
-            # glasbey palette (biased lighter so colours read on the dark
-            # canvas), wrapped in a CyclicLabelColormap so each label value
-            # cycles through a distinct colour. Passing the raw palette list
-            # makes napari map large label IDs past the end -> one flat colour.
+            # Glasbey colours, lightened for the dark canvas, cycled per label.
             palette = _glasbey.create_palette(256, lightness_bounds=(40, 100))
             colors = np.array(
                 [
@@ -460,12 +457,8 @@ def view_in_napari(
             **label_kwargs,
         )
     elif _is_zarr(image):
-        # No labels given → auto-overlay every label image stored inside the
-        # OME-ZARR under labels/<name>/ (the default place tile_process writes
-        # them), each as its own multi-scale Labels layer. Kept as a list (not
-        # unwrapped to a single array) even for one level, so napari always
-        # treats it as multiscale — required for 3D resolution switching, see
-        # https://napari.org/stable/gallery/add_multiscale_volume.html
+        # No labels given: every label image in the store, each as a multiscale
+        # layer (also for one level, for 3-D resolution switching).
         names = _inner_label_names(image)
         if not names:
             logger.warning(
@@ -484,10 +477,7 @@ def view_in_napari(
         loaded = 0
         for name in names:
             store = f"{image}/labels/{name}"
-            # Guarded per label: without this, one bad label group raised
-            # *after* the image had been added, so the viewer opened showing
-            # the image alone and every remaining label was skipped -- which
-            # looks exactly like "there were no labels".
+            # One bad label image must not hide the others.
             try:
                 levels = _multiscale_levels(store, None)
                 lab = [lvl.astype("int32") for lvl in levels]

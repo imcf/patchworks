@@ -746,10 +746,8 @@ def relate_tables(
                 pid[i], dist[i] = found[lab]
         cols[f"{parent}_distance_um"] = dist
     add_columns(cpath, cols)
-    # Which parent labels these columns describe, on the id column itself:
-    # its own metadata, so concurrent relations of one child (each writing
-    # their own columns) cannot overwrite each other's. relation_current()
-    # reads it.
+    # Which parents these columns describe, on the id column itself, so
+    # concurrent relations of one child do not overwrite each other.
     from ._io import open_group_any
 
     id_col = zarr.open_group(cpath, mode="r+")[TABLE_GROUP][f"{parent}_id"]

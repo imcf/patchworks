@@ -1,25 +1,10 @@
-# pixi environment for the patchworks Snakemake workflow.
+# The patchworks cluster workflow.
 #   pixi install
-#   pixi run dry          # dry-run (plan only)
-#   pixi run go           # run locally
-#   pixi run slurm        # submit to SLURM (edit profile/slurm/config.yaml first)
-#   pixi run multi        # run several segmentations + relate their labels (local)
-#   pixi run multi-slurm  # same, on SLURM
-#   pixi run multi-dry    # dry-run every segmentation in config/multi.yaml
-#                          # any of the three: --config my_multi.yaml for another
-#   pixi install -e viewer && pixi run -e viewer napari <image.zarr>
-#                          # open a store in napari, every label auto-loaded.
-#                          # Also takes a `pixi run zip` bundle directly:
-#                          #   pixi run -e viewer napari <image.zarr.zip>
-#                          # Needs a display (ssh -X or remote-desktop/VNC).
-#                          # This workspace is linux-64 only -- to view a
-#                          # result on your own machine, use the separate
-#                          # viewer workspace, which solves everywhere:
-#                          #   cd viewer && pixi install
-#                          #   pixi run napari <image.zarr.zip>
-#
-# On a cluster, put this project on a shared filesystem the compute nodes can
-# read: the SLURM jobs re-launch snakemake from this env's interpreter.
+#   pixi run dry | go | slurm                       # one segmentation (config/config.yaml)
+#   pixi run multi-dry | multi | multi-slurm \
+#     --config my_multi.yaml                        # several, related
+#   pixi run -e viewer napari <image.zarr[.zip]>    # look at a result (needs a display)
+# Keep this folder on a filesystem the compute nodes can read.
 
 [workspace]
 name = "patchworks-workflow"
@@ -28,71 +13,34 @@ platforms = ["linux-64"]
 
 [dependencies]
 python = "3.12.*"
-# The C library pycudadecon binds to. The default environment asks for
-# patchworks[dog] -> pycudadecon, so without this the deconvolution step in
-# config_cilia.yaml imports and then fails at first use. cupy is NOT here:
-# it is CUDA-version-specific (cupy-cuda12x / cupy-cuda13x), so it stays a
-# per-cluster addition.
-cudadecon = ">=0.7.0,<0.8"
+cudadecon = ">=0.7.0,<0.8" # for the DoG plugin's deconvolution
 
-# Default env uses patchworks[cellpose] (>=3.0, resolves to latest compatible).
-# "dog" -> pycudadecon, for config_cilia.yaml's deconvolution step (part of
-# the shipped config/multi.yaml example).
 [pypi-dependencies]
-# This clone's own patchworks, editable: the workflow's scripts and the
-# library they call are always the same revision, so `git pull` updates
-# both at once (an installed copy from GitHub or PyPI lagged behind the
-# scripts until `pixi update`, and prepare failed on a missing import).
+# This clone's own patchworks: `git pull` updates scripts and library together.
 patchworks = { path = "..", editable = true, extras = ["workflow", "cellpose", "imaris", "bioio", "dog"] }
 
-# Cellpose-version-pinned features for explicit environments below.
 [feature.cp3.pypi-dependencies]
 cellpose = ">=3.0,<4"
 
 [feature.cp4.pypi-dependencies]
 cellpose = ">=4"
 
-# cupy, for `dilate_gpu: true` and the dog plugin's `use_gpu: true`. The
-# wheel is CUDA-version-specific, so it cannot be a plain dependency -- pick
-# the environment matching your cluster's CUDA instead of editing this file:
-#
-#   nvidia-smi                       # read the CUDA version off a GPU node
-#   pixi install -e cuda12           # or -e cuda13
-#   pixi run -e cuda12 multi-slurm   # every task works in these too
-#
-# A pixi environment includes the default feature as well, so `-e cuda12` is
-# "everything the default has, plus cupy" -- nothing else needs changing.
-# PlantSeg (method: "custom", module patchworks.plugins.plantseg) is on
-# conda-forge only -- vigra, nifty and elf have no wheels. Its own solve
-# group, since it brings a conda PyTorch the others get from PyPI.
-#   export CONDA_OVERRIDE_CUDA=12.0       # on a login node without a GPU
-#   pixi install -e plantseg
-#   pixi run -e plantseg plantseg-fetch   # download the U-Net, on a node
-#                                         # with internet (GPU nodes often
-#                                         # have none)
+# cupy (dilate_gpu, the DoG plugin's use_gpu): pick the CUDA of your GPUs
+# (nvidia-smi), e.g. pixi install -e cuda12.
+[feature.cuda12.pypi-dependencies]
+cupy-cuda12x = "*"
+
+[feature.cuda13.pypi-dependencies]
+cupy-cuda13x = "*"
+
+# PlantSeg is on conda-forge only. On a login node without a GPU:
+#   export CONDA_OVERRIDE_CUDA=12.0
 [feature.plantseg.dependencies]
 plant-seg = ">=2.0.0rc12"
-# profile/slurm sets `slurm-jobname-prefix`, which the SLURM executor plugin
-# has from 2.2 on. Here conda fixes numpy at 2.3 (the plugin's 2.7+ want
-# 2.4.5) and would take pandas 3 (2.2-2.6 want <3), so the solver fell back
-# to plugin 1.4.0 and every Snakemake call died on "unrecognized arguments:
-# --slurm-jobname-prefix". Keep pandas on 2.x so 2.6 fits, and require it.
-pandas = ">=2.2.3,<3"
-# A CUDA build: left to itself the solver may pick conda-forge's CPU
-# PyTorch, and the U-Net then runs on the CPU of a GPU node.
-pytorch = { version = ">=2.4", build = "cuda*" }
-# The dog plugin's `use_gpu: true` (config_cilia.yaml) and `dilate_gpu`, so
-# a multi run with cilia works from this environment too. From conda-forge,
-# built against the same cuda-version as PyTorch: the cupy-cuda12x wheel the
-# cuda12 environment uses would bring a second CUDA runtime.
-cupy = ">=13"
+pandas = ">=2.2.3,<3" # lets the SLURM executor plugin >= 2.2 solve
+pytorch = { version = ">=2.4", build = "cuda*" } # not the CPU build
+cupy = ">=13" # same CUDA as PyTorch
 
-# pixi refuses to install or run this environment on a machine without a
-# GPU driver (a login node): "Virtual package '__cuda' does not match".
-# Only the jobs on GPU nodes need CUDA, and they run the environment's
-# interpreter directly, without pixi; on the login node, which only submits
-# them, say a driver is there: export CONDA_OVERRIDE_CUDA=12.0 (any 12.x
-# satisfies cuda-version's `__cuda >=12`), e.g. in ~/.bashrc.
 [feature.plantseg.system-requirements]
 cuda = "12"
 
@@ -101,59 +49,27 @@ snakemake-executor-plugin-slurm = ">=2.2"
 
 [feature.plantseg.tasks]
 plantseg-fetch = "python -c 'import sys; from patchworks.plugins.plantseg import fetch_model; fetch_model(*sys.argv[1:])'"
-# Cellpose nuclei + PlantSeg cells, related (config/multi_plantseg.yaml).
-# `--config my_multi.yaml` after these overrides it too (the last one wins).
 multi-plantseg-dry = "python scripts/run_multi.py --config config/multi_plantseg.yaml -n"
 multi-plantseg = "python scripts/run_multi.py --config config/multi_plantseg.yaml"
 multi-plantseg-slurm = "python scripts/run_multi.py --config config/multi_plantseg.yaml --profile profile/slurm"
 
-# CAREamics (the optional `denoise:` step): Noise2Void denoising of every
-# tile before segmenting it.
-#   pixi install -e careamics
-#   pixi run -e careamics denoise-train <work_dir>/image.zarr --out n2v.ckpt
+# Noise2Void denoising (`denoise:`).
 [feature.careamics.pypi-dependencies]
 careamics = ">=0.3"
-
-# PlantSeg's conda stack pins scipy (and others) as PyPI sees them, and
-# careamics needs microssim, which caps scipy below what conda-forge would
-# pick: hold the conda side back so both solve together.
-[feature.plantseg-careamics.dependencies]
-scipy = "<=1.17.1"
-tqdm = "<=4.67.3"
 
 [feature.careamics.tasks]
 denoise-train = "patchworks denoise-train"
 
-[feature.cuda12.pypi-dependencies]
-cupy-cuda12x = "*"
+# PlantSeg and CAREamics together: hold scipy back to what CAREamics accepts.
+[feature.plantseg-careamics.dependencies]
+scipy = "<=1.17.1"
+tqdm = "<=4.67.3"
 
-[feature.cuda13.pypi-dependencies]
-cupy-cuda13x = "*"
-
-# napari pulls in a lot of Qt/GUI dependencies that don't belong in the
-# default headless SLURM environment, so it's a separate opt-in feature --
-# pixi install -e viewer, not part of the default `pixi install`.
-#
-# It sets no-default-feature below, so it carries only what a viewer needs
-# (and its own python) instead of dragging the whole GPU segmentation stack
-# into a session that just looks at a result.
-#
-# This environment is linux-64 like everything else here, and deliberately:
-# adding a platform anywhere in this manifest -- on the workspace *or* on a
-# single feature -- puts it in the set pixi solves every environment for,
-# and the GPU ones then fail on `cudadecon`, which has no build for Windows
-# or macOS. There is no way to make one environment cross-platform while the
-# others stay linux-only.
-#
-# To view a result on your own machine (Windows/macOS included), use the
-# separate workspace in viewer/ -- a second manifest is the only way, since
-# platforms are not scoped per feature. See viewer/pixi.toml.
+# napari, without the GPU stack. Linux only, like everything here; on your
+# own computer use the workspace in viewer/.
 [feature.viewer.dependencies]
 python = "3.12.*"
 
-# >=3.1.0, not "*": opening a `pixi run zip` bundle needs >=3.0.0 (2.8.0
-# sent the bundle to bioio and failed with "reading .zip requires bioio"),
-# and 3.1.0 adds the object tables and `patchworks review`.
 [feature.viewer.pypi-dependencies]
 patchworks = { path = "..", editable = true, extras = ["napari"] }
 
@@ -161,76 +77,26 @@ patchworks = { path = "..", editable = true, extras = ["napari"] }
 napari = "python scripts/view.py"
 review = "patchworks review"
 
-# Named environments: pixi install -e cellpose3 / -e cellpose4 / -e viewer
-#                     pixi install -e cuda12 / -e cuda13   (adds cupy)
-#                     pixi install -e plantseg / -e careamics
-# The base patchworks[cellpose] (>=3.0) is further constrained by each feature.
-# Each of these is the default environment *plus* its feature, so tasks and
-# every other dependency are available in all of them.
+# Each is the default environment plus its feature (viewer excepted).
 [environments]
 cellpose3 = { features = ["cp3"], solve-group = "cp3" }
 cellpose4 = { features = ["cp4"], solve-group = "cp4" }
-# no-default-feature: the default feature pins linux-64 and pulls the GPU
-# segmentation stack, neither of which a laptop viewing a result needs.
 viewer = { features = ["viewer"], no-default-feature = true }
 cuda12 = { features = ["cuda12"] }
 cuda13 = { features = ["cuda13"] }
 plantseg = { features = ["plantseg"], solve-group = "plantseg" }
 careamics = { features = ["careamics"] }
-# PlantSeg on denoised tiles. A solve group of its own, with the conda
-# packages held back to what CAREamics accepts (see plantseg-careamics
-# feature): shared with `plantseg`, its conflict broke every environment --
-# pixi solves them all, even for a task in the default one.
 plantseg-careamics = { features = ["plantseg", "careamics", "plantseg-careamics"], solve-group = "plantseg-careamics" }
-# Combined, for a cluster that needs a pinned Cellpose *and* cupy.
 cellpose4-cuda12 = { features = ["cp4", "cuda12"], solve-group = "cp4-cu12" }
 cellpose4-cuda13 = { features = ["cp4", "cuda13"], solve-group = "cp4-cu13" }
 
 [tasks]
-# --rerun-triggers mtime: don't redo finished steps (e.g. the conversion) just
-# because the patchworks version/code changed — only when an output is missing.
 dry = "snakemake -s Snakefile --configfile config/config.yaml --rerun-triggers mtime -n -p"
 go = "snakemake -s Snakefile --configfile config/config.yaml --rerun-triggers mtime --cores 8"
 slurm = "snakemake --workflow-profile profile/slurm --configfile config/config.yaml"
-
-# Repack an existing store with shards, in place -- no re-conversion and no
-# re-segmentation. For a store written before `shard`/`shard_labels` were
-# turned on, or written with them off by mistake:
-#   pixi run reshard --store /path/to/image.zarr --dry-run
-#   pixi run reshard --store /path/to/image.zarr --labels-only
-# Submit it (it reads and writes every level); on scicore the default QOS
-# caps wall time at 6h, so ask for a longer one:
-#   sbatch --qos=1day --time=12:00:00 --cpus-per-task=8 --mem=64G \
-#     --wrap "cd $PWD && pixi run reshard --store ... --labels-only"
-reshard = "python scripts/reshard_store.py"
-
-# Pack a finished store into one .iso, for copying to a laptop or a share
-# without moving tens of thousands of small files. Mounts read-only on
-# Windows (right-click -> Mount), macOS and Linux:
-#   pixi run iso --store /path/to/image.zarr [--dry-run]
-# Needs xorriso on PATH (conda install -c conda-forge xorriso).
-# NOT a conda dependency: no ISO-building C tool exists on conda-forge
-# (only pycdlib, which is pure Python and assembles the image in RAM --
-# exactly what falls over on a store with tens of thousands of files). The
-# script uses whichever of xorriso/genisoimage/mkisofs the system provides;
-# check with `which xorriso genisoimage mkisofs`, and see the script's
-# --help if none of them is there.
-iso = "python scripts/export_iso.py"
-
-# Pack a store into ONE .zip instead. Needs nothing beyond Python, and zarr
-# reads a store straight out of it without unpacking (zarr.storage.ZipStore),
-# so it is the one to use where no ISO builder exists:
-#   pixi run zip --store /path/to/image.zarr --dry-run
-zip = "python scripts/export_iso.py --format zip"
-
-# Run every segmentation config listed in config/multi.yaml (in order), then
-# relate their labels by voxel overlap (patchworks.label_relations) and write
-# a CSV per configured pair — see config/multi.yaml and
-# docs/guide/snakemake.md "Running two segmentations".
-#
-# Another multi config: pixi run multi-slurm --config /path/to/my_multi.yaml
-# A relative path is taken from the directory you run pixi in (then from
-# here); the configs it lists, from its own directory (then from here).
 multi-dry = "python scripts/run_multi.py -n"
 multi = "python scripts/run_multi.py"
 multi-slurm = "python scripts/run_multi.py --profile profile/slurm"
+zip = "python scripts/export_iso.py --format zip" # --store image.zarr
+iso = "python scripts/export_iso.py" # needs xorriso, genisoimage or mkisofs
+reshard = "python scripts/reshard_store.py" # --store image.zarr: repack with shards

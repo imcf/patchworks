@@ -2,11 +2,7 @@
 
 
 rule fetch_model:
-    """Cache the segmentation model on the (networked) submit host.
-
-    Declared local (see ``localrules`` in the Snakefile) so it never runs on an
-    offline GPU node — Cellpose downloads its weights here, into shared $HOME.
-    """
+    """Download the model on the submit host (GPU nodes are often offline)."""
     output:
         touch(MODEL_OK),
     log:
@@ -18,9 +14,6 @@ rule fetch_model:
 checkpoint prepare:
     input:
         IMAGE_OK,
-        # Depend on the map rather than building it inline: it streams the
-        # whole image, and several configs' prepare steps run concurrently, so
-        # inline each would stream the volume and all but one discard it.
         OCCUPANCY_OK,
     output:
         tiles=TILES,
@@ -32,13 +25,7 @@ checkpoint prepare:
 
 
 rule segment:
-    """Segment one batch of tiles on a GPU and write them into the stage store.
-
-    A batch is `tiles_per_job` tiles (see config), processed sequentially in
-    one process so they share a single CUDA init and a single Cellpose model
-    load. Batches write disjoint chunks, so any number of them run in
-    parallel across GPUs.
-    """
+    """Segment one batch of `tiles_per_job` tiles on a GPU."""
     input:
         tiles=TILES,
         stage=STAGE_OK,

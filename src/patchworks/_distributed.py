@@ -260,13 +260,7 @@ def stage_tile(
     block_spatial = tuple(e.stop - e.start for e in expanded)
     out = np.asarray(fn(block))
     if out.shape != block_spatial:
-        # Caught here rather than 6 frames deep in zarr's codec pipeline as
-        # "could not broadcast input array from shape (13,1020,1020) into
-        # shape (14,1024,1024)", which says nothing about which function is
-        # at fault. A segmentation function must label the voxels it was
-        # given: the halo trim and the destination slice are both computed
-        # from the tile's geometry, so a different shape has no defined
-        # placement.
+        # Named here, not as a broadcast error deep in zarr.
         name = getattr(fn, "__name__", type(fn).__name__)
         raise ValueError(
             f"segmentation function {name!r} returned shape {out.shape} for "
@@ -280,10 +274,7 @@ def stage_tile(
         for i, (left, right) in enumerate(trims)
     )
     trimmed = out[sel]
-    # Local labels collide across tiles; the merge resolves that. Renumber to a
-    # dense 1..n first: trimming the halo can drop objects entirely, and the
-    # merge's offset arithmetic needs each tile's ids to be exactly 1..n with
-    # no gaps so that `offset[tile] + local` is globally unique AND compact.
+    # Ids 1..n with no gaps, so offset[tile] + local is unique and compact.
     if halo_dir is not None:
         _save_halo(out, sel, trims, halo_dir, index)
     trimmed = relabel_sequential_array(trimmed)

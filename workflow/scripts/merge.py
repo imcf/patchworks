@@ -1,8 +1,8 @@
-"""Snakemake script: merge the staged tiles into one labelled OME-ZARR.
+"""Snakemake script: stitch the segmented tiles into one label image.
 
-Runs patchworks' zarr-native boundary merge (stitches labels across tile
-boundaries, optionally renumbers them) and writes the result back into the
-image store under ``labels/<name>/`` as a calibrated, multi-scale pyramid.
+Joins objects across tile seams, renumbers them, applies the size filter,
+and writes ``image.zarr/labels/<name>/``: a calibrated pyramid with its
+object table, provenance and seam report.
 """
 
 import json
@@ -42,19 +42,16 @@ from _pw import (
 )
 
 start_log(snakemake.log[0])  # noqa: F821
-# Codec for every array this step creates (config `compression:`).
 set_compression(snakemake.config.get("compression", "zstd"))  # noqa: F821
 cfg = snakemake.config  # noqa: F821
 work_dir = cfg["work_dir"]
 label_name = cfg.get("label_name", "labels")
-# Level 0 keeps napari-friendly chunks even when the tile is much larger; the
-# cap has to divide the tile so workers still write whole chunks.
+# Level 0 chunks stay viewer-friendly however large the tiles are.
 LABEL_CHUNK_CAP = (16, 1024, 1024)
 image_store = str(Path(work_dir) / "image.zarr")
 label_group = f"{image_store}/labels/{label_name}"
 
-# prepare recorded where the segment jobs wrote: the label group's level 0
-# (merged in place) or a scratch stage store.
+# Where the segment jobs wrote: labels/<name>/0 itself, or a scratch store.
 manifest = load_tiles_json(snakemake.input.tiles)  # noqa: F821
 target_path = manifest["target_path"]
 target_component = manifest.get("target_component", "staged")
@@ -62,11 +59,7 @@ in_place = bool(manifest.get("in_place", False))
 
 staged = zarr.open_group(target_path, mode="r")[target_component]
 
-# Size the relabel pool against what this job was actually granted, not the
-# node. Each worker holds roughly a few copies of one chunk, so the RAM budget
-# -- and not the core count -- is what has to bound it: merge_workers: null
-# used to leave merge_tile_labels capping itself at 4, while the profile's
-# comment claimed the full allocation was in use.
+# Workers bounded by this job's CPUs and memory (each holds a few chunks).
 chunk_nbytes = int(np.prod(staged.chunks)) * staged.dtype.itemsize
 default_workers = min(
     cpu_allocation(), safe_worker_count(chunk_nbytes, fn_overhead=3)
@@ -76,16 +69,10 @@ print(
     f"{_get_available_memory() / 1024**3:.0f} GiB budget, "
     f"{default_workers} worker(s) for {chunk_nbytes / 1024**2:.0f} MB chunks"
 )
-# Each segment job recorded how many labels every tile wrote. Feeding those
-# counts in lets the merge compute global id ranges by a cumulative sum,
-# replacing a full read+write of the store that existed only to renumber it.
+# Labels per tile, from the segment jobs' markers: global ids follow by a
+# cumulative sum. The paths are built here rather than taken from
+# snakemake.input, which is a placeholder once the stage store is deleted.
 label_counts = {}
-# Derive the marker paths from the manifest rather than reading
-# snakemake.input: when the `prepare` checkpoint cannot be resolved (see the
-# STAGE_OK note at the end of this file), Snakemake substitutes a placeholder
-# for a checkpoint-dependent input function, and `markers` then points at
-# tiles.json instead of the seg markers. The paths are deterministic, so
-# building them here is both simpler and immune to that.
 seg_dir = Path(work_dir) / label_name / "seg"
 for batch in range(len(manifest["batches"])):
     marker = seg_dir / f"{batch}.done"
@@ -93,13 +80,8 @@ for batch in range(len(manifest["batches"])):
         label_counts[int(index)] = int(n)
 
 if in_place:
-    # The tiles already sit in labels/<name>/0, so the merge rewrites them
-    # where they are: no scratch store, and one full write of the volume less.
-    # Safe because the boundary scan finishes before any chunk is rewritten.
     out_chunks = None
 else:
-    # Level 0 keeps napari-friendly chunks even when tiles are much larger;
-    # the cap must divide the tile so workers still write whole chunks.
     root = zarr.open_group(image_store, mode="a")
     parent = root.require_group("labels")
     if label_name in parent:
@@ -126,12 +108,10 @@ if min_volume or max_volume:
         max_voxels_for_volume(max_volume, voxel_size) if max_volume else None
     )
 
-# The segment jobs measured their tiles' objects as they wrote them. With
-# every labelled tile's sums there, the merge combines them through its own
-# lookup table: the object table without reading the labels again, and the
-# size filter decided from it and applied in the same relabel pass (no two
-# passes of its own over the volume). Tiles segmented by an older version
-# have none: then the labels are filtered and measured as before.
+# The segment jobs measured each tile's objects. With every tile's sums
+# there, the merge builds the object table and applies the size filter in its
+# own relabel pass; otherwise (a stage from an older version) both are done
+# from the merged labels.
 parts_dir = parts_path(work_dir, label_name)
 fused = bool(label_counts) and all(
     (Path(parts_dir) / f"{index}.npz").exists()
@@ -156,19 +136,15 @@ _, n_objects = merge_tile_labels(
     output_chunks=out_chunks,
     sequential_labels=cfg.get("sequential_labels", True),
     n_workers=cfg.get("merge_workers") or default_workers,
-    # Periodic log lines rather than a bar (see convert.py).
     progress=True,
     return_count=True,
     label_counts=label_counts,
-    # stitch: iou joins labels across a seam only where both tiles' views of
-    # the overlap agree, so touching cells stay apart.
     halo_dir=(
         halo_path(work_dir, label_name)
         if cfg.get("stitch", "touch") == "iou"
         else None
     ),
     iou_threshold=float(cfg.get("iou_threshold", 0.5)),
-    # The neighbourhood the tiles were labelled with (DoG / threshold).
     connectivity=merge_connectivity(cfg),
     parts_dir=parts_dir if fused else None,
     min_voxels=min_voxels if fused else None,
@@ -177,11 +153,8 @@ _, n_objects = merge_tile_labels(
 )
 shutil.rmtree(halo_path(work_dir, label_name), ignore_errors=True)
 
-# Global, exact volume filter -- once on the fully merged objects, so an
-# object's size is never judged from just the fragment one tile happened to
-# see; before the pyramid, so every level reflects it. Fused into the merge
-# when the tiles' sums were there (`objects` filled); otherwise a pass of
-# its own over the merged labels.
+# The size filter judges whole objects, never one tile's fragment, and runs
+# before the pyramid so every level reflects it.
 if (min_voxels or max_voxels) and objects:
     print(
         f"[patchworks] volume filter: [{min_volume or 0}, "
@@ -204,18 +177,6 @@ elif min_voxels or max_voxels:
         f"{n_objects} remain"
     )
 
-# Level 0 could not be sharded while it was being written: the segment jobs
-# (or the merge's own pool) fill it a chunk at a time from several processes,
-# and concurrent writers into one shard read-modify-write the same file and
-# silently drop each other's chunks. Now that every writer is done, one
-# single-threaded pass can rewrite it sharded -- cutting the file count of the
-# largest level by the shard/chunk ratio, which matters on a filesystem that
-# dislikes many small files. It costs a full extra read+write of level 0, so
-# it stays opt-in.
-# Say what the label store will cost in files, and why. The chunk shape is
-# inherited from tile_shape, so an auto-sized tile that is not a multiple of
-# the cap (e.g. 729 against 1024) quietly multiplies the file count -- which
-# is invisible from the config and only shows up as a slow `ls` weeks later.
 level0 = zarr.open_array(f"{label_group}/0", mode="r")
 n_chunks = int(
     np.prod([-(-s // c) for s, c in zip(level0.shape, level0.chunks)])
@@ -226,19 +187,11 @@ print(
 )
 
 shard_labels = cfg.get("shard_labels", False)
-# Echo what was actually read, not just what it leads to. A key set in the
-# wrong config file is silent otherwise: the run behaves as if it were never
-# written, and the log gives no way to tell that from the feature failing.
 print(
     f"[patchworks] sharding: shard={cfg.get('shard', False)!r} "
     f"shard_labels={shard_labels!r}"
 )
 if (not shard_labels or not cfg.get("shard")) and n_chunks > 2000:
-    # Both keys, and level 0 is the one that matters. `shard` sends the
-    # pyramid down the dask path, where each level is rechunked to the cap
-    # and so shrinks fourfold; level 0 keeps tile_shape's chunks and is the
-    # level `shard` cannot reach. On a real store it was 96% of the group's
-    # files, so `shard` alone barely moved the count.
     missing = " and ".join(
         k
         for k, on in (
@@ -255,20 +208,17 @@ if (not shard_labels or not cfg.get("shard")) and n_chunks > 2000:
         "`shard_labels` covers level 0, which is the one that counts."
     )
 if shard_labels:
-    # `true` reuses whatever `shard` asks the conversion for; a list overrides
-    # it with an explicit shard shape. `shard: false` does not veto this --
-    # opting in here is the whole request, and an unsharded raw image with
-    # sharded labels is a perfectly reasonable combination.
+    # Level 0 is written by many processes, so it is sharded only now, in one
+    # pass: `true` takes `shard`'s shape, a list sets one.
     spec = (cfg.get("shard") or True) if shard_labels is True else shard_labels
     reshard_level(label_group, "0", shard=spec, progress=True)
 
-# How these labels were made, stored with them (read_provenance()): the
-# whole effective config, plus what was only decided at run time.
+# How these labels were made (read_provenance): the whole config and what
+# was decided at run time.
 _PRIVATE = ("notify_email", "notify_events")
 settings = {k: v for k, v in cfg.items() if k not in _PRIVATE}
 settings.update(
     label_name=label_name,
-    # As prepare resolved them ("auto" tile shapes, scalar overlaps).
     tile_shape=manifest["tile_shape"],
     overlap=manifest["overlap"],
     resolved={
@@ -283,8 +233,6 @@ settings.update(
     },
 )
 if cfg.get("method", "cellpose") == "cellpose":
-    # Defaults cellpose_fn filled in (fragments, flow3D_smooth): recorded as
-    # what ran, though the config never named them.
     try:
         from patchworks.plugins.cellpose import applied_defaults
 
@@ -305,32 +253,17 @@ group = register_labels(
     downscale=int(cfg.get("pyramid_downscale", 2)),
     progress=True,
     n_objects=n_objects,
-    # Same `shard` the conversion uses, so one setting covers the whole
-    # store. This one only reaches levels 1..N -- each is written by a single
-    # dask pass, so one writer owns every shard. Level 0 needs the separate
-    # `shard_labels` pass above for the reason given there.
     shard=cfg.get("shard", False),
     ngff_version=cfg.get("ngff_version", "auto"),
-    # Segmented at `level`: calibrate (and offset) the labels as that level,
-    # or they are drawn shrunk towards the origin of the image.
     level=int(cfg.get("level", 0)),
 )
 
 if not in_place:
-    # Only the scratch route creates a store to clean up -- and only it has to
-    # drop the checkpoint's completion sentinel, because that sentinel would
-    # otherwise outlive the store it claims exists and a rerun would skip
-    # "prepare" and segment into something already deleted.
-    #
-    # Deleting a checkpoint output is not free: it leaves `prepare`
-    # permanently unresolvable, so a later DAG evaluation cannot expand
-    # batch_done and hands dependent rules a placeholder input instead. That
-    # is why the label counts above are read by path, not from snakemake.input.
+    # The scratch store and its marker go together, or a rerun would segment
+    # into a store that no longer exists.
     shutil.rmtree(stage_path(work_dir, label_name), ignore_errors=True)
     Path(f"{stage_path(work_dir, label_name)}.done").unlink(missing_ok=True)
-# Did the tiling leave marks? Compares how often objects end exactly on a
-# seam against planes inside the tiles; cheap (a sample of thin slabs) and
-# written next to the run for later comparison between configs.
+# Did the tiling leave marks? Objects ending on seams vs inside tiles.
 if cfg.get("seam_report", True):
     from patchworks import seam_report
 
@@ -342,7 +275,6 @@ if cfg.get("seam_report", True):
     Path(work_dir, label_name, "seams.json").write_text(
         json.dumps(report, indent=2)
     )
-    # The verdict travels with the labels: seam vs interior orphan rate.
     record["seams"] = {
         ax: {k: row[k] for k in ("seam_rate", "interior_rate", "ratio")}
         for ax, row in report["axes"].items()
@@ -356,13 +288,8 @@ if cfg.get("seam_report", True):
             f"{'n/a' if interior is None else f'{100 * interior:.1f}%'} "
             "inside tiles"
         )
-# One row per object (size, centroid, bounding box; intensities of
-# `table_channels`) inside the label group: what `patchworks review` and the
-# relation workbooks work from. From the tiles' sums when the merge combined
-# them -- no read of the labels; measured from the labels when it did not,
-# or when intensities are asked for (those need the image anyway). Written
-# after the registration, which completes the fingerprint the table is
-# checked against, so relate finds it current and measures nothing.
+# The object table, written after the labels are registered so relate
+# finds it current. Intensities need the image, so they are measured.
 if cfg.get("object_table", True):
     from patchworks._tables import compute_table, write_table_from_sums
 

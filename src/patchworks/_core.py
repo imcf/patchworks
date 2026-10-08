@@ -1022,10 +1022,7 @@ def tile_process(
 
     _meta = np.empty((0,) * image.ndim, dtype=np.int32)
     if overlap > 0:
-        # One fused pass: add the halo, run fn, trim it back off. map_overlap
-        # materialises only the halos it needs (no separate overlapped array)
-        # and keeps the task graph small. boundary="none" + trim recovers the
-        # original shape, so the boundary-slab scan reads clean tiles.
+        # Halo, fn, trim in one pass.
         labeled = da.map_overlap(
             active_fn,
             image,
@@ -1094,10 +1091,7 @@ def tile_process(
     )
     _merge_cleanup: str | None = None
 
-    # Everything from here on can fail halfway (fn raising, disk full, a
-    # killed worker). The dashboard cluster and the scratch stores are torn
-    # down whatever happens, so a failed run leaves no process or a stage
-    # the size of the whole image behind.
+    # Scratch stores and the cluster are cleaned up whatever happens.
     try:
         if per_tile:
             _workers = (
@@ -1134,11 +1128,6 @@ def tile_process(
                 progress,
             )
 
-        # NB: no post-staging skip-count pass here — counting skipped tiles by
-        # re-reading the whole staged store off disk would double the I/O of
-        # the entire run just for a log line. Use estimate_empty_tiles() up
-        # front for that figure instead.
-
         # Merge runs in worker processes (each holds one chunk + an mmap'd
         # LUT); size it to RAM/CPU like staging, capped so we don't spawn a
         # process storm.
@@ -1152,10 +1141,7 @@ def tile_process(
             if _into_input:
                 _merge_cleanup = _merge_tmp
 
-        # sequential=True folds the contiguous renumbering into the merge's
-        # own LUT, so it costs a np.unique over the object count rather than
-        # the extra full read+write (plus a Python set of every id) that a
-        # separate relabel_sequential_zarr pass would.
+        # Sequential numbering folds into the merge's own lookup table.
         zarr_native_merge(
             stage_path,
             "staged",

@@ -21,11 +21,8 @@ import argparse
 import os
 import tempfile
 
-# Before anything imports numba (napari does): numba caches compiled code
-# next to its source, and inside a pixi environment on a network share
-# that path passes Windows' 260-character limit -- every labels layer then
-# fails with a FileNotFoundError on a .nbc.tmp file. Set here, not only in
-# patchworks, so a pulled checkout fixes it whatever patchworks is installed.
+# Before napari imports numba: its cache path on a network share can
+# pass Windows' 260-character limit.
 os.environ.setdefault(
     "NUMBA_CACHE_DIR",
     os.path.join(tempfile.gettempdir(), "patchworks-numba-cache"),

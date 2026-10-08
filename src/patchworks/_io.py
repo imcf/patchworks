@@ -553,10 +553,7 @@ def estimate_empty_tiles(
     for idx in np.ndindex(*grid):
         sl: list[slice] = []
         for i, t, w, s in zip(idx, tile_shape, win, sp_shape):
-            # Centre the window in this tile, then clamp it to the tile's own
-            # extent -- NOT to the array's. Clamping to ``s - w`` used to drag
-            # the last (partial) tile's window backwards into its neighbour,
-            # so an edge tile's verdict came partly from the tile before it.
+            # Centre the window in this tile and keep it inside the tile.
             lo, hi = i * t, min((i + 1) * t, s)
             start = max(lo, min(lo + (hi - lo - w) // 2, hi - w))
             sl.append(slice(start, min(start + w, hi)))

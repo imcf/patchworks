@@ -1,6 +1,5 @@
 # Nuclei with Cellpose, then cells with PlantSeg grown from them.
 #   pixi run -e plantseg multi-plantseg-slurm
-# The optional blocks are described in multi.yaml.
 
 common: config/common.yaml
 

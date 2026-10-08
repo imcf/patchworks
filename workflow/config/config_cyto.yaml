@@ -1,24 +1,11 @@
-# Cells (cytoplasm or membrane). Only what differs from common.yaml.
+# Cells with Cellpose, the nuclear stain as its second input.
+# With a membrane stain, see docs/guide/membrane_cells.md.
 
-channel: 0 # cytoplasm or membrane
-nuclei_channel: 1 # Cellpose's second input; null for one channel
-overlap: [4, 30, 30]
-method: "cellpose"
-# normalize: "tile" # default "image": one intensity range for every tile
 label_name: "cyto_labels"
-# min_volume: 100.0 # µm³
+channel: 0 # cytoplasm or membrane
+nuclei_channel: 1 # null: one channel only
+overlap: [4, 30, 30]
 cellpose:
-  model: "cyto3"
+  model: "cyto3" # Cellpose 4: "cpsam"
   diameter: 30
   do_3D: true
-  gpu: true
-  # fragments: 0.1 # 3-D default: fold objects under 10% of a cell into it; null: off
-  # flow3D_smooth: 1 # 3-D default: smooth the flows; 0: off
-
-# With a membrane stain, Cellpose 4 (cpsam) may segment the nuclei instead of
-# the cells. One cell per nucleus instead (docs/guide/membrane_cells.md):
-# method: "custom"
-# stitch: "iou"
-# custom:
-#   module: "patchworks.plugins.watershed"   # or patchworks.plugins.plantseg
-#   kwargs: {foreground: "otsu"}
