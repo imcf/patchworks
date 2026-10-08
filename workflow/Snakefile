@@ -1,17 +1,15 @@
-# patchworks Snakemake workflow.
-#
-#   convert ──▶ prepare (checkpoint) ──▶ segment {tile}  ──▶ merge
-#                                        one GPU job per tile
-#
-# Run locally:
-#   snakemake --cores 8 --configfile config/config.yaml
-# Run on SLURM (one GPU job per tile, many GPUs in parallel):
-#   snakemake --workflow-profile profile/slurm --configfile config/config.yaml
+# patchworks workflow: convert -> prepare -> segment (GPU jobs) -> merge.
+#   pixi run dry | go | slurm
 
 import json
+import sys
 from pathlib import Path
 
-configfile: "config/config.yaml"
+sys.path.insert(0, str(Path(workflow.basedir) / "scripts"))
+from _pw import with_defaults
+
+# Settings a config leaves out take their defaults (scripts/_pw.py DEFAULTS).
+config.update(with_defaults(config))
 
 include: "rules/common.smk"
 include: "rules/convert.smk"
@@ -19,7 +17,6 @@ include: "rules/segment.smk"
 include: "rules/merge.smk"
 
 
-# Runs on the submit host (has network) — never submitted to an offline GPU node.
 localrules:
     fetch_model,
 
@@ -29,16 +26,10 @@ rule all:
         f"{RUN}/labels.done",
 
 
-# Workflow-level notifications, covering what SLURM's per-job mail cannot:
-# a local run with no scheduler, and a failure where the useful content is
-# the step's traceback rather than the job's exit code.
+# Mail with the failing step's log tail (SLURM's own mail has no traceback).
 onerror:
     from patchworks._notify import failing_step, log_tail, send
 
-    # Snakemake's own log names the failing rule and the log it used. Picking
-    # the most recently written step log instead gets this wrong in the most
-    # common case: a `segment` failure leaves prepare.log newest among the
-    # sequential steps, so the mail quoted a log that had succeeded.
     _rule, _log = failing_step(log)
     if _log is None:
         _cands = [p for p in (CONVERTLOG, OCCUPANCYLOG, PREPARELOG, MERGELOG)

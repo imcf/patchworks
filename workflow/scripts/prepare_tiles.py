@@ -1,4 +1,5 @@
-"""Snakemake script: plan tiles, create the empty stage store, list work."""
+"""Snakemake script: plan the tiles, measure what every tile shares (empty
+threshold, intensity range, thresholds), and create the store they go to."""
 
 import json
 import shutil
@@ -35,11 +36,10 @@ from _pw import (
     validate_config,
 )
 
-# Chunking ceiling for the written labels, so a viewer can page them lazily.
+# Largest label chunk, so a viewer can page the labels lazily.
 LABEL_CHUNK_CAP = (16, 1024, 1024)
 
 start_log(snakemake.log[0])  # noqa: F821
-# Codec for every array this step creates (config `compression:`).
 set_compression(snakemake.config.get("compression", "zstd"))  # noqa: F821
 cfg = snakemake.config  # noqa: F821
 work_dir = cfg["work_dir"]
@@ -47,29 +47,21 @@ label_name = cfg.get("label_name", "labels")
 Path(work_dir, label_name).mkdir(parents=True, exist_ok=True)
 image = open_image(work_dir, cfg["channel"], cfg["level"])
 
-# Fail here, on a cheap CPU job, rather than in the first GPU job hours after
-# convert and prepare have already run.
+# Fail on this cheap CPU job, not in the first GPU job.
 validate_config(cfg)
-# The seeds' labels must exist by now (run_multi segments them first).
 check_seed_labels(work_dir, cfg)
 
 method = cfg.get("method", "cellpose")
 ts = cfg.get("tile_shape", "auto")
 if ts == "auto":
-    # prepare runs on a CPU node, so the segment GPU's VRAM can't be queried
-    # here; pass gpu_memory_gb from the config to size tiles for it (avoids the
-    # "GPU memory query failed" fallback). None => the built-in 8 GiB default.
+    # This is a CPU job: the segment GPU's memory comes from the config.
     gpu_gb = cfg.get("gpu_memory_gb")
     gpu_bytes = int(gpu_gb * 1024**3) if gpu_gb else None
-    # `image` is single-channel here (the geometry is spatial), but segment
-    # reads nuclei_channel alongside it, so a tile costs twice the bytes.
-    # Without this the sizer would hand the GPU a tile it cannot hold.
+    # A second channel doubles a tile's bytes.
     n_channels = tile_channels(cfg)
     if method == "cellpose":
         cp = cfg["cellpose"]
-        # The same anisotropy segment will derive (or was given). Cellpose
-        # resizes the tile to z * anisotropy planes, so the sizer has to
-        # budget for the resized tile, not the one it hands over.
+        # Cellpose resizes z by the anisotropy: budget for the resized tile.
         anisotropy = cp.get("anisotropy")
         if anisotropy is None and cp.get("do_3D", False):
             from patchworks.plugins.cellpose import cellpose_anisotropy
@@ -91,10 +83,6 @@ if ts == "auto":
             anisotropy=anisotropy,
         )
     else:
-        # cfg["cellpose"] used to be read unconditionally here, so a DoG or
-        # threshold config with tile_shape: "auto" died with KeyError:
-        # 'cellpose'. The Cellpose estimator's memory model wouldn't apply to
-        # them anyway.
         sizer = partial(
             auto_tile_shape,
             use_gpu=gpu_bytes is not None,
@@ -105,13 +93,6 @@ if ts == "auto":
 else:
     tile_shape = tuple(ts)
 
-# Which z regime are we in? auto_tile_shape_cellpose pins z to the full extent
-# when do_3D is set, so "auto" gives whole-z tiles: no z tiling, no z-boundary
-# stitching, and Cellpose sees each object's full depth. An explicit z smaller
-# than the image tiles in z instead, which is faster but leaves the merge to
-# stitch objects back together across z boundaries.
-# tile_shape is zipped against image.shape (see spatial_tiles), so axis 0 of
-# both is z for a 3-D stack.
 if len(tile_shape) >= 3:
     n_z = image.shape[0]
     if tile_shape[0] >= n_z:
@@ -122,9 +103,7 @@ if len(tile_shape) >= 3:
             "planes); objects spanning z boundaries are stitched by the merge"
         )
 
-# A halo wider than the tile itself is not boundary context -- it means every
-# tile re-reads and re-segments its neighbours. Catch it here rather than
-# paying 5x the GPU time for results that get trimmed away.
+# A halo as wide as the tile re-segments the neighbours: refuse it.
 overlap = normalize_overlap(
     cfg.get("overlap", 0), len(tile_shape), tile_shape=tile_shape
 )
@@ -135,9 +114,7 @@ for axis, (ov, extent) in enumerate(zip(overlap, tile_shape)):
             f"would read past its neighbours. Use a per-axis overlap, e.g. "
             f"overlap: {list(max(1, t // 4) for t in tile_shape)}"
         )
-# Clip the halo to the image the way stage_tile does, or a tile that already
-# spans an axis reports a halo it will never actually read -- a tile covering
-# the whole image would claim 5x while reading exactly 1x.
+# How much more each tile reads than it keeps (the halo, clipped to the image).
 read = np.prod(
     [min(t + 2 * o, s) for t, o, s in zip(tile_shape, overlap, image.shape)]
 )
@@ -148,23 +125,15 @@ tiles = spatial_tiles(image.shape, tile_shape)
 occupied = list(range(len(tiles)))
 threshold = None
 if cfg.get("skip_empty", True):
-    # The occupancy map reduces every voxel of the image to per-brick maxima,
-    # so testing a tile covers the whole tile instead of a centred sample. The
-    # map is built once per image.zarr and shared by every config using it;
-    # convert does not produce it, so already-converted stores build it here
-    # on first use.
+    # Per-brick maxima of the whole image (built once, shared by every
+    # config): a tile is empty when none of its bricks reaches the threshold.
     build_occupancy_map(
         str(Path(work_dir) / "image.zarr"),
         level=cfg["level"],
-        # Sized from the tile: a block as coarse as the tile would make every
-        # tile over-cover the same block and test occupied.
         block=block_for_tile(tile_shape),
     )
     threshold = cfg.get("empty_threshold")
     if threshold is None:
-        # Derive the cutoff from raw voxels, not from the pooled maxima: a
-        # brick maximum exceeds the threshold exactly when some voxel in that
-        # brick does, so the comparison stays equivalent to a full scan.
         threshold = auto_empty_threshold(image, cfg["channel"], cfg["level"])
     info = tile_occupancy(
         str(Path(work_dir) / "image.zarr"),
@@ -176,21 +145,15 @@ if cfg.get("skip_empty", True):
     occ = info["occupancy"].ravel()  # row-major, matches spatial_tiles
     occupied = [i for i in range(len(tiles)) if occ[i]]
 
-# One SLURM job per tile means every tile pays CUDA init + a model load before
-# its first voxel. Batching amortizes that over `tiles_per_job` tiles, which
-# run sequentially in one process so they share the cached model and never
-# contend for the GPU. 1 = the old one-job-per-tile behaviour.
+# Several tiles per job share one model load.
 tiles_per_job = max(1, int(cfg.get("tiles_per_job", 1)))
 batches = [
     occupied[i : i + tiles_per_job]
     for i in range(0, len(occupied), tiles_per_job)
 ]
 
-# Where the segment jobs write. When the tile is already within the label
-# chunk cap, they can write straight into the label group's level 0 and the
-# merge relabels it in place -- one full write of the volume less than
-# staging to a scratch store and copying it across. An oversized tile keeps
-# the scratch store, so level 0 can still be chunked for lazy viewing.
+# Tiles within the chunk cap are written straight into labels/<name>/0 and
+# merged in place; larger ones go to a scratch store, rechunked by the merge.
 image_store = str(Path(work_dir) / "image.zarr")
 in_place = capped_output_chunks(tile_shape, LABEL_CHUNK_CAP) == tuple(
     tile_shape
@@ -215,23 +178,19 @@ create_stage(
     image.shape,
     tile_shape,
     component=target_component,
-    # In place, the stage *is* the label group: in the image's own format.
     zarr_format=(
         zarr.open_group(image_store, mode="r").metadata.zarr_format
         if in_place
         else None
     ),
 )
-# One intensity range for the whole image, measured on a coarse level: the
-# segment jobs scale every tile with it, so neighbouring tiles see the same
-# contrast instead of each being stretched from its own percentiles.
+# One intensity range and one set of thresholds for every tile, measured on
+# the tiles to segment: decided per tile, they change at every seam.
 image_range = None
 if uses_image_range(cfg):
     chans = [cfg["channel"]]
     if cfg.get("nuclei_channel") is not None:
         chans.append(cfg["nuclei_channel"])
-    # Sampled at full resolution inside the tiles that will be segmented,
-    # so background and pyramid averaging don't skew it.
     image_range = [
         list(r)
         for r in intensity_range(
@@ -245,8 +204,6 @@ if uses_image_range(cfg):
         f"[patchworks] intensity range (1-99%) of channels {chans}: {image_range}"
     )
 
-# Per-tile Otsu thresholds (membrane plugins' foreground, nuclei found in a
-# stain) resolved once, the same way: one number for every tile.
 thresholds = image_thresholds(
     cfg, str(Path(work_dir) / "image.zarr"), [tiles[i] for i in occupied]
 )
@@ -263,7 +220,6 @@ Path(work_dir, label_name, "tiles.json").write_text(
             "overlap": list(overlap),
             "n_tiles": len(tiles),
             "occupied": occupied,
-            # The cutoff skip_empty actually used (Otsu when not configured).
             "empty_threshold": None if threshold is None else float(threshold),
             "intensity_range": image_range,
             "kwargs_overrides": thresholds,

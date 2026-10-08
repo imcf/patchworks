@@ -1,19 +1,16 @@
-# Cells from a membrane stain with PlantSeg, grown from the nuclei Cellpose
-# found: one cell per nucleus. docs/guide/membrane_cells.md
-#   pixi install -e plantseg
-#   pixi run -e plantseg plantseg-fetch generic_confocal_3D_unet # once
+# Cells from a membrane stain with PlantSeg, one per nucleus found by
+# config_nuclei.yaml. Run from the plantseg environment; once:
+#   pixi run -e plantseg plantseg-fetch generic_confocal_3D_unet
 
+label_name: "cyto_labels"
 channel: 0 # membrane
-seed_labels: "nuclei_labels" # grow from this label image (segmented first)
+seed_labels: "nuclei_labels" # grow one cell from each of these
 overlap: [4, 40, 40] # must hold a whole cell
 stitch: "iou" # required: cells touch at every tile seam
 method: "custom"
-label_name: "cyto_labels"
 custom:
   module: "patchworks.plugins.plantseg"
-  function: "segment"
   kwargs:
     model: "generic_confocal_3D_unet" # or generic_light_sheet_3D_unet
-    segmentation: "nuclei_watershed" # boundaries flooded from the nuclei
-    foreground: "otsu" # keep the tissue only
-    device: "cuda"
+    segmentation: "nuclei_watershed"
+    foreground: "otsu"

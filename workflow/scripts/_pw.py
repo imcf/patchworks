@@ -16,11 +16,63 @@ from pathlib import Path
 
 from patchworks import load_ome_zarr
 
-# Segmentation methods `_build_method_fn` can dispatch. Adding one means
-# teaching that function to build it and adding the name here; the validator
-# reads this list so the two cannot drift apart. Most new methods need
-# neither: `method: "custom"` already imports any `(tile) -> labels` callable.
+# Built-in methods; any other is method: "custom".
 KNOWN_METHODS = ("cellpose", "threshold", "custom")
+
+#: Every setting a config may leave out, with its default. Only ``input``
+#: and ``work_dir`` are required; the example configs set little else.
+DEFAULTS = {
+    # conversion
+    "sequence_pattern": None,  # a TIFF glob: regex with named axes
+    "reuse_pyramid": False,  # .ims: copy its own pyramid
+    "convert_chunks": None,
+    "shard": False,  # true: far fewer files
+    "ngff_version": "auto",  # or "0.4" for older readers
+    "compression": "zstd",
+    # tiling
+    "channel": 0,
+    "level": 0,
+    "tile_shape": "auto",  # or [z, y, x]
+    "gpu_memory_gb": None,  # for "auto": the GPU's memory (default 8)
+    "overlap": 0,  # halo per axis, about one object
+    "skip_empty": True,
+    "empty_threshold": None,  # None: Otsu
+    "tiles_per_job": 4,
+    # segmentation
+    "label_name": "labels",
+    "method": "cellpose",  # or "threshold", "custom"
+    "normalize": "image",  # Cellpose: one intensity range for every tile
+    "nuclei_channel": None,
+    "seed_labels": None,
+    # after segmenting
+    "fill_holes": False,
+    "open_radius": 0,
+    "dilate": 0,
+    "dilate_gpu": False,
+    "min_volume": None,  # µm³
+    "max_volume": None,
+    # merge
+    "stitch": "touch",  # or "iou"
+    "iou_threshold": 0.5,
+    "sequential_labels": True,
+    "pyramid_levels": 5,
+    "pyramid_downscale": 2,
+    "shard_labels": False,
+    "object_table": True,
+    "table_channels": [],
+    "merge_workers": None,
+    "seam_report": True,
+    # email
+    "notify_email": "",
+    "notify_events": ["finish", "error"],
+}
+
+
+def with_defaults(cfg: dict) -> dict:
+    """*cfg* with every setting it leaves out taken from :data:`DEFAULTS`."""
+    import copy
+
+    return {**copy.deepcopy(DEFAULTS), **cfg}
 
 
 class _Tee:
@@ -223,10 +275,7 @@ def check_seed_labels(work_dir, cfg) -> None:
             "first (list both configs in a multi.yaml: run_multi runs the "
             "seeds' config before this one)."
         )
-    # Finished, not merely there: segmenting in place writes tiles straight
-    # into labels/<name>/0 of a bare group, and only the merge, at its very
-    # end, registers it as a label image (multiscales). Seeds read before
-    # that are unmerged tiles with per-tile ids.
+    # Finished, not merely there: unmerged tiles carry per-tile ids.
     import zarr
     from patchworks.plugins.ome_zarr import read_ngff_attr
 
@@ -1057,10 +1106,8 @@ def _build_method_fn(cfg, intensity_range=None):
     """
     method = cfg.get("method", "cellpose")  # see KNOWN_METHODS
     if method == "custom":
-        # Import a user-provided function, e.g.
-        #   custom: {module: my_seg, function: segment, kwargs: {...}}
-        # The module must be importable on the cluster (a file in
-        # workflow/scripts/, on PYTHONPATH, or an installed package).
+        # A user's function: custom: {module, function, kwargs}, importable on
+        # the compute nodes.
         import importlib
 
         spec = cfg["custom"]
@@ -1116,11 +1163,7 @@ def _build_method_fn(cfg, intensity_range=None):
             # Cellpose where they are. setdefault so an explicit
             # cellpose.channel_axis in the config still wins.
             extra.setdefault("channel_axis", 0)
-        # do_3D without anisotropy assumes isotropic voxels, which fragments
-        # objects across z for any real (anisotropic) calibration -- fill it
-        # in from the image's own calibration the same way a custom
-        # function's voxel_size gets filled in, unless the config already
-        # set anisotropy explicitly.
+        # do_3D needs the anisotropy: from the image's calibration unless set.
         extra = _with_voxel_size(cellpose_fn, extra, cfg)
         if intensity_range is not None:
             extra["intensity_range"] = intensity_range

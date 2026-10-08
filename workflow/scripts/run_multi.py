@@ -102,8 +102,7 @@ def _snakemake_cmd(
     if extra:
         cmd += extra
     if targets:
-        # "--" ends option parsing: --rerun-triggers takes a variable number
-        # of values and would otherwise swallow the target path.
+        # "--" ends the options: --rerun-triggers would swallow the target.
         cmd += ["--", *targets]
     return cmd
 
@@ -193,9 +192,7 @@ def _test_email(cfg: dict) -> int:
     return 1
 
 
-# Fallbacks for the relate step, used when neither a --relate-* flag nor a
-# `relate:` block in the multi config supplies a value. Wide-margin guesses,
-# not measured numbers -- see docs/guide/snakemake.md.
+# Relate jobs' SLURM settings when neither a flag nor `relate:` sets them.
 RELATE_DEFAULTS = {
     "partition": "scicore",
     "mem": "32G",
@@ -295,9 +292,7 @@ def _bundle_settings(multi_cfg: dict, args) -> dict:
             f"unknown key(s) in `bundle:`: {', '.join(sorted(unknown))}; "
             f"expected any of {', '.join(sorted(BUNDLE_DEFAULTS))}"
         )
-    # Where the relate jobs were allowed to run, the bundle job is too: a
-    # partition or QOS set only under `relate:` would otherwise leave this
-    # one on the cluster's default QOS, whose time limit can be far shorter.
+    # Fall back to the relate jobs' partition and QOS: the default QOS may be too short.
     relate = _relate_settings(multi_cfg, args)
     resolved = {}
     for key, fallback in BUNDLE_DEFAULTS.items():
@@ -324,9 +319,7 @@ def _bundle_cmd(
     which a login node kills without a message.
     """
     script = str(workflow_dir / "scripts" / "export_iso.py")
-    # Absolute: the command runs with cwd=workflow_dir, so a relative
-    # work_dir would otherwise be resolved against the workflow directory
-    # rather than against where the driver was invoked.
+    # Absolute: the command runs from the workflow directory.
     inner = [
         sys.executable,
         script,
@@ -434,8 +427,7 @@ def _relate_cmd(
         image_store,
         "--relations",
         json.dumps(rels),
-        # Concurrent jobs sharing the default <work_dir>/logs/relate.log
-        # would interleave -- give each its own file.
+        # One log per job.
         "--log",
         str(
             Path(work_dir)
@@ -456,13 +448,7 @@ def _run(cmd: list[str], workflow_dir: Path) -> int:
     return subprocess.run(cmd, cwd=workflow_dir).returncode
 
 
-# Exactly the config keys scripts/convert.py reads -- keep the two in step.
-# Conversion runs once, in phase A, from the first config, so these have to
-# agree across all of them or the disagreement is invisible.
-#
-# Deliberately NOT here: pyramid_levels / pyramid_downscale. Those are read by
-# merge.py, which runs once per config and builds that config's own label
-# pyramid, so they may legitimately differ.
+# The keys convert reads: the image is converted once, so every config must agree.
 _CONVERT_KEYS = (
     "input",
     "sequence_pattern",
@@ -729,10 +715,7 @@ def _validate_configs(paths: list[Path], cfgs: list[dict]) -> str:
             f"against a single image.zarr); got {_spread('work_dir')}"
         )
 
-    # The shipped config/ files are templates. Running them unedited used to
-    # get all the way to creating the state directory and die as a four-frame
-    # pathlib traceback ending in `PermissionError: '/path'`, which names
-    # neither the setting nor the file it came from.
+    # The shipped configs are templates: say which setting still holds a placeholder.
     for key in ("work_dir", "input"):
         for path, cfg in zip(paths, cfgs):
             value = str(cfg.get(key, ""))
@@ -744,8 +727,6 @@ def _validate_configs(paths: list[Path], cfgs: list[dict]) -> str:
                     "edit them for this dataset."
                 )
 
-    # A work_dir that cannot be created fails much later, after the first
-    # Snakemake process is already being launched.
     work_dir = next(iter(work_dirs), None) if len(work_dirs) == 1 else None
     if work_dir and not str(work_dir).startswith(_PLACEHOLDER_PREFIX):
         target = Path(work_dir)
@@ -768,19 +749,7 @@ def _validate_configs(paths: list[Path], cfgs: list[dict]) -> str:
                 f"share a chunk layout; got {_spread(key)}"
             )
 
-    # `tile_shape: "auto"` is identical as a *value* across configs while
-    # producing different tiles: the sizer charges per channel, so a config
-    # with nuclei_channel gets a smaller one. The label groups would then
-    # disagree on chunk layout and label_relations would raise -- after every
-    # segmentation had run. That used to be a hard error asking for a manual
-    # explicit tile_shape; main() now resolves and pins one automatically
-    # (see _resolve_shared_tile_shape), once the converted image exists to
-    # size against, so there is nothing to check here anymore.
-
-    # Phase A converts once, from the first config. Anything `convert` reads
-    # out of a later config is therefore silently ignored -- someone setting
-    # `shard: true` on the second config and watching a million files appear
-    # anyway has no way to see why. Refuse instead, and point at common.yaml.
+    # convert reads only the first config: a conversion setting must be the same in all.
     for key in _CONVERT_KEYS:
         values = {repr(cfg.get(key)) for cfg in cfgs}
         if len(values) != 1:
@@ -1173,10 +1142,7 @@ def main() -> None:
             "otherwise look identical: no email either way."
         ),
     )
-    # Defaults are None here, not the real values: main() has to tell "not
-    # passed" from "passed the default" so a `relate:` block in multi.yaml can
-    # fill the gap while an explicit flag still wins. RELATE_DEFAULTS holds
-    # the actual fallbacks.
+    # None, not the defaults: a `relate:` block fills what no flag sets.
     parser.add_argument(
         "--relate-partition",
         help=(
@@ -1246,27 +1212,24 @@ def main() -> None:
         )
     multi_cfg_path = multi_cfg_path.resolve()
     multi_cfg = _load_yaml(multi_cfg_path)
-    # Paths inside the multi config: next to it first (a copy kept with the
-    # data, listing its own configs), then workflow/ (the shipped one).
+    # Paths in the multi config: next to it first, then workflow/.
     inner = (multi_cfg_path.parent, workflow_dir)
 
     seg_config_paths = [_resolve(c, *inner) for c in multi_cfg["segmentations"]]
-    # Optional shared config: Snakemake merges --configfile values in order,
-    # so `common` holds what every segmentation agrees on and each per-config
-    # file overrides only what differs. Validation has to see the same merged
-    # view Snakemake will, or it would report a missing work_dir that is
-    # simply defined one file over.
+    # What Snakemake will see: common, then each segmentation's config, then defaults.
     common_path = multi_cfg.get("common")
     common_path = _resolve(common_path, *inner) if common_path else None
     common_cfg = _load_yaml(common_path) if common_path else {}
-    seg_cfgs = [{**common_cfg, **_load_yaml(p)} for p in seg_config_paths]
+    from _pw import with_defaults
+
+    seg_cfgs = [
+        with_defaults({**common_cfg, **_load_yaml(p)}) for p in seg_config_paths
+    ]
     if args.test_email:
         sys.exit(_test_email(seg_cfgs[0]))
 
     work_dir = _validate_configs(seg_config_paths, seg_cfgs)
-    # Every package a config needs, checked in the environment that will run
-    # it (this one: the jobs re-launch from its interpreter) before anything
-    # is converted or submitted.
+    # Every package a config needs, in this environment (the jobs run from it).
     from _pw import environment_problems
 
     missing = [p for cfg in seg_cfgs for p in environment_problems(cfg)]
@@ -1274,26 +1237,19 @@ def main() -> None:
         for p in missing:
             print(f"[run_multi] ERROR: {p}", file=sys.stderr)
         sys.exit(1)
-    # Checked now, not after hours of segmentation: a typo'd label name here
-    # would otherwise only surface once the relations start.
     review_rules = _review_rules(
         multi_cfg, [str(c.get("label_name")) for c in seg_cfgs]
     )
     image_store = f"{work_dir}/image.zarr"
-    # Shared by every config, hence keyed on the image and level, not on a
-    # label_name. Levels are validated identical across configs below.
     _level = int(seg_cfgs[0].get("level", 0))
     occupancy_store = f"{work_dir}/image.occupancy.zarr/{_level}"
 
-    # Each phase gets its own Snakemake state directory (the lock lives in the
-    # working directory, not the config), so unlocking has to cover all of
-    # them -- and nobody should have to reconstruct these paths by hand.
+    # Each phase has its own Snakemake state directory (and lock).
     state_dirs = [Path(work_dir) / ".snakemake_convert"] + [
         Path(cfg["work_dir"]) / cfg["label_name"] / ".snakemake"
         for cfg in seg_cfgs
     ]
-    # One driver per work_dir -- --unlock included: releasing the locks of
-    # a run that is still going is exactly how two runs end up in one store.
+    # One driver per work_dir, --unlock included.
     if not args.dry_run:
         claim_driver(work_dir, multi_cfg_path)
 
@@ -1317,12 +1273,7 @@ def main() -> None:
         print("[run_multi] unlocked; re-run without --unlock", flush=True)
         return
 
-    # Phase A: convert exactly once. The three runs are about to go concurrent
-    # and `convert` writes with overwrite=True, so letting them race on it
-    # would have them clobbering one store. Ask for its marker explicitly.
-    # The marker the convert and occupancy rules produce (rules/common.smk):
-    # a zarr v2 store (ngff_version 0.4) has no zarr.json, and asking for one
-    # failed every multi run writing 0.4 with "No rule to produce".
+    # Phase A: convert once (and build the occupancy map) before the configs run concurrently.
     root_file = zarr_root_file(seg_cfgs[0])
     rc = _run(
         _snakemake_cmd(
@@ -1332,11 +1283,6 @@ def main() -> None:
             cores=args.cores,
             dry_run=args.dry_run,
             state_dir=Path(work_dir) / ".snakemake_convert",
-            # Both in one phase-A call so they run as SLURM jobs. The
-            # occupancy map streams the whole image; building it here in the
-            # driver ran it on the login node, where the read is killed
-            # without a traceback. It is shared by every config, so it must
-            # not be left to the concurrent `prepare` steps either.
             targets=[
                 f"{image_store}/{root_file}",
                 # Private, always zarr v3 (see rules/common.smk).
@@ -1357,15 +1303,8 @@ def main() -> None:
         )
         sys.exit(rc)
 
-    # tile_shape: "auto" resolves differently per config when nuclei_channel
-    # differs (the sizer charges per channel) -- pin every config to one
-    # shared, computed value so the label arrays end up with matching chunk
-    # layouts. Needs the just-converted image, so this can only happen here,
-    # not in _validate_configs(). Dry runs never reach a real image.zarr.
+    # tile_shape "auto" differs per config (channels): pin one for all, so the label arrays match.
     tile_override = None
-    # all(), not a set of the values: an explicit tile_shape is a list,
-    # which a set cannot hold -- every real run with one (the shipped
-    # common.yaml has one) died here, right after the conversion.
     if not args.dry_run and all(
         cfg.get("tile_shape", "auto") == "auto" for cfg in seg_cfgs
     ):
@@ -1375,11 +1314,7 @@ def main() -> None:
                 seg_cfgs, image_store, work_dir
             )
 
-    # Phase B: the segmentations touch disjoint files under
-    # work_dir/<label_name>/, so run them together and let the GPU partition
-    # stay busy instead of idling through each config's prepare and merge.
-    # Each needs its own state directory: .snakemake/locks/ is per working
-    # directory, not per config.
+    # Phase B: every segmentation at once, each with its own state directory.
     def _launch(cfg_path, cfg):
         cmd = _snakemake_cmd(
             cfg_path,
@@ -1396,9 +1331,7 @@ def main() -> None:
         print(f"[run_multi] $ {' '.join(cmd)}", flush=True)
         return subprocess.Popen(cmd, cwd=workflow_dir)
 
-    # Labels deleted from image.zarr: segment them again. Their run
-    # directories hold only what the run makes (markers, logs, tiles.json),
-    # and would otherwise tell Snakemake the labels are done.
+    # Labels deleted from image.zarr: clear their run directory and segment them again.
     for run in stale_runs(seg_cfgs, image_store):
         if args.dry_run:
             print(
@@ -1421,9 +1354,7 @@ def main() -> None:
             print(f"[run_multi] ERROR: {p}", file=sys.stderr)
         sys.exit(1)
 
-    # A config growing from another's labels (seed_labels) waits for it;
-    # everything else starts at once. A dry run never writes labels, so
-    # nothing waits there.
+    # A config seeded by another's labels waits for it; the rest start at once.
     deps = {} if args.dry_run else seed_dependencies(seg_cfgs)
     for line in seed_plan(seg_cfgs, image_store):
         print(f"[run_multi] {line}", flush=True)
@@ -1474,12 +1405,8 @@ def main() -> None:
     if review_rules:
         from patchworks._review import write_rules
 
-        # Once, here, before the concurrent relate jobs: `patchworks review`
-        # reads them from the store instead of being told again.
         write_rules(image_store, review_rules)
-    # Every config said ok, so each of its labels should be there; a
-    # relation on one that is not is skipped here, named, instead of failing
-    # as a zarr traceback in its job. The others still run.
+    # A relation on labels a config failed to make is skipped, the others run.
     skipped = [
         rel
         for rel in relations
@@ -1509,28 +1436,10 @@ def main() -> None:
         sys.exit(_run_bundle(image_store, workflow_dir, bundle, args.profile))
 
     if not relations:
-        # No relations to compute, but the store is finished, so the
-        # bundling step still applies.
         _finish()
 
     if args.profile:
-        # Real CPU/IO work -- tens of thousands of zarr chunk reads for a
-        # full-resolution label volume -- not orchestration, so (like the
-        # occupancy map) it does not belong in this driver process on the
-        # login node. Submit it as its own job.
-        #
-        # One job *per relation pair*, not one job for the whole list: a
-        # single shared srun budget lets a slow pair (e.g. one needing a
-        # chunk-layout rechunk first) starve the others' time out of a fixed
-        # --relate-time, and killed that way loses everything not yet
-        # written even though earlier pairs already finished. Separate jobs
-        # also run concurrently rather than one after another, and
-        # relate.py itself now skips a pair whose workbook is already
-        # up to date, so retrying this exact command only redoes what
-        # actually failed.
-        # One job per parent: its children are related in one pass that
-        # reads it once. A position rule's two relations (cilia -> cells,
-        # nuclei -> cells) share the parent, so they are in the same job.
+        # One relate job per parent label image, reading it once for all its children.
         groups: dict[str, list[dict]] = {}
         for rel in relations:
             groups.setdefault(rel["b"], []).append(rel)
@@ -1554,8 +1463,6 @@ def main() -> None:
         names = [
             f"{', '.join(r['a'] for r in g)} -> {g[0]['b']}" for g in group_rels
         ]
-        # Dependencies between jobs: a position rule's relations share a
-        # parent, so this is empty unless a rule spans two parents.
         group_of = {id(r): k for k, g in enumerate(group_rels) for r in g}
         rel_deps = {
             group_of[id(relations[i])]: group_of[id(relations[j])]
@@ -1586,8 +1493,7 @@ def main() -> None:
                 "up-to-date workbooks are skipped, not recomputed).",
                 file=sys.stderr,
             )
-            # Not bundled: a bundle of a run whose relations failed would
-            # look complete and quietly be missing workbooks.
+            # A run with failed relations is not bundled: it would look complete.
             sys.exit(1)
         _finish()
 

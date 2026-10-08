@@ -112,11 +112,8 @@ def retry_on_oom(
                     "GPU OOM persisted after %d retries; giving up.", retries
                 )
                 raise
-        # Released *outside* the except block. Inside it the exception is
-        # alive, and its traceback holds the failed call's frames -- whose
-        # locals are the very device buffers it had allocated -- so freeing
-        # caches there released nothing and the backoff waited with that
-        # memory still pinned.
+        # Released outside the except block: its traceback still holds the
+        # failed call's device buffers.
         if on_release is not None:
             on_release()
         free_gpu_caches()

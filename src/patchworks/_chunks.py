@@ -485,10 +485,7 @@ def auto_tile_shape(
     n_spatial = min(3, len(shape))
 
     if use_gpu:
-        # A tile that fits VRAM still has to be decoded into (and often
-        # copied back out of) host RAM first, so a GPU with more memory
-        # than the job's own host allocation must not produce a tile the
-        # job itself can't hold -- take whichever budget is tighter.
+        # The tile is also held in host RAM: take the tighter budget.
         gpu_mem = gpu_memory if gpu_memory is not None else _get_gpu_memory()
         host_mem = available_memory or _get_available_memory()
         mem = min(gpu_mem, host_mem)
@@ -614,16 +611,8 @@ def auto_tile_shape_cellpose(
     (1, 2048, 2048)
     """
     n_workers = n_workers or cpu_allocation()
-    # Cellpose resizes the tile before the net runs -- by `rescale`
-    # (= 30 / diameter) on every axis, and by `anisotropy` on z as well -- so
-    # the array it actually holds is bigger than the one it was handed, and a
-    # budget computed from the unresized tile under-counts by that factor. A
-    # diameter half the model's 30 px means a 2x upsample per axis: 8x the
-    # voxels, enough to turn a comfortable tile into an OOM.
-    #
-    # Both only ever *shrink* the tile. A predicted downsample (diameter > 30)
-    # would license a bigger one, but these are a safety margin against a
-    # rough memory model, not a measurement to spend headroom on.
+    # Cellpose resizes the tile (30 / diameter, and anisotropy on z) before
+    # the net runs: budget for the resized tile. Only ever shrinks it.
     rescale = max(1.0, 30.0 / diameter) if diameter else 1.0
     z_resize = max(1.0, anisotropy or 1.0)
     # A tile holds n_channels planes per voxel (e.g. Cellpose's
@@ -634,10 +623,7 @@ def auto_tile_shape_cellpose(
     itemsize = np.dtype(dtype).itemsize * n_channels
 
     if use_gpu:
-        # A tile that fits VRAM still has to be decoded into (and often
-        # copied back out of) host RAM first, so a GPU with more memory
-        # than the job's own host allocation must not produce a tile the
-        # job itself can't hold -- take whichever budget is tighter.
+        # The tile is also held in host RAM: take the tighter budget.
         gpu_mem = gpu_memory if gpu_memory is not None else _get_gpu_memory()
         host_mem = available_memory or _get_available_memory()
         total_mem = min(gpu_mem, host_mem)

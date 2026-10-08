@@ -1,14 +1,9 @@
-# Nuclei. Only what differs from common.yaml; listed in multi.yaml.
+# Nuclei with Cellpose.
 
-channel: 1 # nuclear stain
-overlap: [4, 30, 30] # halo per axis: about one nucleus
-method: "cellpose"
-# normalize: "tile" # default "image": one intensity range for every tile
 label_name: "nuclei_labels"
+channel: 1 # nuclear stain
+overlap: [4, 30, 30]
 cellpose:
   model: "nuclei"
   diameter: 15
   do_3D: true
-  gpu: true
-  # fragments: 0.1 # 3-D default: fold objects under 10% of a cell into it; null: off
-  # flow3D_smooth: 1 # 3-D default: smooth the flows; 0: off

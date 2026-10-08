@@ -1,17 +1,15 @@
-# Several segmentations of one image, and how their label images relate.
-#   pixi run multi-dry   --config this.yaml   # check first
+# Several segmentations of one image, and how they relate.
+#   pixi run multi-dry   --config this.yaml
 #   pixi run multi-slurm --config this.yaml
-# Guide: docs/guide/snakemake.md
 
-common: config/common.yaml # settings every segmentation shares
+common: config/common.yaml
 
 segmentations:
 - config/config_nuclei.yaml
 - config/config_cyto.yaml
 - config/config_cilia.yaml
 
-# One workbook per pair: each child's parent (a in b), and each parent's
-# number of children. List every pair you want.
+# One workbook per pair: each a's b, and how many a each b holds.
 relations:
 - a: nuclei_labels
   b: cyto_labels
@@ -19,34 +17,18 @@ relations:
 - a: cilia_labels
   b: cyto_labels
   output: cilia_to_cell.xlsx
-  # max_distance_um: 1.0 # a cilium touching no cell gets the nearest one
-- a: cilia_labels
-  b: nuclei_labels
-  output: cilia_to_nucleus.xlsx
+  max_distance_um: 1.0 # a cilium touching no cell gets the nearest one
 
-# Optional: what `patchworks review image.zarr` flags.
+# What `patchworks review` flags.
 # review:
-#   expect:                  # children per parent: a number or [min, max]
+#   expect:
 #     cyto_labels:
-#       nuclei_labels: 1
-#       cilia_labels: [0, 2]
-#   min_overlap: 0.5         # a child less inside its parent than this
-#   position:                # apical / basal / lateral / central in the cell
-#     cilia_labels:
-#       parent: cyto_labels
-#       apical: nuclei_labels # away from the nuclei; or "+z", "-z"
+#       nuclei_labels: 1 # or [min, max]
 
-# Optional: SLURM settings of the relate jobs (one per parent label image).
+# SLURM settings of the relate and zip jobs.
 # relate:
-#   partition: "scicore"
+#   qos: "1day"
 #   mem: "32G"
-#   cpus: 16               # default: 8
-#   time: 180              # minutes, under the qos's limit
-#   qos: "1day"
 
-# The finished store is packed into one image.zarr.zip at the end.
-# bundle: false            # to skip it
-# bundle:
-#   format: "iso"          # or a disk image instead
-#   time: 720
-#   qos: "1day"
+# The store is zipped at the end.
+# bundle: false

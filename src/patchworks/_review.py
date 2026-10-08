@@ -206,10 +206,7 @@ class Review:
         rules = read_rules(self.store)
         wanted = None if names is None else set(names)
         if wanted is not None:
-            # A position rule reads its parent's table and, for an apical
-            # reference ("away from the nuclei"), that one's too: asked for
-            # the cilia and cell tables only, the workbook then had no
-            # nuclei to orient the cells by.
+            # A position rule also needs its parent's and its reference's tables.
             for child, rule in {
                 **(rules.get("position") or {}),
                 **(position or {}),

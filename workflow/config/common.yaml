@@ -1,34 +1,8 @@
-# Settings shared by every segmentation listed in multi.yaml (its `common:`).
-# Each segmentation config holds only what differs: channel, method, label_name.
-# Conversion settings belong here: the image is converted once.
+# Settings shared by every segmentation in multi.yaml.
+# Anything not set here or in a segmentation's config has a default
+# (all settings: docs/guide/snakemake.md).
 
-input: "/path/to/scan.ims"
-work_dir: "/path/to/results"
-
-# ---- conversion -------------------------------------------------------------
-reuse_pyramid: false
-convert_chunks: null
-shard: false # true: far fewer files, same data
-ngff_version: "auto" # "auto" (OME-Zarr 0.5) or "0.4" for older readers
-compression: "zstd"
-
-# ---- tiling (the same for every segmentation) -------------------------------
-level: 0
-tile_shape: [16, 1024, 1024]
-gpu_memory_gb: null
-skip_empty: true
-empty_threshold: null
-tiles_per_job: 4
-
-# ---- merge ------------------------------------------------------------------
-sequential_labels: true
-stitch: "touch" # or "iou": join across seams only where both tiles agree
-iou_threshold: 0.5
-pyramid_levels: 5
-pyramid_downscale: 2
-shard_labels: false
-merge_workers: null
-
-# ---- email (optional) -------------------------------------------------------
-notify_email: ""
-notify_events: ["finish", "error"]
+input: "/path/to/scan.ims" # .ims .czi .lif .nd2 OME-TIFF .zarr, or a TIFF glob
+work_dir: "/path/to/results" # everything is written here
+tile_shape: [16, 1024, 1024] # the same for every segmentation; "auto" sizes it
+# notify_email: "you@example.org" # mail when the run finishes or fails

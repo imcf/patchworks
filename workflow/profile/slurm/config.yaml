@@ -1,55 +1,19 @@
-# Snakemake 8+ SLURM profile for the patchworks workflow.
-# Needs: pip install "patchworks[workflow]"  (snakemake + slurm executor plugin)
-# Run:   snakemake --workflow-profile profile/slurm --configfile config/config.yaml
-#
-# Edit the partitions / account / GPU request for your cluster.
+# SLURM profile: `pixi run slurm` / `multi-slurm` use it.
+# Adapt the partitions, QOS and GPU request to your cluster.
 
 executor: slurm
-# The SLURM executor names every job after its run UUID and rejects a
-# --job-name in slurm_extra, so `squeue` shows nothing recognisable without
-# this. The prefix goes first in the name (<prefix>_<uuid>), which is the part
-# that survives truncation in a queue listing.
-# Alphanumerics, underscores and hyphens only; 50 characters max.
-# run_multi overrides this per config, so a three-way run shows pw-convert,
-# then pw-nuclei_labels / pw-cyto_labels / pw-cilia_labels.
-slurm-jobname-prefix: patchworks
-# Max concurrent SLURM jobs Snakemake will have in flight at once. This is a
-# submission-side cap, not a cluster limit — raising it just lets more
-# "segment" tiles queue/run together; scicore's scheduler still enforces your
-# real GPU quota (MaxTRESPU) and backfills the rest, so it's safe to raise.
-# Check your actual per-user GPU cap with:
-#   sacctmgr show assoc user=$USER format=account,partition,maxjobs,GrpTRES
-#
-# NOTE: this is per Snakemake process. run_multi.py runs the segmentation
-# configs concurrently, so a 3-config multi run can have up to 3 x this many
-# jobs in flight.
-jobs: 128
+slurm-jobname-prefix: patchworks # run_multi sets one per segmentation
+jobs: 128 # jobs in flight per Snakemake process; the cluster enforces your quota
 latency-wait: 60
 rerun-incomplete: true
-# Only re-run when an output is missing/stale — NOT when the patchworks code,
-# params or software env change. Stops an upgrade from re-doing the expensive
-# conversion / re-segmenting an existing image.zarr.
-rerun-triggers: mtime
+rerun-triggers: mtime # an upgrade does not redo finished steps
 printshellcmds: true
 keep-going: true
-# Retry a failed job twice, asking for more memory each time (see the
-# attempt-scaled mem_mb below). A transient OOM or a node hiccup then costs a
-# resubmission instead of failing the run and requiring a manual rerun.
-retries: 2
+retries: 2 # memory grows with each attempt (mem_mb below)
 
-# Defaults for every rule (CPU jobs).
-#
-# RUNTIME CEILING: every `runtime:` below is capped by the QOS the job lands
-# in, and a job asking for more is rejected by *sbatch* -- it never starts, so
-# its log file stays empty and only the submission error says why:
-#
-#   sbatch: error: QOSMaxWallDurationPerJobLimit
-#
-# On scicore the default QOS on `scicore` allows 6h, which is why convert and
-# occupancy sit at exactly 360 and nothing here exceeds it. To go past that,
-# request a longer QOS for that rule as `segment` does below -- raising
-# `runtime` alone will not work. Check what you may ask for with:
-#
+# Each `runtime` must fit the QOS the job lands in, or sbatch refuses it
+# (QOSMaxWallDurationPerJobLimit) and the job never starts. scicore's default
+# QOS allows 6 h; for longer, set a `qos:` as segment does. What you may use:
 #   sacctmgr show assoc user=$USER format=partition,qos%40
 #   sacctmgr show qos format=name,maxwall
 default-resources:
@@ -59,92 +23,29 @@ default-resources:
   cpus_per_task: 4
   runtime: 60 # minutes
 
-# Per-rule overrides.
 set-resources:
   convert:
-    # convert.py pins dask's threaded scheduler to cpus_per_task, so this
-    # scales conversion without the scheduler quietly running one worker per
-    # *machine* core. Verify actual scaling with `seff <jobid>` after a run
-    # and dial back if efficiency is low (scicore fair-share asks you not to
-    # sit on idle cores).
     mem_mb: "attempt * 64000"
     cpus_per_task: 32
     runtime: 360
-  occupancy:
-    # One streaming pass over the whole image, max-pooling each brick. Reads a
-    # lot but holds little: memory is bounded by the worker count times one
-    # region, not by the image. Runtime tracks the read, so give it room --
-    # this is a multi-terabyte scan on a real dataset.
+  occupancy: # one streaming pass over the image
     mem_mb: "attempt * 32000"
     cpus_per_task: 16
     runtime: 360
   prepare:
-    # Cheap now: it reduces the already-built occupancy map over each tile's
-    # footprint instead of touching the image.
-    #
-    # tile_shape: "auto" now also sizes against a host-RAM budget, and it
-    # reads *this job's* grant as a stand-in for segment's -- prepare runs on
-    # a CPU node and can't query segment's GPU-node grant directly. Keep this
-    # equal to segment's mem_mb below: lower and tiles come out needlessly
-    # small; higher and the sizer budgets against more host RAM than segment
-    # will actually get, undoing the point of the host-RAM check.
+    # Keep equal to segment's mem_mb: tile_shape "auto" sizes tiles to it.
     mem_mb: "attempt * 128000"
     runtime: 120
   segment:
-    # one GPU per job — this is what spreads Cellpose across GPUs.
-    # Use the plugin's native `gres` resource → emits --gres=gpu:1, which is
-    # how scicore binds a CUDA device. (The `gpu:` resource emits --gpus and
-    # leaves the job without a device.)
     slurm_partition: "rtx4090"
-    gres: "gpu:1"
-    # rtx4090-6hours wasn't enough: a do_3D whole-z tile (126 planes, full
-    # footprint) can run past 6h even though most same-sized tiles finish in
-    # 2.5-3.5h -- retrying it bought nothing since `runtime` didn't scale with
-    # `attempt` the way `mem_mb` does below, so it hit the identical wall on
-    # every attempt and burned all `retries` for a job that was never going to
-    # finish in the window. rtx4090-1day is scicore's next tier up (see
-    # `sacctmgr show qos format=name,maxwall | grep rtx4090`); 24h is wide
-    # margin over anything observed so far. If a tile still times out at 24h,
-    # that's not a slow tile anymore -- it's stuck, and worth profiling on its
-    # own rather than reaching for rtx4090-1week.
-    qos: "rtx4090-1day" # scicore: <partition>-<duration> QOS
-    # A job now processes `tiles_per_job` tiles sequentially, so both memory
-    # and runtime scale with that setting — raise it there and re-check here.
-    # The old "a tile used ~1G" note predates tile_shape: "auto", which sizes
-    # tiles against the real GPU and makes them far bigger. If you raise
-    # this, raise prepare's mem_mb above to match (see its comment).
-    #
-    # 128 GB base (256/384 GB on retry) is a wide safety margin, not a tight
-    # estimate: a do_3D tile that `auto_tile_shape_cellpose`'s 20x
-    # cellpose_memory_factor judged safe within a 24 GiB GPU budget still hit
-    # a real 32 GB host OOM, so that heuristic underestimates do_3D's actual
-    # host-RAM use by more than expected. rtx4090 nodes have ~1 TB RAM
-    # (~800 GB usable) and the QOS caps at 4 TB account-wide, so this has
-    # plenty of room -- it buys time until do_3D gets a properly measured
-    # memory factor (e.g. from `seff` on a job that completes) instead of a
-    # guess. ``ponytail:`` tighten this once real peak-RSS numbers exist.
+    gres: "gpu:1" # one GPU per job (`gpu:` would leave the job without one)
+    qos: "rtx4090-1day"
+    # Memory and time cover `tiles_per_job` tiles; a whole-z 3-D tile can
+    # take several hours.
     mem_mb: "attempt * 128000"
     cpus_per_task: 4
-    runtime: 1400 # ~23.3h — must stay under the rtx4090-1day QOS cap (24h)
+    runtime: 1400 # under the QOS's 24 h
   merge:
-    # merge.py sizes its worker pool from the cgroup/SLURM budget rather than
-    # the node's core count, and the pyramid is written zarr-natively (one
-    # source chunk per task) instead of through a dask rechunk — so this no
-    # longer has to cover an unbounded scheduler.
-    #
-    # `shard_labels: true` adds one more pass over level 0 (rewriting it
-    # sharded). That pass *does* go through a dask rechunk, but it bounds its
-    # own pool the same way — cgroup budget, not machine cores. It roughly
-    # doubles this rule's I/O; `seff <jobid>` on a previous merge tells you
-    # whether the headroom below still covers it.
-    #
-    # 360 is the ceiling under scicore's default QOS (see the note on
-    # default-resources). If the merge genuinely needs longer, ask for a QOS
-    # that allows it rather than just raising runtime — otherwise sbatch
-    # rejects the job before it starts and merge.log is left empty:
-    #
-    #   qos: "1day"        # whatever `sacctmgr show assoc user=$USER` lists
-    #   runtime: 720
     mem_mb: "attempt * 64000"
     cpus_per_task: 32
     runtime: 240

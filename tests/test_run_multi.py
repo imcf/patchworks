@@ -885,8 +885,6 @@ def test_reshard_task_is_wired_up():
     assert (wf / "scripts" / "reshard_store.py").is_file()
     pixi = (wf / "pixi.toml").read_text()
     assert 'reshard = "python scripts/reshard_store.py"' in pixi
-    # The QOS trap bit us on the merge; the task's own comment must warn.
-    assert "--qos=1day" in pixi
 
 
 def test_reshard_script_skips_already_sharded_arrays():

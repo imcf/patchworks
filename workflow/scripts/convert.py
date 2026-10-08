@@ -19,11 +19,7 @@ set_compression(snakemake.config.get("compression", "zstd"))  # noqa: F821
 cfg = snakemake.config  # noqa: F821  (injected by Snakemake)
 chunks = cfg.get("convert_chunks")
 
-# dask's threaded scheduler otherwise spawns one worker per *machine* core, not
-# per allocated core: on a 128-core node a 32-core job would run 128 chunk
-# reads at once and blow through its cgroup limit. This is the same class of
-# bug that OOM-killed conversion before, previously worked around by raising
-# mem_mb in the profile.
+# dask's threads bounded by the job's CPUs, not the machine's.
 dask.config.set(scheduler="threads", num_workers=cpu_allocation())
 
 to_ome_zarr(

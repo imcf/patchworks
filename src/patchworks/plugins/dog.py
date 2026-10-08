@@ -431,10 +431,7 @@ def _run(block: np.ndarray, dog_dict: dict[str, Any]) -> np.ndarray:
         Integer (``int32``) label array of the same shape.
     """
     use_gpu = dog_dict["use_gpu"]
-    # Deconvolution is CUDA regardless of use_gpu, so both paths can hit a
-    # device OOM. Retrying is worth it on a shared GPU: the tile is fine, a
-    # co-tenant just grew. cupy's OutOfMemoryError is not a RuntimeError, so
-    # it went entirely uncaught before.
+    # Deconvolution is CUDA whatever use_gpu says: retry device OOMs.
     gpu_involved = bool(use_gpu or dog_dict["decon_kwargs"] is not None)
     return retry_on_oom(
         lambda: _segment_once(block, dog_dict, use_gpu),
@@ -515,12 +512,8 @@ def _segment_once(
         before = img.shape
         img = _cached_decon(img, _resolve_dup_rev_z(decon_kwargs, img.shape))
         if img.shape != before:
-            # cudaDecon returns a slightly smaller volume for some input
-            # sizes (e.g. (14,1024,1024) -> (13,1020,1020) on an edge tile).
-            # patchworks needs one label per input voxel: the halo trim and
-            # the destination slice are both derived from the tile geometry,
-            # so a shrunken result has nowhere to go and used to surface as
-            # an unreadable broadcast error from inside zarr.
+            # cudaDecon can return a slightly smaller volume: one label per input
+            # voxel is required.
             img = _restore_shape(img, before)
 
     from scipy.ndimage import generate_binary_structure
@@ -556,10 +549,7 @@ def _segment_once(
         out = cp.asnumpy(labels) if use_gpu else labels
     finally:
         if use_gpu:
-            # Several tile-sized buffers are live at the peak above, and
-            # cupy's pool never returns a block to the driver on its own — so
-            # without this a long-lived worker's footprint only ever grows.
-            # Drop our references first, or freeing the pool frees nothing.
+            # Return cupy's pool to the driver after each tile.
             del low_blur, high_blur, dog_image, mask, labels, img
             free_gpu_caches()
     return out

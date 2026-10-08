@@ -118,10 +118,7 @@ def _default_axes(ndim: int) -> str:
         )
     guess = _DEFAULT_ORDER[len(_DEFAULT_ORDER) - ndim :]
     if ndim >= 4:
-        # 2-D and 3-D are unambiguous (yx, zyx), but from 4-D on the leading
-        # axis could be channel or time and the array alone cannot say. A
-        # (t, z, y, x) stack is silently labelled "czyx" here. Readers that
-        # carry dimension metadata (bioio, Imaris) never reach this path.
+        # From 4-D the leading axis could be channel or time.
         logger.warning(
             "no axes= given for a %d-D array; guessing %r from the number of "
             "dimensions. Pass axes= explicitly if the leading axis is not %r.",
@@ -366,10 +363,7 @@ def _store_exists(path: str) -> bool:
     remote NGFF 0.4 (zarr v2) store as v3.
     """
     if not is_remote(path):
-        # A group's metadata file, not the directory: Snakemake creates the
-        # output's directory before the job runs, and an empty one taken for
-        # a store left zarr's default (v3) in charge -- `ngff_version: "0.4"`
-        # then wrote 0.5.
+        # The metadata file, not the directory, which Snakemake creates empty.
         root = Path(path)
         return (root / "zarr.json").is_file() or (root / ".zgroup").is_file()
     try:
@@ -923,11 +917,8 @@ def _to_zarr_level(
     sh = _shard_for(shard, inner, arr.shape, arr.dtype, fmt)
     ctx = _progress_ctx(progress, f"{Path(group_path).name}/{component}")
     if not sh:
-        # Created here rather than by da.to_zarr, whose array-creation
-        # keywords changed across dask releases (zarr.create before
-        # create_array), so the pinned codec reaches every supported dask.
-        # Regular chunks make every block exactly one zarr chunk, so blocks
-        # never share a chunk and need no lock.
+        # Created here (dask's array-creation keywords changed between
+        # releases); regular chunks need no lock.
         if any(len(set(c[:-1])) > 1 or c[-1] > c[0] for c in arr.chunks):
             arr = arr.rechunk(arr.chunksize)
         z = _create_level_array(
@@ -951,12 +942,7 @@ def _to_zarr_level(
         dtype=arr.dtype,
         **zarr_compressor_kwargs(fmt),
     )
-    # Rechunking to the shard size is the one place this module hands work to
-    # dask's scheduler, and dask defaults to one thread per *machine* core --
-    # on a 128-core node that is 128 tasks each holding a whole shard
-    # (~512 MB by default), inside whatever cgroup the job was granted. Bound
-    # it here rather than in each caller, so a direct API call is as safe as
-    # the workflow's.
+    # The rechunk to shards is bounded by the job's CPUs, not the machine's.
     shard_nbytes = int(np.prod(sh)) * arr.dtype.itemsize
     n_workers = max(
         1,
@@ -1272,12 +1258,7 @@ def _write_pyramid(
             _to_zarr_level(nxt, group_path, str(i), shard, progress)
             next_shape = nxt.shape
         else:
-            # Stream it: decimation needs no halo, so with chunks chosen as
-            # ceil(src_chunk / stride) each task reads exactly one source chunk
-            # and writes exactly one output chunk. Bounded by construction --
-            # the dask route rechunks *upward* here (e.g. (16,512,512) back to
-            # (16,1024,1024)), pulling four source chunks per output chunk and
-            # letting the threaded scheduler stockpile the intermediates.
+            # One source chunk per task: decimation needs no halo.
             grp = _open_group(group_path)
             src_arr = grp[prev_name]
             out_chunks = _level_chunks(
