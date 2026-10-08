@@ -414,11 +414,15 @@ def _pair_stats(a_ids: np.ndarray, b_ids: np.ndarray):
 def _iou_face_pairs(
     windows: list[tuple[np.ndarray, np.ndarray]], threshold: float
 ) -> np.ndarray:
-    """Pairs whose IoU over the given (A view, B view) windows is enough.
+    """Pairs the two tiles agree are one object, over the overlap zone.
 
     Each window is two label arrays of one region, as seen by the tile on
-    either side. Intersections and areas are summed over all windows before
-    dividing, so the IoU is taken over the whole overlap zone.
+    either side; counts are summed over all windows. A pair is joined when
+    each is the other's best match and their overlap covers at least
+    *threshold* of the smaller one. Measured against the smaller, not the
+    union (IoU): a tile sees a cell crossing the zone cut off where its read
+    region ends, and that cut version lies inside the whole one. Mutual best
+    matches only, so one tile's merged blob cannot glue two cells together.
     """
     inter: dict[tuple[int, int], int] = {}
     a_area: dict[int, int] = {}
@@ -431,10 +435,17 @@ def _iou_face_pairs(
             a_area[k] = a_area.get(k, 0) + v
         for k, v in ba.items():
             b_area[k] = b_area.get(k, 0) + v
+    best_a: dict[int, tuple[int, int]] = {}
+    best_b: dict[int, tuple[int, int]] = {}
+    for (a, b), c in inter.items():
+        if c > best_a.get(a, (0, 0))[0]:
+            best_a[a] = (c, b)
+        if c > best_b.get(b, (0, 0))[0]:
+            best_b[b] = (c, a)
     keep = [
-        pair
-        for pair, c in inter.items()
-        if c / (a_area[pair[0]] + b_area[pair[1]] - c) >= threshold
+        (a, b)
+        for a, (c, b) in best_a.items()
+        if best_b[b][1] == a and c / min(a_area[a], b_area[b]) >= threshold
     ]
     return np.asarray(keep, dtype=np.int64).reshape(-1, 2)
 
