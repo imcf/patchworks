@@ -2,6 +2,7 @@
 
 import sys
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
@@ -298,3 +299,211 @@ def test_controller_job_forgets_its_own_slurm_context():
     script = core.controller_job_script("run")
     unset = script.index("unset")
     assert "SLURM|SBATCH" in script and unset < script.index("\nrun\n")
+
+
+def test_required_fields_and_plan_helpers():
+    cfg = core.build_config({**BASE, "method": "threshold"})
+    assert core.missing_fields(cfg) == []
+    empty = core.build_config(
+        {**BASE, "input": "", "work_dir": " ", "method": "threshold"}
+    )
+    # An empty work_dir is what planned /image.zarr.
+    assert core.missing_fields(empty) == ["input", "work_dir"]
+    assert core.image_store(cfg) == "/scratch/run/image.zarr"
+    assert "zarr.json" in core.store_exists_command("/s/image.zarr")
+
+    out = 'INFO plan: ...\n{"shape": [10, 2048, 2048], "tile_shape": [10, '
+    out += '1024, 1024], "grid": [1, 2, 2], "tiles": 4, '
+    out += '"tiles_with_signal": 3, "tile_read_bytes": 1073741824, '
+    out += '"labels_bytes_uncompressed": 0, "estimated_seconds": null}\n'
+    plan = core.parse_plan(out)
+    row = core.plan_row("cells", plan)
+    assert row["tiles"] == 4 and row["grid"] == "1 × 2 × 2"
+    assert row["read per tile (GiB)"] == 1.0
+    assert core.parse_plan("Traceback ...") is None
+    assert core.last_error_line("a\nFileNotFoundError: x\n\n") == (
+        "FileNotFoundError: x"
+    )
+
+
+def test_browse_entries_and_paths():
+    entries = [
+        ("b.czi", False),
+        (".hidden", True),
+        ("notes.txt", False),
+        ("image.zarr", True),
+        ("Data", True),
+        ("a.ims", False),
+    ]
+    assert core.browse_entries(entries) == [
+        ("Data", "dir"),
+        ("image.zarr", "store"),
+        ("a.ims", "image"),
+        ("b.czi", "image"),
+        ("notes.txt", "file"),
+    ]
+    assert core.browse_entries(entries, dirs_only=True) == [
+        ("Data", "dir"),
+        ("image.zarr", "store"),
+    ]
+    assert core.parent_dir("/a/b/") == "/a" and core.parent_dir("/a") == "/"
+    assert core.parent_dir("/") == "/"
+    assert core.join_remote("/", "x") == "/x"
+    assert core.join_remote("/a/", "x") == "/a/x"
+
+
+class _FakeAttr:
+    def __init__(self, name, is_dir):
+        import stat
+
+        self.filename = name
+        self.st_mode = stat.S_IFDIR if is_dir else stat.S_IFREG
+
+
+class _FakeSFTP:
+    """Just enough of paramiko's SFTPClient over a dict of folders."""
+
+    tree: ClassVar[dict[str, list[str]]] = {
+        "/home/u": ["patchworks", "data"],
+        "/home/u/patchworks": ["workflow"],
+        "/home/u/patchworks/workflow": ["Snakefile", "config"],
+        "/home/u/data": ["scan.czi", "old.zarr"],
+    }
+
+    class sock:
+        closed = False
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def close(self):
+        pass
+
+    def normalize(self, path):
+        return "/home/u"
+
+    def _is_dir(self, path):
+        return path in self.tree or path.endswith(".zarr")
+
+    def stat(self, path):
+        parent, name = path.rsplit("/", 1)
+        if path in self.tree or name in self.tree.get(parent, []):
+            return _FakeAttr(name, self._is_dir(path))
+        raise FileNotFoundError(path)
+
+    def listdir_attr(self, path):
+        if path not in self.tree:
+            raise FileNotFoundError(path)
+        return [
+            _FakeAttr(n, self._is_dir(f"{path}/{n}")) for n in self.tree[path]
+        ]
+
+    def open(self, path, mode="r"):
+        raise FileNotFoundError(path)
+
+
+class _FakeSSH:
+    """An SSH client whose commands report a missing converted image."""
+
+    def __init__(self):
+        self.commands = []
+
+    def open_sftp(self):
+        return _FakeSFTP()
+
+    def exec_command(self, command, timeout=None):
+        import io as _io
+        from types import SimpleNamespace
+
+        self.commands.append(command)
+        out = b"NO\n" if "zarr.json" in command else b""
+        chan = SimpleNamespace(recv_exit_status=lambda: 0)
+        stdout = SimpleNamespace(read=_io.BytesIO(out).read, channel=chan)
+        return None, stdout, SimpleNamespace(read=lambda: b"")
+
+    def close(self):
+        pass
+
+
+def test_app_connected_flow_validates_and_explains_a_missing_image():
+    """With a (fake) connection: required fields, then the plan's check."""
+    pytest.importorskip("paramiko")
+    testing = pytest.importorskip("streamlit.testing.v1")
+    at = testing.AppTest.from_file(
+        str(ROOT / "workflow/launcher/app.py"), default_timeout=30
+    )
+    ssh = _FakeSSH()
+    at.session_state["ssh_client"] = ssh
+    at.session_state["ssh_target"] = "u@host:22"
+    at.session_state["wf_dir"] = "/home/u/patchworks/workflow"
+    at.run()
+    assert not at.exception
+    assert any(
+        "still to fill in: input, work_dir" in w.value for w in at.warning
+    )
+
+    at.text_input(key="input").set_value("/home/u/data/scan.czi")
+    at.text_input(key="work_dir").set_value("/scratch/run")
+    at.run()
+    assert not at.exception
+    assert any("config is complete" in s.value for s in at.success)
+
+    plan = next(b for b in at.button if b.label == "Plan")
+    plan.click().run()
+    assert not at.exception
+    assert any("/scratch/run/image.zarr" in w.value for w in at.warning)
+    # Only the existence check ran: no plan on a missing image.
+    assert not any("--plan" in c for c in ssh.commands)
+
+
+class _FakeSSHWithImage(_FakeSSH):
+    """The converted image exists, and every plan succeeds."""
+
+    plan = (
+        '{"shape": [10, 2048, 2048], "tile_shape": [10, 1024, 1024], '
+        '"grid": [1, 2, 2], "tiles": 4, "tiles_with_signal": 3}'
+    )
+
+    def exec_command(self, command, timeout=None):
+        import io as _io
+        from types import SimpleNamespace
+
+        self.commands.append(command)
+        if "zarr.json" in command:
+            out = b"YES\n"
+        elif "--plan" in command:
+            out = self.plan.encode()
+        else:
+            out = b""
+        chan = SimpleNamespace(recv_exit_status=lambda: 0)
+        stdout = SimpleNamespace(read=_io.BytesIO(out).read, channel=chan)
+        return None, stdout, SimpleNamespace(read=lambda: b"")
+
+
+def test_app_plans_every_segmentation_of_a_multi_run():
+    pytest.importorskip("paramiko")
+    testing = pytest.importorskip("streamlit.testing.v1")
+    at = testing.AppTest.from_file(
+        str(ROOT / "workflow/launcher/app.py"), default_timeout=30
+    )
+    ssh = _FakeSSHWithImage()
+    at.session_state["ssh_client"] = ssh
+    at.session_state["ssh_target"] = "u@host:22"
+    at.session_state["wf_dir"] = "/home/u/patchworks/workflow"
+    at.session_state["input"] = "/home/u/data/scan.czi"
+    at.session_state["work_dir"] = "/scratch/run"
+    at.run()
+    at.button_group[0].set_value("Several segmentations + relations").run()
+    assert not at.exception
+    next(b for b in at.button if b.label == "Plan all segmentations").click()
+    at.run()
+    assert not at.exception
+    plans = [c for c in ssh.commands if "--plan" in c]
+    assert len(plans) == 2
+    rows = next(
+        d.value for d in at.dataframe if "segmentation" in d.value.columns
+    )
+    assert list(rows["segmentation"]) == ["nuclei_labels", "cyto_labels"]

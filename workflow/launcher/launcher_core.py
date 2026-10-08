@@ -221,6 +221,24 @@ def build_config(v: dict[str, Any]) -> dict[str, Any]:
     return cfg
 
 
+def missing_fields(cfg: dict[str, Any]) -> list[str]:
+    """Settings a run cannot do without that the form left empty.
+
+    An empty ``work_dir`` would put the converted image at ``/image.zarr``
+    (and every result next to it), so it is refused before anything runs.
+    """
+    missing = []
+    for key in ("input", "work_dir", "label_name"):
+        value = str(cfg.get(key) or "").strip()
+        if not value or value.startswith("/path/to/"):
+            missing.append(key)
+    if cfg.get("method") == "custom" and not (cfg.get("custom") or {}).get(
+        "module"
+    ):
+        missing.append("custom.module")
+    return missing
+
+
 def effective_config(
     base: dict[str, Any] | None, run: dict[str, Any]
 ) -> tuple[dict[str, Any], list[str]]:
@@ -507,6 +525,20 @@ def status_command(job: dict[str, Any]) -> str:
     return f"kill -0 {pid} 2>/dev/null && echo RUNNING || echo DONE"
 
 
+def image_store(cfg: dict[str, Any]) -> str:
+    """The converted image the workflow writes (``<work_dir>/image.zarr``)."""
+    return f"{cfg['work_dir'].rstrip('/')}/image.zarr"
+
+
+def store_exists_command(store: str) -> str:
+    """Shell line printing YES when *store* holds a converted image."""
+    q = shlex.quote(store)
+    return (
+        f"if [ -e {q}/zarr.json ] || [ -e {q}/.zgroup ]; "
+        "then echo YES; else echo NO; fi"
+    )
+
+
 def plan_command(cfg: dict[str, Any]) -> str | None:
     """``patchworks segment --plan`` for the run's converted image.
 
@@ -514,8 +546,7 @@ def plan_command(cfg: dict[str, Any]) -> str | None:
     once; it runs no segmentation (no sampling), so it is safe on a login
     node. None when the method has no CLI equivalent.
     """
-    store = f"{cfg['work_dir'].rstrip('/')}/image.zarr"
-    args = ["patchworks", "segment", store, "--plan"]
+    args = ["patchworks", "segment", image_store(cfg), "--plan"]
     tile = cfg.get("tile_shape")
     if isinstance(tile, (list, tuple)):
         args += ["--tile-shape", ",".join(str(t) for t in tile)]
@@ -553,6 +584,114 @@ def plan_command(cfg: dict[str, Any]) -> str | None:
             json.dumps(custom.get("kwargs") or {}),
         ]
     return " ".join(shlex.quote(a) for a in args)
+
+
+def parse_plan(output: str) -> dict[str, Any] | None:
+    """The JSON plan ``patchworks segment --plan`` printed, if any."""
+    start = output.find("{")
+    end = output.rfind("}")
+    if start < 0 or end < start:
+        return None
+    try:
+        plan = json.loads(output[start : end + 1])
+    except ValueError:
+        return None
+    return plan if isinstance(plan, dict) else None
+
+
+def plan_row(label: str, plan: dict[str, Any]) -> dict[str, Any]:
+    """One readable table row for a plan."""
+
+    def axes(value: Any) -> str:
+        if isinstance(value, (list, tuple)):
+            return " × ".join(str(v) for v in value)
+        return "" if value is None else str(value)
+
+    gib = 1024**3
+    row = {
+        "segmentation": label,
+        "image shape": axes(plan.get("shape")),
+        "tile shape": axes(plan.get("tile_shape")),
+        "grid": axes(plan.get("grid")),
+        "tiles": plan.get("tiles"),
+        "with signal": plan.get("tiles_with_signal"),
+        "read per tile (GiB)": round(
+            (plan.get("tile_read_bytes") or 0) / gib, 2
+        ),
+        "labels (GiB, raw)": round(
+            (plan.get("labels_bytes_uncompressed") or 0) / gib, 1
+        ),
+    }
+    if plan.get("estimated_seconds") is not None:
+        row["estimate (h)"] = round(plan["estimated_seconds"] / 3600, 1)
+    return row
+
+
+def last_error_line(text: str) -> str:
+    """The line of a traceback worth showing first (its last non-empty one)."""
+    lines = [line.strip() for line in text.strip().splitlines() if line.strip()]
+    return lines[-1] if lines else ""
+
+
+# ---------------------------------------------------------------------------
+# Remote file browser
+# ---------------------------------------------------------------------------
+
+# What the input of a run can be (a directory store counts as a file).
+IMAGE_SUFFIXES = (
+    ".ims",
+    ".czi",
+    ".lif",
+    ".nd2",
+    ".tif",
+    ".tiff",
+    ".zarr",
+    ".zip",
+)
+
+
+def is_store(name: str) -> bool:
+    """A directory that is one dataset rather than a folder to open."""
+    return name.lower().endswith((".zarr", ".n5"))
+
+
+def browse_entries(
+    entries: list[tuple[str, bool]], *, dirs_only: bool = False
+) -> list[tuple[str, str]]:
+    """``(name, kind)`` for a remote listing, in the order to show them.
+
+    *entries* are ``(name, is_dir)``. Kinds: ``"dir"`` (a folder to open),
+    ``"store"`` (a ``.zarr`` folder, picked like a file), ``"image"`` (a
+    file with an image suffix) and ``"file"``. Hidden entries are left out;
+    folders come first, then stores, images and other files, each by name.
+    With *dirs_only*, only folders (and stores, which are folders too).
+    """
+    rank = {"dir": 0, "store": 1, "image": 2, "file": 3}
+    out = []
+    for name, is_dir in entries:
+        if name.startswith("."):
+            continue
+        if is_dir:
+            kind = "store" if is_store(name) else "dir"
+        elif dirs_only:
+            continue
+        else:
+            kind = "image" if name.lower().endswith(IMAGE_SUFFIXES) else "file"
+        out.append((name, kind))
+    return sorted(out, key=lambda e: (rank[e[1]], e[0].lower()))
+
+
+def parent_dir(path: str) -> str:
+    """The folder above *path* (``/`` stays ``/``)."""
+    path = path.rstrip("/")
+    if not path:
+        return "/"
+    head = path.rsplit("/", 1)[0]
+    return head or "/"
+
+
+def join_remote(folder: str, name: str) -> str:
+    return f"{folder.rstrip('/')}/{name}" if folder != "/" else f"/{name}"
 
 
 # ---------------------------------------------------------------------------
