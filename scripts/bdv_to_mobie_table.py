@@ -193,6 +193,55 @@ def read_setups(xml_path: Path):
     ]
 
 
+def check_image_file(xml_path: Path):
+    """Check that the data file a BDV XML points to exists.
+
+    MoBIE opens the file named in the XML's ``ImageLoader`` (``<hdf5>``
+    or ``<n5>``), not the one that happens to sit next to the XML, so a
+    data file renamed after the XML was written fails only in MoBIE.
+
+    Parameters
+    ----------
+    xml_path : Path
+        A BDV XML.
+
+    Returns
+    -------
+    str or None
+        A description of the problem, None if the file exists or the
+        loader is not file based.
+    """
+    root = ET.parse(xml_path).getroot()
+    loader = root.find("SequenceDescription/ImageLoader")
+    if loader is None:
+        return None
+    el = next((e for e in loader if e.tag in ("hdf5", "n5", "zarr")), None)
+    if el is None or not (el.text or "").strip():
+        return None
+    ref = Path(el.text.strip().replace("\\", "/"))
+    if el.get("type", "relative") == "relative":
+        base = xml_path.parent
+        bp = root.find("BasePath")
+        if bp is not None and bp.get("type", "relative") == "relative":
+            base = base / (bp.text or ".").strip()
+        target = base / ref
+    else:
+        target = ref
+    if target.exists():
+        return None
+    others = sorted(p.name for p in xml_path.parent.glob(f"*{ref.suffix}"))
+    msg = (
+        f"{xml_path.name} points to <{el.tag}> {el.text.strip()}, which "
+        f"does not exist ({target})."
+    )
+    if others:
+        msg += (
+            f" {ref.suffix} files next to it: {', '.join(others)}. "
+            f"Edit the <{el.tag}> line of the XML to the right name."
+        )
+    return msg
+
+
 def channel_color(channel: str) -> str:
     """MoBIE color for a channel, from the wavelength in its name.
 
@@ -325,6 +374,7 @@ def main(argv=None):
 
     names = view_names([x for x, _ in xmls], args.name_level)
     rows = []
+    problems = []
     for x, setups in xmls:
         view = names[x]
         if args.absolute:
@@ -337,9 +387,9 @@ def main(argv=None):
                     f"{x} is not below the table's folder {out.parent}; "
                     "pass --absolute or write the table higher up."
                 )
-        h5 = list(x.parent.glob(f"{x.stem}*.h5"))
-        if not h5:
-            print(f"WARNING: no .h5 next to {x}")
+        problem = check_image_file(x)
+        if problem:
+            problems.append(problem)
         for s in setups:
             rows.append(
                 {
@@ -373,6 +423,11 @@ def main(argv=None):
             f"{len(chans)} channel(s): "
             + ", ".join(f"{c or 'unnamed'} ({channel_color(c)})" for c in chans)
         )
+
+    for problem in problems:
+        print(f"\nWARNING: {problem}")
+    if problems:
+        print("MoBIE will fail to open these views until that is fixed.")
 
     if args.dry_run:
         print(
