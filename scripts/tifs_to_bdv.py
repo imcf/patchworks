@@ -49,6 +49,12 @@ Usage
     uv run scripts/tifs_to_bdv.py /data/scan -o /out/scan.xml \\
         --voxel-size 0.325 0.325 2 --grid-columns 14 --overlap 10 --snake
 
+To add a pyramid to an existing BDV H5/XML that has none (e.g. a fused
+BigStitcher export), pass the .xml instead of a folder. Level 0 is kept,
+the lower levels are added to the same .h5::
+
+    uv run scripts/tifs_to_bdv.py /data/Scan/fused_bdv.xml
+
 Without uv: ``pip install numpy h5py tifffile`` and run it with python.
 Only uint8/uint16 images are supported (BDV HDF5 stores uint16).
 """
@@ -80,7 +86,9 @@ NAME_RE = re.compile(
 CHUNK_XY = 64
 # Stop adding pyramid levels once every dimension is at most this.
 MIN_LEVEL_SIZE = 64
-MAX_LEVELS = 8
+MAX_LEVELS = 12
+# Memory budget for one downsampling block, in bytes of float32.
+BLOCK_BYTES = 256 * 2**20
 
 
 @dataclass
@@ -723,26 +731,137 @@ def write_level0(ds, stack: Stack, setup: Setup, pool, chunk_z: int):
 def downsample(src, dst, rel_zyx):
     """Mean-downsample one pyramid level into the next.
 
-    Works a z slab at a time to bound memory.
+    Works block by block -- a z slab of chunk height and as many rows as
+    fit in ``BLOCK_BYTES`` -- so memory stays bounded even for a single
+    huge 2D plane.
 
     Parameters
     ----------
     src : h5py.Dataset
-        The finer level, (z, y, x) int16 holding uint16 data.
+        The finer level, (z, y, x). int16 is read as the uint16 BDV
+        stores in it; other types are averaged as they are.
     dst : h5py.Dataset
-        The coarser level to fill.
+        The coarser level to fill, same type as `src`.
     rel_zyx : tuple of int
         Downsampling factor from `src` to `dst`, z, y, x (1 or 2 each).
     """
     rz, ry, rx = rel_zyx
     nz, ny, nx = dst.shape
-    slab = max(1, dst.chunks[0])
-    for z0 in range(0, nz, slab):
-        z1 = min(nz, z0 + slab)
-        block = src[z0 * rz : z1 * rz, : ny * ry, : nx * rx]
-        block = block.view(np.uint16).astype(np.float32)
-        block = block.reshape(z1 - z0, rz, ny, ry, nx, rx).mean(axis=(1, 3, 5))
-        dst[z0:z1] = np.round(block).astype(np.uint16).view(np.int16)
+    as_u16 = src.dtype == np.int16
+    out_type = np.uint16 if as_u16 else dst.dtype
+    cz = max(1, (dst.chunks or dst.shape)[0])
+    cy = max(1, (dst.chunks or dst.shape)[1])
+    # Rows per block: a multiple of the chunk height within the budget.
+    row_bytes = cz * rz * ry * nx * rx * 4
+    rows = max(cy, BLOCK_BYTES // max(row_bytes, 1) // cy * cy)
+    for z0 in range(0, nz, cz):
+        z1 = min(nz, z0 + cz)
+        for y0 in range(0, ny, rows):
+            y1 = min(ny, y0 + rows)
+            block = src[z0 * rz : z1 * rz, y0 * ry : y1 * ry, : nx * rx]
+            if as_u16:
+                block = block.view(np.uint16)
+            block = block.astype(np.float32).reshape(
+                z1 - z0, rz, y1 - y0, ry, nx, rx
+            )
+            block = block.mean(axis=(1, 3, 5))
+            if np.issubdtype(out_type, np.integer):
+                block = np.round(block)
+            block = block.astype(out_type)
+            dst[z0:z1, y0:y1] = block.view(np.int16) if as_u16 else block
+
+
+def add_pyramid(xml_path: Path, overwrite: bool = False):
+    """Add a multiresolution pyramid to an existing BDV H5/XML.
+
+    For a file written without one (e.g. a fused BigStitcher export):
+    every setup gets the same levels this script writes for new data,
+    computed from the level-0 data already in the HDF5 file. Only new
+    datasets are added and the setup's ``resolutions`` and
+    ``subdivisions`` updated; level 0 is never touched.
+
+    Parameters
+    ----------
+    xml_path : Path
+        The BDV XML; its ``<hdf5>`` names the file to extend.
+    overwrite : bool, optional
+        Rebuild the levels of setups that already have a pyramid.
+        Without it, those setups are left alone.
+    """
+    root = ET.parse(xml_path).getroot()
+    el = root.find("SequenceDescription/ImageLoader/hdf5")
+    if el is None:
+        sys.exit(f"{xml_path} is not a BDV HDF5 dataset.")
+    h5_path = Path(el.text.strip().replace("\\", "/"))
+    if el.get("type", "relative") == "relative":
+        h5_path = xml_path.parent / h5_path
+    if not h5_path.is_file():
+        sys.exit(f"{xml_path.name} points to {h5_path}, which does not exist.")
+
+    setups = {}
+    for vs in root.iter("ViewSetup"):
+        size = tuple(int(v) for v in vs.findtext("size").split())
+        vox = vs.findtext("voxelSize/size")
+        voxel = tuple(float(v) for v in vox.split()) if vox else (1, 1, 1)
+        setups[int(vs.findtext("id"))] = (size, voxel)
+
+    t0 = time.time()
+    with h5py.File(h5_path, "r+") as h5:
+        for sid, (size, voxel) in sorted(setups.items()):
+            sname = f"s{sid:02d}"
+            if sname not in h5:
+                continue
+            levels = len(h5[f"{sname}/resolutions"])
+            if levels > 1 and not overwrite:
+                print(f"  {sname}: already {levels} levels, skipped")
+                continue
+            factors, chunks = plan_pyramid(size, voxel)
+            tps = sorted(
+                k for k in h5 if k.startswith("t") and f"{k}/{sname}" in h5
+            )
+            for tp in tps:
+                grp = h5[f"{tp}/{sname}"]
+                base = grp["0/cells"]
+                for level in list(grp):
+                    if level != "0":
+                        del grp[level]
+                prev, prev_f = base, factors[0]
+                for level in range(1, len(factors)):
+                    f, c = factors[level], chunks[level]
+                    shape = tuple(
+                        max(n // fi, 1)
+                        for n, fi in zip(size[::-1], f[::-1], strict=True)
+                    )
+                    ds = grp.create_dataset(
+                        f"{level}/cells",
+                        shape=shape,
+                        dtype=base.dtype,
+                        chunks=tuple(c[::-1]),
+                        compression=base.compression,
+                        compression_opts=base.compression_opts,
+                    )
+                    rel = tuple(
+                        a // b
+                        for a, b in zip(f[::-1], prev_f[::-1], strict=True)
+                    )
+                    downsample(prev, ds, rel)
+                    prev, prev_f = ds, f
+            for name, data, dtype in (
+                ("resolutions", factors, np.float64),
+                ("subdivisions", chunks, np.int32),
+            ):
+                del h5[f"{sname}/{name}"]
+                h5[f"{sname}/{name}"] = np.array(data, dtype=dtype)
+            top = [
+                max(n // fi, 1) for n, fi in zip(size, factors[-1], strict=True)
+            ]
+            print(
+                f"  {sname}: {len(factors)} levels, coarsest "
+                f"{' x '.join(map(str, top))} "
+                f"({(time.time() - t0) / 60:.1f} min)",
+                flush=True,
+            )
+    print(f"Done: {h5_path}")
 
 
 def write_setup_meta(h5, setup: Setup):
@@ -1129,7 +1248,12 @@ def main(argv=None):
         description=__doc__.split("\n\n")[0],
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p.add_argument("folder", type=Path, help="folder with the TIFFs")
+    p.add_argument(
+        "folder",
+        type=Path,
+        help="folder with the TIFFs -- or an existing BDV .xml, to add a "
+        "pyramid to its .h5 (see --overwrite)",
+    )
     p.add_argument(
         "-o",
         "--output",
@@ -1214,11 +1338,17 @@ def main(argv=None):
         help="report what was found, write nothing",
     )
     p.add_argument(
-        "--overwrite", action="store_true", help="replace an existing output"
+        "--overwrite",
+        action="store_true",
+        help="replace an existing output; with an .xml input, rebuild "
+        "pyramids that already exist",
     )
     args = p.parse_args(argv)
 
     folder = args.folder
+    if folder.is_file() and folder.suffix.lower() == ".xml":
+        add_pyramid(folder, overwrite=args.overwrite)
+        return
     if not folder.is_dir():
         sys.exit(f"Not a folder: {folder}")
     # Next to the folder, not in it: among thousands of TIFFs the output
