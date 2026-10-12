@@ -1,0 +1,25 @@
+# The web launcher, as its own pixi workspace -- like ../viewer/, separate
+# from ../pixi.toml: it runs on your own computer (any OS), needs none of
+# the GPU stack, and only talks to the cluster over SSH.
+#
+#   cd workflow/launcher
+#   pixi run start          # http://localhost:8501
+#
+# (pip install -r requirements.txt && streamlit run app.py works too.)
+
+[workspace]
+name = "patchworks-launcher"
+channels = ["conda-forge"]
+platforms = ["linux-64", "win-64", "osx-arm64", "osx-64"]
+
+[dependencies]
+python = "3.12.*"
+streamlit = ">=1.45"
+paramiko = ">=3.4"
+pyyaml = ">=6.0"
+
+[tasks]
+start = "streamlit run app.py"
+# Reachable from other machines (a team server inside the institute
+# network): never on a public address, the form takes passwords.
+serve = "streamlit run app.py --server.address 0.0.0.0"

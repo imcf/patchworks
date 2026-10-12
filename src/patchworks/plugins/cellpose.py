@@ -161,8 +161,9 @@ def cellpose_fn(
         and cells are cut at the seams. Measure it once with
         :func:`patchworks.intensity_range`; the workflow does by default.
     fragments:
-        Merge objects smaller than this fraction of a typical cell into the
-        neighbour they touch most, and drop those touching nothing
+        Merge objects smaller than this fraction of a cell of *diameter*
+        (30 px if not given) into the neighbour they touch most, and drop
+        those touching nothing
         (:func:`patchworks.absorb_fragments`), per tile before the halo is
         trimmed. 3-D Cellpose often splits a cell into a body and slivers,
         and leaves specks in dim regions. ``"auto"`` (default): 0.1 with
@@ -490,14 +491,30 @@ def _run(block: np.ndarray, cellpose_dict: dict[str, Any]) -> np.ndarray:
         return masks[np.newaxis] if squeeze else masks
 
 
+def cell_voxels(cellpose_dict: dict[str, Any], ndim: int) -> float:
+    """Voxels in one cell of the configured diameter (Cellpose's 30 px if
+    none), z shortened by the anisotropy: the same for every tile."""
+    diameter = float(cellpose_dict.get("diameter") or 30.0)
+    if ndim < 3:
+        return float(np.pi / 4 * diameter**2)
+    anisotropy = cellpose_dict.get("cellpose_kwargs", {}).get("anisotropy")
+    return float(np.pi / 6 * diameter**3 / float(anisotropy or 1.0))
+
+
 def _clean(masks: np.ndarray, cellpose_dict: dict[str, Any]) -> np.ndarray:
-    """Fold fragments into the cells they belong to (``fragments=``)."""
+    """Fold fragments into the cells they belong to (``fragments=``).
+
+    The size limit comes from the diameter, not from what each tile holds:
+    measured per tile, a tile of texture without cells kept all its
+    fragments while its neighbours were cleaned.
+    """
     fraction = cellpose_dict.get("fragments")
     if not fraction:
         return masks
     from .._postprocess import absorb_fragments
 
-    return absorb_fragments(masks, fraction=float(fraction))
+    min_voxels = float(fraction) * cell_voxels(cellpose_dict, masks.ndim)
+    return absorb_fragments(masks, min_voxels)
 
 
 # Keep the lower-level names available for advanced users
