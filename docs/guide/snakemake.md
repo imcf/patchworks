@@ -57,10 +57,11 @@ cellpose:
   do_3D: true
 ```
 
-Only `input` and `work_dir` are required. Every other setting has a
-default, listed with a one-line description in `DEFAULTS` at the top of
-`workflow/scripts/_pw.py`; the options most worth knowing are
-[below](#options-worth-knowing). Then edit
+Only `input` and `work_dir` are required. Every other setting is listed in
+the file, commented out with its default and a one-line description: remove
+the `#` to change one. In a multi run, settings shared by every
+segmentation are listed in `common.yaml`, the rest in each segmentation's
+config. The options most worth knowing are [below](#options-worth-knowing). Then edit
 `profile/slurm/config.yaml` for your cluster: partitions, the GPU request,
 `jobs:` (how many jobs at once).
 

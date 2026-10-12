@@ -2131,3 +2131,66 @@ def test_the_bundle_job_runs_where_the_relate_jobs_may(monkeypatch):
     # Its own block still wins.
     cfg["bundle"] = {"qos": "6hours"}
     assert _bundle_settings(cfg, flags)["qos"] == "6hours"
+
+
+def test_every_setting_is_listed_where_it_belongs():
+    """The configs set little, so they list every other setting commented
+    out with its default: the shared ones in common.yaml, the rest in each
+    segmentation's config, all of them in config.yaml. Listed names must be
+    real settings."""
+    import re
+
+    from _pw import DEFAULTS
+
+    shared = {
+        "level",
+        "tile_shape",
+        "gpu_memory_gb",
+        "tiles_per_job",
+        "sequence_pattern",
+        "reuse_pyramid",
+        "convert_chunks",
+        "shard",
+        "shard_labels",
+        "ngff_version",
+        "compression",
+        "pyramid_levels",
+        "pyramid_downscale",
+        "merge_workers",
+        "seam_report",
+        "notify_email",
+        "notify_events",
+    }
+    extra = {
+        "input",
+        "work_dir",
+        "denoise",
+        "connectivity",
+        "cellpose",
+        "custom",
+    }
+    per_segmentation = (
+        set(DEFAULTS) - shared - {"label_name", "method", "channel"}
+    )
+
+    def keys(path):
+        text = (_workflow_dir() / "config" / path).read_text()
+        return set(re.findall(r"^#? ?([a-z_0-9]+):", text, re.M))
+
+    assert set(DEFAULTS) <= keys("config.yaml")
+    assert shared <= keys("common.yaml")
+    for seg in (
+        "config_nuclei.yaml",
+        "config_cyto.yaml",
+        "config_cilia.yaml",
+        "config_cyto_plantseg.yaml",
+    ):
+        assert per_segmentation <= keys(seg), (
+            seg,
+            per_segmentation - keys(seg),
+        )
+    for path in ("config.yaml", "common.yaml", "config_nuclei.yaml"):
+        assert keys(path) <= set(DEFAULTS) | extra, (
+            path,
+            keys(path) - set(DEFAULTS) - extra,
+        )

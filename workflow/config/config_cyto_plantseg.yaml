@@ -13,4 +13,26 @@ custom:
   kwargs:
     model: "generic_confocal_3D_unet" # or generic_light_sheet_3D_unet
     segmentation: "nuclei_watershed"
-    foreground: "otsu"
+    foreground: "otsu" # keep the tissue only; null: everywhere
+    # beta: 0.6          # gasp/multicut: lower merges more, higher splits more
+    # max_radius_um: null # a cell reaches at most this far from its nucleus
+    # rescale: true      # resample tiles to the model's voxel size
+    # device: "cuda"
+
+# ---- every other setting of this segmentation, with its default ----------
+# iou_threshold: 0.5      # with "iou": overlap needed, of the smaller piece
+# skip_empty: true        # skip tiles without signal
+# empty_threshold: null   # their cutoff, in intensity; null: Otsu of the channel
+# nuclei_channel: null    # a second channel (Cellpose, watershed, PlantSeg)
+# denoise: null           # {model: "n2v.ckpt"}: Noise2Void first (careamics environment)
+# normalize: "image"      # Cellpose: one intensity range for every tile; "tile": per tile
+# connectivity: 1         # 3: also join voxels touching at edges and corners
+# fill_holes: false       # true, or "per_plane"
+# open_radius: 0          # cut thin spurs (not for cilia)
+# dilate: 0               # grow labels by N pixels
+# dilate_gpu: false
+# min_volume: null        # µm³: drop smaller objects
+# max_volume: null        # µm³: drop larger objects
+# sequential_labels: true # number objects 1..N
+# object_table: true      # one row per object, stored with the labels
+# table_channels: []      # add mean/std intensity of these channels
