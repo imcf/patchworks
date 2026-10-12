@@ -166,3 +166,43 @@ def test_write_reviewed_labels(scene):
     cil = rv.write_reviewed_labels("cilia_labels")
     arr = zarr.open_group(f"{scene}/labels/{cil}", mode="r")["0"][...]
     assert 4 not in np.unique(arr)
+
+
+def test_review_reads_a_zip_bundle(scene, tmp_path):
+    """The viewer opens the zipped store the run ends with: the corrected
+    view (and the relations it carries) must build from it, not fail on
+    opening a label group as a directory."""
+    import os
+    import zipfile
+
+    bundle = tmp_path / "s.zarr.zip"
+    with zipfile.ZipFile(bundle, "w") as zf:
+        for root, _, files in os.walk(scene):
+            for f in files:
+                full = os.path.join(root, f)
+                zf.write(full, os.path.relpath(full, tmp_path))
+    direct = Review(scene).effective("cilia_labels")
+    zipped = Review(str(bundle)).effective("cilia_labels")
+    pd.testing.assert_frame_equal(direct, zipped)
+    assert "cyto_labels_id" in zipped.columns
+
+
+def test_plain_viewer_shows_relations_on_hover(scene, tmp_path):
+    """`pixi run napari` (not only the review panel) gives each label layer
+    the features napari's status bar shows: parent and children."""
+    import types
+
+    from patchworks.plugins.napari import _show_relations
+
+    class Layers(dict):
+        pass
+
+    names = ["nuclei_labels", "cyto_labels", "cilia_labels"]
+    viewer = types.SimpleNamespace(
+        layers=Layers({n: types.SimpleNamespace(features=None) for n in names})
+    )
+    _show_relations(viewer, scene)
+    cyto = viewer.layers["cyto_labels"].features
+    cilia = viewer.layers["cilia_labels"].features
+    assert {"index", "n_nuclei_labels", "n_cilia_labels"} <= set(cyto.columns)
+    assert "cyto_labels_id" in cilia.columns

@@ -404,3 +404,28 @@ def test_view_script_sets_the_numba_cache_before_importing_napari():
     assert src.index("NUMBA_CACHE_DIR") < src.index(
         "from patchworks.plugins.napari import"
     )
+
+
+def test_axes_come_from_the_store_not_a_guess(tmp_path, caplog):
+    """Every channel shown is a 4-D image: its axes are read from the
+    store, without the "guessing 'czyx'" warning."""
+    import logging
+
+    import numpy as np
+
+    from patchworks.plugins.napari import _pyramid_calibration
+    from patchworks.plugins.ome_zarr import to_ome_zarr
+
+    store = str(tmp_path / "s.zarr")
+    to_ome_zarr(
+        np.zeros((2, 4, 8, 8), "uint16"),
+        store,
+        axes="czyx",
+        pixel_size={"z": 2.0, "y": 0.5, "x": 0.5},
+        n_levels=1,
+        progress=False,
+    )
+    with caplog.at_level(logging.WARNING):
+        scale, _ = _pyramid_calibration(store, 4)
+    assert scale[1:] == [2.0, 0.5, 0.5]
+    assert "guessing" not in caplog.text

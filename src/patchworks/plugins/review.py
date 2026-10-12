@@ -1002,15 +1002,7 @@ class _ReviewPanel:
             layer = self._layer(name)
             if layer is None:
                 continue
-            eff = self.rv.effective(name)
-            cols = [f"{p}_id" for p in self.rv.parents[name]]
-            cols += [f"n_{c}" for c in self.rv.children[name]]
-            cols += [c for c in ("position", "qc") if c in eff]
-            features = (
-                eff[cols]
-                .reset_index()
-                .rename(columns={eff.index.name or "label": "index"})
-            )
+            features = self.rv.hover_features(name)
             try:
                 layer.features = features
             except Exception:  # pragma: no cover - depends on napari

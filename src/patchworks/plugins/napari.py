@@ -187,12 +187,27 @@ def _pyramid_translate(
 
     Returns None when there is none, leaving napari's default of 0.
     """
-    from .ome_zarr import _default_axes, read_translation
+    from .ome_zarr import read_translation
 
     offset = read_translation(str(path))
     if not offset:
         return None
-    return [float(offset.get(a, 0.0)) for a in _default_axes(ndim)]
+    return [float(offset.get(a, 0.0)) for a in _store_axes(path, ndim)]
+
+
+def _store_axes(path: Union[str, Path], ndim: int) -> str:
+    """The store's own axis names (its multiscales metadata), or the usual
+    trailing ones when it records none."""
+    from .ome_zarr import _DEFAULT_ORDER, _multiscale_meta
+
+    meta = _multiscale_meta(str(path)) or {}
+    names = "".join(
+        str(a.get("name", "") if isinstance(a, dict) else a)[:1]
+        for a in meta.get("axes") or []
+    )
+    if len(names) == ndim:
+        return names
+    return _DEFAULT_ORDER[len(_DEFAULT_ORDER) - ndim :]
 
 
 def _pyramid_calibration(
@@ -221,9 +236,9 @@ def _pyramid_calibration(
         ``(None, None)`` if the store carries no calibration (napari then
         falls back to its uncalibrated pixel default).
     """
-    from .ome_zarr import _base_scale, _default_axes, _read_zarr_calibration
+    from .ome_zarr import _base_scale, _read_zarr_calibration
 
-    axes = _default_axes(ndim)
+    axes = _store_axes(path, ndim)
     pixel_size = _read_zarr_calibration(str(path), axes)
     if not pixel_size:
         return None, None
@@ -501,6 +516,8 @@ def view_in_napari(
                 continue
             loaded += 1
             logger.info("auto-loaded labels/%s from %s", name, image)
+        if loaded:
+            _show_relations(viewer, image)
         if names and not loaded:
             logger.error(
                 "found %d label image(s) in %s/labels but none could be "
@@ -512,3 +529,23 @@ def view_in_napari(
     if show:
         napari.run()
     return viewer
+
+
+def _show_relations(viewer: Any, store: Any) -> None:
+    """Hovering an object shows its parent and children in the status bar,
+    from the store's object tables (when it has them)."""
+    try:
+        from .._review import Review
+
+        rv = Review(str(store))
+    except Exception:
+        logger.info("no object tables in %s: no relations on hover", store)
+        return
+    for name in rv.names:
+        if name in viewer.layers:
+            try:
+                viewer.layers[name].features = rv.hover_features(name)
+            except Exception:  # pragma: no cover - depends on napari
+                logger.debug(
+                    "could not set features on %s", name, exc_info=True
+                )
