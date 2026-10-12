@@ -184,25 +184,29 @@ def view_names(xmls: list[Path], level: int = 1):
     Returns
     -------
     dict of Path to str
-        The folder name -- with the XML's stem appended when one folder
-        holds several XMLs, and the folders below it when two views
-        would otherwise share a name.
+        The folder name. Where two views would share it, the folders
+        from there down to the XML (``SampleA_Acquisition``), and the
+        XML's file name only if that still clashes.
     """
 
     def folder(x, lvl):
         parents = x.parents
         return parents[min(lvl, len(parents)) - 1].name
 
+    def dedupe(names, longer):
+        counts: dict[str, int] = {}
+        for n in names.values():
+            counts[n] = counts.get(n, 0) + 1
+        return {x: longer(x) if counts[n] > 1 else n for x, n in names.items()}
+
     names = {x: folder(x, level) for x in xmls}
-    counts: dict[str, int] = {}
-    for n in names.values():
-        counts[n] = counts.get(n, 0) + 1
-    for x in xmls:
-        if counts[names[x]] > 1:
-            # Spell out the path from the naming folder down to the XML.
-            parts = x.parent.parts[len(x.parent.parts) - level :]
-            names[x] = "_".join((*parts, x.stem))
-    return names
+    # Clashes: spell out the folders from the naming one down to the XML
+    # (SampleA_Acquisition), then, if still needed, add the file name.
+    below = {
+        x: "_".join(x.parent.parts[len(x.parent.parts) - level :]) for x in xmls
+    }
+    names = dedupe(names, lambda x: below[x])
+    return dedupe(names, lambda x: f"{below[x]}_{x.stem}")
 
 
 def main(argv=None):
