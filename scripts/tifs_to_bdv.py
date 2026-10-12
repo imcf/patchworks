@@ -14,6 +14,9 @@ The input is one 2D TIFF per plane, named like::
     |   '---------------------------------- field / well index
     '-------------------------------------- well
 
+The channel suffix is optional: ``A1--W00001--P00082--Z00009--T00000.tif``
+is read as a single-channel acquisition.
+
 Each (position, channel) becomes one BDV view setup -- a tile in one
 channel -- so the result opens directly in BigDataViewer and BigStitcher.
 Every T found becomes a timepoint; a position/channel missing at some T is
@@ -69,7 +72,7 @@ import tifffile
 
 NAME_RE = re.compile(
     r"^(?P<well>.+?)--W(?P<field>\d+)--P(?P<pos>\d+)--Z(?P<z>\d+)"
-    r"--T(?P<t>\d+)--(?P<chan>.+?)\.tiff?$",
+    r"--T(?P<t>\d+)(?:--(?P<chan>.+?))?\.tiff?$",
     re.IGNORECASE,
 )
 
@@ -156,7 +159,8 @@ def scan(folder: Path):
             skipped.append(path.name)
             continue
         tile = (m["well"], int(m["field"]), int(m["pos"]))
-        key = (tile, m["chan"], int(m["t"]))
+        # Single-channel acquisitions have no channel suffix.
+        key = (tile, m["chan"] or "", int(m["t"]))
         z = int(m["z"])
         if z in stacks[key].planes:
             sys.exit(f"Duplicate plane: {path.name}")
@@ -918,7 +922,7 @@ def write_xml(
     for i, name in enumerate(channels):
         ch = sub(att, "Channel")
         sub(ch, "id", i)
-        sub(ch, "name", name)
+        sub(ch, "name", name or "0")
     att = sub(vs, "Attributes", name="tile")
     for i, name in enumerate(tiles):
         t = sub(att, "Tile")
@@ -1274,7 +1278,7 @@ def main(argv=None):
                 id=len(setups),
                 tile=tile_idx[tile],
                 channel=chan_idx[chan],
-                name=f"{names[tile]}_{chan}",
+                name=f"{names[tile]}_{chan}" if chan else names[tile],
                 size_xyz=(shape[1], shape[0], z_max - z_min + 1),
                 z_min=z_min,
             )
@@ -1334,7 +1338,9 @@ def main(argv=None):
     print(
         f"  tiles:      {len(tiles)} ({names[tiles[0]]} .. {names[tiles[-1]]})"
     )
-    print(f"  channels:   {len(channels)} ({', '.join(channels)})")
+    print(
+        f"  channels:   {len(channels)} ({', '.join(c or 'none' for c in channels)})"
+    )
     print(
         f"  timepoints: {len(timepoints)} ({', '.join(map(str, timepoints))})"
     )
