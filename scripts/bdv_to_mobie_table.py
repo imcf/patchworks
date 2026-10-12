@@ -31,6 +31,7 @@ Columns written (see https://mobie.github.io/tutorials/mobie_collection_table.ht
 
 Usage
 -----
+    uv run scripts/bdv_to_mobie_table.py /data/project --dry-run
     uv run scripts/bdv_to_mobie_table.py /data/project
     uv run scripts/bdv_to_mobie_table.py /data/project -o /data/project/mobie.tsv
 
@@ -251,6 +252,11 @@ def main(argv=None):
         action="store_true",
         help="opening a view adds to what is shown instead of replacing it",
     )
+    p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="list the views and preview the table, write nothing",
+    )
     args = p.parse_args(argv)
 
     root = args.root.resolve()
@@ -305,7 +311,27 @@ def main(argv=None):
                     "channel_name": s.channel,
                 }
             )
-        print(f"  {view}: {len(setups)} setups ({x.relative_to(root)})")
+        tiles = {st.tile for st in setups}
+        chans = dict.fromkeys(st.channel for st in setups)
+        print(f"  {view}  <- {x.relative_to(root)}")
+        print(
+            f"      {len(setups)} rows: {len(tiles)} tile(s) x "
+            f"{len(chans)} channel(s): "
+            + ", ".join(f"{c or 'unnamed'} ({channel_color(c)})" for c in chans)
+        )
+
+    if args.dry_run:
+        print(
+            f"\nDry run: would write {out} ({len(xmls)} views, "
+            f"{len(rows)} rows)"
+            + (", replacing the existing file." if out.exists() else ".")
+        )
+        preview = 5
+        print(f"First {min(preview, len(rows))} rows:")
+        writer = csv.DictWriter(sys.stdout, COLUMNS, delimiter=delimiter)
+        writer.writeheader()
+        writer.writerows(rows[:preview])
+        return
 
     out.parent.mkdir(parents=True, exist_ok=True)
     with open(out, "w", newline="", encoding="utf-8") as f:
