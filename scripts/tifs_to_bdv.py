@@ -1130,7 +1130,8 @@ def main(argv=None):
         "-o",
         "--output",
         type=Path,
-        help="output .xml (default: <folder>/dataset.xml); the "
+        help="output .xml (default: dataset.xml next to the folder, "
+        "outside the TIFFs); the "
         ".h5 is written next to it with the same name",
     )
     p.add_argument(
@@ -1216,7 +1217,9 @@ def main(argv=None):
     folder = args.folder
     if not folder.is_dir():
         sys.exit(f"Not a folder: {folder}")
-    xml_path = args.output or folder / "dataset.xml"
+    # Next to the folder, not in it: among thousands of TIFFs the output
+    # sorts to the bottom of a file browser and is easily missed.
+    xml_path = args.output or folder.resolve().parent / "dataset.xml"
     if xml_path.suffix.lower() != ".xml":
         xml_path = xml_path.with_suffix(".xml")
     h5_path = xml_path.with_suffix(".h5")
@@ -1402,7 +1405,13 @@ def main(argv=None):
         voxel,
         tile_offsets,
     )
-    print(f"Done: {xml_path}")
+    for path in (xml_path, h5_path):
+        if not path.is_file():
+            sys.exit(f"ERROR: {path.resolve()} was not written.")
+        print(f"Wrote {path.resolve()} ({path.stat().st_size / 1e9:.2f} GB)")
+    print(
+        "Done. Open the .xml in Fiji: Plugins > BigDataViewer or BigStitcher."
+    )
 
 
 if __name__ == "__main__":
