@@ -20,14 +20,17 @@ and color setting controls the whole channel.
 Columns written (see https://mobie.github.io/tutorials/mobie_collection_table.html):
 
 - ``uri``: the XML, relative to the table (or absolute, ``--absolute``)
+- ``type``: ``intensities``
 - ``channel``: setup index in the XML
 - ``name``: ``<folder>_<setup name>``, unique per row
 - ``view``: the folder name -- all rows of one XML are shown together
 - ``display``: ``<folder>_<channel>``, shared by all tiles of a channel
-- ``color``: from the channel's wavelength (405 blue, 488 green, ...)
-- ``contrast_limits``: ``auto`` unless given with ``--contrast-limits``
+- ``color``: from the channel's wavelength (405 Blue, 488 Green, ...)
+- ``contrast_limits``: empty (MoBIE's default) unless ``--contrast-limits``
 - ``exclusive``: ``true``, so opening a view replaces the previous one
-- ``sample``, ``tile``, ``channel_name``: annotations for browsing
+- ``channel_name``, ``pixel_unit``, ``pixel_size_x/y/z``,
+  ``num_pixels_x/y/z``, ``sample``, ``tile``: annotations for browsing,
+  the first ones as Fiji's own "Create MoBIE Collection Table" writes them
 
 Usage
 -----
@@ -50,10 +53,21 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
 
+# Order and annotation columns as Fiji's MoBIE > Create > Create MoBIE
+# Collection Table writes them.
 COLUMNS = [
     "uri",
-    "channel",
+    "type",
     "name",
+    "channel_name",
+    "pixel_unit",
+    "pixel_size_x",
+    "pixel_size_y",
+    "pixel_size_z",
+    "num_pixels_x",
+    "num_pixels_y",
+    "num_pixels_z",
+    "channel",
     "view",
     "display",
     "color",
@@ -61,15 +75,14 @@ COLUMNS = [
     "exclusive",
     "sample",
     "tile",
-    "channel_name",
 ]
 
 # (upper wavelength bound in nm, MoBIE color)
 WAVELENGTH_COLORS = [
-    (460, "blue"),
-    (530, "green"),
-    (600, "red"),
-    (10_000, "magenta"),
+    (460, "Blue"),
+    (530, "Green"),
+    (600, "Red"),
+    (10_000, "Magenta"),
 ]
 
 
@@ -87,12 +100,21 @@ class SetupInfo:
         Name of its tile, empty if the XML has no tile attribute.
     channel : str
         Name of its channel, empty if the XML has no channel attribute.
+    unit : str
+        Unit of the voxel size, e.g. ``µm``.
+    voxel : tuple of str
+        Voxel size x, y, z, as written in the XML.
+    size : tuple of str
+        Image size in pixels x, y, z, as written in the XML.
     """
 
     index: int
     name: str
     tile: str
     channel: str
+    unit: str = ""
+    voxel: tuple[str, str, str] = ("", "", "")
+    size: tuple[str, str, str] = ("", "", "")
 
 
 def read_setups(xml_path: Path):
@@ -142,11 +164,32 @@ def read_setups(xml_path: Path):
             return attr_names.get(kind, {}).get(value, value)
 
         name = (el.findtext("name") or "").strip()
-        setups.append((sid, name, attr("tile"), attr("channel")))
+        size = (el.findtext("size") or "").split()
+        voxel = (el.findtext("voxelSize/size") or "").split()
+        unit = (el.findtext("voxelSize/unit") or "").strip()
+        setups.append(
+            (
+                sid,
+                name,
+                attr("tile"),
+                attr("channel"),
+                unit,
+                tuple(voxel) if len(voxel) == 3 else ("", "", ""),
+                tuple(size) if len(size) == 3 else ("", "", ""),
+            )
+        )
     setups.sort()
     return [
-        SetupInfo(index=i, name=name or f"setup{sid}", tile=tile, channel=ch)
-        for i, (sid, name, tile, ch) in enumerate(setups)
+        SetupInfo(
+            index=i,
+            name=name or f"setup{sid}",
+            tile=tile,
+            channel=ch,
+            unit=unit,
+            voxel=voxel,
+            size=size,
+        )
+        for i, (sid, name, tile, ch, unit, voxel, size) in enumerate(setups)
     ]
 
 
@@ -161,12 +204,12 @@ def channel_color(channel: str) -> str:
     Returns
     -------
     str
-        ``blue``, ``green``, ``red`` or ``magenta`` by wavelength;
-        ``white`` if the name holds no plausible wavelength.
+        ``Blue``, ``Green``, ``Red`` or ``Magenta`` by wavelength;
+        ``White`` if the name holds no plausible wavelength.
     """
     m = re.search(r"\d{3}", channel)
     if not m or not 300 <= int(m.group()) <= 1000:
-        return "white"
+        return "White"
     nm = int(m.group())
     return next(color for limit, color in WAVELENGTH_COLORS if nm < limit)
 
@@ -244,8 +287,8 @@ def main(argv=None):
     p.add_argument(
         "--contrast-limits",
         metavar="MIN,MAX",
-        help="initial contrast for every channel, e.g. 100,5000 "
-        "(default: auto)",
+        help="initial contrast for every channel, e.g. 100,5000, or "
+        "'auto' (default: empty, MoBIE's own default)",
     )
     p.add_argument(
         "--not-exclusive",
@@ -273,8 +316,10 @@ def main(argv=None):
     if not xmls:
         sys.exit(f"No BDV XML below {root}")
 
-    contrast = "auto"
-    if args.contrast_limits:
+    contrast = ""
+    if args.contrast_limits == "auto":
+        contrast = "auto"
+    elif args.contrast_limits:
         lo, hi = (float(v) for v in args.contrast_limits.split(","))
         contrast = f"({lo:g},{hi:g})"
 
@@ -299,8 +344,18 @@ def main(argv=None):
             rows.append(
                 {
                     "uri": uri,
-                    "channel": s.index,
+                    "type": "intensities",
                     "name": f"{view}_{s.name}",
+                    "channel_name": s.channel,
+                    # MoBIE reads "um"; BDV XMLs often say "µm".
+                    "pixel_unit": "um" if s.unit in ("µm", "μm") else s.unit,
+                    "pixel_size_x": s.voxel[0],
+                    "pixel_size_y": s.voxel[1],
+                    "pixel_size_z": s.voxel[2],
+                    "num_pixels_x": s.size[0],
+                    "num_pixels_y": s.size[1],
+                    "num_pixels_z": s.size[2],
+                    "channel": s.index,
                     "view": view,
                     "display": f"{view}_{s.channel}" if s.channel else view,
                     "color": channel_color(s.channel),
@@ -308,7 +363,6 @@ def main(argv=None):
                     "exclusive": "false" if args.not_exclusive else "true",
                     "sample": view,
                     "tile": s.tile,
-                    "channel_name": s.channel,
                 }
             )
         tiles = {st.tile for st in setups}
