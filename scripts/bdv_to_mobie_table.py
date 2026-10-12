@@ -116,7 +116,7 @@ COORD_RE = {
     )
     for axis in "xyz"
 }
-ID_KEYS = ("id", "spotid", "name", "label", "index")
+ID_KEYS = ("id", "spotid", "position", "name", "label", "index")
 
 
 @dataclass
@@ -416,10 +416,12 @@ def read_positions(path: Path):
     """Read spot coordinates from a ``positions.xml``.
 
     The format is not fixed, so every element is checked for x and y
-    values, as attributes (``<Spot x="1" y="2"/>``) or as child elements
-    (``<Position><X>1</X><Y>2</Y></Position>``), under the usual names
-    (``x``, ``PosX``, ``PositionX``, ``X_um``, ...). The element type
-    with the most such matches holds the spots.
+    values, as attributes (``<Spot x="1" y="2"/>``), as child elements
+    (``<Position><X>1</X><Y>2</Y></Position>``) or as LabVIEW name/value
+    pairs, as ScanR writes them (``<Cluster><DBL><Name>X</Name>
+    <Val>1</Val></DBL>...``), under the usual names (``x``, ``PosX``,
+    ``PositionX``, ``X_um``, ...). The element type with the most such
+    matches holds the spots.
 
     Parameters
     ----------
@@ -429,27 +431,51 @@ def read_positions(path: Path):
     Returns
     -------
     list of dict
-        ``spot_id``, ``x``, ``y`` and ``z`` (None if absent) per spot.
+        ``spot_id``, ``x``, ``y`` and ``z`` (None if absent) per spot,
+        and ``extra``: the element's other values (e.g. ``well``), kept
+        as extra columns of the spots table.
     """
     try:
         root = ET.parse(path).getroot()
     except ET.ParseError as e:
         sys.exit(f"{path}: not readable as XML ({e})")
 
+    def local(el):
+        return el.tag.rsplit("}", 1)[-1]
+
     def values(el):
-        found = {}
+        found = {"extra": {}}
+        ids = {}
         items = [(k, v) for k, v in el.attrib.items()]
-        items += [(c.tag, c.text or "") for c in el if len(c) == 0]
+        for c in el:
+            if len(c) == 0:
+                items.append((c.tag, c.text or ""))
+                continue
+            # LabVIEW clusters: <DBL><Name>X</Name><Val>1.5</Val></DBL>
+            sub = {local(g): (g.text or "") for g in c}
+            if "Name" in sub and "Val" in sub:
+                items.append((sub["Name"], sub["Val"]))
         for k, v in items:
-            k = _key(k)
+            raw, k, v = k, _key(k), v.strip()
+            is_coord = False
             for axis, rx in COORD_RE.items():
                 if axis not in found and rx.match(k):
                     try:
-                        found[axis] = float(v.strip().replace(",", "."))
+                        found[axis] = float(v.replace(",", "."))
+                        is_coord = True
                     except ValueError:
                         pass
-            if k in ID_KEYS and "spot_id" not in found:
-                found["spot_id"] = v.strip()
+            if is_coord:
+                continue
+            if k in ID_KEYS:
+                ids[k] = v
+            if v and len(v) < 64:
+                found["extra"][_key(raw)] = v
+        # Most specific id name first: "id" before "position" before "name".
+        for k in ID_KEYS:
+            if ids.get(k):
+                found["spot_id"] = ids[k]
+                break
         return found
 
     by_tag: dict[str, list[dict]] = {}
@@ -460,6 +486,13 @@ def read_positions(path: Path):
     if not by_tag:
         return []
     spots = max(by_tag.values(), key=len)
+    # Drop values shared by all spots (element names, counts...).
+    if len(spots) > 1:
+        keys = {k for p in spots for k in p["extra"]}
+        for k in keys:
+            if len({p["extra"].get(k) for p in spots}) == 1:
+                for p in spots:
+                    p["extra"].pop(k, None)
     for i, s in enumerate(spots, 1):
         s.setdefault("z", None)
         # MoBIE needs numeric, unique spot ids.
@@ -535,6 +568,133 @@ def view_names(paths: list[Path], level: int = 1):
     }
     names = dedupe(names, lambda x: below[x])
     return dedupe(names, lambda x: f"{below[x]}_{x.stem}")
+
+
+def tile_geometry(xml_path: Path):
+    """Where each tile of a BDV XML sits, in µm and in world coordinates.
+
+    Parameters
+    ----------
+    xml_path : Path
+        A BDV XML whose tiles carry a ``<location>``, as the ones
+        ``tifs_to_bdv.py`` writes from the stage positions.
+
+    Returns
+    -------
+    list of dict
+        Per tile: ``name``, ``loc`` (x, y of its ``<location>``),
+        ``corner`` and ``center`` (x, y in world coordinates, through its
+        registration). Empty if the tiles have no location.
+    """
+    root = ET.parse(xml_path).getroot()
+    regs = registrations(root)
+    locs, names = {}, {}
+    for t in root.iter("Tile"):
+        tid = (t.findtext("id") or "").strip()
+        loc = (t.findtext("location") or "").split()
+        names[tid] = (t.findtext("name") or tid).strip()
+        if len(loc) >= 2:
+            locs[tid] = (float(loc[0]), float(loc[1]))
+    tiles, seen = [], set()
+    for vs in root.iter("ViewSetup"):
+        tid = (vs.findtext("attributes/tile") or "").strip()
+        if tid not in locs or tid in seen:
+            continue
+        seen.add(tid)
+        m = regs.get(int(vs.findtext("id")), IDENTITY)
+        sx, sy = (int(v) for v in vs.findtext("size").split()[:2])
+
+        def world(x, y, m=m):
+            return (m[0] * x + m[1] * y + m[3], m[4] * x + m[5] * y + m[7])
+
+        tiles.append(
+            {
+                "name": names[tid],
+                "loc": locs[tid],
+                "corner": world(0, 0),
+                "center": world(sx / 2, sy / 2),
+            }
+        )
+    return tiles
+
+
+def map_spots_to_tiles(spots, tiles):
+    """Map stage coordinates onto the tiles they were acquired at.
+
+    The tile locations ``tifs_to_bdv.py`` writes are the stage positions
+    minus their minimum, possibly with axes flipped or swapped. Every
+    orientation is tried; for each, the offset that makes the most spots
+    land exactly on a tile location wins. The spots then go to the
+    centre of their tile in world coordinates -- a ScanR stage position
+    is the centre of the field, while the tile is placed by its corner.
+
+    Parameters
+    ----------
+    spots : list of dict
+        Spots with stage ``x`` and ``y`` (µm).
+    tiles : list of dict
+        Output of `tile_geometry`.
+
+    Returns
+    -------
+    list of dict or None
+        Per spot: ``x``, ``y`` (world) and ``tile``; None if fewer than
+        half the spots match a tile, i.e. the spots are not tile
+        positions.
+    """
+    if len(tiles) < 2:
+        return None
+    by_loc = {(round(t["loc"][0], 1), round(t["loc"][1], 1)): t for t in tiles}
+    best = (0, None, None)
+    for swap in (False, True):
+        for fx in (1, -1):
+            for fy in (1, -1):
+
+                def orient(p, swap=swap, fx=fx, fy=fy):
+                    a, b = (p["y"], p["x"]) if swap else (p["x"], p["y"])
+                    return fx * a, fy * b
+
+                votes: dict[tuple, int] = {}
+                for p in spots:
+                    a, b = orient(p)
+                    for lx, ly in by_loc:
+                        key = (round(lx - a, 1), round(ly - b, 1))
+                        votes[key] = votes.get(key, 0) + 1
+                offset, n = max(votes.items(), key=lambda kv: kv[1])
+                if n > best[0]:
+                    best = (n, orient, offset)
+    n, orient, (ox, oy) = best
+    if n < max(2, len(spots) / 2):
+        return None
+
+    # Spots on a tile go to its centre; others (if any) are placed with
+    # the location -> world scale fitted on the tiles.
+    t0, t1 = (
+        tiles[0],
+        max(tiles, key=lambda t: abs(t["loc"][0] - tiles[0]["loc"][0])),
+    )
+    span = t1["loc"][0] - t0["loc"][0]
+    scale = (t1["corner"][0] - t0["corner"][0]) / span if span else 1.0
+    out = []
+    for p in spots:
+        a, b = orient(p)
+        lx, ly = round(a + ox, 1), round(b + oy, 1)
+        t = by_loc.get((lx, ly))
+        if t is not None:
+            out.append(
+                {"x": t["center"][0], "y": t["center"][1], "tile": t["name"]}
+            )
+        else:
+            half_x = t0["center"][0] - t0["corner"][0]
+            half_y = t0["center"][1] - t0["corner"][1]
+            out.append(
+                {
+                    "x": t0["corner"][0] + (lx - t0["loc"][0]) * scale + half_x,
+                    "y": t0["corner"][1] + (ly - t0["loc"][1]) * scale + half_y,
+                    "tile": "",
+                }
+            )
+    return out
 
 
 def pick_reference(sources, wanted: str | None):
@@ -654,10 +814,6 @@ def main(argv=None):
             if not spots:
                 print(f"WARNING: no x/y coordinates recognised in {x}")
                 continue
-            for s in spots:
-                for axis in "xyz":
-                    if s[axis] is not None:
-                        s[axis] *= args.spot_scale
             sources.append(Source(path=x, kind="spots", spots=spots))
     if not sources:
         sys.exit(f"No BDV XML or positions.xml below {root}")
@@ -667,25 +823,46 @@ def main(argv=None):
         s.view = names[s.path]
         s.sample = s.path.parent.parent
 
-    # 2D datasets and z-less spots go to the middle of the 3D reference.
+    # 2D datasets and spots go to the middle of the 3D reference; spots
+    # at stage positions are mapped onto the reference's tiles.
     by_sample: dict[Path, list[Source]] = {}
     for s in sources:
         by_sample.setdefault(s.sample, []).append(s)
     notes = []
     for members in by_sample.values():
         ref = pick_reference(members, args.reference)
-        if ref is None:
-            continue
-        lo, hi = ref.z_range
-        mid = (lo + hi) / 2
+        mid = None
+        if ref is not None:
+            lo, hi = ref.z_range
+            mid = (lo + hi) / 2
         for s in members:
-            if s.kind == "intensities" and not s.is_3d:
+            if s.kind == "intensities" and not s.is_3d and ref is not None:
                 s.dz = mid - s.z_range[0]
                 notes.append(
                     f"{s.view}: 2D, moved by z {fmt(s.dz)} to the middle "
                     f"of {ref.view} (z {fmt(lo)}..{fmt(hi)})"
                 )
-            elif s.kind == "spots" and any(p["z"] is None for p in s.spots):
+            if s.kind != "spots":
+                continue
+            mapped = None
+            if ref is not None:
+                mapped = map_spots_to_tiles(s.spots, tile_geometry(ref.path))
+            if mapped is not None:
+                on_tile = sum(1 for m in mapped if m["tile"])
+                for p, m in zip(s.spots, mapped, strict=True):
+                    p["x"], p["y"], p["z"] = m["x"], m["y"], mid
+                    p["extra"]["tile"] = m["tile"]
+                notes.append(
+                    f"{s.view}: stage positions matched to {on_tile}/"
+                    f"{len(mapped)} tiles of {ref.view}; spots at the tile "
+                    f"centres, z {fmt(mid)} (middle of the stack)"
+                )
+                continue
+            for p in s.spots:
+                for axis in "xyz":
+                    if p[axis] is not None:
+                        p[axis] *= args.spot_scale
+            if ref is not None and any(p["z"] is None for p in s.spots):
                 for p in s.spots:
                     if p["z"] is None:
                         p["z"] = mid
@@ -693,6 +870,15 @@ def main(argv=None):
                     f"{s.view}: spots without z put at z {fmt(mid)}, the "
                     f"middle of {ref.view}"
                 )
+            if ref is not None:
+                xs = [t["corner"][0] for t in tile_geometry(ref.path)]
+                if xs:
+                    notes.append(
+                        f"{s.view}: spots are not tile positions; taken as "
+                        f"they are (x*{fmt(args.spot_scale)}). Compare with "
+                        f"{ref.view} tiles at world x {fmt(min(xs))}.."
+                        f"{fmt(max(xs))}"
+                    )
 
     contrast = ""
     if args.contrast_limits == "auto":
@@ -813,12 +999,21 @@ def main(argv=None):
         return
 
     for table, spots in spot_tables.items():
+        extras = list(
+            dict.fromkeys(
+                k
+                for p in spots
+                for k in p["extra"]
+                if k not in ("spotid", "x", "y", "z")
+            )
+        )
         with open(table, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f, delimiter="\t")
-            writer.writerow(["spot_id", "x", "y", "z"])
-            for s in spots:
+            writer.writerow(["spot_id", "x", "y", "z", *extras])
+            for p in spots:
                 writer.writerow(
-                    [s["spot_id"], fmt(s["x"]), fmt(s["y"]), fmt(s["z"] or 0)]
+                    [p["spot_id"], fmt(p["x"]), fmt(p["y"]), fmt(p["z"] or 0)]
+                    + [p["extra"].get(k, "") for k in extras]
                 )
         print(f"Wrote {table} ({len(spots)} spots)")
 

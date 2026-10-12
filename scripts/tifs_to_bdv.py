@@ -53,7 +53,8 @@ To add a pyramid to an existing BDV H5/XML that has none (e.g. a fused
 BigStitcher export), pass the .xml instead of a folder. Level 0 is kept,
 the lower levels are added to the same .h5::
 
-    uv run scripts/tifs_to_bdv.py /data/Scan/fused_bdv.xml
+    uv run scripts/tifs_to_bdv.py /data/Scan/fused_bdv.xml --dry-run  # report
+    uv run scripts/tifs_to_bdv.py /data/Scan/fused_bdv.xml            # add
 
 Without uv: ``pip install numpy h5py tifffile`` and run it with python.
 Only uint8/uint16 images are supported (BDV HDF5 stores uint16).
@@ -771,7 +772,7 @@ def downsample(src, dst, rel_zyx):
             dst[z0:z1, y0:y1] = block.view(np.int16) if as_u16 else block
 
 
-def add_pyramid(xml_path: Path, overwrite: bool = False):
+def add_pyramid(xml_path: Path, overwrite: bool = False, dry_run: bool = False):
     """Add a multiresolution pyramid to an existing BDV H5/XML.
 
     For a file written without one (e.g. a fused BigStitcher export):
@@ -787,6 +788,8 @@ def add_pyramid(xml_path: Path, overwrite: bool = False):
     overwrite : bool, optional
         Rebuild the levels of setups that already have a pyramid.
         Without it, those setups are left alone.
+    dry_run : bool, optional
+        Only report the levels each setup has; change nothing.
     """
     root = ET.parse(xml_path).getroot()
     el = root.find("SequenceDescription/ImageLoader/hdf5")
@@ -806,12 +809,19 @@ def add_pyramid(xml_path: Path, overwrite: bool = False):
         setups[int(vs.findtext("id"))] = (size, voxel)
 
     t0 = time.time()
-    with h5py.File(h5_path, "r+") as h5:
+    with h5py.File(h5_path, "r" if dry_run else "r+") as h5:
         for sid, (size, voxel) in sorted(setups.items()):
             sname = f"s{sid:02d}"
             if sname not in h5:
                 continue
             levels = len(h5[f"{sname}/resolutions"])
+            if dry_run:
+                factors = h5[f"{sname}/resolutions"][()].astype(int).tolist()
+                print(
+                    f"  {sname}: {levels} level(s), downsampling "
+                    + ", ".join("x".join(map(str, f)) for f in factors)
+                )
+                continue
             if levels > 1 and not overwrite:
                 print(f"  {sname}: already {levels} levels, skipped")
                 continue
@@ -861,7 +871,8 @@ def add_pyramid(xml_path: Path, overwrite: bool = False):
                 f"({(time.time() - t0) / 60:.1f} min)",
                 flush=True,
             )
-    print(f"Done: {h5_path}")
+    if not dry_run:
+        print(f"Done: {h5_path}")
 
 
 def write_setup_meta(h5, setup: Setup):
@@ -1347,7 +1358,7 @@ def main(argv=None):
 
     folder = args.folder
     if folder.is_file() and folder.suffix.lower() == ".xml":
-        add_pyramid(folder, overwrite=args.overwrite)
+        add_pyramid(folder, overwrite=args.overwrite, dry_run=args.dry_run)
         return
     if not folder.is_dir():
         sys.exit(f"Not a folder: {folder}")
