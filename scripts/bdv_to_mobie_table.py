@@ -17,6 +17,14 @@ table has one row per setup: with 168 tiles and 4 channels, 672 rows per
 XML. Tiles of the same channel share one ``display``, so a single contrast
 and color setting controls the whole channel.
 
+**One correlative view per sample.** Datasets are grouped by *sample*
+(the folder above their own) and all shown in one view named after it,
+overlaid. Everything is put in µm: BDV XMLs count world units in pixels
+(of 0.065 µm for one, 0.108 µm for another), so each dataset's
+``affine`` scales its pixels to µm. ``--offset Scan=DX,DY`` shifts a
+dataset (by its folder name) to line it up; ``--separate-views`` gives
+each dataset its own view instead.
+
 **2D in 3D.** Datasets are grouped by *sample*: the folder above their own
 (``ScanR/Acquisition`` and ``ScanR/Scan`` are both in sample ``ScanR``).
 Within a sample, every 2D dataset (one z plane) is shifted along z to the
@@ -41,12 +49,13 @@ Columns written (see https://mobie.github.io/tutorials/mobie_collection_table.ht
 - ``type``: ``intensities`` or ``spots``
 - ``channel``: setup index in the XML
 - ``name``: ``<view>_<setup name>``, unique per row
-- ``view``: the view name -- all rows of one XML are shown together
+- ``view``: the sample -- all its datasets are shown together
 - ``display``: ``<view>_<channel>``, shared by all tiles of a channel
 - ``color``: from the channel's wavelength (405 Blue, 488 Green, ...)
 - ``contrast_limits``: empty (MoBIE's default) unless ``--contrast-limits``
 - ``spot_radius``: for spots
-- ``affine``: the z shift of 2D datasets, empty otherwise
+- ``affine``: pixel -> µm scaling, ``--offset`` and the z shift of 2D
+  datasets
 - ``channel_name``, ``pixel_unit``, ``pixel_size_x/y/z``,
   ``num_pixels_x/y/z``, ``sample``, ``tile``: annotations for browsing,
   the first ones as Fiji's own "Create MoBIE Collection Table" writes them
@@ -142,6 +151,9 @@ class SetupInfo:
     z_range : tuple of float
         Lowest and highest z the setup covers in world coordinates,
         through its registration at the first timepoint.
+    um_per_world : float
+        Size of one world unit in µm: XMLs written by ``tifs_to_bdv.py``
+        or BigStitcher count world units in pixels, not µm.
     """
 
     index: int
@@ -152,6 +164,7 @@ class SetupInfo:
     voxel: tuple[str, str, str] = ("", "", "")
     size: tuple[str, str, str] = ("", "", "")
     z_range: tuple[float, float] = (0.0, 0.0)
+    um_per_world: float = 1.0
 
 
 @dataclass
@@ -173,8 +186,10 @@ class Source:
     spots : list of dict
         ``spot_id``, ``x``, ``y``, ``z`` (None if absent) of a spots set.
     dz : float
-        z shift applied to put a 2D dataset (or z-less spots) in the
-        middle of the sample's 3D reference.
+        z shift (µm) that puts a 2D dataset in the middle of the
+        sample's 3D reference.
+    offset : tuple of float
+        Extra x, y, z shift in µm, from ``--offset``.
     """
 
     path: Path
@@ -184,6 +199,7 @@ class Source:
     setups: list[SetupInfo] = field(default_factory=list)
     spots: list[dict] = field(default_factory=list)
     dz: float = 0.0
+    offset: tuple[float, float, float] = (0.0, 0.0, 0.0)
 
     @property
     def is_3d(self):
@@ -197,6 +213,27 @@ class Source:
             min(s.z_range[0] for s in self.setups),
             max(s.z_range[1] for s in self.setups),
         )
+
+    @property
+    def scale(self):
+        """µm per world unit of this XML."""
+        return self.setups[0].um_per_world if self.setups else 1.0
+
+    @property
+    def z_range_um(self):
+        """z range in µm, offset included."""
+        lo, hi = self.z_range
+        return lo * self.scale + self.offset[2], hi * self.scale + self.offset[
+            2
+        ]
+
+    def affine(self):
+        """MoBIE ``affine`` cell: world units to µm, then the shifts."""
+        sc, (ox, oy, oz) = self.scale, self.offset
+        if sc == 1 and not (ox or oy or oz or self.dz):
+            return ""
+        values = (sc, 0, 0, ox, 0, sc, 0, oy, 0, 0, sc, oz + self.dz)
+        return "(" + ",".join(fmt(v) for v in values) + ")"
 
 
 # --------------------------------------------------------------------------
@@ -283,6 +320,44 @@ def world_z_range(m, size):
     return min(zs), max(zs)
 
 
+UNIT_TO_UM = {
+    "µm": 1.0,
+    "μm": 1.0,
+    "um": 1.0,
+    "micron": 1.0,
+    "nm": 1e-3,
+    "mm": 1e3,
+}
+
+
+def um_per_world(m, voxel, unit):
+    """Size of one world unit in µm, for a setup.
+
+    A pixel is ``voxel[0]`` µm wide and the registration maps it to
+    ``|m[:, 0]|`` world units, so a world unit is their ratio.
+
+    Parameters
+    ----------
+    m : sequence of float
+        The setup's row-packed 3x4 registration.
+    voxel : list of str
+        Voxel size x, y, z from the XML.
+    unit : str
+        Unit of the voxel size.
+
+    Returns
+    -------
+    float
+        µm per world unit; 1 if the voxel size is unknown.
+    """
+    try:
+        vx = float(voxel[0]) * UNIT_TO_UM.get(unit, 1.0)
+    except (IndexError, ValueError):
+        return 1.0
+    norm = (m[0] ** 2 + m[4] ** 2 + m[8] ** 2) ** 0.5
+    return vx / norm if norm else 1.0
+
+
 def read_setups(xml_path: Path):
     """Read the view setups of a BDV XML.
 
@@ -345,6 +420,11 @@ def read_setups(xml_path: Path):
                     voxel=tuple(voxel) if len(voxel) == 3 else ("", "", ""),
                     size=size,
                     z_range=world_z_range(regs.get(sid, IDENTITY), size),
+                    um_per_world=um_per_world(
+                        regs.get(sid, IDENTITY),
+                        voxel,
+                        (el.findtext("voxelSize/unit") or "").strip(),
+                    ),
                 ),
             )
         )
@@ -697,6 +777,28 @@ def map_spots_to_tiles(spots, tiles):
     return out
 
 
+def match_sources(sources, key: str):
+    """Datasets named by ``key``.
+
+    The dataset's own folder name is compared first, exactly (``Scan``
+    is the ``Scan`` folder, not ``ScanR/Acquisition``); only if none
+    matches, any view name containing ``key``.
+
+    Parameters
+    ----------
+    sources : list of Source
+    key : str
+        Case-insensitive name.
+
+    Returns
+    -------
+    list of Source
+    """
+    key = key.lower()
+    exact = [s for s in sources if s.path.parent.name.lower() == key]
+    return exact or [s for s in sources if key in s.view.lower()]
+
+
 def pick_reference(sources, wanted: str | None):
     """The 3D dataset 2D data of a sample is centred on.
 
@@ -716,8 +818,7 @@ def pick_reference(sources, wanted: str | None):
     stacks = [s for s in sources if s.kind == "intensities" and s.is_3d]
     if not stacks:
         return None
-    key = (wanted or "scan").lower()
-    named = [s for s in stacks if key in s.view.lower()]
+    named = match_sources(stacks, wanted or "scan")
     if named:
         return named[0]
     if wanted:
@@ -776,6 +877,19 @@ def main(argv=None):
         "view name (default: the one with 'scan' in it, else the only one)",
     )
     p.add_argument(
+        "--offset",
+        action="append",
+        default=[],
+        metavar="NAME=DX,DY[,DZ]",
+        help="shift the datasets whose view name contains NAME by DX, DY "
+        "(and DZ) µm, e.g. Scan=120,-35; repeatable",
+    )
+    p.add_argument(
+        "--separate-views",
+        action="store_true",
+        help="one view per dataset instead of one overlaid view per sample",
+    )
+    p.add_argument(
         "--spot-radius",
         type=float,
         default=10.0,
@@ -822,6 +936,18 @@ def main(argv=None):
     for s in sources:
         s.view = names[s.path]
         s.sample = s.path.parent.parent
+    for spec in args.offset:
+        key, _, values = spec.partition("=")
+        try:
+            vals = [float(v) for v in values.split(",")]
+        except ValueError:
+            sys.exit(f"--offset {spec}: expected NAME=DX,DY[,DZ]")
+        vals = (vals + [0.0, 0.0, 0.0])[:3]
+        hits = match_sources(sources, key)
+        if not hits:
+            sys.exit(f"--offset {spec}: no dataset named like '{key}'")
+        for s in hits:
+            s.offset = tuple(vals)
 
     # 2D datasets and spots go to the middle of the 3D reference; spots
     # at stage positions are mapped onto the reference's tiles.
@@ -833,14 +959,14 @@ def main(argv=None):
         ref = pick_reference(members, args.reference)
         mid = None
         if ref is not None:
-            lo, hi = ref.z_range
+            lo, hi = ref.z_range_um
             mid = (lo + hi) / 2
         for s in members:
             if s.kind == "intensities" and not s.is_3d and ref is not None:
-                s.dz = mid - s.z_range[0]
+                s.dz = mid - s.z_range_um[0]
                 notes.append(
                     f"{s.view}: 2D, moved by z {fmt(s.dz)} to the middle "
-                    f"of {ref.view} (z {fmt(lo)}..{fmt(hi)})"
+                    f"of {ref.view} (z {fmt(lo)}..{fmt(hi)} µm)"
                 )
             if s.kind != "spots":
                 continue
@@ -849,8 +975,14 @@ def main(argv=None):
                 mapped = map_spots_to_tiles(s.spots, tile_geometry(ref.path))
             if mapped is not None:
                 on_tile = sum(1 for m in mapped if m["tile"])
+                # World units of the reference -> µm, as its images.
+                sc, (ox, oy, _) = ref.scale, ref.offset
                 for p, m in zip(s.spots, mapped, strict=True):
-                    p["x"], p["y"], p["z"] = m["x"], m["y"], mid
+                    p["x"], p["y"], p["z"] = (
+                        m["x"] * sc + ox,
+                        m["y"] * sc + oy,
+                        mid,
+                    )
                     p["extra"]["tile"] = m["tile"]
                 notes.append(
                     f"{s.view}: stage positions matched to {on_tile}/"
@@ -871,13 +1003,16 @@ def main(argv=None):
                     f"middle of {ref.view}"
                 )
             if ref is not None:
-                xs = [t["corner"][0] for t in tile_geometry(ref.path)]
+                xs = [
+                    t["corner"][0] * ref.scale + ref.offset[0]
+                    for t in tile_geometry(ref.path)
+                ]
                 if xs:
                     notes.append(
                         f"{s.view}: spots are not tile positions; taken as "
                         f"they are (x*{fmt(args.spot_scale)}). Compare with "
-                        f"{ref.view} tiles at world x {fmt(min(xs))}.."
-                        f"{fmt(max(xs))}"
+                        f"{ref.view} tiles at x {fmt(min(xs))}.."
+                        f"{fmt(max(xs))} µm"
                     )
 
     contrast = ""
@@ -897,6 +1032,10 @@ def main(argv=None):
                 f"{path} is not below the table's folder {out.parent}; "
                 "pass --absolute or write the table higher up."
             )
+
+    def view_of(src):
+        # One overlaid view per sample, so all acquisitions correlate.
+        return src.view if args.separate_views else src.sample.name
 
     rows = []
     problems = []
@@ -918,7 +1057,7 @@ def main(argv=None):
                     "uri": rel(table),
                     "type": "spots",
                     "name": src.view,
-                    "view": src.view,
+                    "view": view_of(src),
                     "display": src.view,
                     "spot_radius": fmt(args.spot_radius),
                     "sample": src.sample.name,
@@ -929,10 +1068,7 @@ def main(argv=None):
         problem = check_image_file(src.path)
         if problem:
             problems.append(problem)
-        affine = ""
-        if src.dz:
-            affine = "(" + ",".join(fmt(v) for v in IDENTITY[:11]) + ","
-            affine += fmt(src.dz) + ")"
+        affine = src.affine()
         for s in src.setups:
             rows.append(
                 {
@@ -949,7 +1085,7 @@ def main(argv=None):
                     "num_pixels_y": s.size[1],
                     "num_pixels_z": s.size[2],
                     "channel": s.index,
-                    "view": src.view,
+                    "view": view_of(src),
                     "display": f"{src.view}_{s.channel}"
                     if s.channel
                     else src.view,
@@ -962,12 +1098,13 @@ def main(argv=None):
             )
         tiles = {st.tile for st in src.setups}
         chans = dict.fromkeys(st.channel for st in src.setups)
-        lo, hi = src.z_range
+        lo, hi = src.z_range_um
         print(
             f"      {len(src.setups)} rows: {len(tiles)} tile(s) x "
             f"{len(chans)} channel(s): "
             + ", ".join(f"{c or 'unnamed'} ({channel_color(c)})" for c in chans)
-            + f"; {'3D' if src.is_3d else '2D'}, z {fmt(lo)}..{fmt(hi)}"
+            + f"; {'3D' if src.is_3d else '2D'}, z {fmt(lo)}..{fmt(hi)} µm, "
+            f"{fmt(src.scale)} µm per world unit"
         )
 
     if notes:
