@@ -1,19 +1,60 @@
 # One segmentation: `pixi run dry`, then `pixi run slurm`.
-# Anything not set here has a default (all settings: docs/guide/snakemake.md).
+# Remove the # to change a setting; the rest keep their defaults.
 
 input: "/path/to/scan.ims" # .ims .czi .lif .nd2 OME-TIFF .zarr, or a TIFF glob
 work_dir: "/path/to/results" # everything is written here
+# tile_shape: "auto"      # or [z, y, x], e.g. [16, 1024, 1024]
 
 label_name: "nuclei_labels" # the label image in image.zarr/labels/
 channel: 0
 overlap: [4, 30, 30] # halo per axis (z, y, x): about one object
+# method: "cellpose"      # or "threshold" (CPU, testing), "custom" (see config_cilia.yaml)
 cellpose:
   model: "nuclei" # Cellpose 3: cyto3, nuclei; Cellpose 4: cpsam
   diameter: 30 # pixels
   do_3D: true
+  # gpu: true
+  # anisotropy: null        # z step / pixel size; null: from the image
+  # flow3D_smooth: 1        # 3-D: smooth the flows; 0: off
+  # fragments: 0.1          # 3-D: fold objects under 10% of a cell into it; null: off
+  # cellprob_threshold: 0.0 # higher: fewer, tighter cells
+  # flow_threshold: 0.4     # 2-D only
+  # min_size: 15            # Cellpose's own size floor, in voxels
 
-# Often useful:
-# nuclei_channel: 1 # a second channel for Cellpose
-# min_volume: 50 # µm³: drop smaller objects
-# skip_empty: false # segment every tile, even ones that look empty
-# notify_email: "you@example.org"
+# ---- every other setting of this segmentation, with its default ----------
+# stitch: "touch"         # join pieces touching across a seam; "iou": only where both tiles agree
+# iou_threshold: 0.5      # with "iou": overlap needed, of the smaller piece
+# skip_empty: true        # skip tiles without signal
+# empty_threshold: null   # their cutoff, in intensity; null: Otsu of the channel
+# nuclei_channel: null    # a second channel (Cellpose, watershed, PlantSeg)
+# seed_labels: null       # or grow from a label image another config made
+# denoise: null           # {model: "n2v.ckpt"}: Noise2Void first (careamics environment)
+# normalize: "image"      # Cellpose: one intensity range for every tile; "tile": per tile
+# connectivity: 1         # 3: also join voxels touching at edges and corners
+# fill_holes: false       # true, or "per_plane"
+# open_radius: 0          # cut thin spurs (not for cilia)
+# dilate: 0               # grow labels by N pixels
+# dilate_gpu: false
+# min_volume: null        # µm³: drop smaller objects
+# max_volume: null        # µm³: drop larger objects
+# sequential_labels: true # number objects 1..N
+# object_table: true      # one row per object, stored with the labels
+# table_channels: []      # add mean/std intensity of these channels
+
+# ---- every other shared setting, with its default -------------------------
+# level: 0                # pyramid level to segment (0: full resolution)
+# gpu_memory_gb: null     # for tile_shape "auto": the GPU memory (default 8)
+# tiles_per_job: 4        # tiles per GPU job, sharing one model load
+# sequence_pattern: null  # a TIFF glob: regex with named axes
+# reuse_pyramid: false    # .ims: copy its own pyramid
+# convert_chunks: null
+# shard: false            # true: far fewer files
+# shard_labels: false     # also shard label level 0 (one extra pass)
+# ngff_version: "auto"    # or "0.4" for older readers
+# compression: "zstd"     # or "zstd:3", "blosc", "none"
+# pyramid_levels: 5
+# pyramid_downscale: 2
+# merge_workers: null     # null: from the job's CPUs and memory
+# seam_report: true       # seams.json: do objects end at tile seams?
+# notify_email: ""        # mail when the long steps finish or fail
+# notify_events: ["finish", "error"]

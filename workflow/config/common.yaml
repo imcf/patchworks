@@ -1,8 +1,24 @@
-# Settings shared by every segmentation in multi.yaml.
-# Anything not set here or in a segmentation's config has a default
-# (all settings: docs/guide/snakemake.md).
+# Settings shared by every segmentation in multi.yaml. Each segmentation's
+# own settings are in its config. Remove the # to change one.
 
 input: "/path/to/scan.ims" # .ims .czi .lif .nd2 OME-TIFF .zarr, or a TIFF glob
 work_dir: "/path/to/results" # everything is written here
 tile_shape: [16, 1024, 1024] # the same for every segmentation; "auto" sizes it
-# notify_email: "you@example.org" # mail when the run finishes or fails
+
+# ---- every other shared setting, with its default -------------------------
+# level: 0                # pyramid level to segment (0: full resolution)
+# gpu_memory_gb: null     # for tile_shape "auto": the GPU memory (default 8)
+# tiles_per_job: 4        # tiles per GPU job, sharing one model load
+# sequence_pattern: null  # a TIFF glob: regex with named axes
+# reuse_pyramid: false    # .ims: copy its own pyramid
+# convert_chunks: null
+# shard: false            # true: far fewer files
+# shard_labels: false     # also shard label level 0 (one extra pass)
+# ngff_version: "auto"    # or "0.4" for older readers
+# compression: "zstd"     # or "zstd:3", "blosc", "none"
+# pyramid_levels: 5
+# pyramid_downscale: 2
+# merge_workers: null     # null: from the job's CPUs and memory
+# seam_report: true       # seams.json: do objects end at tile seams?
+# notify_email: ""        # mail when the long steps finish or fail
+# notify_events: ["finish", "error"]
