@@ -1250,10 +1250,8 @@ def test_viewer_workspace_solves_everywhere():
     assert set(pixi["pypi-dependencies"]) == {"patchworks"}
     spec = pixi["pypi-dependencies"]["patchworks"]
     assert spec["extras"] == ["napari"]
-    floor = tuple(int(x) for x in spec["version"].removeprefix(">=").split("."))
-    assert spec["version"].startswith(">=") and floor >= (3, 0, 0), spec[
-        "version"
-    ]
+    # This clone's own patchworks, like the workflow's environments.
+    assert spec.get("path") == "../.." and spec.get("editable") is True, spec
 
     # It reuses the workflow's viewer script rather than duplicating it.
     task = pixi["tasks"]["napari"]
@@ -1424,7 +1422,7 @@ def test_pixi_manifests_require_the_patchworks_the_scripts_use():
 def _patchworks_is_recent(spec, floor):
     """The manifest takes patchworks from this clone, GitHub main, or a
     release >= floor."""
-    if spec.get("path") == "..":
+    if spec.get("path") in ("..", "../.."):
         return True
     if "git" in spec:
         return (

@@ -25,14 +25,9 @@ platforms = ["linux-64", "win-64", "osx-arm64", "osx-64"]
 [dependencies]
 python = "3.12.*"
 
-# >=3.1.0: opening a .zip bundle needs >=3.0.0 -- 2.8.0 read stores out of
-# a bundle but did not recognise the bundle itself as one, sent it to bioio
-# and failed with "reading .zip requires bioio". 3.1.0 adds the object
-# tables and `patchworks review`. Raising this floor is also what makes an
-# existing environment upgrade: pixi keeps whatever its lock file holds for
-# as long as that still satisfies the manifest.
+# This clone's own patchworks: `git pull` updates the viewer too.
 [pypi-dependencies]
-patchworks = { version = ">=3.1.0", extras = ["napari"] }
+patchworks = { path = "../..", editable = true, extras = ["napari"] }
 
 [tasks]
 # Tasks run with the manifest's directory as cwd, so this reaches the
