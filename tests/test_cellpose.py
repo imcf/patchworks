@@ -181,7 +181,9 @@ def test_3d_cellpose_folds_fragments_and_smooths_flows(monkeypatch):
     monkeypatch.setattr(
         cp, "_cellpose_models", type("M", (), {"CellposeModel": Model})
     )
-    out = cp.cellpose_fn("cpsam", do_3D=True)(np.zeros((10, 32, 32), "uint16"))
+    out = cp.cellpose_fn("cpsam", do_3D=True, diameter=30)(
+        np.zeros((10, 32, 32), "uint16")
+    )
     assert set(np.unique(out)) == {0, 1}
     assert model.smooth == 1
     # Off on request, and off by default in 2-D.
@@ -202,11 +204,16 @@ def test_applied_defaults_are_what_cellpose_fn_fills_in(monkeypatch):
     monkeypatch.setattr(
         cp, "_cellpose_models", type("M", (), {"CellposeModel": Model})
     )
-    assert cp.applied_defaults(True, {}) == {
+    assert cp.applied_defaults(True, {"diameter": 15}) == {
         "fragments": 0.1,
         "flow3D_smooth": 1,
     }
-    assert cp.applied_defaults(False, {}) == {"fragments": None}
+    # Without a diameter a cell's size is a guess: no folding.
+    assert cp.applied_defaults(True, {}) == {
+        "fragments": None,
+        "flow3D_smooth": 1,
+    }
+    assert cp.applied_defaults(False, {"diameter": 15}) == {"fragments": None}
     assert cp.applied_defaults(
         True, {"fragments": None, "flow3D_smooth": 0}
     ) == {"fragments": None}
