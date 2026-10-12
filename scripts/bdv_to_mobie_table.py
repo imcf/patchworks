@@ -4,12 +4,10 @@
 # ///
 """Make a MoBIE collection table from the BDV H5/XML files below a folder.
 
-Every BigDataViewer ``.xml`` found (recursively) becomes one *view*, named
-after the folder that holds it -- e.g. ``rescan_001/dataset.xml`` from
-``tifs_to_bdv.py`` gives the view ``rescan_001``. ``--name-level 2`` names
-it after the folder above instead, and so on. Selecting the view in
-MoBIE shows all its tiles and channels together, each tile at the
-position stored in the XML.
+Every BigDataViewer ``.xml`` found (recursively) becomes a dataset; its
+rows are named after the folders above it (``--name-level``), its view
+after its own folder. Selecting the view in MoBIE shows all its tiles and
+channels together.
 
 MoBIE loads one single-channel image per table row, and for a BDV XML its
 ``channel`` column picks a *view setup* (a tile in one channel). So the
@@ -17,30 +15,40 @@ table has one row per setup: with 168 tiles and 4 channels, 672 rows per
 XML. Tiles of the same channel share one ``display``, so a single contrast
 and color setting controls the whole channel.
 
-**One correlative view per sample.** Datasets are grouped by *sample*
-(the folder above their own) and all shown in one view named after it,
-overlaid. Everything is put in µm: BDV XMLs count world units in pixels
-(of 0.065 µm for one, 0.108 µm for another), so each dataset's
-``affine`` scales its pixels to µm. ``--offset Scan=DX,DY`` shifts a
-dataset (by its folder name) to line it up; ``--separate-views`` gives
-each dataset its own view instead.
+**Stage coordinates.** Everything is placed in the microscope's stage
+coordinates, in µm, so all acquisitions of a sample overlay:
 
-**2D in 3D.** Datasets are grouped by *sample*: the folder above their own
-(``ScanR/Acquisition`` and ``ScanR/Scan`` are both in sample ``ScanR``).
+- The tiled 3D dataset (the reference, see below) is put at its stage
+  position, from a ``positions.xml`` whose spots match its tiles, or
+  from absolute tile ``<location>``s (``tifs_to_bdv.py`` writes them;
+  ``--xml-only`` updates an older XML without touching its .h5).
+- A stitched 2D dataset with a ScanR ``metadata.ome.xml`` in its own
+  folder or elsewhere in the sample (e.g. the prescan ``Scan``) is put
+  on that ScanR field grid: centred on it, scaled so the fields land on
+  their stage positions. ``Scan`` is mirrored in x by default
+  (``--flip-x``/``--flip-y`` NAME change that).
+- Datasets with other calibrations are scaled from their pixels to µm.
+- ``--offset NAME=DX,DY`` fine-tunes a dataset (by its folder name).
+
+**Views.** The view of every dataset is the name of its folder
+(``Acquisition``, ``Scan``, ``Detection``, ...). All views share the
+stage coordinates, so showing several overlays them.
+
+**2D in 3D.** Datasets are grouped by *sample*, the folder above their
+own (``ScanR/Acquisition`` and ``ScanR/Scan`` are both in sample ``ScanR``).
 Within a sample, every 2D dataset (one z plane) is shifted along z to the
 middle of the sample's 3D dataset, through the ``affine`` column, so it
 sits inside the stack instead of at its top or bottom. If a sample has
 several 3D datasets, the one with "scan" in its name is the reference
 (``--reference`` picks another).
 
-**Spots.** A ``positions.xml`` alone in a folder (no BDV XML next to it)
-becomes a spots dataset: its coordinates are written to a
-``positions_spots.tsv`` next to it (``spot_id``, ``x``, ``y``, ``z``) and
-added with ``type`` ``spots`` and a ``spot_radius`` of 10. Spots without z
-are put at the middle of the sample's 3D dataset, like 2D images.
-Coordinates are taken as they are, so they must be in the same space as
-the images; the dry run prints both ranges to check, and
-``--spot-scale`` converts (e.g. µm to pixels).
+**Spots.** A ScanR ``metadata.ome.xml`` in a folder without images or
+BDV XML (e.g. ``Detection``) becomes a spots dataset: the distinct
+``PositionX``/``PositionY`` of its planes, in acquisition order, are
+written to ``detection_positions.tsv`` next to it (``spot_id``, ``x``,
+``y``, ``z``; tab-separated, as MoBIE reads ``.tsv``). A ``positions.xml``
+alone in a folder likewise becomes ``positions_spots.tsv``. Spots are in
+stage µm and drawn at mid-stack with a radius of 10 (``--spot-radius``).
 
 Columns written (see https://mobie.github.io/tutorials/mobie_collection_table.html):
 
@@ -49,13 +57,13 @@ Columns written (see https://mobie.github.io/tutorials/mobie_collection_table.ht
 - ``type``: ``intensities`` or ``spots``
 - ``channel``: setup index in the XML
 - ``name``: ``<view>_<setup name>``, unique per row
-- ``view``: the sample -- all its datasets are shown together
+- ``view``: the dataset's folder name
 - ``display``: ``<view>_<channel>``, shared by all tiles of a channel
 - ``color``: from the channel's wavelength (405 Blue, 488 Green, ...)
 - ``contrast_limits``: empty (MoBIE's default) unless ``--contrast-limits``
 - ``spot_radius``: for spots
-- ``affine``: pixel -> µm scaling, ``--offset`` and the z shift of 2D
-  datasets
+- ``affine``: from the XML's coordinates to stage µm (scaling, stage
+  position, flips, ``--offset``, z shift of 2D datasets)
 - ``channel_name``, ``pixel_unit``, ``pixel_size_x/y/z``,
   ``num_pixels_x/y/z``, ``sample``, ``tile``: annotations for browsing,
   the first ones as Fiji's own "Create MoBIE Collection Table" writes them
@@ -165,6 +173,7 @@ class SetupInfo:
     size: tuple[str, str, str] = ("", "", "")
     z_range: tuple[float, float] = (0.0, 0.0)
     um_per_world: float = 1.0
+    reg: tuple = IDENTITY
 
 
 @dataclass
@@ -200,6 +209,10 @@ class Source:
     spots: list[dict] = field(default_factory=list)
     dz: float = 0.0
     offset: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    flip: tuple[bool, bool] = (False, False)
+    meta: dict | None = None
+    matrix: tuple | None = None
+    table: Path | None = None
 
     @property
     def is_3d(self):
@@ -227,13 +240,45 @@ class Source:
             2
         ]
 
+    def xy_range(self):
+        """World x and y ranges covered by all setups together."""
+        xs, ys = [], []
+        for st in self.setups:
+            try:
+                dims = [max(int(v) - 1, 0) for v in st.size]
+            except ValueError:
+                dims = [0, 0, 0]
+            m = st.reg
+            for x in (0, dims[0]):
+                for y in (0, dims[1]):
+                    xs.append(m[0] * x + m[1] * y + m[3])
+                    ys.append(m[4] * x + m[5] * y + m[7])
+        return (min(xs), max(xs)), (min(ys), max(ys))
+
     def affine(self):
-        """MoBIE ``affine`` cell: world units to µm, then the shifts."""
-        sc, (ox, oy, oz) = self.scale, self.offset
-        if sc == 1 and not (ox or oy or oz or self.dz):
+        """MoBIE ``affine`` cell, from this XML's world units to µm.
+
+        Either the placement computed from stage metadata (`matrix`), or
+        a scaling to µm, mirrored about the dataset's centre if asked;
+        then ``--offset`` and the z shift.
+        """
+        ox, oy, oz = self.offset
+        if self.matrix is not None:
+            m = list(self.matrix)
+        else:
+            sc = self.scale
+            m = [sc, 0, 0, 0, 0, sc, 0, 0, 0, 0, sc, 0]
+            (x0, x1), (y0, y1) = self.xy_range()
+            if self.flip[0]:
+                m[0], m[3] = -sc, sc * (x0 + x1)
+            if self.flip[1]:
+                m[5], m[7] = -sc, sc * (y0 + y1)
+        m[3] += ox
+        m[7] += oy
+        m[11] += oz + self.dz
+        if tuple(m) == IDENTITY:
             return ""
-        values = (sc, 0, 0, ox, 0, sc, 0, oy, 0, 0, sc, oz + self.dz)
-        return "(" + ",".join(fmt(v) for v in values) + ")"
+        return "(" + ",".join(fmt(v) for v in m) + ")"
 
 
 # --------------------------------------------------------------------------
@@ -261,6 +306,219 @@ def compose(a, b):
             v = sum(row[k] * b[4 * k + c] for k in range(3))
             out.append(v + (row[3] if c == 3 else 0.0))
     return tuple(out)
+
+
+def invert(m):
+    """Inverse of a row-packed 3x4 affine.
+
+    Parameters
+    ----------
+    m : sequence of float
+
+    Returns
+    -------
+    tuple of float
+    """
+    a, b, c, d, e, f, g, h, i = (
+        m[0],
+        m[1],
+        m[2],
+        m[4],
+        m[5],
+        m[6],
+        m[8],
+        m[9],
+        m[10],
+    )
+    det = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g)
+    if not det:
+        sys.exit("A registration in the XML is not invertible.")
+    inv = [
+        (e * i - f * h) / det,
+        (c * h - b * i) / det,
+        (b * f - c * e) / det,
+        (f * g - d * i) / det,
+        (a * i - c * g) / det,
+        (c * d - a * f) / det,
+        (d * h - e * g) / det,
+        (b * g - a * h) / det,
+        (a * e - b * d) / det,
+    ]
+    t = (m[3], m[7], m[11])
+    out = []
+    for r in range(3):
+        row = inv[3 * r : 3 * r + 3]
+        out += [*row, -sum(row[k] * t[k] for k in range(3))]
+    return tuple(out)
+
+
+def read_scanr_meta(path: Path):
+    """Field positions of a ScanR acquisition, from its metadata.ome.xml.
+
+    Parameters
+    ----------
+    path : Path
+        A ``metadata.ome.xml`` as ScanR writes it.
+
+    Returns
+    -------
+    dict or None
+        ``positions``: the distinct stage (x, y) in µm of the fields, in
+        acquisition order (the planes repeat them per channel and z);
+        ``field_px``: field size (x, y) in pixels; ``pixel``: nominal
+        pixel size (x, y) in µm. None if the file has no plane positions.
+    """
+    try:
+        root = ET.parse(path).getroot()
+    except ET.ParseError:
+        return None
+    positions, field_px, pixel = {}, None, None
+    for el in root.iter():
+        tag = el.tag.rsplit("}", 1)[-1]
+        if tag == "Pixels" and field_px is None:
+            try:
+                field_px = (int(el.get("SizeX")), int(el.get("SizeY")))
+                pixel = (
+                    float(el.get("PhysicalSizeX")),
+                    float(el.get("PhysicalSizeY")),
+                )
+            except (TypeError, ValueError):
+                pass
+        elif tag == "Plane" and el.get("PositionX") is not None:
+            try:
+                xy = (float(el.get("PositionX")), float(el.get("PositionY")))
+            except (TypeError, ValueError):
+                continue
+            positions.setdefault(xy, None)
+    if not positions:
+        return None
+    return {"positions": list(positions), "field_px": field_px, "pixel": pixel}
+
+
+def place_on_grid(src, meta, flip):
+    """Put a stitched image of a ScanR grid at its stage position.
+
+    The stitched image spans the field grid, so its centre is the grid's
+    centre, and the spacing of the fields in the image sets its scale:
+    ``(grid extent in µm) / (image size - one field, in pixels)``. That
+    is more reliable for overlaying stage-positioned data than the
+    nominal pixel size, which the stitching need not reproduce.
+
+    Parameters
+    ----------
+    src : Source
+        The stitched dataset (one setup is used for the geometry).
+    meta : dict
+        Output of `read_scanr_meta`.
+    flip : tuple of bool
+        Mirror the image in x and/or y.
+
+    Returns
+    -------
+    matrix : tuple of float
+        Row-packed affine from the XML's world coordinates to stage µm.
+    note : str
+        What was done, for the report.
+    """
+    st = src.setups[0]
+    w, h = (int(v) for v in st.size[:2])
+    xs = sorted({p[0] for p in meta["positions"]})
+    ys = sorted({p[1] for p in meta["positions"]})
+    nominal = meta["pixel"] or (st.um_per_world, st.um_per_world)
+    fw, fh = meta["field_px"] or (0, 0)
+    scale = []
+    for extent, size, one_field, nom in (
+        (xs[-1] - xs[0], w, fw, nominal[0]),
+        (ys[-1] - ys[0], h, fh, nominal[1]),
+    ):
+        fitted = (
+            extent / (size - one_field) if size > one_field and extent else 0
+        )
+        # Fall back to the nominal size if the fit is implausible.
+        scale.append(fitted if 0.85 < fitted / nom < 1.15 else nom)
+    sx, sy = scale
+    fx, fy = (-1 if f else 1 for f in flip)
+    cx, cy = (xs[0] + xs[-1]) / 2, (ys[0] + ys[-1]) / 2
+    uc, vc = (w - 1) / 2, (h - 1) / 2
+    try:
+        sz = float(st.voxel[2])
+    except ValueError:
+        sz = 1.0
+    pixel_to_stage = (
+        fx * sx,
+        0,
+        0,
+        cx - fx * sx * uc,
+        0,
+        fy * sy,
+        0,
+        cy - fy * sy * vc,
+        0,
+        0,
+        sz,
+        0,
+    )
+    matrix = compose(pixel_to_stage, invert(st.reg))
+    note = (
+        f"{src.view}: placed on its ScanR grid ({len(xs)} x {len(ys)} fields), "
+        f"centred at stage ({fmt(cx)}, {fmt(cy)}) µm, {fmt(sx)} x {fmt(sy)} "
+        f"µm/px (nominal {fmt(nominal[0])})"
+        + (
+            ", flipped in " + "/".join(a for a, f in zip("XY", flip) if f)
+            if any(flip)
+            else ""
+        )
+    )
+    return matrix, note
+
+
+def stage_offset(ref, spots):
+    """Shift that puts a tiled dataset at its absolute stage position.
+
+    A ScanR stage position is the centre of a field, and
+    ``tifs_to_bdv.py`` writes tile positions relative to the first; the
+    absolute ones come from matching stage-coordinate spots (a
+    ``positions.xml``) to the tiles, or from the tiles' ``<location>``
+    when it holds absolute positions (newer ``tifs_to_bdv.py``).
+
+    Parameters
+    ----------
+    ref : Source
+        The tiled dataset.
+    spots : list of dict or None
+        Spots in stage µm, e.g. from ``positions.xml``.
+
+    Returns
+    -------
+    tuple of float or None
+        x, y shift in µm, None if no absolute position is known.
+    source : str
+    """
+    tiles = tile_geometry(ref.path)
+    if not tiles:
+        return None, ""
+    sc = ref.scale
+    pairs = []
+    if spots:
+        mapped = map_spots_to_tiles(spots, tiles)
+        if mapped:
+            centre = {t["name"]: t["center"] for t in tiles}
+            for p, m in zip(spots, mapped, strict=True):
+                if m["tile"]:
+                    c = centre[m["tile"]]
+                    pairs.append(((p["x"], p["y"]), (c[0] * sc, c[1] * sc)))
+            source = "positions.xml"
+    # Relative locations start at 0; absolute (stage) ones do not.
+    absolute = any(abs(min(t["loc"][i] for t in tiles)) > 1e-6 for i in (0, 1))
+    if not pairs and absolute:
+        for t in tiles:
+            pairs.append((t["loc"], (t["center"][0] * sc, t["center"][1] * sc)))
+        source = "tile locations"
+    if not pairs:
+        return None, ""
+    dx = sum(a[0] - b[0] for a, b in pairs) / len(pairs)
+    dy = sum(a[1] - b[1] for a, b in pairs) / len(pairs)
+    return (dx, dy), source
 
 
 def registrations(root):
@@ -420,6 +678,7 @@ def read_setups(xml_path: Path):
                     voxel=tuple(voxel) if len(voxel) == 3 else ("", "", ""),
                     size=size,
                     z_range=world_z_range(regs.get(sid, IDENTITY), size),
+                    reg=regs.get(sid, IDENTITY),
                     um_per_world=um_per_world(
                         regs.get(sid, IDENTITY),
                         voxel,
@@ -885,9 +1144,18 @@ def main(argv=None):
         "(and DZ) µm, e.g. Scan=120,-35; repeatable",
     )
     p.add_argument(
-        "--separate-views",
-        action="store_true",
-        help="one view per dataset instead of one overlaid view per sample",
+        "--flip-x",
+        action="append",
+        metavar="NAME",
+        help="mirror the dataset(s) in folder NAME in x; repeatable "
+        "(default: Scan)",
+    )
+    p.add_argument(
+        "--flip-y",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="mirror the dataset(s) in folder NAME in y; repeatable",
     )
     p.add_argument(
         "--spot-radius",
@@ -915,27 +1183,56 @@ def main(argv=None):
     out = (args.output or root / "mobie_collection.tsv").resolve()
     delimiter = "," if out.suffix.lower() == ".csv" else "\t"
 
-    # Collect the BDV XMLs, then positions.xml files alone in a folder.
+    # Collect the BDV XMLs; then positions.xml and ScanR metadata.ome.xml
+    # files, which become spots when alone in a folder.
     sources: list[Source] = []
     for x in sorted(root.rglob("*.xml")):
         setups = read_setups(x)
         if setups:
             sources.append(Source(path=x, kind="intensities", setups=setups))
     bdv_folders = {s.path.parent for s in sources}
+    metas: dict[Path, dict] = {}
     for x in sorted(root.rglob("*")):
-        if x.name.lower() == "positions.xml" and x.parent not in bdv_folders:
+        name = x.name.lower()
+        if name == "metadata.ome.xml":
+            # A TIFF folder's own metadata is not a detection list.
+            if any(x.parent.glob("*.tif")):
+                continue
+            meta = read_scanr_meta(x)
+            if meta is None:
+                continue
+            metas[x.parent] = meta
+            if x.parent not in bdv_folders:
+                spots = [
+                    {
+                        "spot_id": str(i),
+                        "x": px,
+                        "y": py,
+                        "z": None,
+                        "extra": {},
+                    }
+                    for i, (px, py) in enumerate(meta["positions"], 1)
+                ]
+                src = Source(path=x, kind="spots", spots=spots, meta=meta)
+                src.table = x.with_name("detection_positions.tsv")
+                sources.append(src)
+        elif name == "positions.xml" and x.parent not in bdv_folders:
             spots = read_positions(x)
             if not spots:
                 print(f"WARNING: no x/y coordinates recognised in {x}")
                 continue
-            sources.append(Source(path=x, kind="spots", spots=spots))
+            src = Source(path=x, kind="spots", spots=spots)
+            src.table = x.with_name("positions_spots.tsv")
+            sources.append(src)
     if not sources:
-        sys.exit(f"No BDV XML or positions.xml below {root}")
+        sys.exit(f"No BDV XML, positions.xml or metadata.ome.xml below {root}")
 
     names = view_names([s.path for s in sources], args.name_level)
     for s in sources:
         s.view = names[s.path]
         s.sample = s.path.parent.parent
+        if s.kind == "intensities":
+            s.meta = metas.get(s.path.parent)
     for spec in args.offset:
         key, _, values = spec.partition("=")
         try:
@@ -948,72 +1245,91 @@ def main(argv=None):
             sys.exit(f"--offset {spec}: no dataset named like '{key}'")
         for s in hits:
             s.offset = tuple(vals)
+    flip_x = args.flip_x if args.flip_x is not None else ["Scan"]
+    for key, axis in [(k, 0) for k in flip_x] + [(k, 1) for k in args.flip_y]:
+        for s in match_sources(sources, key):
+            f = list(s.flip)
+            f[axis] = True
+            s.flip = tuple(f)
 
-    # 2D datasets and spots go to the middle of the 3D reference; spots
-    # at stage positions are mapped onto the reference's tiles.
+    # Per sample, everything goes into stage coordinates (µm): the tiled
+    # 3D reference at its stage position, stitched ScanR grids on their
+    # grid, spots as they are. 2D data and spots go to mid-stack.
     by_sample: dict[Path, list[Source]] = {}
     for s in sources:
         by_sample.setdefault(s.sample, []).append(s)
     notes = []
     for members in by_sample.values():
         ref = pick_reference(members, args.reference)
+        stage_spots = [
+            p
+            for s in members
+            if s.kind == "spots" and s.meta is None
+            for p in s.spots
+        ]
+        sample_metas = [s.meta for s in members if s.meta is not None]
+        in_stage = False
+        if ref is not None:
+            shift, how = stage_offset(ref, stage_spots)
+            if shift is not None:
+                o = ref.offset
+                ref.offset = (o[0] + shift[0], o[1] + shift[1], o[2])
+                in_stage = True
+                notes.append(
+                    f"{ref.view}: at its stage position (from {how}), "
+                    f"shifted by ({fmt(shift[0])}, {fmt(shift[1])}) µm"
+                )
         mid = None
         if ref is not None:
             lo, hi = ref.z_range_um
             mid = (lo + hi) / 2
         for s in members:
-            if s.kind == "intensities" and not s.is_3d and ref is not None:
-                s.dz = mid - s.z_range_um[0]
+            if s.kind != "intensities" or s.is_3d or s is ref:
+                continue
+            meta = s.meta or (
+                sample_metas[0] if len(sample_metas) == 1 else None
+            )
+            if meta is not None:
+                s.matrix, note = place_on_grid(s, meta, s.flip)
+                notes.append(note)
+                placed_z = 0.0
+                if not in_stage and ref is not None:
+                    notes.append(
+                        f"WARNING: {ref.view} has no absolute stage position "
+                        f"(no positions.xml, relative tile locations), so "
+                        f"{s.view} will not line up with it. Rewrite its XML "
+                        "with tifs_to_bdv.py --xml-only."
+                    )
+            else:
+                placed_z = s.z_range_um[0]
+            if mid is not None:
+                s.dz = mid - placed_z
                 notes.append(
-                    f"{s.view}: 2D, moved by z {fmt(s.dz)} to the middle "
-                    f"of {ref.view} (z {fmt(lo)}..{fmt(hi)} µm)"
+                    f"{s.view}: 2D, at z {fmt(mid)} µm, the middle of {ref.view}"
                 )
+        for s in members:
             if s.kind != "spots":
                 continue
-            mapped = None
-            if ref is not None:
+            if not (in_stage or sample_metas) and ref is not None:
+                # No stage frame: map stage positions onto the tiles.
                 mapped = map_spots_to_tiles(s.spots, tile_geometry(ref.path))
-            if mapped is not None:
-                on_tile = sum(1 for m in mapped if m["tile"])
-                # World units of the reference -> µm, as its images.
-                sc, (ox, oy, _) = ref.scale, ref.offset
-                for p, m in zip(s.spots, mapped, strict=True):
-                    p["x"], p["y"], p["z"] = (
-                        m["x"] * sc + ox,
-                        m["y"] * sc + oy,
-                        mid,
-                    )
-                    p["extra"]["tile"] = m["tile"]
-                notes.append(
-                    f"{s.view}: stage positions matched to {on_tile}/"
-                    f"{len(mapped)} tiles of {ref.view}; spots at the tile "
-                    f"centres, z {fmt(mid)} (middle of the stack)"
-                )
-                continue
-            for p in s.spots:
-                for axis in "xyz":
-                    if p[axis] is not None:
-                        p[axis] *= args.spot_scale
-            if ref is not None and any(p["z"] is None for p in s.spots):
+                if mapped is not None:
+                    sc, (ox, oy, _) = ref.scale, ref.offset
+                    for p, m in zip(s.spots, mapped, strict=True):
+                        p["x"], p["y"] = m["x"] * sc + ox, m["y"] * sc + oy
+                        p["extra"]["tile"] = m["tile"]
+            elif args.spot_scale != 1:
                 for p in s.spots:
-                    if p["z"] is None:
-                        p["z"] = mid
+                    p["x"] *= args.spot_scale
+                    p["y"] *= args.spot_scale
+            if mid is not None:
+                # Shown in the middle of the stack, whatever z they had.
+                for p in s.spots:
+                    p["z"] = mid
                 notes.append(
-                    f"{s.view}: spots without z put at z {fmt(mid)}, the "
+                    f"{s.view}: {len(s.spots)} spots at z {fmt(mid)} µm, the "
                     f"middle of {ref.view}"
                 )
-            if ref is not None:
-                xs = [
-                    t["corner"][0] * ref.scale + ref.offset[0]
-                    for t in tile_geometry(ref.path)
-                ]
-                if xs:
-                    notes.append(
-                        f"{s.view}: spots are not tile positions; taken as "
-                        f"they are (x*{fmt(args.spot_scale)}). Compare with "
-                        f"{ref.view} tiles at x {fmt(min(xs))}.."
-                        f"{fmt(max(xs))} µm"
-                    )
 
     contrast = ""
     if args.contrast_limits == "auto":
@@ -1034,8 +1350,9 @@ def main(argv=None):
             )
 
     def view_of(src):
-        # One overlaid view per sample, so all acquisitions correlate.
-        return src.view if args.separate_views else src.sample.name
+        # The dataset's own folder (Acquisition, Scan, Detection...); all
+        # share stage coordinates, so views can be shown together.
+        return src.path.parent.name
 
     rows = []
     problems = []
@@ -1043,7 +1360,7 @@ def main(argv=None):
     for src in sources:
         print(f"  {src.view}  <- {src.path.relative_to(root)}")
         if src.kind == "spots":
-            table = src.path.with_name("positions_spots.tsv")
+            table = src.table
             spot_tables[table] = src.spots
             xs = [p["x"] for p in src.spots]
             ys = [p["y"] for p in src.spots]

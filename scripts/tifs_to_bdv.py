@@ -998,6 +998,7 @@ def write_xml(
     missing,
     voxel,
     tile_offsets,
+    tile_locations=None,
 ):
     """Write the BDV/BigStitcher XML describing the HDF5 file.
 
@@ -1020,7 +1021,13 @@ def write_xml(
     voxel : tuple of float
         Voxel size in µm, x, y, z.
     tile_offsets : list of tuple of float or None
-        Location in µm (x, y, z) of each tile, or None for all at origin.
+        Position in µm (x, y, z) of each tile relative to the first, which
+        the registrations use; None for all at the origin.
+    tile_locations : list of tuple of float, optional
+        Absolute stage position in µm written as each tile's
+        ``<location>``, so other data in stage coordinates (a prescan,
+        detections) can be placed against these tiles. Defaults to
+        `tile_offsets`.
     """
     root = ET.Element("SpimData", version="0.2")
     sub(root, "BasePath", ".", type="relative")
@@ -1058,9 +1065,9 @@ def write_xml(
         t = sub(att, "Tile")
         sub(t, "id", i)
         sub(t, "name", name)
-        if tile_offsets is not None:
-            loc = tile_offsets[i]
-            sub(t, "location", " ".join(fmt(v) for v in loc))
+        locations = tile_locations or tile_offsets
+        if locations is not None:
+            sub(t, "location", " ".join(fmt(v) for v in locations[i]))
     att = sub(vs, "Attributes", name="angle")
     ang = sub(att, "Angle")
     sub(ang, "id", 0)
@@ -1151,8 +1158,11 @@ def metadata_offsets(stacks, tiles, channels, flip_x, flip_y, swap_xy):
     Returns
     -------
     offsets : list of tuple of float or None
-        Location in µm (x, y, z=0) of each tile; None if no file has a
-        position. Stops the script if only some tiles have one.
+        Location in µm (x, y, z=0) of each tile, relative to the lowest;
+        None if no file has a position. Stops the script if only some
+        tiles have one.
+    stage : list of tuple of float or None
+        The absolute stage positions (x, y, z) in µm, as read.
     source : str or None
         Which kind of metadata the positions came from.
     """
@@ -1177,7 +1187,7 @@ def metadata_offsets(stacks, tiles, channels, flip_x, flip_y, swap_xy):
             "are at the origin. Run with --dump-metadata to see what the "
             "files contain, or give --grid-columns."
         )
-        return None, None
+        return None, None, None
     if found < len(positions):
         missing = [p.name for p, q in zip(first_planes, positions) if q is None]
         sys.exit(
@@ -1197,7 +1207,8 @@ def metadata_offsets(stacks, tiles, channels, flip_x, flip_y, swap_xy):
     if len(xy) > 1 and np.ptp(xy, axis=0).max() == 0:
         print("WARNING: every tile has the same stage position.")
     offsets = [(float(x), float(y), 0.0) for x, y in xy]
-    return offsets, ", ".join(sorted(s for s in sources if s))
+    stage = [(float(p[0]), float(p[1]), float(p[2] or 0.0)) for p in positions]
+    return offsets, stage, ", ".join(sorted(s for s in sources if s))
 
 
 def grid_offsets(n_tiles, cols, overlap, snake, column_major, tile_xy, voxel):
@@ -1344,6 +1355,12 @@ def main(argv=None):
         help="positions fill columns first (needs --grid-rows)",
     )
     p.add_argument(
+        "--xml-only",
+        action="store_true",
+        help="rewrite only the .xml next to an existing .h5 (e.g. to "
+        "update tile positions); the image data is not touched",
+    )
+    p.add_argument(
         "--dry-run",
         action="store_true",
         help="report what was found, write nothing",
@@ -1437,9 +1454,9 @@ def main(argv=None):
             else:
                 gaps += s.size_xyz[2] - len(st.planes)
 
-    tile_offsets = None
+    tile_offsets = tile_locations = None
     if not (args.grid_columns or args.grid_rows or args.ignore_positions):
-        tile_offsets, source = metadata_offsets(
+        tile_offsets, tile_locations, source = metadata_offsets(
             stacks, tiles, channels, args.flip_x, args.flip_y, args.swap_xy
         )
         if tile_offsets is not None:
@@ -1511,9 +1528,13 @@ def main(argv=None):
     if args.dry_run:
         return
 
-    for path in (xml_path, h5_path):
-        if path.exists() and not args.overwrite:
-            sys.exit(f"{path} exists; pass --overwrite to replace it")
+    if args.xml_only:
+        if not h5_path.is_file():
+            sys.exit(f"--xml-only: {h5_path} does not exist")
+    else:
+        for path in (xml_path, h5_path):
+            if path.exists() and not args.overwrite:
+                sys.exit(f"{path} exists; pass --overwrite to replace it")
     xml_path.parent.mkdir(parents=True, exist_ok=True)
 
     compression = None if args.compression == "none" else "gzip"
@@ -1523,12 +1544,14 @@ def main(argv=None):
         for (tile, chan) in setup_of
         if (tile, chan, tp) in stacks
     ]
+    if args.xml_only:
+        todo = []
     t0 = time.time()
     with (
-        h5py.File(h5_path, "w") as h5,
+        h5py.File(h5_path, "r" if args.xml_only else "w") as h5,
         ThreadPoolExecutor(args.workers) as pool,
     ):
-        for s in setups:
+        for s in setups if not args.xml_only else ():
             write_setup_meta(h5, s)
         for i, (tp, tile, chan) in enumerate(todo, 1):
             s = setup_of[(tile, chan)]
@@ -1551,6 +1574,7 @@ def main(argv=None):
         missing,
         voxel,
         tile_offsets,
+        tile_locations,
     )
     for path in (xml_path, h5_path):
         if not path.is_file():
