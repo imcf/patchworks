@@ -822,7 +822,7 @@ def nearest_parents(
     size = read_pixel_size(cpath)
     spacing = np.array([float(size.get(ax, 1.0)) for ax in axes])
     margin = np.ceil(max_distance_um / spacing).astype(int)
-    table = zarr.open_group(f"{cpath}/{TABLE_GROUP}", mode="r")
+    table = open_group_any(f"{cpath}/{TABLE_GROUP}")
     all_labels = table["label"][...]
     lo = np.stack([np.asarray(table[f"bbox_min_{ax}"][...]) for ax in axes], 1)
     hi = np.stack([np.asarray(table[f"bbox_max_{ax}"][...]) for ax in axes], 1)
