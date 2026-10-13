@@ -70,7 +70,12 @@ the `#` to change one. In a multi run, settings shared by every
 segmentation are listed in `common.yaml`, the rest in each segmentation's
 config. The options most worth knowing are [below](#options-worth-knowing). Then edit
 `profile/slurm/config.yaml` for your cluster: partitions, the GPU request,
-`jobs:` (how many jobs at once).
+`jobs:` (how many jobs at once). It ships with sciCORE's values; for
+another cluster, copy the folder to `profile/<cluster>/` and pass
+`--workflow-profile profile/<cluster>` (`--profile` to run_multi), or name
+it as the preset's `profile:` in the launcher. The segment jobs' memory is
+set once, under `prepare:`, and used by both: prepare sizes
+`tile_shape: "auto"` tiles to it.
 
 !!! warning "`runtime` is capped by the QOS"
     A job asking for more time than its QOS allows is refused by `sbatch`
