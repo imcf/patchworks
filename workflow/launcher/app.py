@@ -1207,6 +1207,33 @@ def launch(
         command = core.snakemake_command(first, mode, profile=profile)
     inner = core.inner_command(wf_dir, setup_cmd, command)
 
+    if mode != core.DRY_RUN and not convert_only:
+        # Here, on the login node: the controller job and the GPU nodes may
+        # have no internet access, and the first segment job would fail.
+        with st.spinner("fetching the models on the login node…"):
+            rc, out, err = run(
+                client,
+                core.inner_command(
+                    wf_dir, setup_cmd, core.fetch_command(multi or first)
+                ),
+                timeout=1800,
+            )
+        if rc:
+            st.warning(
+                "Could not fetch the models here: "
+                f"{core.last_error_line(err or out)}. The run fetches them "
+                "itself, which fails if its nodes have no internet access.",
+                icon=":material/cloud_off:",
+            )
+        else:
+            st.caption(
+                ":material/cloud_done: "
+                + "; ".join(
+                    line.removeprefix("[fetch] ")
+                    for line in out.splitlines()
+                    if line.startswith("[fetch]")
+                )
+            )
     if mode == core.DRY_RUN:
         with st.spinner("dry run…"):
             rc, out, err = run(client, inner, timeout=900)

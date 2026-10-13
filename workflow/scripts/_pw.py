@@ -426,6 +426,38 @@ def plan_run(cfg, sample: int = 0) -> dict:
     return plan
 
 
+def fetch_models(cfg) -> str:
+    """Download the model a config segments with, now: on a node with
+    internet access (the login node), not the offline GPU nodes.
+
+    Cellpose's weights go to ``~/.cellpose``, PlantSeg's zoo U-Nets to
+    ``$PLANTSEG_HOME``; both on the shared home, where the segment jobs
+    read them. Returns what was done, for the log.
+    """
+    method = cfg.get("method", "cellpose")
+    if method == "cellpose":
+        # _get_model downloads + caches the weights keyed by (model, gpu).
+        from patchworks.plugins.cellpose import _get_model
+
+        model = cfg["cellpose"]["model"]
+        _get_model({"model": model, "gpu": False})
+        return f"cached Cellpose model {model}"
+    custom = cfg.get("custom") or {}
+    if (
+        method == "custom"
+        and custom.get("module") == "patchworks.plugins.plantseg"
+    ):
+        kwargs = custom.get("kwargs") or {}
+        model = kwargs.get("model", "generic_confocal_3D_unet")
+        if kwargs.get("model_id") or kwargs.get("config_path"):
+            return "PlantSeg model given by id or path: nothing to fetch"
+        from patchworks.plugins.plantseg import fetch_model
+
+        fetch_model(model)
+        return f"cached PlantSeg model {model}"
+    return f"method {method!r}: no model to fetch"
+
+
 def check_seed_labels(work_dir, cfg) -> None:
     """Fail early when ``seed_labels`` names labels that are not there yet.
 

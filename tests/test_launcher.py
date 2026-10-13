@@ -770,7 +770,11 @@ def test_app_resources_change_for_one_run():
     assert "rtx4090-6hours" not in at.selectbox(key="ctrl_qos").options
     next(b for b in at.button if b.label == "Launch").click().run()
     assert not at.exception
-    assert any("sbatch" in c for c in ssh.commands)
+    fetched = next(
+        i for i, c in enumerate(ssh.commands) if "fetch_models.py" in c
+    )
+    submitted = next(i for i, c in enumerate(ssh.commands) if "sbatch" in c)
+    assert fetched < submitted  # the models first, on the login node
     record = json.loads(ssh.files[f"{WF}/{core.REGISTRY}"].decode())
     assert record["slurm_job"] == "123" and record["kind"] == "single"
     assert record["inner"] and record["setup"] is not None

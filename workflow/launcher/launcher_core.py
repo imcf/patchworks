@@ -883,6 +883,13 @@ def check_command(config: str, *, sample: int = 0) -> str:
     return " ".join(shlex.quote(a) for a in args)
 
 
+def fetch_command(config: str) -> str:
+    """``scripts/fetch_models.py``: the run's models, downloaded now."""
+    return " ".join(
+        shlex.quote(a) for a in ("python", "scripts/fetch_models.py", config)
+    )
+
+
 def run_status_command(config: str) -> str:
     """``scripts/status.py`` on a run's config (or multi config), as JSON."""
     return " ".join(

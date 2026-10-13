@@ -108,3 +108,48 @@ def test_a_multi_config_is_checked_as_a_set(tmp_path):
     report = check.check(multi)
     assert not report["valid"]
     assert any("work_dir" in p for p in report["shared_problems"])
+
+
+def test_fetch_models_names_what_it_fetches(monkeypatch):
+    import _pw
+
+    calls = []
+    import patchworks.plugins.cellpose as cp
+
+    monkeypatch.setattr(cp, "_get_model", lambda spec: calls.append(spec))
+    assert "Cellpose model nuclei" in _pw.fetch_models(
+        {"method": "cellpose", "cellpose": {"model": "nuclei"}}
+    )
+    assert calls == [{"model": "nuclei", "gpu": False}]
+    try:
+        import patchworks.plugins.plantseg as ps
+    except ImportError:
+        pytest.skip("no PlantSeg plugin import here")
+    monkeypatch.setattr(ps, "fetch_model", lambda m: calls.append(m))
+    spec = {
+        "method": "custom",
+        "custom": {
+            "module": "patchworks.plugins.plantseg",
+            "kwargs": {"model": "generic_light_sheet_3D_unet"},
+        },
+    }
+    assert "PlantSeg model generic_light_sheet_3D_unet" in _pw.fetch_models(
+        spec
+    )
+    assert calls[-1] == "generic_light_sheet_3D_unet"
+    assert "no model" in _pw.fetch_models({"method": "threshold"})
+
+
+def test_fetch_script_reports_each_segmentation(tmp_path, monkeypatch, capsys):
+    import _pw
+    import fetch_models
+
+    monkeypatch.setattr(
+        _pw, "fetch_models", lambda cfg: f"ok {cfg['label_name']}"
+    )
+    path = _config(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["fetch_models.py", str(path)])
+    with pytest.raises(SystemExit) as stop:
+        fetch_models.main()
+    assert stop.value.code == 0
+    assert "[fetch] cells: ok cells" in capsys.readouterr().out

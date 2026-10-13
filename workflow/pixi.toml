@@ -100,6 +100,7 @@ multi-dry = "python scripts/run_multi.py -n"
 multi = "python scripts/run_multi.py"
 multi-slurm = "python scripts/run_multi.py --profile profile/slurm"
 check = "python scripts/check.py" # <config or multi config>: before running
+fetch = "python scripts/fetch_models.py" # <config or multi config>: models, on the login node
 status = "python scripts/status.py" # <config or multi config>: how far it got
 zip = "python scripts/export_iso.py --format zip" # --store image.zarr
 iso = "python scripts/export_iso.py" # needs xorriso, genisoimage or mkisofs

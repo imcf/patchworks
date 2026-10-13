@@ -88,6 +88,7 @@ set once, under `prepare:`, and used by both: prepare sizes
 ```bash
 C=config/local/my_run.yaml
 pixi run check $C               # the config's problems; once converted, the plan
+pixi run fetch $C               # its models, here (GPU nodes are often offline)
 pixi run dry   --configfile $C   # checks the config, lists the steps; runs nothing
 pixi run go    --configfile $C   # locally, on this machine
 pixi run slurm --configfile $C   # on the cluster: submits and follows the jobs
