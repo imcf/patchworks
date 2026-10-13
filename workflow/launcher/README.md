@@ -116,7 +116,9 @@ it where only the people it's for can reach it.
      jobs it submitted; or force), **Unlock** after a killed run, and
      **Relaunch** (the same command again: it resumes);
    - progress per segmentation (`scripts/status.py`: GPU jobs done out of
-     how many, merged);
+     how many, merged), and any step that failed with why and what to do;
+   - while it runs, your patchworks jobs in the SLURM queue and why each
+     waits (its turn, a QOS limit ...), flagging one that never starts;
    - once merged, the results: object counts, the seam report, the
      relation workbooks to download, and how to open the store or the
      bundle;

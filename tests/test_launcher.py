@@ -1326,3 +1326,63 @@ def test_configure_shows_the_channels():
     assert any(
         "3 × 40 × 2048 × 2048 · voxel z 0.5 µm" in c.value for c in at.caption
     )
+
+
+QUEUE = """101|pw-cells|RUNNING|None|1:02:03|3-00:00:00|scicore
+102|pw-cells_3f2a|PENDING|Priority|0:00|1-00:00:00|rtx4090
+103|pw-cells_3f2a|PENDING|QOSMaxWallDurationPerJobLimit|0:00|2-00:00:00|rtx4090
+104|my_other_job|PENDING|Priority|0:00|1:00:00|scicore
+"""
+
+
+def test_queue_rows_say_why_jobs_wait():
+    rows = core.parse_queue(QUEUE)
+    assert [r["job"] for r in rows] == ["101", "102", "103"]  # ours only
+    assert rows[0]["running for"] == "1:02:03" and rows[0]["why it waits"] == ""
+    assert rows[1]["why it waits"].startswith("waiting its turn")
+    assert rows[2]["why it waits"].startswith("NEVER STARTS")
+
+
+def test_jobs_tab_shows_failures_and_the_queue():
+    pytest.importorskip("paramiko")
+    status = {
+        "work_dir": "/scratch/run",
+        "segmentations": [
+            {
+                "label_name": "cells",
+                "stage": "segmenting",
+                "batches": 10,
+                "batches_done": 3,
+                "objects": None,
+                "seams": None,
+                "failures": [
+                    {
+                        "step": "segment job 4",
+                        "log": "/scratch/run/cells/logs/segment/4.log",
+                        "error": "torch.OutOfMemoryError: CUDA out of memory",
+                        "hint": "the GPU ran out of memory: smaller tiles",
+                    }
+                ],
+            }
+        ],
+        "failures": [],
+    }
+    ssh = _FakeSSH(
+        {
+            "squeue --me": QUEUE,
+            "squeue": "RUNNING\n",
+            "scripts/status.py": json.dumps(status),
+            "tail -n 80": "CUDA out of memory\n",
+        },
+        files={f"{WF}/{core.REGISTRY}": core.registry_line(_job()).encode()},
+    )
+    at = _app(ssh, input="/x.czi", work_dir="/scratch/run")
+    at.run()
+    assert not at.exception
+    assert any("segment job 4" in e.value for e in at.error)
+    assert any("GPU ran out of memory" in m.value for m in at.markdown)
+    assert any("NEVER STARTS" in e.value and "103" in e.value for e in at.error)
+    queue = next(
+        d.value for d in at.dataframe if "why it waits" in d.value.columns
+    )
+    assert len(queue) == 3

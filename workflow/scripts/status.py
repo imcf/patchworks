@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -42,6 +43,183 @@ def _attrs(path: Path) -> dict:
             continue
         return data.get(inner, {}) if inner else data
     return {}
+
+
+# What a failed step's log says, and what to do about it. First match wins.
+HINTS = (
+    (
+        r"CUDA out of memory|OutOfMemoryError|cudaErrorMemoryAllocation",
+        "the GPU ran out of memory: smaller tiles (a tile_shape, or a lower "
+        "gpu_memory_gb)",
+    ),
+    (
+        r"oom[_-]kill|OUT_OF_MEMORY|MemoryError|\bKilled\b",
+        "the job ran out of memory: more memory for this step (mem_mb in "
+        "the profile, Cluster resources in the launcher)",
+    ),
+    (
+        r"DUE TO TIME LIMIT|TIMEOUT",
+        "the job hit its time limit: a longer runtime for this step, or "
+        "fewer tiles_per_job",
+    ),
+    (
+        r"No module named|ModuleNotFoundError|which this environment does "
+        r"not have",
+        "a package is missing: run from the pixi environment that has it "
+        "(the launcher's Environment)",
+    ),
+    (
+        r"HTTPError|URLError|urlopen|Name or service not known|Temporary "
+        r"failure in name resolution|Connection (refused|reset)",
+        "a download failed, likely on an offline node: pixi run fetch "
+        "<config> on the login node first",
+    ),
+    (
+        r"No space left on device|Disk quota exceeded",
+        "the disk is full: free space in work_dir, or ask for more quota",
+    ),
+    (
+        r"cannot be locked|LockException",
+        "a killed run left its lock: unlock (--unlock, or Unlock in the "
+        "launcher), then start again",
+    ),
+)
+_ERROR = re.compile(r"Traceback|Error|error:|Killed|CANCELLED|oom", re.I)
+
+
+def explain(text: str) -> tuple[str, str | None]:
+    """The line of a log that says what went wrong, and a fix if known."""
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    for pattern, hint in HINTS:
+        for line in reversed(lines):
+            if re.search(pattern, line):
+                return line[:300], hint
+    errors = [
+        line for line in lines if re.search(r"Error|Exception|error:", line)
+    ]
+    return (errors or lines or [""])[-1][:300], None
+
+
+def _failure(step: str, log: Path) -> dict | None:
+    """A failure record for *log*, if it says something went wrong."""
+    try:
+        text = log.read_text(errors="replace")[-200_000:]
+    except OSError:
+        return None
+    if not _ERROR.search(text):
+        return None
+    error, hint = explain(text)
+    return {"step": step, "log": str(log), "error": error, "hint": hint}
+
+
+def _slurm_logs(dirs: list[Path]) -> list[Path]:
+    """The SLURM executor's job logs (``.snakemake/slurm_logs``) there."""
+    logs = []
+    for d in dirs:
+        root = d / ".snakemake" / "slurm_logs"
+        if root.is_dir():
+            logs += sorted(root.rglob("*.log"), key=lambda p: p.stat().st_mtime)
+    return logs
+
+
+def _killed(log: Path) -> bool:
+    """A SLURM log of a job SLURM itself ended (time, memory)."""
+    try:
+        text = log.read_text(errors="replace")[-20_000:]
+    except OSError:
+        return False
+    return bool(
+        re.search(
+            r"DUE TO TIME LIMIT|oom[_-]kill|OUT_OF_MEMORY|CANCELLED", text
+        )
+    )
+
+
+def failures(cfg: dict, workflow_dir: Path | None = None) -> list[dict]:
+    """The steps of one segmentation that failed and are not done since.
+
+    From each step's own log (a traceback), and the SLURM executor's job
+    logs (a job SLURM ended: time limit, out of memory), with what to do.
+    """
+    work = Path(cfg["work_dir"])
+    label = cfg.get("label_name", "labels")
+    run = work / label
+    found = []
+    steps = [("prepare", run / "logs" / "prepare.log", run / "tiles.json")]
+    seg_logs = run / "logs" / "segment"
+    if seg_logs.is_dir():
+        for log in sorted(seg_logs.glob("*.log")):
+            steps.append(
+                (
+                    f"segment job {log.stem}",
+                    log,
+                    run / "seg" / f"{log.stem}.done",
+                )
+            )
+    steps.append(("merge", run / "logs" / "merge.log", run / "labels.done"))
+    for step, log, done in steps:
+        if log.exists() and not done.exists():
+            failure = _failure(step, log)
+            if failure:
+                found.append(failure)
+    # The state directories a run's Snakemake works in: the workflow folder
+    # (pixi run slurm), or run_multi's per segmentation.
+    dirs = [run / ".snakemake"]
+    if workflow_dir is not None:
+        dirs.append(workflow_dir)
+    for log in _slurm_logs(dirs):
+        # slurm_logs/rule_<rule>/<wildcards>/<job id>.log
+        rule = next(
+            (
+                p.removeprefix("rule_")
+                for p in log.parts
+                if p.startswith("rule_")
+            ),
+            "",
+        )
+        batch = re.search(r"batch[_=]?(\d+)", str(log))
+        if rule == "segment" and batch:
+            if (run / "seg" / f"{batch.group(1)}.done").exists():
+                continue
+            step = f"segment job {batch.group(1)}"
+        elif rule == "merge" and (run / "labels.done").exists():
+            continue
+        elif rule == "prepare" and (run / "tiles.json").exists():
+            continue
+        elif rule not in ("segment", "merge", "prepare"):
+            continue
+        else:
+            step = rule
+        if _killed(log) and not any(f["step"] == step for f in found):
+            failure = _failure(f"{step} (SLURM)", log)
+            if failure:
+                found.append(failure)
+    return found
+
+
+def shared_failures(cfg: dict) -> list[dict]:
+    """The conversion steps, shared by every segmentation of a work_dir."""
+    work = Path(cfg["work_dir"])
+    level = int(cfg.get("level", 0))
+    store = work / "image.zarr"
+    found = []
+    for step, log, done in (
+        (
+            "convert",
+            work / "logs" / "convert.log",
+            [store / "zarr.json", store / ".zgroup"],
+        ),
+        (
+            "occupancy",
+            work / "logs" / "occupancy.log",
+            [work / "image.occupancy.zarr" / str(level) / "zarr.json"],
+        ),
+    ):
+        if log.exists() and not any(d.exists() for d in done):
+            failure = _failure(step, log)
+            if failure:
+                found.append(failure)
+    return found
 
 
 def segmentation_status(cfg: dict) -> dict:
@@ -95,10 +273,15 @@ def segmentation_status(cfg: dict) -> dict:
 
 def run_status(cfgs: list[dict], multi: dict | None) -> dict:
     """Every segmentation, and for a multi run its relations and bundle."""
+    workflow_dir = Path(__file__).resolve().parent.parent
     status = {
         "work_dir": str(cfgs[0]["work_dir"]),
         "segmentations": [segmentation_status(c) for c in cfgs],
+        "failures": shared_failures(cfgs[0]),
     }
+    for seg, cfg in zip(status["segmentations"], cfgs):
+        # A single run's Snakemake works in the workflow folder.
+        seg["failures"] = failures(cfg, workflow_dir if multi is None else None)
     if multi is None:
         return status
     work = Path(cfgs[0]["work_dir"])
@@ -140,6 +323,15 @@ def format_status(status: dict) -> str:
                 "on a seam vs "
                 f"{'n/a' if inner is None else f'{100 * inner:.1f}%'} inside"
             )
+    for f in status.get("failures", []) + [
+        dict(f, step=f"{s['label_name']}: {f['step']}")
+        for s in status["segmentations"]
+        for f in s.get("failures", [])
+    ]:
+        lines.append(f"  FAILED {f['step']}: {f['error']}")
+        if f["hint"]:
+            lines.append(f"    -> {f['hint']}")
+        lines.append(f"    log: {f['log']}")
     for rel in status.get("relations", []):
         files = ", ".join(rel["files"]) or "not yet"
         lines.append(f"  relation {rel['a']} -> {rel['b']}: {files}")

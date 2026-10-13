@@ -93,3 +93,62 @@ def test_one_config_not_started(tmp_path):
     got = status.run_status(*status._configs(cfg))
     assert got["segmentations"][0]["stage"] == "not started"
     assert "relations" not in got
+
+
+def test_failures_say_what_went_wrong_and_what_to_do(tmp_path):
+    work = tmp_path / "results"
+    (work / "image.zarr").mkdir(parents=True)
+    (work / "image.zarr" / "zarr.json").write_text("{}")
+    _markers(work, "cells", batches=3, done=1)
+    logs = work / "cells" / "logs" / "segment"
+    logs.mkdir(parents=True)
+    # Batch 0 failed once but is done since: not a failure any more.
+    (logs / "0.log").write_text("Traceback ...\nRuntimeError: boom\n")
+    (logs / "1.log").write_text(
+        "[patchworks] tile 4\nTraceback (most recent call last):\n"
+        "torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 2 GiB\n"
+    )
+    (logs / "2.log").write_text("[patchworks] tile 7 (1/4)\n")  # running
+    # SLURM ended a job of batch 2 for its time limit.
+    slurm = work / "cells" / ".snakemake" / ".snakemake" / "slurm_logs"
+    killed = slurm / "rule_segment" / "batch_2" / "123.log"
+    killed.parent.mkdir(parents=True)
+    killed.write_text(
+        "slurmstepd: error: *** JOB 123 CANCELLED AT 2026-10-13T03:00:00 "
+        "DUE TO TIME LIMIT ***\n"
+    )
+    cfg = {"work_dir": str(work), "label_name": "cells"}
+    found = {f["step"]: f for f in status.failures(cfg)}
+    assert set(found) == {"segment job 1", "segment job 2 (SLURM)"}
+    assert "CUDA out of memory" in found["segment job 1"]["error"]
+    assert "GPU ran out of memory" in found["segment job 1"]["hint"]
+    assert "time limit" in found["segment job 2 (SLURM)"]["hint"]
+
+    (work / "logs").mkdir()
+    (work / "logs" / "convert.log").write_text(
+        "OSError: No space left on device\n"
+    )
+    assert status.shared_failures(cfg) == []  # converted, so not failed
+    (work / "image.zarr" / "zarr.json").unlink()
+    (shared,) = status.shared_failures(cfg)
+    assert "disk is full" in shared["hint"]
+
+    text = status.format_status(
+        {
+            "work_dir": str(work),
+            "segmentations": [
+                {
+                    **status.segmentation_status(cfg),
+                    "failures": [found["segment job 1"]],
+                }
+            ],
+            "failures": [shared],
+        }
+    )
+    assert "FAILED convert" in text and "FAILED cells: segment job 1" in text
+    assert "-> the GPU ran out of memory" in text
+
+
+def test_explain_without_a_known_cause():
+    line, hint = status.explain("step 1\nValueError: overlap too wide\n\n")
+    assert line == "ValueError: overlap too wide" and hint is None

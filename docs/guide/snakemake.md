@@ -110,7 +110,10 @@ objects outlined, to judge the settings before the run: run it where the
 jobs run (`srun` with the segment job's partition and GPU).
 `status` reads what the run left in work_dir: converted or not,
 tiles segmented out of how many, merged with how many objects, the seam
-report, and for a multi config its relations and bundle.
+report, and for a multi config its relations and bundle. A step that
+failed is named with the line of its log that says why and, for the
+usual causes (GPU or RAM out of memory, a time limit, a missing package,
+a download on an offline node, a full disk, a stale lock), what to do.
 
 ## Several segmentations and their relations
 

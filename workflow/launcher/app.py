@@ -1601,6 +1601,27 @@ def job_actions(job: dict, state: str, alive: bool, setup: str) -> None:
                 )
 
 
+def queue_view() -> None:
+    """Your patchworks jobs in the SLURM queue, and why each waits."""
+    _, out, _ = run(client, core.QUEUE_COMMAND, timeout=30)
+    rows = core.parse_queue(out)
+    if not rows:
+        return
+    running = sum(r["state"] == "RUNNING" for r in rows)
+    with section(
+        ":material/queue: In the queue",
+        f"{running} running, {len(rows) - running} waiting (all your "
+        "patchworks jobs)",
+    ):
+        st.dataframe(rows, hide_index=True)
+        for row in rows:
+            if row["why it waits"].startswith("NEVER STARTS"):
+                st.error(
+                    f"job {row['job']} ({row['name']}): {row['why it waits']}",
+                    icon=":material/block:",
+                )
+
+
 def job_progress(job: dict, setup: str) -> None:
     """How far the run got (scripts/status.py), and what it made."""
     rc, out, err = run(
@@ -1614,6 +1635,27 @@ def job_progress(job: dict, setup: str) -> None:
     if not status or "segmentations" not in status:
         st.caption(f"progress unavailable: {core.last_error_line(err or out)}")
         return
+    failed = list(status.get("failures") or []) + [
+        {**f, "step": f"{seg['label_name']}: {f['step']}"}
+        for seg in status["segmentations"]
+        for f in seg.get("failures") or []
+    ]
+    if failed:
+        with section(":material/error: Failed", "and what to do about it"):
+            for f in failed:
+                st.error(f"**{f['step']}**: `{f['error']}`")
+                if f.get("hint"):
+                    st.markdown(f":material/lightbulb: {f['hint']}")
+                with st.expander(
+                    f"log: {f['log']}", icon=":material/terminal:"
+                ):
+                    _, tail, _ = run(
+                        client,
+                        f"tail -n 80 {shlex.quote(f['log'])}",
+                        login=False,
+                        timeout=30,
+                    )
+                    st.code(tail or "(empty)", language="text")
     with section(":material/data_usage: Progress", f"`{status['work_dir']}`"):
         for seg in status["segmentations"]:
             total, done = seg["batches"], seg["batches_done"]
@@ -2282,6 +2324,8 @@ with tab_jobs:
                             show_check(report)
                             show_previews(report)
             elif job.get("config"):
+                if alive:
+                    queue_view()
                 job_progress(job, setup)
             with st.expander("Log", icon=":material/terminal:", expanded=alive):
                 st.caption(f"`{job['log']}`")

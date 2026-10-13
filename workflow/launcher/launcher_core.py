@@ -1281,6 +1281,58 @@ def resource_problems(
     return problems
 
 
+# Your patchworks jobs in the queue: the run's controller (pw-<label>), its
+# segmentations' jobs (pw-<label>_<uuid>) and a single run's (patchworks_).
+QUEUE_COMMAND = 'squeue --me -h -o "%i|%j|%T|%r|%M|%l|%P" 2>/dev/null'
+
+# Why a job waits, in words, and whether it ever starts.
+PENDING_REASONS = {
+    "Priority": "waiting its turn: other jobs come first",
+    "Resources": "next in line, waiting for a node to free up",
+    "Dependency": "waiting for the job it depends on",
+    "QOSMaxJobsPerUserLimit": "you already run as many jobs as this QOS allows",
+    "QOSMaxGRESPerUser": "you already use as many GPUs as this QOS allows",
+    "AssocGrpGRES": "your group already uses all its GPUs",
+    "AssocMaxJobsLimit": "your account already runs its most jobs",
+    "QOSGrpCpuLimit": "the QOS's CPUs are all in use",
+    "ReqNodeNotAvail": "the nodes it needs are down or reserved",
+    "BeginTime": "starts later, as asked",
+    "QOSMaxWallDurationPerJobLimit": "NEVER STARTS: its time is over the "
+    "QOS's limit; cancel it, raise the QOS or lower the runtime",
+    "PartitionTimeLimit": "NEVER STARTS: its time is over the partition's "
+    "limit; cancel it and lower the runtime",
+    "PartitionNodeLimit": "NEVER STARTS: asks for more nodes than the "
+    "partition has",
+    "InvalidQOS": "NEVER STARTS: a QOS the account may not use",
+}
+
+
+def parse_queue(output: str) -> list[dict[str, str]]:
+    """Your patchworks jobs in the queue, with why each waits."""
+    rows = []
+    for line in output.splitlines():
+        fields = line.strip().split("|")
+        if len(fields) < 7:
+            continue
+        jid, name, state, reason, elapsed, limit, partition = fields[:7]
+        if not name.startswith(("pw-", "patchworks")):
+            continue
+        rows.append(
+            {
+                "job": jid,
+                "name": name,
+                "state": state,
+                "partition": partition,
+                "running for": elapsed if state == "RUNNING" else "",
+                "time limit": limit,
+                "why it waits": ""
+                if state == "RUNNING"
+                else PENDING_REASONS.get(reason, reason),
+            }
+        )
+    return rows
+
+
 def status_command(job: dict[str, Any]) -> str:
     """Shell line printing RUNNING/PENDING/DONE for a registered job."""
     if job.get("slurm_job"):
