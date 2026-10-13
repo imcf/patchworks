@@ -1229,13 +1229,18 @@ def main() -> None:
         sys.exit(_test_email(seg_cfgs[0]))
 
     work_dir = _validate_configs(seg_config_paths, seg_cfgs)
-    # Every package a config needs, in this environment (the jobs run from it).
-    from _pw import environment_problems
+    # Each config on its own (every package it needs included: the jobs run
+    # from this environment), before converting rather than in prepare.
+    from _pw import validate_config
 
-    missing = [p for cfg in seg_cfgs for p in environment_problems(cfg)]
-    if missing:
-        for p in missing:
-            print(f"[run_multi] ERROR: {p}", file=sys.stderr)
+    invalid = False
+    for path, cfg in zip(seg_config_paths, seg_cfgs):
+        try:
+            validate_config(cfg)
+        except ValueError as exc:
+            print(f"[run_multi] ERROR: {path.name}: {exc}", file=sys.stderr)
+            invalid = True
+    if invalid:
         sys.exit(1)
     review_rules = _review_rules(
         multi_cfg, [str(c.get("label_name")) for c in seg_cfgs]

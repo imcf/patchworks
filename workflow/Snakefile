@@ -6,10 +6,15 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(workflow.basedir) / "scripts"))
-from _pw import with_defaults
+from _pw import validate_config, with_defaults
 
 # Settings a config leaves out take their defaults (scripts/_pw.py DEFAULTS).
 config.update(with_defaults(config))
+# Refuse a bad config now, dry runs included, not in prepare after hours of
+# converting. Only here, in the main process: every cluster job reads this
+# file again, and some checks import Cellpose.
+if getattr(workflow, "is_main_process", True):
+    validate_config(config)
 
 include: "rules/common.smk"
 include: "rules/convert.smk"
