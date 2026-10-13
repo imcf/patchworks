@@ -580,3 +580,39 @@ def test_app_plans_every_segmentation_of_a_multi_run():
         d.value for d in at.dataframe if "segmentation" in d.value.columns
     )
     assert list(rows["segmentation"]) == ["nuclei_labels", "cyto_labels"]
+
+
+def test_a_folder_of_tiffs_becomes_a_glob_and_a_pattern():
+    tifffile = pytest.importorskip("tifffile")
+    listing = [
+        *(
+            (f"s_T0_Z{z:03d}_C{c}_V0.tif", False)
+            for z in range(3)
+            for c in (0, 1)
+        ),
+        ("notes.txt", False),
+        (".hidden.tif", False),
+        ("sub.tif", True),
+    ]
+    names = core.tiff_names(listing)
+    assert len(names) == 6
+    assert core.tiff_glob("/data/scan", names) == "/data/scan/*.tif"
+    assert core.tiff_glob("/d", ["a.TIFF", "b.TIFF"]) == "/d/*.TIFF"
+    pattern = core.guess_sequence_pattern(names)
+    # What the converter hands it to: the constant T0 is no axis.
+    axes, shape = tifffile.tifffile.parse_filenames(names, pattern)[:2]
+    assert (axes, shape) == (("Z", "C"), (3, 2))
+    numbered = [f"plane{z:04d}.tif" for z in range(5)]
+    pattern = core.guess_sequence_pattern(numbered)
+    assert tifffile.tifffile.parse_filenames(numbered, pattern)[:2] == (
+        ("Z",),
+        (5,),
+    )
+    assert core.guess_sequence_pattern(["one.tif"]) is None
+
+    cfg = core.build_config(
+        {**BASE, "input": "/d/*.tif", "method": "threshold"}
+    )
+    assert any("sequence_pattern" in p for p in core.config_problems(cfg))
+    cfg["sequence_pattern"] = pattern
+    assert not core.config_problems(cfg)

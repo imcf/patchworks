@@ -44,7 +44,9 @@ not live in a terminal, and it never starts a run with a typo in a key.
 1. **Connect**: pick the cluster, log in, and choose the workflow folder
    (`~/patchworks/workflow` is found by itself). Every path field has a
    folder button that browses the cluster, so you can pick the image, the
-   work_dir or a PSF instead of typing it.
+   work_dir or a PSF instead of typing it instead of typing it. A folder of
+   single-plane TIFFs is picked with *Use this folder's TIFFs as one
+   image*, which also guesses its `sequence_pattern` from the file names.
 2. **Configure**: one segmentation, or several with the relations between them
    (the form of a [multi config](snakemake.md#several-segmentations-and-their-relations)).
    Settings mean the same as in the [config](snakemake.md#2-configure). The

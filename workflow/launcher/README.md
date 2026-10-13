@@ -46,8 +46,12 @@ it where only the people it's for can reach it.
    holds a `Snakefile`. Every path field (workflow folder, input image,
    work_dir, PSF) has a folder button that browses the cluster over SFTP:
    folders open, image files and `.zarr` stores are picked, and a folder
-   field can also take a new folder inside the current one. A TIFF glob
-   still has to be typed in.
+   field can also take a new folder inside the current one. For an image
+   stored as one TIFF per plane, browse into its folder and click *Use
+   this folder's TIFFs as one image*: the input becomes `folder/*.tif`,
+   and a `sequence_pattern` (which part of each file name is the z plane,
+   channel or time point) is guessed from the file names, for you to
+   check.
 1. **Configure tab.** Choose *One segmentation* or *Several
    segmentations + relations*. The form is split into blocks: image, tiling,
    segmentation(s) (one tab each), relations and review, outputs, and a
