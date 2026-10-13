@@ -590,7 +590,9 @@ def start_from_form(wf_dir: str, jobs: list[dict]) -> None:
         (st.success if note[0] == "ok" else st.error)(note[1])
 
 
-def segmentation_form(k: str = "", label: str = "labels") -> dict:
+def segmentation_form(
+    k: str = "", label: str = "labels", others: list[str] | None = None
+) -> dict:
     """One segmentation: what to label, how, and how to post-process it.
 
     *k* prefixes every widget key, so several can sit on one page; the keys
@@ -620,8 +622,12 @@ def segmentation_form(k: str = "", label: str = "labels") -> dict:
     v["method"] = (
         st.segmented_control(
             "method",
-            ["cellpose", "dog", "threshold", "custom"],
-            format_func=lambda m: {"dog": "DoG (+ deconvolution)"}.get(m, m),
+            ["cellpose", "plantseg", "watershed", "dog", "threshold", "custom"],
+            format_func=lambda m: {
+                "dog": "DoG (+ deconvolution)",
+                "plantseg": "PlantSeg (cells, membranes)",
+                "watershed": "watershed (cells from nuclei)",
+            }.get(m, m),
             label_visibility="collapsed",
             **_init(f"{k}method", default="cellpose"),
         )
@@ -649,6 +655,18 @@ def segmentation_form(k: str = "", label: str = "labels") -> dict:
             height=68,
             **_init(f"{k}cpx", value=""),
         )
+        v["normalize"] = st.radio(
+            "normalize",
+            ["image", "tile"],
+            horizontal=True,
+            format_func=lambda n: {
+                "image": "one intensity range for the whole image",
+                "tile": "each tile its own (uneven staining)",
+            }[n],
+            **_init(f"{k}norm"),
+        )
+    elif v["method"] in core.SEEDED:
+        plantseg_form(v, k, others or [])
     elif v["method"] == "dog":
         c1, c2, c3, c4 = st.columns(4)
         v["dog_low_sigma"] = c1.number_input(
@@ -744,9 +762,100 @@ def segmentation_form(k: str = "", label: str = "labels") -> dict:
     v["dilate"] = c3.number_input(
         "dilate (px)", min_value=0, **_init(f"{k}dil", value=0)
     )
+    if v["dilate"]:
+        v["dilate_gpu"] = c3.checkbox(
+            "on the GPU", help="cupy", **_init(f"{k}dgpu", value=False)
+        )
     v["min_volume"] = _opt_float("min_volume (um³)", c4, key=f"{k}minv")
     v["max_volume"] = _opt_float("max_volume (um³)", c5, key=f"{k}maxv")
     return v
+
+
+def plantseg_form(v: dict, k: str, others: list[str]) -> None:
+    """PlantSeg or the watershed: cells filling space, from a membrane stain.
+
+    Both can grow one cell per nucleus: nuclei from a channel (the
+    nuclei_channel above) or another segmentation's objects (seed_labels).
+    """
+    if v["method"] == "plantseg":
+        c1, c2, c3, c4 = st.columns(4)
+        models = list(core.PLANTSEG_MODELS)
+        if st.session_state.get(f"{k}psm") not in (None, *models):
+            models.append(st.session_state[f"{k}psm"])  # a loaded one
+        v["ps_model"] = c1.selectbox(
+            "model",
+            models,
+            accept_new_options=True,
+            help="PlantSeg zoo model; fetched before the run (GPU nodes are "
+            "often offline)",
+            **_init(f"{k}psm"),
+        )
+        v["ps_segmentation"] = c2.selectbox(
+            "segmentation",
+            core.PLANTSEG_SEGMENTATIONS,
+            help="gasp: the usual; nuclei_watershed / lifted_multicut use "
+            "nuclei",
+            **_init(f"{k}pss"),
+        )
+        v["ps_beta"] = c3.number_input(
+            "beta",
+            min_value=0.0,
+            max_value=1.0,
+            step=0.05,
+            help="lower merges more, higher splits more",
+            **_init(f"{k}psb", value=0.6),
+        )
+        v["ps_post_minsize"] = c4.number_input(
+            "smallest cell (voxels)",
+            min_value=0,
+            **_init(f"{k}psmin", value=100),
+        )
+        uses_nuclei = v["ps_segmentation"] in core.PLANTSEG_NUCLEI
+    else:
+        v["ws_nuclei_min_size"] = st.number_input(
+            "smallest nucleus (voxels)",
+            min_value=0,
+            **_init(f"{k}nmin", value=50),
+        )
+        uses_nuclei = True
+    c1, c2, c3 = st.columns(3)
+    if uses_nuclei:
+        source = c1.radio(
+            "nuclei from",
+            ["channel", "labels"],
+            format_func=lambda s: {
+                "channel": "the nuclei channel (above)",
+                "labels": "another segmentation",
+            }[s],
+            disabled=not others,
+            help="another segmentation: one cell grows from each of its "
+            "objects (e.g. Cellpose's nuclei); it runs first",
+            **_init(f"{k}seed_from"),
+        )
+        if source == "labels" and others:
+            v["seed_labels"] = c2.selectbox(
+                "grow from", others, **_init(f"{k}seed")
+            )
+        v["max_radius_um"] = _opt_float(
+            "at most this far from a nucleus (µm)",
+            c3,
+            help="blank: up to the walls",
+            key=f"{k}rad",
+        )
+    c1, c2 = st.columns([1, 3])
+    v["foreground"] = c1.selectbox(
+        "foreground",
+        ["otsu", "none"],
+        help="otsu: stop at the tissue edge (a boundary U-Net puts cells "
+        "everywhere, empty space included)",
+        **_init(f"{k}fg"),
+    )
+    v["extra_kwargs"] = c2.text_area(
+        "more settings (YAML mapping)",
+        help="any other keyword of the plugin, e.g. patch: [64, 128, 128]",
+        height=68,
+        **_init(f"{k}px", value=""),
+    )
 
 
 DEFAULT_LABELS = ["nuclei_labels", "cyto_labels", "cilia_labels"]
@@ -770,10 +879,14 @@ def segmentations_form() -> list[dict]:
         f"{i + 1} · {st.session_state.get(f's{i}_lbl', defaults[i])}"
         for i in range(int(n))
     ]
+    labels = [
+        st.session_state.get(f"s{i}_lbl", defaults[i]) for i in range(int(n))
+    ]
     segs = []
     for i, tab in enumerate(st.tabs(names)):
         with tab:
-            segs.append(segmentation_form(f"s{i}_", defaults[i]))
+            others = [x for j, x in enumerate(labels) if j != i]
+            segs.append(segmentation_form(f"s{i}_", defaults[i], others))
     return segs
 
 

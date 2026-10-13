@@ -758,7 +758,9 @@ def test_app_resources_change_for_one_run():
         d.value for d in at.dataframe if "partition" in d.value.columns
     )
     assert "rtx4090" in partitions["partition"].tolist()
-    at.radio[0].set_value(core.SLURM_JOB).run()
+    next(r for r in at.radio if r.label == "run mode").set_value(
+        core.SLURM_JOB
+    ).run()
     # The controller's partition, QOS and account are dropdowns of what
     # the cluster has; anything else may still be typed.
     assert "rtx4090" in at.selectbox(key="ctrl_partition").options
@@ -917,6 +919,7 @@ def test_stitch_is_per_segmentation(tmp_path):
             "label_name": "cells",
             "method": "custom",
             "custom_module": "patchworks.plugins.watershed",
+            "nuclei_channel": 1,  # the watershed grows from nuclei
             "stitch": "iou",
             "iou_threshold": 0.3,
         },
@@ -1011,11 +1014,15 @@ def _roundtrip_files(directory):
         },
         {
             "label_name": "cells",
-            "method": "custom",
+            "method": "plantseg",
             "channel": 0,
-            "nuclei_channel": 1,
-            "custom_module": "patchworks.plugins.plantseg",
-            "custom_kwargs": "model: generic_confocal_3D_unet",
+            # One cell grown from each of the nuclei segmented above.
+            "seed_labels": "nuclei",
+            "ps_model": "generic_light_sheet_3D_unet",
+            "ps_segmentation": "nuclei_watershed",
+            "ps_beta": 0.5,
+            "max_radius_um": 12.0,
+            "extra_kwargs": "patch: [64, 128, 128]",
             "stitch": "iou",
             "iou_threshold": 0.3,
             "dilate": 2,
@@ -1102,7 +1109,7 @@ def test_form_state_says_what_the_form_cannot_hold():
     cfg["seed_labels"] = "nuclei"
     cfg["denoise"] = {"model": "n2v"}
     state, ignored = core.form_state([cfg])
-    assert ignored == ["denoise", "seed_labels"]
+    assert ignored == ["denoise"]  # seed_labels has a field now
     assert (
         state["run_kind"] == core.RUN_KINDS[0]
         and state["method"] == "threshold"
@@ -1127,8 +1134,12 @@ def test_a_config_file_loads_into_the_one_segmentation_form():
     cfg = core.build_config(
         {
             **BASE,
-            "method": "custom",
-            "custom_module": "patchworks.plugins.watershed",
+            "method": "watershed",
+            "nuclei_channel": 1,
+            "ws_nuclei_min_size": 200,
+            "foreground": "none",
+            "dilate": 1,
+            "dilate_gpu": True,
             "stitch": "iou",
             "overlap": "[2, 20, 20]",
             "max_volume": 900.0,
@@ -1143,3 +1154,61 @@ def test_a_config_file_loads_into_the_one_segmentation_form():
     assert not at.exception
     (rebuilt,) = at.session_state["files"].values()
     assert rebuilt == cfg
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"method": "watershed", "nuclei_channel": 1, "max_radius_um": "15"},
+        {"method": "watershed", "seed_labels": "nuclei", "foreground": "none"},
+        {
+            "method": "plantseg",
+            "ps_segmentation": "nuclei_watershed",
+            "seed_labels": "nuclei",
+        },
+        {"method": "plantseg", "ps_model": "my_own_model", "ps_beta": 0.3},
+    ],
+)
+def test_seeded_methods_write_what_the_workflow_accepts(extra):
+    """PlantSeg and the watershed from the form: valid to the workflow,
+    but for packages this test environment may lack."""
+    from _pw import environment_problems, validate_config
+
+    cfg = core.build_config({**BASE, "stitch": "iou", **extra})
+    assert cfg["method"] == "custom"
+    assert cfg["custom"]["module"] == core.SEEDED[extra["method"]]
+    assert core.config_problems(cfg) == []
+    missing = environment_problems(cfg)
+    try:
+        validate_config(cfg)
+    except ValueError as exc:
+        others = [
+            line
+            for line in str(exc).splitlines()[1:]
+            if not any(m in line for m in missing)
+        ]
+        assert others == [], others
+
+
+def test_seed_rules():
+    def problems(**extra):
+        return core.config_problems(
+            core.build_config({**BASE, "stitch": "iou", **extra})
+        )
+
+    assert "nuclei" in problems(method="watershed")[0]
+    assert (
+        "not both"
+        in problems(method="watershed", seed_labels="nuclei", nuclei_channel=1)[
+            0
+        ]
+    )
+    assert "from itself" in problems(method="watershed", seed_labels="cells")[0]
+    assert (
+        "would ignore it"
+        in problems(method="plantseg", seed_labels="nuclei")[0]
+    )
+    assert (
+        "uses nuclei"
+        in problems(method="plantseg", ps_segmentation="lifted_multicut")[0]
+    )

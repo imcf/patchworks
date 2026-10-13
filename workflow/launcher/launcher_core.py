@@ -21,6 +21,31 @@ SLURM_JOB = "Submit — controller as a SLURM job (recommended)"
 LOGIN_NODE = "Submit — controller on the login node"
 RUN_MODES = (DRY_RUN, SLURM_JOB, LOGIN_NODE)
 
+# The methods the form has fields for that run a plugin: they fill space
+# from a membrane stain, PlantSeg with a U-Net, the watershed from nuclei.
+SEEDED = {
+    "plantseg": "patchworks.plugins.plantseg",
+    "watershed": "patchworks.plugins.watershed",
+}
+# PlantSeg's zoo models for cells from a membrane stain; any other can be
+# typed (patchworks.plugins.plantseg.available_models() lists them all).
+PLANTSEG_MODELS = (
+    "generic_confocal_3D_unet",
+    "generic_light_sheet_3D_unet",
+    "confocal_3D_unet_ovules_ds2x",
+    "lightsheet_3D_unet_root_ds1x",
+)
+PLANTSEG_SEGMENTATIONS = (
+    "gasp",
+    "mutex_ws",
+    "multicut",
+    "dt_watershed",
+    "lifted_multicut",
+    "nuclei_watershed",
+)
+# The PlantSeg modes that use nuclei: from a channel or another segmentation.
+PLANTSEG_NUCLEI = ("lifted_multicut", "nuclei_watershed")
+
 LOG_DIR = ".streamlit_launcher_logs"
 REGISTRY = f"{LOG_DIR}/jobs.jsonl"
 
@@ -157,7 +182,12 @@ def build_config(v: dict[str, Any]) -> dict[str, Any]:
         "fill_holes": v.get("fill_holes") or False,
         "open_radius": v.get("open_radius", 0),
         "dilate": v.get("dilate", 0),
+        "dilate_gpu": bool(v.get("dilate_gpu", False)),
         "min_volume": v.get("min_volume"),
+        # Grow from another segmentation's objects (one cell per nucleus).
+        "seed_labels": v.get("seed_labels") or None,
+        # Cellpose: one intensity range for every tile, or each its own.
+        "normalize": v.get("normalize", "image"),
         "max_volume": v.get("max_volume"),
         # merge
         "stitch": v.get("stitch", "touch"),
@@ -211,6 +241,28 @@ def build_config(v: dict[str, Any]) -> dict[str, Any]:
             "function": "segment",
             "kwargs": kwargs,
         }
+    elif method in SEEDED:
+        kwargs: dict[str, Any] = {}
+        if method == "plantseg":
+            kwargs = {
+                "model": v.get("ps_model") or PLANTSEG_MODELS[0],
+                "segmentation": v.get("ps_segmentation", "gasp"),
+                "beta": float(v.get("ps_beta", 0.6)),
+                "post_minsize": int(v.get("ps_post_minsize", 100)),
+            }
+        else:
+            kwargs = {"nuclei_min_size": int(v.get("ws_nuclei_min_size", 50))}
+        foreground = v.get("foreground", "otsu")
+        kwargs["foreground"] = None if foreground == "none" else foreground
+        if v.get("max_radius_um"):
+            kwargs["max_radius_um"] = float(v["max_radius_um"])
+        kwargs.update(_yaml_or(v.get("extra_kwargs", ""), {}) or {})
+        cfg["method"] = "custom"
+        cfg["custom"] = {
+            "module": SEEDED[method],
+            "function": "segment",
+            "kwargs": kwargs,
+        }
     elif method == "custom":
         cfg["custom"] = {
             "module": v["custom_module"],
@@ -245,7 +297,7 @@ FILLS_SPACE = ("patchworks.plugins.plantseg", "patchworks.plugins.watershed")
 
 def fills_space(v: dict[str, Any]) -> bool:
     """Whether the form values *v* pick a method that needs iou stitching."""
-    return (
+    return v.get("method") in SEEDED or (
         v.get("method") == "custom"
         and str(v.get("custom_module", "")).strip() in FILLS_SPACE
     )
@@ -255,6 +307,39 @@ def config_problems(cfg: dict[str, Any]) -> list[str]:
     """What the form holds that the workflow would get wrong."""
     problems = []
     module = (cfg.get("custom") or {}).get("module")
+    kwargs = (cfg.get("custom") or {}).get("kwargs") or {}
+    seeds = cfg.get("seed_labels")
+    if seeds and cfg.get("nuclei_channel") is not None:
+        problems.append(
+            f"{cfg['label_name']}: nuclei from a channel or from "
+            f"{seeds!r}, not both (clear nuclei_channel)"
+        )
+    if seeds and seeds == cfg.get("label_name"):
+        problems.append(f"{cfg['label_name']}: cannot grow from itself")
+    if (
+        module == SEEDED["watershed"]
+        and not seeds
+        and (cfg.get("nuclei_channel") is None)
+    ):
+        problems.append(
+            f"{cfg['label_name']}: the watershed grows cells from nuclei: give "
+            "a nuclei channel, or another segmentation's nuclei"
+        )
+    if module == SEEDED["plantseg"]:
+        needs = kwargs.get("segmentation") in PLANTSEG_NUCLEI
+        has = seeds or cfg.get("nuclei_channel") is not None
+        if needs and not has:
+            problems.append(
+                f"{cfg['label_name']}: segmentation "
+                f"{kwargs.get('segmentation')!r} uses nuclei: give a nuclei "
+                "channel, or another segmentation's nuclei"
+            )
+        if seeds and not needs:
+            problems.append(
+                f"{cfg['label_name']}: only segmentation "
+                f"{' or '.join(PLANTSEG_NUCLEI)} grows from "
+                f"{seeds!r}; {kwargs.get('segmentation')!r} would ignore it"
+            )
     if (
         cfg.get("method") == "custom"
         and module in FILLS_SPACE
@@ -1283,6 +1368,9 @@ def segmentation_state(cfg: dict[str, Any], k: str = "") -> dict[str, Any]:
     method = cfg.get("method", "cellpose")
     if method == "custom" and custom.get("module") == DOG_MODULE:
         method = "dog"
+    for name, module in SEEDED.items():
+        if method == "custom" and custom.get("module") == module:
+            method = name
     v: dict[str, Any] = {
         "lbl": _text(cfg.get("label_name", "labels")),
         "ch": int(cfg.get("channel") or 0),
@@ -1297,6 +1385,26 @@ def segmentation_state(cfg: dict[str, Any], k: str = "") -> dict[str, Any]:
         v["cp3"] = bool(cp.pop("do_3D", False))
         v["cpg"] = bool(cp.pop("gpu", True))
         v["cpx"] = yaml.safe_dump(cp, sort_keys=False).strip() if cp else ""
+        v["norm"] = cfg.get("normalize", "image")
+    elif method in SEEDED:
+        kw = dict(custom.get("kwargs") or {})
+        if method == "plantseg":
+            v["psm"] = _text(kw.pop("model", PLANTSEG_MODELS[0]))
+            v["pss"] = kw.pop("segmentation", "gasp")
+            v["psb"] = float(kw.pop("beta", 0.6))
+            v["psmin"] = int(kw.pop("post_minsize", 100))
+        else:
+            v["nmin"] = int(kw.pop("nuclei_min_size", 50))
+        # The plugins' own default when left out: PlantSeg none, the
+        # watershed Otsu.
+        fg = kw.pop("foreground", None if method == "plantseg" else "otsu")
+        v["fg"] = "none" if fg is None else str(fg)
+        v["rad"] = _text(kw.pop("max_radius_um", None))
+        kw.pop("seeds", None)  # the workflow sets it from seed_labels
+        v["px"] = yaml.safe_dump(kw, sort_keys=False).strip() if kw else ""
+        if cfg.get("seed_labels"):
+            v["seed_from"] = "labels"
+            v["seed"] = cfg["seed_labels"]
     elif method == "dog":
         kw = dict(custom.get("kwargs") or {})
         v["dl"] = float(kw.get("low_sigma", 1.0))
@@ -1332,6 +1440,7 @@ def segmentation_state(cfg: dict[str, Any], k: str = "") -> dict[str, Any]:
     )
     v["open"] = int(cfg.get("open_radius") or 0)
     v["dil"] = int(cfg.get("dilate") or 0)
+    v["dgpu"] = bool(cfg.get("dilate_gpu", False))
     v["minv"] = _text(cfg.get("min_volume"))
     v["maxv"] = _text(cfg.get("max_volume"))
     return {f"{k}{key}": value for key, value in v.items()}
