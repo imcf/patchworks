@@ -25,8 +25,14 @@ coordinates, in µm, so all acquisitions of a sample overlay:
 - A stitched 2D dataset with a ScanR ``metadata.ome.xml`` in its own
   folder or elsewhere in the sample (e.g. the prescan ``Scan``) is put
   on that ScanR field grid: centred on it, scaled so the fields land on
-  their stage positions. ``Scan`` is mirrored in x by default
-  (``--flip-x``/``--flip-y`` NAME change that).
+  their stage positions.
+- A dataset with one tile per field of that grid (e.g. probability maps
+  of the prescan fields) gets each tile centred on its field (by the
+  ``P`` number in its name, else in order), at the scale the stitched
+  image showed.
+- Data on a ScanR grid is mirrored in x by default, as its camera runs
+  against the stage (``--grid-flip``); ``--flip-x``/``--flip-y NAME``
+  mirror other datasets.
 - A dataset whose XML places nothing (every tile at the origin, as
   probability maps or segmentations computed tile by tile usually are)
   takes the place of the reference's tiles: each tile is matched by its
@@ -65,7 +71,8 @@ Columns written (see https://mobie.github.io/tutorials/mobie_collection_table.ht
 - ``name``: ``<view>_<setup name>``, unique per row
 - ``view``: the dataset's folder name
 - ``display``: ``<view>_<channel>``, shared by all tiles of a channel
-- ``color``: from the channel's wavelength (405 Blue, 488 Green, ...)
+- ``color``: from the wavelength in the channel name, else in the file
+  name (405 Blue, 488 Green, 561 Red, 640 Magenta)
 - ``contrast_limits``: empty (MoBIE's default) unless ``--contrast-limits``
 - ``spot_radius``: for spots
 - ``affine``: from the XML's coordinates to stage µm (scaling, stage
@@ -493,7 +500,66 @@ def place_on_grid(src, meta, flip):
             else ""
         )
     )
-    return matrix, note
+    return matrix, note, (sx, sy)
+
+
+def place_on_fields(src, meta, flip, pixel):
+    """Put each tile of a per-field dataset on its ScanR field.
+
+    For data with one tile per field of a ScanR acquisition (e.g. a
+    probability map computed on every prescan field): tile *i* -- by the
+    position number in its name (``P00012`` is field 12), else by order
+    -- is centred on the stage position of field *i*.
+
+    Parameters
+    ----------
+    src : Source
+    meta : dict
+        Output of `read_scanr_meta`; as many positions as `src` has tiles.
+    flip : tuple of bool
+        Mirror each tile in x and/or y, as the stitched data of the same
+        camera.
+    pixel : tuple of float
+        Pixel size (x, y) in µm.
+
+    Returns
+    -------
+    dict of int to tuple
+        Setup index to affine (world -> stage µm).
+    """
+    positions = meta["positions"]
+    tiles = list(dict.fromkeys(st.tile for st in src.setups))
+    fx, fy = (-1 if f else 1 for f in flip)
+    out = {}
+    for st in src.setups:
+        n = _position_number(st.tile, st.name)
+        k = (
+            n - 1
+            if n is not None and 0 < n <= len(positions)
+            else tiles.index(st.tile)
+        )
+        cx, cy = positions[k]
+        w, h = (int(v) for v in st.size[:2])
+        try:
+            sz = float(st.voxel[2])
+        except ValueError:
+            sz = 1.0
+        pixel_to_stage = (
+            fx * pixel[0],
+            0,
+            0,
+            cx - fx * pixel[0] * (w - 1) / 2,
+            0,
+            fy * pixel[1],
+            0,
+            cy - fy * pixel[1] * (h - 1) / 2,
+            0,
+            0,
+            sz,
+            0,
+        )
+        out[st.index] = compose(pixel_to_stage, invert(st.reg))
+    return out
 
 
 def has_positions(src):
@@ -999,6 +1065,26 @@ def channel_color(channel: str) -> str:
     return next(color for limit, color in WAVELENGTH_COLORS if nm < limit)
 
 
+def colour_of(src, setup):
+    """Colour of a row: from its channel name, else from the file name.
+
+    Parameters
+    ----------
+    src : Source
+    setup : SetupInfo
+
+    Returns
+    -------
+    str
+    """
+    colour = channel_color(setup.channel)
+    if colour == "White":
+        colour = channel_color(
+            re.sub(r"P\d+|Z\d+|T\d+|W\d+", "", src.path.stem)
+        )
+    return colour
+
+
 def view_names(paths: list[Path], level: int = 1):
     """Name each dataset after a folder above it, adding detail if needed.
 
@@ -1274,11 +1360,18 @@ def main(argv=None):
         "(and DZ) µm, e.g. Scan=120,-35; repeatable",
     )
     p.add_argument(
+        "--grid-flip",
+        choices=("none", "x", "y", "xy"),
+        default="x",
+        help="mirror data placed on a ScanR grid (stitched scan, per-field "
+        "maps), whose camera runs against the stage (default: x)",
+    )
+    p.add_argument(
         "--flip-x",
         action="append",
+        default=[],
         metavar="NAME",
-        help="mirror the dataset(s) in folder NAME in x; repeatable "
-        "(default: Scan)",
+        help="mirror the dataset(s) in folder NAME in x; repeatable",
     )
     p.add_argument(
         "--flip-y",
@@ -1375,7 +1468,7 @@ def main(argv=None):
             sys.exit(f"--offset {spec}: no dataset named like '{key}'")
         for s in hits:
             s.offset = tuple(vals)
-    flip_x = args.flip_x if args.flip_x is not None else ["Scan"]
+    flip_x = args.flip_x
     for key, axis in [(k, 0) for k in flip_x] + [(k, 1) for k in args.flip_y]:
         for s in match_sources(sources, key):
             f = list(s.flip)
@@ -1414,22 +1507,74 @@ def main(argv=None):
             lo, hi = ref.z_range_um
             mid = (lo + hi) / 2
 
-        # Datasets without any position (e.g. probability maps made tile
-        # by tile) take the places of the reference's tiles.
-        def grid_meta(s, sample_metas=sample_metas):
-            # Stitched 2D data goes on a ScanR grid, if one is known.
-            if s.kind != "intensities" or s.is_3d:
-                return None
-            return s.meta or (
-                sample_metas[0] if len(sample_metas) == 1 else None
+        sample_meta = sample_metas[0] if len(sample_metas) == 1 else None
+        grid_flip = (
+            args.grid_flip in ("x", "xy"),
+            args.grid_flip in ("y", "xy"),
+        )
+
+        def n_tiles(s):
+            return len({st.tile for st in s.setups})
+
+        def flip_of(s, grid_flip=grid_flip):
+            return (s.flip[0] or grid_flip[0], s.flip[1] or grid_flip[1])
+
+        # 1. Stitched 2D images of a ScanR grid (the Scan): on that grid.
+        fitted = []
+        for s in members:
+            meta = s.meta or sample_meta
+            if s.kind != "intensities" or s is ref or s.is_3d or meta is None:
+                continue
+            if n_tiles(s) != 1:
+                continue
+            s.matrix, note, scale = place_on_grid(s, meta, flip_of(s))
+            fitted.append(scale)
+            notes.append(note)
+            if not in_stage and ref is not None:
+                notes.append(
+                    f"WARNING: {ref.view} has no absolute stage position "
+                    f"(no positions.xml, relative tile locations), so "
+                    f"{s.view} will not line up with it. Rewrite its XML "
+                    "with tifs_to_bdv.py --xml-only."
+                )
+
+        # 2. One tile per field of that grid (e.g. prescan probabilities):
+        # each tile on its field, at the scale the stitched images showed.
+        for s in members:
+            meta = s.meta or sample_meta
+            if s.kind != "intensities" or s is ref or meta is None:
+                continue
+            if s.matrix is not None or n_tiles(s) != len(meta["positions"]):
+                continue
+            if fitted:
+                pixel = (
+                    sum(f[0] for f in fitted) / len(fitted),
+                    sum(f[1] for f in fitted) / len(fitted),
+                )
+                how = "scale of the stitched image(s)"
+            else:
+                pixel = meta["pixel"] or (s.scale, s.scale)
+                how = "nominal pixel size"
+            s.setup_matrix = place_on_fields(s, meta, flip_of(s), pixel)
+            own = " (its own positions ignored)" if has_positions(s) else ""
+            flips = "/".join(
+                a for a, f in zip("XY", flip_of(s), strict=True) if f
+            )
+            notes.append(
+                f"{s.view}: {n_tiles(s)} tiles centred on the {len(meta['positions'])}"
+                f" ScanR fields{own}, {fmt(pixel[0])} µm/px ({how})"
+                + (f", flipped in {flips}" if flips else "")
             )
 
+        # 3. Other datasets without positions (e.g. probability maps of
+        # the 3D tiles) take the places of the reference's tiles.
         for s in members:
             if (
                 s.kind != "intensities"
                 or s is ref
                 or ref is None
-                or grid_meta(s) is not None
+                or s.matrix is not None
+                or s.setup_matrix is not None
             ):
                 continue
             if has_positions(s):
@@ -1443,40 +1588,20 @@ def main(argv=None):
                 )
                 continue
             s.setup_matrix = placed
-            if not s.is_3d:
-                s.dz = mid
             notes.append(
                 f"{s.view}: no positions of its own; {len(placed)}/"
                 f"{len(s.setups)} setups placed on the tiles of {ref.view}"
-                + (" (2D, at mid-stack)" if not s.is_3d else "")
             )
+
+        # 4. Every 2D dataset in the middle of the stack.
         for s in members:
-            if (
-                s.kind != "intensities"
-                or s.is_3d
-                or s is ref
-                or s.setup_matrix is not None
-            ):
+            if s.kind != "intensities" or s.is_3d or s is ref or mid is None:
                 continue
-            meta = grid_meta(s)
-            if meta is not None:
-                s.matrix, note = place_on_grid(s, meta, s.flip)
-                notes.append(note)
-                placed_z = 0.0
-                if not in_stage and ref is not None:
-                    notes.append(
-                        f"WARNING: {ref.view} has no absolute stage position "
-                        f"(no positions.xml, relative tile locations), so "
-                        f"{s.view} will not line up with it. Rewrite its XML "
-                        "with tifs_to_bdv.py --xml-only."
-                    )
-            else:
-                placed_z = s.z_range_um[0]
-            if mid is not None:
-                s.dz = mid - placed_z
-                notes.append(
-                    f"{s.view}: 2D, at z {fmt(mid)} µm, the middle of {ref.view}"
-                )
+            placed = s.matrix is not None or s.setup_matrix is not None
+            s.dz = mid - (0.0 if placed else s.z_range_um[0])
+            notes.append(
+                f"{s.view}: 2D, at z {fmt(mid)} µm, the middle of {ref.view}"
+            )
         for s in members:
             if s.kind != "spots":
                 continue
@@ -1575,7 +1700,7 @@ def main(argv=None):
                     "display": f"{src.view}_{s.channel}"
                     if s.channel
                     else src.view,
-                    "color": channel_color(s.channel),
+                    "color": colour_of(src, s),
                     "contrast_limits": contrast,
                     "affine": src.affine(s),
                     "sample": src.sample.name,
@@ -1588,7 +1713,10 @@ def main(argv=None):
         print(
             f"      {len(src.setups)} rows: {len(tiles)} tile(s) x "
             f"{len(chans)} channel(s): "
-            + ", ".join(f"{c or 'unnamed'} ({channel_color(c)})" for c in chans)
+            + ", ".join(
+                f"{c or 'unnamed'} ({colour_of(src, st)})"
+                for c, st in {st.channel: st for st in src.setups}.items()
+            )
             + f"; {'3D' if src.is_3d else '2D'}, z {fmt(lo)}..{fmt(hi)} µm, "
             f"{fmt(src.scale)} µm per world unit"
         )
