@@ -1257,3 +1257,38 @@ def test_launcher_and_workflow_agree_on_the_8gb_fallback():
     ):
         cfg = with_defaults(core.build_config({**BASE, **extra}))
         assert core.needs_gpu_memory(cfg) == sized_for_fallback_gpu(cfg), extra
+
+
+def test_jobs_tab_shows_a_tried_tile():
+    pytest.importorskip("paramiko")
+    report = json.loads(_report(["cells"], converted=True))
+    report["segmentations"][0]["plan"].update(
+        {
+            "seconds_per_tile": 4.2,
+            "preview": "/scratch/run/previews/1/cells.png",
+            "preview_tile": 3,
+            "preview_objects": 57,
+            "preview_plane": 8,
+        }
+    )
+    import io
+
+    from PIL import Image
+
+    png = io.BytesIO()
+    Image.new("RGB", (8, 4)).save(png, format="PNG")
+    job = _job(kind="check", previews="/scratch/run/previews/1")
+    ssh = _FakeSSH(
+        {"squeue": "DONE\n", "cat ": "[check] log\n" + json.dumps(report)},
+        files={
+            f"{WF}/{core.REGISTRY}": core.registry_line(job).encode(),
+            "/scratch/run/previews/1/cells.png": png.getvalue(),
+        },
+    )
+    at = _app(ssh, input="/x.czi", work_dir="/scratch/run")
+    at.run()
+    assert not at.exception
+    (image,) = [e for e in at.main if type(e).__name__ == "Image"]
+    assert "tile 3, plane 8 of the tile · 57 objects · 4.2 s per tile" in str(
+        image.proto
+    )

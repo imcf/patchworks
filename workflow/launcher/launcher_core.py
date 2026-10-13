@@ -875,11 +875,16 @@ def unlock_command(job: dict[str, Any], workflow_dir: str) -> str | None:
     return " ".join(shlex.quote(a) for a in [*args, "--unlock"])
 
 
-def check_command(config: str, *, sample: int = 0) -> str:
-    """``scripts/check.py`` on a run's config (or multi config), as JSON."""
+def check_command(
+    config: str, *, sample: int = 0, preview: str | None = None
+) -> str:
+    """``scripts/check.py`` on a run's config (or multi config), as JSON;
+    with *preview*, a picture of one segmented tile per segmentation."""
     args = ["python", "scripts/check.py", config, "--json"]
     if sample:
         args += ["--sample", str(sample)]
+    if preview:
+        args += ["--preview", preview]
     return " ".join(shlex.quote(a) for a in args)
 
 

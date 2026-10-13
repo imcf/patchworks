@@ -344,14 +344,16 @@ def check_overlap(overlap, tile_shape) -> None:
             )
 
 
-def plan_run(cfg, sample: int = 0) -> dict:
+def plan_run(cfg, sample: int = 0, preview: str | None = None) -> dict:
     """What a run will do, from its converted image, without running it.
 
     The tiles prepare would make (the same sizing), how many hold signal
     (when the occupancy map is built: ``convert`` builds it), the GPU jobs,
     and the size of the result. With *sample*, the method runs on that many
     real tiles (the first only loads the model) for a time per tile: run it
-    where the jobs would run, on a GPU for a GPU method.
+    where the jobs would run, on a GPU for a GPU method. With *preview* (a
+    PNG path) as well, the last of them is drawn there: its middle plane,
+    and the objects found on it outlined.
     """
     import time
 
@@ -433,6 +435,7 @@ def plan_run(cfg, sample: int = 0) -> dict:
     lead = (slice(None),) if stacked.ndim > image.ndim else ()
     fn = build_fn(cfg)
     times = []
+    labels = None
     for index in pick:
         sl = tuple(
             slice(max(0, s.start - h), min(n, s.stop + h))
@@ -440,8 +443,21 @@ def plan_run(cfg, sample: int = 0) -> dict:
         )
         block = np.asarray(stacked[lead + sl])
         started = time.perf_counter()
-        fn(block)
+        labels = fn(block)
         times.append(time.perf_counter() - started)
+    if preview and labels is not None:
+        # The tile without its halo, as the run keeps it.
+        inner = tuple(
+            slice(t.start - r.start, t.stop - r.start)
+            for t, r in zip(tiles[index], sl)
+        )
+        tile_labels = np.asarray(labels)[inner]
+        plan["preview"] = str(preview)
+        plan["preview_tile"] = int(index)
+        plan["preview_objects"] = int(len(np.unique(tile_labels)) - 1)
+        plan["preview_plane"] = write_preview(
+            np.asarray(image[tiles[index]]), tile_labels, preview
+        )
     steady = times[1:] if len(times) > 1 else times
     per_tile = float(np.mean(steady))
     plan["seconds_per_tile"] = per_tile
@@ -450,6 +466,54 @@ def plan_run(cfg, sample: int = 0) -> dict:
         plan["gpu_hours"] = per_tile * len(occupied) / 3600
         plan["hours_per_job"] = per_tile * per_job / 3600
     return plan
+
+
+def write_preview(image, labels, path) -> int | None:
+    """A PNG of one tile: the image, and beside it the objects outlined.
+
+    A 3-D tile shows its middle plane (returned; None for 2-D). The image
+    is stretched between its 1st and 99th percentiles; each object gets a
+    colour of its own.
+    """
+    from PIL import Image
+    from skimage.segmentation import find_boundaries
+
+    import numpy as np
+
+    plane = None
+    if image.ndim == 3:
+        plane = image.shape[0] // 2
+        image, labels = image[plane], labels[plane]
+    image = image.astype(np.float32)
+    lo, hi = np.percentile(image, (1, 99))
+    gray = np.clip((image - lo) / max(hi - lo, 1e-6), 0, 1)
+    gray = (gray * 255).astype(np.uint8)
+    left = np.repeat(gray[..., None], 3, axis=2)
+    right = left.copy()
+    # Two pixels wide, to stay visible on a 1024-pixel tile shown smaller.
+    edges = find_boundaries(labels, mode="thick") & (labels > 0)
+    ids = labels[edges].astype(np.uint64)
+    # Hues spread by the golden ratio: neighbours rarely look alike.
+    hue = (ids * 0.618033988749895) % 1.0
+    colors = np.stack(
+        [
+            np.clip(np.abs(hue * 6 - 3) - 1, 0, 1),
+            np.clip(2 - np.abs(hue * 6 - 2), 0, 1),
+            np.clip(2 - np.abs(hue * 6 - 4), 0, 1),
+        ],
+        axis=1,
+    )
+    right[edges] = (colors * 255).astype(np.uint8)
+    gap = np.full((gray.shape[0], 8, 3), 255, dtype=np.uint8)
+    picture = Image.fromarray(np.concatenate([left, gap, right], axis=1))
+    if picture.width > 2400:
+        scale = 2400 / picture.width
+        picture = picture.resize(
+            (2400, max(1, round(picture.height * scale))), Image.NEAREST
+        )
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    picture.save(path)
+    return plane
 
 
 def fetch_models(cfg) -> str:

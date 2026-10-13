@@ -47,7 +47,9 @@ def load(path: Path) -> tuple[list[Path], list[dict], bool]:
     return paths, cfgs, True
 
 
-def check(path: Path, sample: int = 0) -> dict:
+def check(
+    path: Path, sample: int = 0, preview: str | Path | None = None
+) -> dict:
     from _pw import plan_run, validate_config
 
     paths, cfgs, multi = load(path)
@@ -74,7 +76,15 @@ def check(path: Path, sample: int = 0) -> dict:
             ] or [str(exc)]
         if report["converted"] and not entry["problems"]:
             try:
-                entry["plan"] = plan_run(cfg, sample=sample)
+                entry["plan"] = plan_run(
+                    cfg,
+                    sample=sample,
+                    preview=(
+                        str(Path(preview) / f"{entry['label_name']}.png")
+                        if preview and sample
+                        else None
+                    ),
+                )
             except Exception as exc:  # reported, the other configs go on
                 entry["plan_error"] = f"{type(exc).__name__}: {exc}"
         report["segmentations"].append(entry)
@@ -135,6 +145,11 @@ def format_report(report: dict) -> str:
                     f"{plan['gpu_hours']:.1f} GPU hours in all"
                 )
             lines.append(line)
+        if plan.get("preview"):
+            lines.append(
+                f"  tile {plan['preview_tile']}: {plan['preview_objects']} "
+                f"objects, drawn in {plan['preview']}"
+            )
     if report["valid"] and not report["converted"]:
         lines.append(
             "Not converted yet: convert first (the run's first step) to see "
@@ -156,13 +171,19 @@ def main() -> None:
         metavar="N",
         help="time the method on N real tiles (where the jobs would run)",
     )
+    parser.add_argument(
+        "--preview",
+        metavar="DIR",
+        help="with --sample: a PNG per segmentation in DIR, one tile with "
+        "its objects outlined",
+    )
     parser.add_argument("--json", action="store_true", help="print JSON")
     args = parser.parse_args()
     workflow_dir = Path(__file__).resolve().parent.parent
     path = _resolve(args.config, *_config_bases(workflow_dir))
     if not path.is_file():
         sys.exit(f"[check] ERROR: {args.config} not found")
-    report = check(path, sample=args.sample)
+    report = check(path, sample=args.sample, preview=args.preview)
     print(
         json.dumps(report, default=str) if args.json else format_report(report)
     )

@@ -103,8 +103,10 @@ it was when started again with the same command; finished steps are not
 redone. Once the image is converted, `check` also plans each
 segmentation with the run's own tile sizing: tiles, how many hold signal,
 GPU jobs, memory per tile, size of the result. `check $C --sample 3` times
-the method on 3 real tiles for the hours a job and the run will take: run
-it where the jobs run (`srun` with the segment job's partition and GPU).
+the method on 3 real tiles for the hours a job and the run will take, and
+`--preview DIR` adds a picture of one of them per segmentation, its
+objects outlined, to judge the settings before the run: run it where the
+jobs run (`srun` with the segment job's partition and GPU).
 `status` reads what the run left in work_dir: converted or not,
 tiles segmented out of how many, merged with how many objects, the seam
 report, and for a multi config its relations and bundle.

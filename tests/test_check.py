@@ -153,3 +153,24 @@ def test_fetch_script_reports_each_segmentation(tmp_path, monkeypatch, capsys):
         fetch_models.main()
     assert stop.value.code == 0
     assert "[fetch] cells: ok cells" in capsys.readouterr().out
+
+
+def test_preview_draws_a_segmented_tile(tmp_path):
+    from PIL import Image
+
+    (tmp_path / "w").mkdir()
+    _converted(tmp_path / "w")
+    report = check.check(
+        _config(tmp_path), sample=2, preview=tmp_path / "previews"
+    )
+    plan = report["segmentations"][0]["plan"]
+    assert plan["preview"] == str(tmp_path / "previews" / "cells.png")
+    assert plan["preview_objects"] == 1  # the one bright square
+    assert plan["preview_plane"] == 4  # the middle of 8 planes
+    picture = Image.open(plan["preview"])
+    # The tile (32 x 32), a gap, the tile again with the outlines.
+    assert picture.size == (32 + 8 + 32, 32)
+    rgb = picture.convert("RGB")
+    left, right = rgb.crop((0, 0, 32, 32)), rgb.crop((40, 0, 72, 32))
+    assert left.tobytes() != right.tobytes()  # outlined on the right
+    assert "1 objects, drawn in" in check.format_report(report)

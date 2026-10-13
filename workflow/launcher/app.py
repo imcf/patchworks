@@ -1082,6 +1082,28 @@ def check_on_cluster(client, wf_dir, setup, files) -> dict:
     return report
 
 
+def show_previews(report: dict) -> None:
+    """The tile each segmentation was tried on, its objects outlined."""
+    for seg in report.get("segmentations", []):
+        plan = seg.get("plan") or {}
+        if not plan.get("preview"):
+            continue
+        try:
+            with get_sftp().open(plan["preview"]) as fh:
+                picture = fh.read()
+        except OSError:
+            st.caption(f"{seg['label_name']}: no picture at {plan['preview']}")
+            continue
+        plane = plan.get("preview_plane")
+        st.image(
+            picture,
+            caption=f"{seg['label_name']}: tile {plan['preview_tile']}"
+            + ("" if plane is None else f", plane {plane} of the tile")
+            + f" · {plan['preview_objects']} objects · "
+            f"{plan['seconds_per_tile']:.1f} s per tile",
+        )
+
+
 def show_check(report: dict) -> None:
     """Problems first, then the plan of every segmentation."""
     if "error" in report:
@@ -1263,14 +1285,20 @@ def launch(
 
 
 def submit_timing(client, *, wf_dir, setup, files, name, segment, account):
-    """A short GPU job timing the method on real tiles (check --sample).
+    """A short GPU job trying the method on real tiles (check --sample).
 
     It runs where the segment jobs run -- their partition, QOS and GPU --
-    so the seconds per tile are the ones the run will see.
+    so the seconds per tile are the ones the run will see, and draws one
+    segmented tile per segmentation, to judge the settings by.
     """
     upload(client, files)
+    first = next(c for p, c in files.items() if not p.endswith("multi.yaml"))
+    stamp = name.rsplit("_", 1)[-1]
+    previews = f"{first['work_dir'].rstrip('/')}/previews/{stamp}"
     inner = core.inner_command(
-        wf_dir, setup, core.check_command(run_config_path(files), sample=3)
+        wf_dir,
+        setup,
+        core.check_command(run_config_path(files), sample=3, preview=previews),
     )
     mem = core.first_attempt(segment.get("mem_mb")) or 16000
     return start_job(
@@ -1289,7 +1317,11 @@ def submit_timing(client, *, wf_dir, setup, files, name, segment, account):
             "gres": segment.get("gres") or "",
             "cpus": int(segment.get("cpus_per_task") or 4),
         },
-        record={"config": run_config_path(files), "kind": "check"},
+        record={
+            "config": run_config_path(files),
+            "kind": "check",
+            "previews": previews,
+        },
     )
 
 
@@ -1996,11 +2028,12 @@ with tab_launch:
                         client, wf_dir, run_setup, files
                     )
             if c2.button(
-                "Time it on a GPU",
-                icon=":material/timer:",
-                help="a short SLURM job on the segment partition times the "
-                "method on 3 real tiles, for the hours a job and the run "
-                "take; its result shows in the Jobs tab",
+                "Try it on a GPU",
+                icon=":material/science:",
+                help="a short SLURM job on the segment partition runs the "
+                "method on 3 real tiles: a picture of one with its objects "
+                "outlined, to judge the settings by, and the hours a job and "
+                "the run take. It shows in the Jobs tab.",
                 disabled="segment" not in resources,
             ):
                 submit_timing(
@@ -2188,8 +2221,9 @@ with tab_jobs:
                     )
                     report = core.parse_json_output(log)
                     if report:
-                        with section(":material/timer: Timing"):
+                        with section(":material/science: Tried on real tiles"):
                             show_check(report)
+                            show_previews(report)
             elif job.get("config"):
                 job_progress(job, setup)
             with st.expander("Log", icon=":material/terminal:", expanded=alive):

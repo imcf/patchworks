@@ -92,8 +92,10 @@ it where only the people it's for can reach it.
      plan per segmentation (tiles, how many hold signal, GPU jobs, memory
      per tile, size of the result). The image comes from launching with
      *Convert only* (the run's first step, which a later run skips).
-     *Time it on a GPU* submits a short job on the segment partition that
-     times the method on 3 real tiles: hours per job, GPU hours in all.
+     *Try it on a GPU* submits a short job on the segment partition that
+     runs the method on 3 real tiles: a picture of one tile per
+     segmentation with its objects outlined (to judge diameter, threshold
+     and the rest before the run), and the hours a job and the run take.
    - Then pick a mode:
      - **Dry run**: `snakemake -n`, or `run_multi.py -n`. The output is
        shown right away.
