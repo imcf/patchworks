@@ -692,8 +692,17 @@ def segmentation_form(
     )
     if v["method"] == "cellpose":
         c1, c2, c3, c4 = st.columns(4)
-        v["cp_model"] = c1.text_input(
-            "cellpose.model", **_init(f"{k}cpm", value="cyto3")
+        models = cellpose_models()
+        default = "cyto3" if "cyto3" in models else models[0]
+        if st.session_state.get(f"{k}cpm") not in (None, *models):
+            models = [*models, st.session_state[f"{k}cpm"]]  # loaded, or own
+        v["cp_model"] = c1.selectbox(
+            "cellpose.model",
+            models,
+            accept_new_options=True,
+            help="the models the cluster's Cellpose has (v3 and v4 name "
+            "them differently); or type the path of your own",
+            **_init(f"{k}cpm", index=models.index(default)),
         )
         v["cp_diameter"] = c2.number_input(
             "cellpose.diameter (0 = estimate)",
@@ -826,6 +835,23 @@ def segmentation_form(
     v["min_volume"] = _opt_float("min_volume (um³)", c4, key=f"{k}minv")
     v["max_volume"] = _opt_float("max_volume (um³)", c5, key=f"{k}maxv")
     return v
+
+
+def cellpose_models() -> list[str]:
+    """The models the cluster's Cellpose accepts, asked once per session."""
+    if "cellpose_models" not in st.session_state:
+        with st.spinner("asking the cluster's Cellpose for its models…"):
+            _, out, _ = run(
+                get_client(),
+                core.inner_command(
+                    wf_dir, setup_cmd, core.CELLPOSE_MODELS_COMMAND
+                ),
+                timeout=120,
+            )
+        st.session_state["cellpose_models"] = core.parse_models(out)
+    return st.session_state["cellpose_models"] or list(
+        core.CELLPOSE_FALLBACK_MODELS
+    )
 
 
 def plantseg_form(v: dict, k: str, others: list[str]) -> None:

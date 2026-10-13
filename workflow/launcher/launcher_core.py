@@ -903,6 +903,27 @@ def channels_command(config: str) -> str:
     )
 
 
+# The pretrained models the cluster's Cellpose accepts (v3: cyto3, nuclei
+# ...; v4: cpsam ...), printed after a tag so log lines cannot confuse it.
+CELLPOSE_MODELS_COMMAND = (
+    "python -c 'import json; "
+    "from patchworks.plugins.cellpose import available_models; "
+    'print("MODELS:" + json.dumps(available_models()))\''
+)
+# When the cluster cannot say: Cellpose 4's model, then Cellpose 3's.
+CELLPOSE_FALLBACK_MODELS = ["cpsam", "cyto3", "nuclei", "cyto2"]
+
+
+def parse_models(output: str) -> list[str]:
+    """The model names CELLPOSE_MODELS_COMMAND printed ([] if none)."""
+    tag = parse_tag(output, "MODELS")
+    try:
+        names = json.loads(tag) if tag else []
+    except ValueError:
+        return []
+    return [str(n) for n in names] if isinstance(names, list) else []
+
+
 def run_status_command(config: str) -> str:
     """``scripts/status.py`` on a run's config (or multi config), as JSON."""
     return " ".join(

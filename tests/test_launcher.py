@@ -1386,3 +1386,20 @@ def test_jobs_tab_shows_failures_and_the_queue():
         d.value for d in at.dataframe if "why it waits" in d.value.columns
     )
     assert len(queue) == 3
+
+
+def test_cellpose_model_dropdown_lists_the_clusters_models():
+    pytest.importorskip("paramiko")
+    ssh = _FakeSSH({"available_models": 'MODELS:["cpsam"]\n'})
+    at = _app(ssh, input="/x.czi", work_dir="/scratch/run")
+    at.run()
+    assert not at.exception
+    model = at.selectbox(key="cpm")
+    # Cellpose 4 only: its model, and the form's default is not offered.
+    assert model.options == ["cpsam"] and model.value == "cpsam"
+    (cfg,) = at.session_state["files"].values()
+    assert cfg["cellpose"]["model"] == "cpsam"
+    # Asked once, not on every rerun.
+    at.run()
+    assert sum("available_models" in c for c in ssh.commands) == 1
+    assert core.parse_models("Traceback") == []
