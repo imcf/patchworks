@@ -9,9 +9,11 @@ Full guide: <https://imcf.one/patchworks/guide/snakemake/>
 
 ```bash
 pixi install
-# one segmentation: edit config/config.yaml and profile/slurm/config.yaml
-pixi run dry
-pixi run slurm
+# one segmentation: your copy of config/config.yaml in config/local/
+# (git ignores it), and profile/slurm/config.yaml for your cluster
+pixi run dry   --configfile config/local/my_run.yaml
+pixi run slurm --configfile config/local/my_run.yaml
+pixi run status config/local/my_run.yaml     # how far it got
 # several, related: list them in a multi.yaml (see config/multi.yaml)
 pixi run multi-dry   --config my_multi.yaml
 pixi run multi-slurm --config my_multi.yaml

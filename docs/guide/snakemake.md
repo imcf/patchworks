@@ -42,8 +42,15 @@ GPU; tell pixi a driver is there: `export CONDA_OVERRIDE_CUDA=12.0`.
 
 ## 2. Configure
 
-Edit `config/config.yaml` (or keep your own copy and add `--configfile
-my_config.yaml` to the commands below):
+Copy `config/config.yaml` into `config/local/`, which git ignores, and edit
+the copy: the shipped files then stay untouched, so `git pull` never
+conflicts with your settings. Add `--configfile` to the commands below; it
+replaces the shipped config rather than adding to it:
+
+```bash
+mkdir -p config/local && cp config/config.yaml config/local/my_run.yaml
+pixi run dry --configfile config/local/my_run.yaml
+```
 
 ```yaml
 input: "/data/scan.ims"        # .ims/.czi/.lif/.nd2/OME-TIFF/.zarr
@@ -74,14 +81,21 @@ config. The options most worth knowing are [below](#options-worth-knowing). Then
 ## 3. Run
 
 ```bash
-pixi run dry      # the plan, nothing run
-pixi run go       # locally, on this machine
-pixi run slurm    # on the cluster: submits and follows the jobs
+C=config/local/my_run.yaml
+pixi run dry   --configfile $C   # checks the config, lists the steps; runs nothing
+pixi run go    --configfile $C   # locally, on this machine
+pixi run slurm --configfile $C   # on the cluster: submits and follows the jobs
+pixi run status $C               # how far it got (from another shell)
 ```
 
-Run it in `tmux` on the login node: it follows the jobs until the end. A
-run that stops (or fails) resumes where it was when started again with the
-same command; finished steps are not redone.
+The dry run checks the whole config first (unknown keys, wrong values,
+packages the environment lacks), so a mistake shows in seconds rather
+than after the conversion. Run `slurm` in `tmux` on the login node: it
+follows the jobs until the end. A run that stops (or fails) resumes where
+it was when started again with the same command; finished steps are not
+redone. `status` reads what the run left in work_dir: converted or not,
+tiles segmented out of how many, merged with how many objects, the seam
+report, and for a multi config its relations and bundle.
 
 ## Several segmentations and their relations
 

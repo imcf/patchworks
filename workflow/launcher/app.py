@@ -43,7 +43,15 @@ CLUSTERS = core.load_clusters(Path(__file__).with_name("clusters.yaml"))
 
 
 def get_client() -> paramiko.SSHClient | None:
-    return st.session_state.get("ssh_client")
+    """The session's SSH connection; None (log in again) once it dropped."""
+    client = st.session_state.get("ssh_client")
+    transport = client.get_transport() if client is not None else None
+    if client is not None and (transport is None or not transport.is_active()):
+        for key in ("ssh_client", "sftp"):
+            st.session_state.pop(key, None)
+        st.session_state["connection_lost"] = True
+        return None
+    return client
 
 
 def connect(host, port, username, password, fingerprints, allow_unverified):
@@ -63,8 +71,12 @@ def connect(host, port, username, password, fingerprints, allow_unverified):
         look_for_keys=False,
         allow_agent=False,
     )
+    # A keepalive every 30 s: firewalls drop an idle connection, and the
+    # page sits idle while you fill in the form.
+    client.get_transport().set_keepalive(30)
     st.session_state["ssh_client"] = client
     st.session_state["ssh_target"] = f"{username}@{host}:{port}"
+    st.session_state.pop("connection_lost", None)
     # A clone in the home folder is the usual place: fill it in if found.
     try:
         sftp = get_sftp()
@@ -886,6 +898,12 @@ STATE_COLORS = {"RUNNING": "green", "PENDING": "orange", "DONE": "gray"}
 with st.sidebar:
     st.markdown("### :material/dns: Cluster")
     if get_client() is None:
+        if st.session_state.get("connection_lost"):
+            st.warning(
+                "The connection to the cluster was lost: log in again. "
+                "Jobs keep running.",
+                icon=":material/link_off:",
+            )
         name = st.selectbox("preset", ["Custom"] + sorted(CLUSTERS))
         preset = CLUSTERS.get(name, {})
         fps = preset.get("host_key_fingerprints", [])

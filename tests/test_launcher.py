@@ -483,6 +483,12 @@ class _FakeSSH:
 
     def __init__(self):
         self.commands = []
+        self.active = True
+
+    def get_transport(self):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(is_active=lambda: self.active)
 
     def open_sftp(self):
         return _FakeSFTP()
@@ -668,3 +674,24 @@ def test_fills_space_lists_the_plugins_that_say_so():
         {"method": "custom", "custom_module": "patchworks.plugins.plantseg"}
     )
     assert not core.fills_space({"method": "cellpose"})
+
+
+def test_a_dropped_connection_asks_to_log_in_again():
+    pytest.importorskip("paramiko")
+    testing = pytest.importorskip("streamlit.testing.v1")
+    at = testing.AppTest.from_file(
+        str(ROOT / "workflow/launcher/app.py"), default_timeout=30
+    )
+    ssh = _FakeSSH()
+    at.session_state["ssh_client"] = ssh
+    at.session_state["ssh_target"] = "u@host:22"
+    at.session_state["wf_dir"] = "/home/u/patchworks/workflow"
+    at.run()
+    assert not at.exception
+    ssh.active = False
+    at.run()
+    assert not at.exception
+    assert any(
+        "connection to the cluster was lost" in w.value for w in at.warning
+    )
+    assert any("Connect to a cluster" in i.value for i in at.info)
