@@ -160,6 +160,12 @@ def _pick(key: str, path: str) -> None:
     st.session_state[f"{key}__close"] = True
 
 
+def _pick_tiffs(key: str, pattern_glob: str, pattern: str | None) -> None:
+    _pick(key, pattern_glob)
+    if pattern:
+        st.session_state["sequence_pattern__picked"] = pattern
+
+
 def _start_dir(value: str, dirs_only: bool) -> str:
     sftp = get_sftp()
     value = value.strip()
@@ -173,7 +179,9 @@ def _start_dir(value: str, dirs_only: bool) -> str:
 
 
 @st.dialog("Choose on the cluster", width="large")
-def browse(key: str, label: str, dirs_only: bool) -> None:
+def browse(
+    key: str, label: str, dirs_only: bool, tiff_folder: bool = False
+) -> None:
     if st.session_state.pop(f"{key}__close", False):
         st.rerun()
     cwd_key = f"{key}__cwd"
@@ -216,10 +224,24 @@ def browse(key: str, label: str, dirs_only: bool) -> None:
     needle = c2.text_input("filter", key=f"{key}__filter").strip().lower()
 
     try:
-        entries = core.browse_entries(list_remote(cwd), dirs_only=dirs_only)
+        listing = list_remote(cwd)
     except OSError as exc:
         st.error(f"cannot list {cwd}: {exc}")
         return
+    entries = core.browse_entries(listing, dirs_only=dirs_only)
+    tiffs = core.tiff_names(listing) if tiff_folder else []
+    if len(tiffs) > 1:
+        # One image stored as a plane per file: the input is a glob.
+        pattern = core.guess_sequence_pattern(tiffs)
+        st.button(
+            f"Use this folder's {len(tiffs)} TIFFs as one image",
+            icon=":material/burst_mode:",
+            type="primary",
+            on_click=_pick_tiffs,
+            args=(key, core.tiff_glob(cwd, tiffs), pattern),
+            help="each file one plane; which plane is read from the file "
+            "names (sequence_pattern)",
+        )
     if needle:
         entries = [e for e in entries if needle in e[0].lower()]
     with st.container(height=380):
@@ -261,6 +283,7 @@ def remote_path(
     dirs_only: bool = False,
     help: str | None = None,
     narrow: bool = False,
+    tiff_folder: bool = False,
 ) -> str:
     """A path on the cluster: typed in, or chosen with *Browse*."""
     picked = st.session_state.pop(f"{key}__picked", None)
@@ -276,7 +299,7 @@ def remote_path(
         help="browse the cluster",
     ):
         st.session_state[f"{key}__cwd"] = None  # start from the value
-        browse(key, label, dirs_only)
+        browse(key, label, dirs_only, tiff_folder)
     return (value or "").strip()
 
 
@@ -307,8 +330,10 @@ def image_form() -> dict:
         v["input"] = remote_path(
             "input image",
             "input",
-            help=".ims/.czi/.lif/.nd2/ome-tiff/.zarr, or a TIFF glob "
-            "(type the glob in)",
+            help=".ims/.czi/.lif/.nd2/ome-tiff/.zarr, or a folder of "
+            "single-plane TIFFs as a glob (folder/*.tif): browse into the "
+            "folder and use its TIFFs",
+            tiff_folder=True,
         )
     with c2:
         v["work_dir"] = remote_path(
@@ -317,6 +342,22 @@ def image_form() -> dict:
             dirs_only=True,
             help="everything is written under here, on the cluster; the "
             "converted image goes to <work_dir>/image.zarr",
+        )
+    picked = st.session_state.pop("sequence_pattern__picked", None)
+    if picked is not None:
+        st.session_state["sequence_pattern"] = picked
+    v["sequence_pattern"] = None
+    if core.is_glob(v["input"]):
+        v["sequence_pattern"] = (
+            st.text_input(
+                "sequence_pattern: where the plane's index is in each file name",
+                key="sequence_pattern",
+                placeholder=r"_Z(?P<Z>\d+).*?_C(?P<C>\d+)",
+                help="a regex; each named group (Z, C, T) is an axis, read "
+                "from the digits it matches. Guessed from the file names when "
+                "you use a folder's TIFFs; check it.",
+            ).strip()
+            or None
         )
     with st.expander("Conversion", icon=":material/transform:"):
         c1, c2, c3, c4 = st.columns(4)
@@ -329,12 +370,8 @@ def image_form() -> dict:
             help="zstd: best for labels; zstd:3 ~10% smaller raw images; "
             "blosc for older Java viewers without zstd",
         )
-        c1, c2 = st.columns(2)
-        v["convert_chunks"] = c1.text_input(
+        v["convert_chunks"] = st.text_input(
             "convert_chunks (YAML, e.g. [8, 512, 512]; blank = auto)", ""
-        )
-        v["sequence_pattern"] = c2.text_input(
-            "sequence_pattern (regex, only for a TIFF glob input)", ""
         )
     return v
 

@@ -240,12 +240,97 @@ def missing_fields(cfg: dict[str, Any]) -> list[str]:
 
 def config_problems(cfg: dict[str, Any]) -> list[str]:
     """What the form holds that the workflow would get wrong."""
+    problems = []
     work_dir = str(cfg.get("work_dir") or "").strip()
     if work_dir and not work_dir.startswith("/"):
-        return [
+        problems.append(
             f"work_dir must be an absolute path on the cluster: {work_dir!r}"
+        )
+    if is_glob(str(cfg.get("input") or "")) and not cfg.get("sequence_pattern"):
+        problems.append(
+            "a folder of TIFFs needs a sequence_pattern: which part of each "
+            "file name is the z plane (and channel, time point)"
+        )
+    return problems
+
+
+# ---------------------------------------------------------------------------
+# A folder of single-plane TIFFs
+# ---------------------------------------------------------------------------
+
+TIFF_SUFFIXES = (".tif", ".tiff")
+
+
+def is_glob(path: str) -> bool:
+    return any(c in path for c in "*?[")
+
+
+def tiff_names(entries: list[tuple[str, bool]]) -> list[str]:
+    """The TIFF files of a folder listing (``(name, is_dir)`` pairs)."""
+    return sorted(
+        name
+        for name, is_dir in entries
+        if not is_dir
+        and not name.startswith(".")
+        and name.lower().endswith(TIFF_SUFFIXES)
+    )
+
+
+def tiff_glob(folder: str, names: list[str]) -> str:
+    """A glob matching the TIFFs *names* of *folder*.
+
+    A glob is case-sensitive, so it uses the suffix the files actually have
+    (the most common one, if they are mixed).
+    """
+    suffixes = [n[n.rfind(".") :] for n in names]
+    suffix = max(set(suffixes), key=suffixes.count) if suffixes else ".tif"
+    return join_remote(folder, f"*{suffix}")
+
+
+def guess_sequence_pattern(names: list[str]) -> str | None:
+    """A ``sequence_pattern`` for file names such as ``x_Z012_C1.tif``.
+
+    Looks for an axis letter (T, Z or C, either case) followed by digits,
+    not preceded by another letter, that is in every name and changes
+    between them -- a constant one (``T0``) is no axis. None if no z or
+    channel index is found, or the names do not agree.
+    """
+    import re
+
+    token = re.compile(r"(?<![A-Za-z])([TZCtzc])(\d+)")
+
+    def tokens(name: str) -> list[tuple[str, str, str]]:
+        # (letter, digits, the character before it)
+        return [
+            (m.group(1), m.group(2), name[m.start() - 1] if m.start() else "")
+            for m in token.finditer(name)
         ]
-    return []
+
+    def numbered() -> str | None:
+        # img0001.tif, img0002.tif ...: the number is the z plane.
+        ends = [re.search(r"(\d+)\.tiff?$", n, re.IGNORECASE) for n in names]
+        if all(ends) and len({m.group(1) for m in ends}) == len(names) > 1:
+            return r"(?P<Z>\d+)\.(?i:tiff?)$"
+        return None
+
+    parsed = [tokens(n) for n in names]
+    if not parsed or not parsed[0]:
+        return numbered()
+    first = parsed[0]
+    if any([t[0] for t in p] != [t[0] for t in first] for p in parsed):
+        return None  # not one naming scheme
+    parts, seen = [], set()
+    for i, (letter, _, before) in enumerate(first):
+        values = {p[i][1] for p in parsed}
+        axis = letter.upper()
+        if len(values) < 2 or axis in seen:
+            continue
+        seen.add(axis)
+        prefix = re.escape(before) if not before.isalnum() else ""
+        parts.append(f"{prefix}{re.escape(letter)}(?P<{axis}>\\d+)")
+    if not seen & {"Z", "C"}:
+        return numbered()
+    return ".*?".join(parts)
 
 
 # ---------------------------------------------------------------------------
