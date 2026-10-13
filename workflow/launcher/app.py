@@ -474,7 +474,7 @@ def tiling_form() -> dict:
         "tiles_per_job", min_value=1, step=1, **_init("tiles_per_job", value=4)
     )
     v["gpu_memory_gb"] = c4.number_input(
-        "gpu_memory_gb (0 = detect)",
+        "gpu_memory_gb (0 = the segment GPU)",
         min_value=0,
         **_init("gpu_memory_gb", value=0),
     )
