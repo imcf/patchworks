@@ -51,7 +51,9 @@ it where only the people it's for can reach it.
    this folder's TIFFs as one image*: the input becomes `folder/*.tif`,
    and a `sequence_pattern` (which part of each file name is the z plane,
    channel or time point) is guessed from the file names, for you to
-   check.
+   check. Once the image is converted, *See the channels* shows each
+   channel (its maximum over z) and the voxel size, to pick the channels
+   by.
 1. **Configure tab.** *Start from a past run* loads a past launch, or
    any config or multi config on the cluster, back into the form (a
    setting the form cannot hold, such as `seed_labels`, is named, not

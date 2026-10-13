@@ -379,6 +379,8 @@ def image_form() -> dict:
             ).strip()
             or None
         )
+    if v["work_dir"]:
+        channels_view(v["work_dir"])
     with st.expander("Conversion", icon=":material/transform:"):
         c1, c2, c3, c4 = st.columns(4)
         v["reuse_pyramid"] = c1.checkbox(
@@ -400,6 +402,61 @@ def image_form() -> dict:
             **_init("convert_chunks", value=""),
         )
     return v
+
+
+def channels_view(work_dir: str) -> None:
+    """Each channel of the converted image, to pick the channels by."""
+    with st.expander("See the channels", icon=":material/palette:"):
+        key = f"channels_{work_dir}"
+        st.caption(
+            "Each channel's maximum over z, once the image is converted "
+            "(Plan & launch → Convert only); and its voxel size."
+        )
+        if st.button("Show", icon=":material/visibility:", key="show_channels"):
+            # Any config of this work_dir will do: the script reads only
+            # its work_dir. Written here, so this works before Configure
+            # is complete.
+            probe = f"{wf_dir}/config/launcher_channels_probe.yaml"
+            run(
+                get_client(),
+                f"mkdir -p {shlex.quote(wf_dir)}/config",
+                login=False,
+            )
+            write_remote(
+                get_client(),
+                probe,
+                yaml.safe_dump({"work_dir": work_dir, "input": ""}),
+            )
+            rc, out, err = run(
+                get_client(),
+                core.inner_command(
+                    wf_dir, setup_cmd, core.channels_command(probe)
+                ),
+                timeout=600,
+            )
+            st.session_state[key] = core.parse_json_output(out) or {
+                "error": core.last_error_line(err or out) or f"exit {rc}"
+            }
+        info = st.session_state.get(key)
+        if not info:
+            return
+        if "error" in info:
+            st.warning(info["error"], icon=":material/hourglass_empty:")
+            return
+        voxel = ", ".join(
+            f"{a} {v:g} µm" for a, v in (info.get("voxel_um") or {}).items()
+        )
+        st.caption(
+            f"{info['axes']} {' × '.join(map(str, info['shape']))}"
+            + (f" · voxel {voxel}" if voxel else " · voxel size unknown")
+        )
+        cols = st.columns(min(4, max(1, len(info["pictures"]))))
+        for c, path in enumerate(info["pictures"]):
+            try:
+                with get_sftp().open(path) as fh:
+                    cols[c % len(cols)].image(fh.read(), caption=f"channel {c}")
+            except OSError:
+                cols[c % len(cols)].caption(f"channel {c}: no picture")
 
 
 def tiling_form() -> dict:

@@ -174,3 +174,29 @@ def test_preview_draws_a_segmented_tile(tmp_path):
     left, right = rgb.crop((0, 0, 32, 32)), rgb.crop((40, 0, 72, 32))
     assert left.tobytes() != right.tobytes()  # outlined on the right
     assert "1 objects, drawn in" in check.format_report(report)
+
+
+def test_channel_pictures(tmp_path, capsys, monkeypatch):
+    import channels
+    from PIL import Image
+
+    (tmp_path / "w").mkdir()
+    _converted(tmp_path / "w")
+    path = _config(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["channels.py", str(path), "--json"])
+    channels.main()
+    info = json.loads(capsys.readouterr().out)
+    assert info["channels"] == 2 and info["shape"] == [2, 8, 64, 64]
+    assert info["axes"] == "czyx" and len(info["pictures"]) == 2
+    first = Image.open(info["pictures"][0])
+    assert first.size == (64, 64)
+    # Channel 0 has the bright square, channel 1 nothing.
+    assert first.getextrema()[1] == 255
+
+
+def test_channels_needs_a_converted_image(tmp_path, monkeypatch):
+    import channels
+
+    monkeypatch.setattr(sys, "argv", ["channels.py", str(_config(tmp_path))])
+    with pytest.raises(SystemExit, match="not converted yet"):
+        channels.main()

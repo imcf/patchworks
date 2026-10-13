@@ -1292,3 +1292,37 @@ def test_jobs_tab_shows_a_tried_tile():
     assert "tile 3, plane 8 of the tile · 57 objects · 4.2 s per tile" in str(
         image.proto
     )
+
+
+def test_configure_shows_the_channels():
+    pytest.importorskip("paramiko")
+    import io
+
+    from PIL import Image
+
+    png = io.BytesIO()
+    Image.new("L", (4, 4)).save(png, format="PNG")
+    info = {
+        "store": "/scratch/run/image.zarr",
+        "axes": "czyx",
+        "shape": [3, 40, 2048, 2048],
+        "channels": 3,
+        "voxel_um": {"z": 0.5, "y": 0.1, "x": 0.1},
+        "level": 1,
+        "pictures": [
+            f"/scratch/run/previews/channels/channel_{c}.png" for c in range(3)
+        ],
+    }
+    ssh = _FakeSSH(
+        {"scripts/channels.py": json.dumps(info)},
+        files={p: png.getvalue() for p in info["pictures"]},
+    )
+    at = _app(ssh, input="/x.czi", work_dir="/scratch/run")
+    at.run()
+    at.button(key="show_channels").click().run()
+    assert not at.exception
+    images = [e for e in at.main if type(e).__name__ == "Image"]
+    assert len(images) == 3
+    assert any(
+        "3 × 40 × 2048 × 2048 · voxel z 0.5 µm" in c.value for c in at.caption
+    )

@@ -895,6 +895,14 @@ def fetch_command(config: str) -> str:
     )
 
 
+def channels_command(config: str) -> str:
+    """``scripts/channels.py``: a picture per channel of the converted image."""
+    return " ".join(
+        shlex.quote(a)
+        for a in ("python", "scripts/channels.py", config, "--json")
+    )
+
+
 def run_status_command(config: str) -> str:
     """``scripts/status.py`` on a run's config (or multi config), as JSON."""
     return " ".join(
