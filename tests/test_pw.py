@@ -702,11 +702,11 @@ def _two_channel_store(path, membrane_level):
     to_ome_zarr(img, str(path), axes="czyx", n_levels=1, progress=False)
 
 
-def test_image_thresholds_resolve_per_tile_otsu_once(tmp_path):
+def test_image_wide_kwargs_resolve_per_tile_otsu_once(tmp_path):
     """foreground: "otsu" and an unset nuclei_threshold are each measured
     once over the image, so every tile gets the same number -- per tile they
     move with each tile's content and the mask changes at every seam."""
-    from _pw import image_thresholds
+    from _pw import image_wide_kwargs
 
     store = tmp_path / "image.zarr"
     _two_channel_store(store, 1000)
@@ -716,22 +716,29 @@ def test_image_thresholds_resolve_per_tile_otsu_once(tmp_path):
         "nuclei_channel": 1,
         "custom": {"module": "patchworks.plugins.watershed", "kwargs": {}},
     }
-    out = image_thresholds(cfg, str(store))
+    out = image_wide_kwargs(cfg, str(store))
     assert set(out) == {"foreground", "nuclei_threshold"}
     assert 110 < out["foreground"] < 1100  # between the two halves
     assert 110 < out["nuclei_threshold"] < 2100
     # Explicit numbers, seeds from labels, other methods: nothing to do.
     cfg["custom"]["kwargs"] = {"foreground": 500, "nuclei_threshold": 900}
-    assert image_thresholds(cfg, str(store)) == {}
-    assert image_thresholds({**cfg, "method": "cellpose"}, str(store)) == {}
+    assert image_wide_kwargs(cfg, str(store)) == {}
+    assert image_wide_kwargs({**cfg, "method": "cellpose"}, str(store)) == {}
     plantseg = {**cfg, "seed_labels": "nuclei", "nuclei_channel": None}
     plantseg["custom"] = {"module": "patchworks.plugins.plantseg", "kwargs": {}}
-    assert image_thresholds(plantseg, str(store)) == {}  # foreground off
+    # PlantSeg: its standardization always; foreground only when asked.
+    out = image_wide_kwargs(plantseg, str(store))
+    assert set(out) == {"intensity_stats"}
+    mean, std = out["intensity_stats"]
+    assert 100 < mean < 1100 and std > 0
     plantseg["custom"]["kwargs"] = {"foreground": "otsu"}
-    assert set(image_thresholds(plantseg, str(store))) == {"foreground"}
+    assert set(image_wide_kwargs(plantseg, str(store))) == {
+        "foreground",
+        "intensity_stats",
+    }
 
 
-def test_build_fn_applies_the_image_thresholds(monkeypatch):
+def test_build_fn_applies_the_image_wide_kwargs(monkeypatch):
     import _pw
 
     seen = {}

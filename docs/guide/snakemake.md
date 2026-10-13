@@ -57,10 +57,11 @@ cellpose:
   do_3D: true
 ```
 
-Only `input` and `work_dir` are required. Every other setting has a
-default, listed with a one-line description in `DEFAULTS` at the top of
-`workflow/scripts/_pw.py`; the options most worth knowing are
-[below](#options-worth-knowing). Then edit
+Only `input` and `work_dir` are required. Every other setting is listed in
+the file, commented out with its default and a one-line description: remove
+the `#` to change one. In a multi run, settings shared by every
+segmentation are listed in `common.yaml`, the rest in each segmentation's
+config. The options most worth knowing are [below](#options-worth-knowing). Then edit
 `profile/slurm/config.yaml` for your cluster: partitions, the GPU request,
 `jobs:` (how many jobs at once).
 
@@ -167,8 +168,9 @@ own percentiles, which gives every tile its own contrast and cuts cells at
 the seams. The workflow measures the image's 1–99% range once, from
 full-resolution samples of the tiles to segment, and scales every tile with
 it. `normalize: "tile"` restores Cellpose's per-tile behaviour. The same
-goes for the membrane plugins' `foreground: "otsu"` and nuclei threshold:
-one Otsu threshold for the whole image, not one per tile. The values used
+goes for PlantSeg, which standardizes with the image's mean and standard
+deviation, and for the membrane plugins' `foreground: "otsu"` and nuclei
+threshold: one Otsu threshold for the whole image, not one per tile. The values used
 are in the labels' provenance.
 
 **Fragments in 3-D** — 3-D Cellpose often splits a cell into a body and

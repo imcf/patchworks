@@ -335,3 +335,18 @@ def absorb_fragments(
     if small.any():
         out[small[out]] = 0
     return out
+
+
+def fill_enclosed_holes(labels: np.ndarray) -> np.ndarray:
+    """Fill background enclosed by objects, in 3-D and then plane by plane,
+    from the nearest object: holes a voxel-wise mask punched into cells.
+    Background reaching the array's edge stays.
+
+    >>> lab = np.ones((5, 5), int); lab[2, 2] = 0
+    >>> int(fill_enclosed_holes(lab)[2, 2])
+    1
+    """
+    out = _fill_label_holes(np.asarray(labels))
+    if out.ndim == 3:
+        out = np.stack([_fill_label_holes(plane) for plane in out])
+    return out

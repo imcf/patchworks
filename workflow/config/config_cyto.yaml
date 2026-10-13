@@ -1,11 +1,38 @@
-# Cells with Cellpose, the nuclear stain as its second input.
-# With a membrane stain, see docs/guide/membrane_cells.md.
+# Cells with Cellpose, the nuclear stain as its second input. With a
+# membrane stain, see docs/guide/membrane_cells.md. Remove the # to change
+# a setting.
 
 label_name: "cyto_labels"
 channel: 0 # cytoplasm or membrane
 nuclei_channel: 1 # null: one channel only
-overlap: [4, 30, 30]
+overlap: [4, 30, 30] # halo per axis (z, y, x): about one cell
 cellpose:
   model: "cyto3" # Cellpose 4: "cpsam"
-  diameter: 30
+  diameter: 30 # pixels
   do_3D: true
+  # gpu: true
+  # anisotropy: null        # z step / pixel size; null: from the image
+  # flow3D_smooth: 1        # 3-D: smooth the flows; 0: off
+  # fragments: 0.1          # 3-D: fold objects under 10% of a cell into it; null: off
+  # cellprob_threshold: 0.0 # higher: fewer, tighter cells
+  # flow_threshold: 0.4     # 2-D only
+  # min_size: 15            # Cellpose's own size floor, in voxels
+
+# ---- every other setting of this segmentation, with its default ----------
+# stitch: "touch"         # join pieces touching across a seam; "iou": only where both tiles agree
+# iou_threshold: 0.5      # with "iou": overlap needed, of the smaller piece
+# skip_empty: true        # skip tiles without signal
+# empty_threshold: null   # their cutoff, in intensity; null: Otsu of the channel
+# seed_labels: null       # or grow from a label image another config made
+# denoise: null           # {model: "n2v.ckpt"}: Noise2Void first (careamics environment)
+# normalize: "image"      # Cellpose: one intensity range for every tile; "tile": per tile
+# connectivity: 1         # 3: also join voxels touching at edges and corners
+# fill_holes: false       # true, or "per_plane"
+# open_radius: 0          # cut thin spurs (not for cilia)
+# dilate: 0               # grow labels by N pixels
+# dilate_gpu: false
+# min_volume: null        # µm³: drop smaller objects
+# max_volume: null        # µm³: drop larger objects
+# sequential_labels: true # number objects 1..N
+# object_table: true      # one row per object, stored with the labels
+# table_channels: []      # add mean/std intensity of these channels

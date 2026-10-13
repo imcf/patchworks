@@ -181,7 +181,9 @@ def test_3d_cellpose_folds_fragments_and_smooths_flows(monkeypatch):
     monkeypatch.setattr(
         cp, "_cellpose_models", type("M", (), {"CellposeModel": Model})
     )
-    out = cp.cellpose_fn("cpsam", do_3D=True)(np.zeros((10, 32, 32), "uint16"))
+    out = cp.cellpose_fn("cpsam", do_3D=True, diameter=30)(
+        np.zeros((10, 32, 32), "uint16")
+    )
     assert set(np.unique(out)) == {0, 1}
     assert model.smooth == 1
     # Off on request, and off by default in 2-D.
@@ -202,11 +204,37 @@ def test_applied_defaults_are_what_cellpose_fn_fills_in(monkeypatch):
     monkeypatch.setattr(
         cp, "_cellpose_models", type("M", (), {"CellposeModel": Model})
     )
-    assert cp.applied_defaults(True, {}) == {
+    assert cp.applied_defaults(True, {"diameter": 15}) == {
         "fragments": 0.1,
         "flow3D_smooth": 1,
     }
-    assert cp.applied_defaults(False, {}) == {"fragments": None}
+    # Without a diameter a cell's size is a guess: no folding.
+    assert cp.applied_defaults(True, {}) == {
+        "fragments": None,
+        "flow3D_smooth": 1,
+    }
+    assert cp.applied_defaults(False, {"diameter": 15}) == {"fragments": None}
     assert cp.applied_defaults(
         True, {"fragments": None, "flow3D_smooth": 0}
     ) == {"fragments": None}
+
+
+def test_fragments_are_judged_against_the_diameter_in_every_tile(monkeypatch):
+    """Measured per tile, a tile of texture holding only fragments took a
+    fragment for a typical cell and kept them all, while its neighbours
+    were cleaned: a rectangle of fragments one tile wide."""
+    from patchworks.plugins import cellpose as cp
+
+    class Model:
+        def eval(self, img, **kwargs):
+            masks = np.zeros(img.shape, "int32")
+            for i, y in enumerate(range(2, 60, 8)):  # specks, no cell at all
+                masks[2:6, y : y + 4, 2:6] = i + 1
+            return (masks,)
+
+    monkeypatch.setattr(cp, "_require_cellpose", lambda: None)
+    monkeypatch.setattr(cp, "_get_model", lambda _cfg: Model())
+    out = cp.cellpose_fn("cpsam", do_3D=True, diameter=30)(
+        np.zeros((8, 64, 64), "uint16")
+    )
+    assert not out.any()

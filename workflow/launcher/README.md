@@ -13,9 +13,13 @@ For the full walkthrough, see the documentation page *Web launcher
 ## Run it
 
 ```bash
-pip install -r requirements.txt
-streamlit run app.py
+cd workflow/launcher
+pixi run start            # http://localhost:8501
 ```
+
+`pixi.toml` here is a workspace of its own (like `../viewer/`): it solves
+on Linux, macOS and Windows and holds only Streamlit, paramiko and PyYAML.
+Without pixi: `pip install -r requirements.txt && streamlit run app.py`.
 
 Run it on your own machine, or on a server inside the institute network
 for a team. Each visitor logs in with their own cluster account, isolated
@@ -37,8 +41,18 @@ it where only the people it's for can reach it.
 
 ## Using it
 
-1. **Config tab.** Choose *One segmentation* or *Several segmentations +
-   relations (multi)*.
+0. **Sidebar.** Connect, then choose the workflow folder. A clone at
+   `~/patchworks/workflow` is filled in by itself; the sidebar confirms it
+   holds a `Snakefile`. Every path field (workflow folder, input image,
+   work_dir, PSF) has a folder button that browses the cluster over SFTP:
+   folders open, image files and `.zarr` stores are picked, and a folder
+   field can also take a new folder inside the current one. A TIFF glob
+   still has to be typed in.
+1. **Configure tab.** Choose *One segmentation* or *Several
+   segmentations + relations*. The form is split into blocks: image, tiling,
+   segmentation(s) (one tab each), relations and review, outputs, and a
+   final *Check* that lists anything still missing (an empty input or
+   work_dir is refused) before it shows the configs it will upload.
    - Shared settings (input, work_dir, conversion, compression, tiling, GPU,
      merge/pyramid) are entered once.
    - Each segmentation gets its own label name, channel, method (cellpose,
@@ -46,15 +60,23 @@ it where only the people it's for can reach it.
      and post-processing.
    - A multi run adds a relations table (`a` → `b` → `.xlsx`), plus
      optional SLURM settings for the relate jobs and a bundle format.
-   - Each config is written in full, so nothing depends on what the
-     cluster's `config/config.yaml` holds. The app still reads that file
-     and shows the effective config, and flags any keys that would come
-     from it. A multi run is checked the way `run_multi.py` checks it
+   - Each config is complete: the workflow fills in its defaults and
+     reads nothing from the cluster's `config/config.yaml`. A multi run
+     is checked the way `run_multi.py` checks it
      before anything is uploaded: unique label names; one work_dir, input,
      tile shape and level; relations between known labels.
-2. **Launch tab.**
-   - *Plan* runs `patchworks segment --plan` on the converted image. It
-     shows tiles, memory and size, with no segmentation.
+2. **Plan & launch tab.**
+   - *Environment*: the workflow's pixi environment the run starts from,
+     read from its `pixi.toml`. The app picks the smallest one with what
+     the config needs (PlantSeg: `plantseg`; `use_gpu` or `dilate_gpu`:
+     cupy, `cuda12`; `denoise`: `careamics`) and swaps it into the
+     `pixi shell-hook` of the sidebar's setup line.
+   - *Plan* runs `patchworks segment --plan` on the converted image, for
+     every segmentation of the run, and shows tiles, memory and size in
+     one table, before any GPU time is spent. It needs
+     `<work_dir>/image.zarr`: launch with *Convert only* first (the same
+     conversion step a full run starts with, which a later run then
+     skips), or plan after a full run has converted.
    - Then pick a mode:
      - **Dry run**: `snakemake -n`, or `run_multi.py -n`. The output is
        shown right away.

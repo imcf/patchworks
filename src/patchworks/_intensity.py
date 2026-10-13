@@ -124,6 +124,21 @@ def intensity_range(
     return ranges
 
 
+def intensity_stats(
+    store: Union[str, Path], channel: Union[int, None] = 0, **sampling
+) -> tuple[float, float]:
+    """Image-wide mean and standard deviation of one channel, from
+    full-resolution crops (:func:`sample_crops`), exact zeros left out."""
+    values = _acquired(sample_crops(store, channel, **sampling)).astype(
+        "float64"
+    )
+    if values.size == 0:
+        return 0.0, 1.0
+    mean, std = float(values.mean()), float(values.std())
+    logger.info("mean and std of channel %s: %.6g, %.6g", channel, mean, std)
+    return mean, (std if std > 0 else 1.0)
+
+
 def otsu_threshold(
     store: Union[str, Path],
     channel: Union[int, None] = 0,

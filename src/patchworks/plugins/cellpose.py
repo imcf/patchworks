@@ -161,12 +161,14 @@ def cellpose_fn(
         and cells are cut at the seams. Measure it once with
         :func:`patchworks.intensity_range`; the workflow does by default.
     fragments:
-        Merge objects smaller than this fraction of a typical cell into the
-        neighbour they touch most, and drop those touching nothing
+        Merge objects smaller than this fraction of a cell of *diameter*
+        (30 px if not given) into the neighbour they touch most, and drop
+        those touching nothing
         (:func:`patchworks.absorb_fragments`), per tile before the halo is
         trimmed. 3-D Cellpose often splits a cell into a body and slivers,
-        and leaves specks in dim regions. ``"auto"`` (default): 0.1 with
-        ``do_3D``, off in 2-D; ``None`` turns it off. 3-D runs also smooth
+        and leaves specks in dim regions. ``"auto"`` (default): 0.1 in 3-D
+        when *diameter* is given (the size it is judged against), else off;
+        ``None`` turns it off. 3-D runs also smooth
         the flows (``flow3D_smooth=1``) unless told otherwise, Cellpose's own
         remedy for fragmentation along z.
     **cellpose_kwargs:
@@ -216,7 +218,7 @@ def cellpose_fn(
             )
             cellpose_kwargs = {**cellpose_kwargs, "anisotropy": anisotropy}
     defaults = applied_defaults(
-        do_3D, {**cellpose_kwargs, "fragments": fragments}
+        do_3D, {**cellpose_kwargs, "fragments": fragments, "diameter": diameter}
     )
     fragments = defaults.pop("fragments", None)
     cellpose_kwargs = {**cellpose_kwargs, **defaults}
@@ -239,16 +241,17 @@ def cellpose_fn(
 def applied_defaults(do_3D: bool, settings: dict[str, Any]) -> dict[str, Any]:
     """What :func:`cellpose_fn` fills in that *settings* left open.
 
-    ``fragments`` (``"auto"`` or absent: 0.1 in 3-D, off in 2-D) and, in
-    3-D where the installed Cellpose takes it, ``flow3D_smooth=1``. Used by
+    ``fragments`` (``"auto"`` or absent: 0.1 in 3-D with a ``diameter``,
+    else off: without one, a cell's size is a guess) and, in 3-D where the
+    installed Cellpose takes it, ``flow3D_smooth=1``. Used by
     ``cellpose_fn`` itself and by the workflow to record in the labels'
     provenance what actually ran.
     """
     out: dict[str, Any] = {}
     fragments = settings.get("fragments", "auto")
-    out["fragments"] = (
-        (0.1 if do_3D else None) if fragments == "auto" else fragments
-    )
+    if fragments == "auto":
+        fragments = 0.1 if do_3D and settings.get("diameter") else None
+    out["fragments"] = fragments
     if do_3D and "flow3D_smooth" not in settings and _accepts("flow3D_smooth"):
         out["flow3D_smooth"] = 1
     return out
@@ -490,14 +493,30 @@ def _run(block: np.ndarray, cellpose_dict: dict[str, Any]) -> np.ndarray:
         return masks[np.newaxis] if squeeze else masks
 
 
+def cell_voxels(cellpose_dict: dict[str, Any], ndim: int) -> float:
+    """Voxels in one cell of the configured diameter (Cellpose's 30 px if
+    none), z shortened by the anisotropy: the same for every tile."""
+    diameter = float(cellpose_dict.get("diameter") or 30.0)
+    if ndim < 3:
+        return float(np.pi / 4 * diameter**2)
+    anisotropy = cellpose_dict.get("cellpose_kwargs", {}).get("anisotropy")
+    return float(np.pi / 6 * diameter**3 / float(anisotropy or 1.0))
+
+
 def _clean(masks: np.ndarray, cellpose_dict: dict[str, Any]) -> np.ndarray:
-    """Fold fragments into the cells they belong to (``fragments=``)."""
+    """Fold fragments into the cells they belong to (``fragments=``).
+
+    The size limit comes from the diameter, not from what each tile holds:
+    measured per tile, a tile of texture without cells kept all its
+    fragments while its neighbours were cleaned.
+    """
     fraction = cellpose_dict.get("fragments")
     if not fraction:
         return masks
     from .._postprocess import absorb_fragments
 
-    return absorb_fragments(masks, fraction=float(fraction))
+    min_voxels = float(fraction) * cell_voxels(cellpose_dict, masks.ndim)
+    return absorb_fragments(masks, min_voxels)
 
 
 # Keep the lower-level names available for advanced users

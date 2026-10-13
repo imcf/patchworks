@@ -411,13 +411,19 @@ def _run(tile: np.ndarray, cfg: dict[str, Any]) -> np.ndarray:
         sigma=_sigma(cfg["foreground_sigma"], ndim, cal, units),
         max_radius=radius,
     )
-    return seeded_watershed(
+    labels = seeded_watershed(
         boundaries,
         seeds,
         mask=mask,
         compactness=cfg["compactness"],
         min_size=cfg["min_size"],
     )
+    if mask is not None:
+        # Holes the mask punched into cells go back to them.
+        from .._postprocess import fill_enclosed_holes
+
+        labels = fill_enclosed_holes(labels)
+    return labels
 
 
 def segment(tile: np.ndarray, **kwargs: Any) -> np.ndarray:

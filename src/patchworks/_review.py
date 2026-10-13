@@ -33,6 +33,8 @@ from typing import TYPE_CHECKING, Any, Iterable, Mapping, Union
 import numpy as np
 import zarr
 
+from ._io import open_group_any
+
 from ._tables import (
     TABLE_GROUP,
     _label_group,
@@ -293,7 +295,7 @@ class Review:
     def _load_decisions(self, name: str) -> None:
         log = dict(self._table_group(name).attrs.get(REVIEW_KEY) or {})
         fingerprint = label_fingerprint(
-            zarr.open_group(_label_group(self.store, name), mode="r")
+            open_group_any(_label_group(self.store, name))
         )
         decisions = log.get("decisions") or {}
         if decisions and log.get("labels") != fingerprint:
@@ -317,7 +319,7 @@ class Review:
         group.attrs[REVIEW_KEY] = {
             "updated": _dt.datetime.now(_dt.timezone.utc).isoformat(),
             "labels": label_fingerprint(
-                zarr.open_group(_label_group(self.store, name), mode="r")
+                open_group_any(_label_group(self.store, name))
             ),
             "seed": self.seed[name],
             "decisions": {
@@ -472,6 +474,19 @@ class Review:
         df["qc"] = qc
         self._cache[key] = df
         return df
+
+    def hover_features(self, name: str) -> "pd.DataFrame":
+        """Per-label features for napari's status bar: each object's
+        parent(s), number of children, position and review status."""
+        eff = self.effective(name)
+        cols = [f"{p}_id" for p in self.parents[name]]
+        cols += [f"n_{c}" for c in self.children[name]]
+        cols += [c for c in ("position", "qc") if c in eff]
+        return (
+            eff[[c for c in cols if c in eff]]
+            .reset_index()
+            .rename(columns={eff.index.name or "label": "index"})
+        )
 
     def effective(self, name: str) -> "pd.DataFrame":
         """*name*'s table with every decision applied.
@@ -1146,7 +1161,7 @@ class Review:
         from ._tables import _level0, write_table
         from .plugins.ome_zarr import write_labels
 
-        group = zarr.open_group(_label_group(self.store, name), mode="r")
+        group = open_group_any(_label_group(self.store, name))
         level0 = da.from_zarr(_level0(group))
         roots = self.roots(name)
         top = int(max(self.tables[name].index.max(), max(roots, default=0)))

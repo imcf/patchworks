@@ -937,39 +937,38 @@ def uses_image_range(cfg) -> bool:
     return cfg.get("normalize", "image") == "image"
 
 
-#: Plugins whose per-tile Otsu thresholds are resolved once for the image.
-IMAGE_OTSU_PLUGINS = (
+#: Plugins whose per-tile values are measured once for the image instead.
+IMAGE_WIDE_PLUGINS = (
     "patchworks.plugins.watershed",
     "patchworks.plugins.plantseg",
 )
 
 
-def image_thresholds(cfg, store, regions=None) -> dict:
-    """Per-tile Otsu thresholds of the membrane plugins, measured once.
+def image_wide_kwargs(cfg, store, regions=None) -> dict:
+    """Values the membrane plugins would decide per tile, measured once.
 
-    ``foreground: "otsu"`` and an unset ``nuclei_threshold`` make the
-    watershed and PlantSeg plugins threshold every tile on its own, so the
-    tissue mask and the nuclei found change at every seam with the tile's
-    content. The same Otsu computed on full-resolution crops of the tiles
-    being segmented gives every tile the same number.
+    Decided per tile, they change at every seam with the tile's content:
+    ``foreground: "otsu"`` and an unset ``nuclei_threshold`` (Otsu of the
+    tile), and PlantSeg's standardization (the tile's mean and std). Each is
+    measured on full-resolution crops of the tiles being segmented instead.
 
     Returns
     -------
     dict
-        ``custom.kwargs`` overrides, e.g. ``{"foreground": 812.5}``; empty
-        when nothing is thresholded per tile.
+        ``custom.kwargs`` overrides, e.g. ``{"foreground": 812.5,
+        "intensity_stats": [640.2, 211.7]}``; empty when none apply.
     """
     import importlib
     import inspect
 
     import numpy as np
 
-    from patchworks._intensity import otsu_threshold
+    from patchworks._intensity import intensity_stats, otsu_threshold
 
     spec = cfg.get("custom") or {}
     if (
         cfg.get("method") != "custom"
-        or spec.get("module") not in IMAGE_OTSU_PLUGINS
+        or spec.get("module") not in IMAGE_WIDE_PLUGINS
     ):
         return {}
     fn = getattr(
@@ -1019,6 +1018,10 @@ def image_thresholds(cfg, store, regions=None) -> dict:
             sigma=sigma_px("nuclei_sigma"),
             **sampling,
         )
+    if "intensity_stats" in params and value("intensity_stats") is None:
+        out["intensity_stats"] = list(
+            intensity_stats(store, cfg["channel"], **sampling)
+        )
     return out
 
 
@@ -1047,7 +1050,7 @@ def build_fn(cfg, intensity_range=None, kwargs_overrides=None):
         scales every tile alike instead of from its own percentiles.
     kwargs_overrides : dict, optional
         ``custom.kwargs`` values resolved once by ``prepare``
-        (:func:`image_thresholds`), e.g. a per-tile ``"otsu"`` replaced by
+        (:func:`image_wide_kwargs`), e.g. a per-tile ``"otsu"`` replaced by
         the image's own Otsu threshold.
 
     Returns
@@ -1056,7 +1059,7 @@ def build_fn(cfg, intensity_range=None, kwargs_overrides=None):
         ``(ndarray) -> ndarray`` returning integer labels.
     """
     if kwargs_overrides:
-        # Thresholds prepare measured once for the image (image_thresholds).
+        # Values prepare measured once for the image (image_wide_kwargs).
         custom = dict(cfg["custom"])
         custom["kwargs"] = {**(custom.get("kwargs") or {}), **kwargs_overrides}
         cfg = {**cfg, "custom": custom}

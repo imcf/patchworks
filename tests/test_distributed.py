@@ -765,3 +765,35 @@ def test_object_table_from_tile_sums_equals_measuring_the_merge(tmp_path, mode):
         whole = ndi.label(mask, structure=struct)[0]
         ids, n = np.unique(whole[whole > 0], return_counts=True)
         assert np.array_equal(merged > 0, np.isin(whole, ids[n >= 8]))
+
+
+def test_iou_joins_a_cell_each_tile_sees_cut_off():
+    """Across the overlap zone each tile sees the cell cut off where its
+    read region ends: union-based IoU fell under 0.5 though the tiles
+    agree, and the cell stayed cut at the seam."""
+    import numpy as np
+
+    from patchworks._merge import _iou_face_pairs
+
+    a_core = np.ones((1, 4, 30), int)  # A's core next to the seam: cell 1
+    b_halo = np.zeros((1, 4, 30), int)
+    b_halo[..., 18:] = 2  # B sees it only near the seam
+    a_halo = np.zeros((1, 4, 30), int)
+    a_halo[..., :12] = 1  # A sees it only near the seam
+    b_core = np.full((1, 4, 30), 2)
+    pairs = _iou_face_pairs([(a_halo, b_core), (a_core, b_halo)], 0.5)
+    assert pairs.tolist() == [[1, 2]]
+
+
+def test_iou_does_not_glue_two_cells_through_one_blob():
+    """One tile merges two cells into a blob near its edge: only the better
+    of the two matches is joined, never both."""
+    import numpy as np
+
+    from patchworks._merge import _iou_face_pairs
+
+    a = np.full((1, 4, 20), 1)  # A: one blob over both cells
+    b = np.zeros((1, 4, 20), int)
+    b[..., :12] = 2
+    b[..., 12:] = 3
+    assert _iou_face_pairs([(a, b)], 0.5).tolist() == [[1, 2]]

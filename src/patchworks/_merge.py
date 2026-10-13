@@ -412,13 +412,20 @@ def _pair_stats(a_ids: np.ndarray, b_ids: np.ndarray):
 
 
 def _iou_face_pairs(
-    windows: list[tuple[np.ndarray, np.ndarray]], threshold: float
+    windows: list[tuple[np.ndarray, np.ndarray]],
+    threshold: float,
+    scores: "list[float] | None" = None,
 ) -> np.ndarray:
-    """Pairs whose IoU over the given (A view, B view) windows is enough.
+    """Pairs the two tiles agree are one object, over the overlap zone.
 
     Each window is two label arrays of one region, as seen by the tile on
-    either side. Intersections and areas are summed over all windows before
-    dividing, so the IoU is taken over the whole overlap zone.
+    either side; counts are summed over all windows. A pair is joined when
+    each is the other's best match and their overlap covers at least
+    *threshold* of the smaller one. Measured against the smaller, not the
+    union (IoU): a tile sees a cell crossing the zone cut off where its read
+    region ends, and that cut version lies inside the whole one. Mutual best
+    matches only, so one tile's merged blob cannot glue two cells together.
+    *scores*, if given, receives the overlap of every mutual best match.
     """
     inter: dict[tuple[int, int], int] = {}
     a_area: dict[int, int] = {}
@@ -431,11 +438,22 @@ def _iou_face_pairs(
             a_area[k] = a_area.get(k, 0) + v
         for k, v in ba.items():
             b_area[k] = b_area.get(k, 0) + v
-    keep = [
-        pair
-        for pair, c in inter.items()
-        if c / (a_area[pair[0]] + b_area[pair[1]] - c) >= threshold
-    ]
+    best_a: dict[int, tuple[int, int]] = {}
+    best_b: dict[int, tuple[int, int]] = {}
+    for (a, b), c in inter.items():
+        if c > best_a.get(a, (0, 0))[0]:
+            best_a[a] = (c, b)
+        if c > best_b.get(b, (0, 0))[0]:
+            best_b[b] = (c, a)
+    keep = []
+    for a, (c, b) in best_a.items():
+        if best_b[b][1] != a:
+            continue
+        score = c / min(a_area[a], b_area[b])
+        if scores is not None:
+            scores.append(score)
+        if score >= threshold:
+            keep.append((a, b))
     return np.asarray(keep, dtype=np.int64).reshape(-1, 2)
 
 
@@ -535,7 +553,9 @@ def _scan_iou_pairs(
             region[ax] = slice(pos - 1, pos + 1)
             slab = np.moveaxis(np.asarray(arr[tuple(region)]), ax, 0)
             windows.append((glob(slab[0], oa), glob(slab[1], ob)))
-        return _iou_face_pairs(windows, threshold)
+        scores: list[float] = []
+        pairs = _iou_face_pairs(windows, threshold, scores)
+        return pairs, scores
 
     nw = max(1, min(n_workers, len(tasks)))
     if nw <= 1:
@@ -557,7 +577,22 @@ def _scan_iou_pairs(
                     enabled=progress,
                 )
             )
-    found = [r for r in results if r.size]
+    scores = np.asarray([v for _, sc in results for v in sc], dtype=float)
+    if scores.size:
+        # How well the tiles agreed across the seams: a low median means
+        # they segment differently there, whatever the threshold.
+        p10, p50 = np.percentile(scores, [10, 50])
+        logger.info(
+            "IoU stitching: %d match(es) across seams, overlap of the smaller "
+            "p10 %.2f, median %.2f; %d (%.0f%%) at or above %.2f joined",
+            scores.size,
+            p10,
+            p50,
+            int((scores >= threshold).sum()),
+            100 * float((scores >= threshold).mean()),
+            threshold,
+        )
+    found = [r for r, _ in results if r.size]
     if not found:
         return np.empty((0, 2), dtype=np.int64)
     return np.unique(np.vstack(found), axis=0)
