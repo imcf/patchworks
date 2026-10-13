@@ -1,5 +1,6 @@
 """Tests for the Streamlit launcher's logic (workflow/launcher)."""
 
+import json
 import sys
 from pathlib import Path
 from typing import ClassVar
@@ -218,25 +219,81 @@ def test_commands_and_parsing():
     assert [j["name"] for j in jobs] == ["b", "a"]
 
 
-@pytest.mark.parametrize("method", ["threshold", "cellpose", "dog"])
-def test_plan_command_parses_with_the_real_cli(method):
+def test_stop_unlock_and_script_commands():
     import shlex
 
-    from patchworks.cli import build_parser
-
-    cfg = core.build_config(
-        {
-            **BASE,
-            "method": method,
-            "tile_shape": "[16, 512, 512]",
-            "overlap": "[4, 30, 30]",
-            "stitch": "iou",
-        }
+    slurm = {"slurm_job": "42", "config": "/w/c.yaml", "kind": "single"}
+    assert core.stop_command(slurm) == "scancel --full --signal=INT 42"
+    assert core.stop_command(slurm, force=True) == "scancel 42"
+    login = {"pid": "99", "config": "/w/m.yaml", "kind": "multi"}
+    assert core.stop_command(login) == "kill -INT -- -99"
+    assert shlex.split(core.unlock_command(login, "/w")) == [
+        "python",
+        "scripts/run_multi.py",
+        "--config",
+        "/w/m.yaml",
+        "--unlock",
+    ]
+    assert core.unlock_command(slurm, "/w").endswith("c.yaml --unlock")
+    convert = {"config": "/w/c.yaml", "kind": "convert", "work_dir": "/s/r"}
+    assert "--directory /s/r/.snakemake_convert" in core.unlock_command(
+        convert, "/w"
     )
-    argv = shlex.split(core.plan_command(cfg))[1:]
-    args = build_parser().parse_args(argv)
-    assert args.plan and args.image == "/scratch/run/image.zarr"
-    assert args.overlap == (4, 30, 30) and args.stitch == "iou"
+    assert core.unlock_command({"kind": "check", "config": "x"}, "/w") is None
+    assert core.check_command("/w/m.yaml", sample=3).split()[-2:] == [
+        "--sample",
+        "3",
+    ]
+    assert core.parse_json_output('log line\n{"a": 1}\nmore\n') == {"a": 1}
+    assert core.parse_json_output("Traceback") is None
+
+
+def test_profile_overrides_and_account_limits():
+    import yaml
+
+    text = (ROOT / "workflow" / "profile" / "slurm" / "config.yaml").read_text()
+    res = core.profile_resources(text)
+    assert res["segment"]["gres"] == "gpu:1"
+    assert core.first_attempt(res["segment"]["mem_mb"]) == 128000
+    assert (
+        res["convert"]["slurm_partition"] == res["default"]["slurm_partition"]
+    )
+    new = yaml.safe_load(
+        core.profile_with_overrides(
+            text, {"segment": {"mem_mb": 96000, "qos": "", "runtime": 300}}
+        )
+    )
+    seg = new["set-resources"]["segment"]
+    assert seg["mem_mb"] == "attempt * 96000" and "qos" not in seg
+    assert seg["runtime"] == 300
+    # prepare sizes "auto" tiles from its own memory: it follows segment.
+    assert new["set-resources"]["prepare"]["mem_mb"] == "attempt * 96000"
+    assert new["executor"] == "slurm"  # the rest of the profile is kept
+
+    limits = core.parse_account_limits(
+        "#assoc\nscicore|6hours,1day\nrtx4090|rtx4090-6hours\n"
+        "#qos\n6hours|06:00:00\n1day|1-00:00:00\nrtx4090-6hours|06:00:00\n"
+    )
+    assert limits["maxwall"]["1day"] == 1440
+    ok = {
+        "segment": {
+            "slurm_partition": "rtx4090",
+            "qos": "rtx4090-6hours",
+            "runtime": 300,
+        }
+    }
+    assert core.resource_problems(ok, limits) == []
+    too_long = {"segment": {**ok["segment"], "runtime": 1400}}
+    assert "over QOS" in core.resource_problems(too_long, limits)[0]
+    wrong_qos = {"segment": {**ok["segment"], "qos": "1day"}}
+    assert (
+        "not one your account may use on"
+        in core.resource_problems(wrong_qos, limits)[0]
+    )
+    no_part = {"merge": {"slurm_partition": "a100", "runtime": 10}}
+    assert "no association" in core.resource_problems(no_part, limits)[0]
+    assert core.slurm_minutes("2-03:04:05") == 2 * 1440 + 3 * 60 + 5
+    assert core.slurm_minutes("UNLIMITED") is None
 
 
 def test_app_renders_the_login_screen():
@@ -382,18 +439,31 @@ def test_required_fields_and_plan_helpers():
     )
     # An empty work_dir is what planned /image.zarr.
     assert core.missing_fields(empty) == ["input", "work_dir"]
-    assert core.image_store(cfg) == "/scratch/run/image.zarr"
-    assert "zarr.json" in core.store_exists_command("/s/image.zarr")
-
-    out = 'INFO plan: ...\n{"shape": [10, 2048, 2048], "tile_shape": [10, '
-    out += '1024, 1024], "grid": [1, 2, 2], "tiles": 4, '
-    out += '"tiles_with_signal": 3, "tile_read_bytes": 1073741824, '
-    out += '"labels_bytes_uncompressed": 0, "estimated_seconds": null}\n'
-    plan = core.parse_plan(out)
+    plan = {
+        "shape": [10, 2048, 2048],
+        "tile_shape": [10, 1024, 1024],
+        "grid": [1, 2, 2],
+        "tiles": 4,
+        "tiles_with_signal": None,
+        "gpu_jobs": None,
+        "tile_read_bytes": 1073741824,
+        "labels_bytes_uncompressed": 0,
+        "seconds_per_tile": None,
+    }
     row = core.plan_row("cells", plan)
     assert row["tiles"] == 4 and row["grid"] == "1 × 2 × 2"
+    assert row["with signal"] == "?" and "GPU hours" not in row
     assert row["read per tile (GiB)"] == 1.0
-    assert core.parse_plan("Traceback ...") is None
+    timed = core.plan_row(
+        "cells",
+        {
+            **plan,
+            "seconds_per_tile": 12.0,
+            "hours_per_job": 0.5,
+            "gpu_hours": 3.2,
+        },
+    )
+    assert timed["s / tile"] == 12.0 and timed["GPU hours"] == 3.2
     assert core.last_error_line("a\nFileNotFoundError: x\n\n") == (
         "FileNotFoundError: x"
     )
@@ -426,15 +496,17 @@ def test_browse_entries_and_paths():
 
 
 class _FakeAttr:
-    def __init__(self, name, is_dir):
+    def __init__(self, name, is_dir, size=0):
         import stat
 
         self.filename = name
         self.st_mode = stat.S_IFDIR if is_dir else stat.S_IFREG
+        self.st_size = size
 
 
 class _FakeSFTP:
-    """Just enough of paramiko's SFTPClient over a dict of folders."""
+    """Just enough of paramiko's SFTPClient over a dict of folders, and of
+    files (path -> bytes) it can read and write."""
 
     tree: ClassVar[dict[str, list[str]]] = {
         "/home/u": ["patchworks", "data"],
@@ -442,6 +514,9 @@ class _FakeSFTP:
         "/home/u/patchworks/workflow": ["Snakefile", "config"],
         "/home/u/data": ["scan.czi", "old.zarr"],
     }
+
+    def __init__(self, files=None):
+        self.files = {} if files is None else files
 
     class sock:
         closed = False
@@ -463,6 +538,8 @@ class _FakeSFTP:
 
     def stat(self, path):
         parent, name = path.rsplit("/", 1)
+        if path in self.files:
+            return _FakeAttr(name, False, len(self.files[path]))
         if path in self.tree or name in self.tree.get(parent, []):
             return _FakeAttr(name, self._is_dir(path))
         raise FileNotFoundError(path)
@@ -475,15 +552,33 @@ class _FakeSFTP:
         ]
 
     def open(self, path, mode="r"):
-        raise FileNotFoundError(path)
+        import io
+
+        if "a" in mode:
+            files = self.files
+
+            class _Append(io.BytesIO):
+                def write(self, text):
+                    data = text.encode() if isinstance(text, str) else text
+                    files[path] = files.get(path, b"") + data
+
+            return _Append()
+        if path not in self.files:
+            raise FileNotFoundError(path)
+        return io.BytesIO(self.files[path])
+
+    def putfo(self, fh, path):
+        self.files[path] = fh.read()
 
 
 class _FakeSSH:
-    """An SSH client whose commands report a missing converted image."""
+    """An SSH client: canned answers by command, files kept in memory."""
 
-    def __init__(self):
+    def __init__(self, answers=None, files=None):
         self.commands = []
         self.active = True
+        self.answers = answers or {}
+        self.files = {} if files is None else files
 
     def get_transport(self):
         from types import SimpleNamespace
@@ -491,14 +586,16 @@ class _FakeSSH:
         return SimpleNamespace(is_active=lambda: self.active)
 
     def open_sftp(self):
-        return _FakeSFTP()
+        return _FakeSFTP(self.files)
 
     def exec_command(self, command, timeout=None):
         import io as _io
         from types import SimpleNamespace
 
         self.commands.append(command)
-        out = b"NO\n" if "zarr.json" in command else b""
+        out = next(
+            (v for k, v in self.answers.items() if k in command), ""
+        ).encode()
         chan = SimpleNamespace(recv_exit_status=lambda: 0)
         stdout = SimpleNamespace(read=_io.BytesIO(out).read, channel=chan)
         return None, stdout, SimpleNamespace(read=lambda: b"")
@@ -507,17 +604,57 @@ class _FakeSSH:
         pass
 
 
-def test_app_connected_flow_validates_and_explains_a_missing_image():
-    """With a (fake) connection: required fields, then the plan's check."""
-    pytest.importorskip("paramiko")
+WF = "/home/u/patchworks/workflow"
+
+
+def _app(ssh, **state):
     testing = pytest.importorskip("streamlit.testing.v1")
     at = testing.AppTest.from_file(
         str(ROOT / "workflow/launcher/app.py"), default_timeout=30
     )
-    ssh = _FakeSSH()
     at.session_state["ssh_client"] = ssh
     at.session_state["ssh_target"] = "u@host:22"
-    at.session_state["wf_dir"] = "/home/u/patchworks/workflow"
+    at.session_state["wf_dir"] = WF
+    for key, value in state.items():
+        at.session_state[key] = value
+    return at
+
+
+def _report(labels, converted, plans=True):
+    plan = {
+        "shape": [10, 2048, 2048],
+        "tile_shape": [10, 1024, 1024],
+        "grid": [1, 2, 2],
+        "tiles": 4,
+        "tiles_with_signal": 3,
+        "gpu_jobs": 1,
+        "tile_read_bytes": 1,
+        "labels_bytes_uncompressed": 1,
+        "seconds_per_tile": None,
+    }
+    return json.dumps(
+        {
+            "shared_problems": [],
+            "converted": converted,
+            "valid": True,
+            "segmentations": [
+                {
+                    "label_name": label,
+                    "config": f"{label}.yaml",
+                    "problems": [],
+                    "plan": plan if converted and plans else None,
+                }
+                for label in labels
+            ],
+        }
+    )
+
+
+def test_app_connected_flow_validates_and_checks_on_the_cluster():
+    """With a (fake) connection: required fields, then check.py's report."""
+    pytest.importorskip("paramiko")
+    ssh = _FakeSSH({"scripts/check.py": _report(["labels"], converted=False)})
+    at = _app(ssh)
     at.run()
     assert not at.exception
     assert any(
@@ -530,62 +667,157 @@ def test_app_connected_flow_validates_and_explains_a_missing_image():
     assert not at.exception
     assert any("config is complete" in s.value for s in at.success)
 
-    plan = next(b for b in at.button if b.label == "Plan")
-    plan.click().run()
+    next(b for b in at.button if b.label == "Check and plan").click().run()
     assert not at.exception
-    assert any("/scratch/run/image.zarr" in w.value for w in at.warning)
-    # Only the existence check ran: no plan on a missing image.
-    assert not any("--plan" in c for c in ssh.commands)
-
-
-class _FakeSSHWithImage(_FakeSSH):
-    """The converted image exists, and every plan succeeds."""
-
-    plan = (
-        '{"shape": [10, 2048, 2048], "tile_shape": [10, 1024, 1024], '
-        '"grid": [1, 2, 2], "tiles": 4, "tiles_with_signal": 3}'
+    assert any("Not converted yet" in i.value for i in at.info)
+    # The configs went up first, then check.py ran on them, there.
+    uploaded = [p for p in ssh.files if p.startswith(f"{WF}/config/launcher_")]
+    assert uploaded and any(
+        "scripts/check.py" in c and uploaded[0] in c for c in ssh.commands
     )
-
-    def exec_command(self, command, timeout=None):
-        import io as _io
-        from types import SimpleNamespace
-
-        self.commands.append(command)
-        if "zarr.json" in command:
-            out = b"YES\n"
-        elif "--plan" in command:
-            out = self.plan.encode()
-        else:
-            out = b""
-        chan = SimpleNamespace(recv_exit_status=lambda: 0)
-        stdout = SimpleNamespace(read=_io.BytesIO(out).read, channel=chan)
-        return None, stdout, SimpleNamespace(read=lambda: b"")
 
 
 def test_app_plans_every_segmentation_of_a_multi_run():
     pytest.importorskip("paramiko")
-    testing = pytest.importorskip("streamlit.testing.v1")
-    at = testing.AppTest.from_file(
-        str(ROOT / "workflow/launcher/app.py"), default_timeout=30
+    ssh = _FakeSSH(
+        {
+            "scripts/check.py": _report(
+                ["nuclei_labels", "cyto_labels"], converted=True
+            )
+        }
     )
-    ssh = _FakeSSHWithImage()
-    at.session_state["ssh_client"] = ssh
-    at.session_state["ssh_target"] = "u@host:22"
-    at.session_state["wf_dir"] = "/home/u/patchworks/workflow"
-    at.session_state["input"] = "/home/u/data/scan.czi"
-    at.session_state["work_dir"] = "/scratch/run"
+    at = _app(ssh, input="/home/u/data/scan.czi", work_dir="/scratch/run")
     at.run()
     at.button_group[0].set_value("Several segmentations + relations").run()
     assert not at.exception
-    next(b for b in at.button if b.label == "Plan all segmentations").click()
-    at.run()
+    next(b for b in at.button if b.label == "Check and plan").click().run()
     assert not at.exception
-    plans = [c for c in ssh.commands if "--plan" in c]
-    assert len(plans) == 2
     rows = next(
         d.value for d in at.dataframe if "segmentation" in d.value.columns
     )
     assert list(rows["segmentation"]) == ["nuclei_labels", "cyto_labels"]
+    # check.py ran once, on the multi config.
+    checks = [c for c in ssh.commands if "scripts/check.py" in c]
+    assert len(checks) == 1 and "multi.yaml" in checks[0]
+
+
+def test_app_resources_change_for_one_run():
+    """A changed resource goes into this run's own copy of the profile."""
+    pytest.importorskip("paramiko")
+    profile = (ROOT / "workflow/profile/slurm/config.yaml").read_bytes()
+    ssh = _FakeSSH(
+        {"sbatch": "123\n", "sacctmgr": "#assoc\nrtx4090|other\n#qos\n"},
+        files={f"{WF}/profile/slurm/config.yaml": profile},
+    )
+    at = _app(ssh, input="/home/u/data/scan.czi", work_dir="/scratch/run")
+    at.run()
+    assert not at.exception
+    next(
+        b for b in at.button if b.label == "Check against my account"
+    ).click().run()
+    assert any("rtx4090-1day" in e.value for e in at.error)
+    at.radio[0].set_value(core.SLURM_JOB).run()
+    next(b for b in at.button if b.label == "Launch").click().run()
+    assert not at.exception
+    assert any("sbatch" in c for c in ssh.commands)
+    record = json.loads(ssh.files[f"{WF}/{core.REGISTRY}"].decode())
+    assert record["slurm_job"] == "123" and record["kind"] == "single"
+    assert record["inner"] and record["setup"] is not None
+
+
+def _job(**extra):
+    return {
+        "name": "cells_20261013-120000",
+        "log": f"{WF}/{core.LOG_DIR}/cells.log",
+        "started": "20261013-120000",
+        "mode": core.SLURM_JOB,
+        "slurm_job": "42",
+        "config": f"{WF}/config/launcher_cells.yaml",
+        "kind": "single",
+        "setup": 'eval "$(pixi shell-hook)"',
+        "inner": "cd /w && snakemake ...",
+        "slurm": {"time": "1:00:00"},
+        **extra,
+    }
+
+
+def test_jobs_tab_progress_results_and_actions():
+    pytest.importorskip("paramiko")
+    status = {
+        "work_dir": "/scratch/run",
+        "segmentations": [
+            {
+                "label_name": "nuclei",
+                "stage": "done",
+                "batches": 4,
+                "batches_done": 4,
+                "objects": 1234,
+                "seams": {"x": {"seam_rate": 0.1, "interior_rate": 0.05}},
+            },
+            {
+                "label_name": "cells",
+                "stage": "segmenting",
+                "batches": 10,
+                "batches_done": 3,
+                "objects": None,
+                "seams": None,
+            },
+        ],
+        "relations": [
+            {"a": "nuclei", "b": "cells", "files": ["/scratch/run/n_c.xlsx"]}
+        ],
+        "bundle": None,
+    }
+    ssh = _FakeSSH(
+        {
+            "scripts/status.py": json.dumps(status),
+            "squeue": "DONE\n",
+            "sbatch": "77\n",
+            "tail -n": "the log\n",
+        },
+        files={
+            f"{WF}/{core.REGISTRY}": core.registry_line(_job()).encode(),
+            "/scratch/run/n_c.xlsx": b"xlsx bytes",
+        },
+    )
+    at = _app(ssh, input="/x.czi", work_dir="/scratch/run")
+    at.run()
+    assert not at.exception
+    texts = [p.proto.text for p in at.get("progress")]
+    assert any("cells** · 3/10 GPU jobs done" in t for t in texts)
+    assert any("nuclei** · merged" in t for t in texts)
+    rows = next(d.value for d in at.dataframe if "objects" in d.value.columns)
+    assert rows["objects"].tolist() == [1234]
+    labels = [b.label for b in at.button]
+    assert "Unlock" in labels and "Relaunch" in labels
+    # Stop is offered only while the run is alive.
+    assert "Stop it" not in labels
+
+    next(b for b in at.button if b.label == "Unlock").click().run()
+    assert any("--unlock" in c for c in ssh.commands)
+    next(b for b in at.button if b.label == "Relaunch").click().run()
+    lines = ssh.files[f"{WF}/{core.REGISTRY}"].decode().splitlines()
+    assert len(lines) == 2 and json.loads(lines[1])["inner"] == _job()["inner"]
+
+    fetch = next(b for b in at.button if "n_c.xlsx" in b.label)
+    fetch.click().run()
+    assert not at.exception
+    assert at.session_state["dl_/scratch/run/n_c.xlsx"] == b"xlsx bytes"
+
+
+def test_jobs_tab_stop_while_running():
+    pytest.importorskip("paramiko")
+    ssh = _FakeSSH(
+        {"squeue": "RUNNING\n", "scripts/status.py": "{}"},
+        files={f"{WF}/{core.REGISTRY}": core.registry_line(_job()).encode()},
+    )
+    at = _app(ssh, input="/x.czi", work_dir="/scratch/run")
+    at.run()
+    assert not at.exception
+    labels = [b.label for b in at.button]
+    assert "Unlock" not in labels and "Relaunch" not in labels
+    next(b for b in at.button if b.label == "Stop it").click().run()
+    assert any("scancel --full --signal=INT 42" in c for c in ssh.commands)
 
 
 def test_a_folder_of_tiffs_becomes_a_glob_and_a_pattern():

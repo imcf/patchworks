@@ -723,71 +723,135 @@ def relations_form(labels: list[str]) -> tuple[list[dict], dict, dict]:
 
 
 # ---------------------------------------------------------------------------
-# Plan and launch
+# Check, plan and launch
 # ---------------------------------------------------------------------------
 
 
-def plan_all(client, wf_dir, setup_cmd, cfgs: list[dict]) -> dict:
-    """``patchworks segment --plan`` for each segmentation of the run.
+def upload(client, files: dict) -> None:
+    """Write the run's config files (remote path -> config) to the cluster."""
+    for path in files:
+        parent = path.rsplit("/", 1)[0]
+        run(client, f"mkdir -p {shlex.quote(parent)}", login=False)
+    for path, content in files.items():
+        write_remote(client, path, yaml.safe_dump(content, sort_keys=False))
 
-    Every segmentation of a run reads the same converted image, so that is
-    checked once up front: without it there is nothing to plan.
-    """
-    store = core.image_store(cfgs[0])
-    _, out, _ = run(
-        client,
-        f"cd {shlex.quote(wf_dir)} && {core.store_exists_command(store)}",
-        login=False,
-        timeout=30,
+
+def run_config_path(files: dict) -> str:
+    """The file a run is started from: its multi.yaml, or its one config."""
+    return next(
+        (p for p in files if p.endswith("/multi.yaml")), next(iter(files))
     )
-    if out.strip() != "YES":
-        return {"missing": store}
-    results = {}
-    progress = st.progress(0.0)
-    for i, cfg in enumerate(cfgs):
-        label = cfg["label_name"]
-        progress.progress(i / len(cfgs), text=f"planning {label}…")
-        rc, out, err = run(
-            client,
-            core.inner_command(wf_dir, setup_cmd, core.plan_command(cfg)),
-            timeout=300,
-        )
-        plan = core.parse_plan(out) if rc == 0 else None
-        results[label] = {"plan": plan, "rc": rc, "out": out, "err": err}
-    progress.empty()
-    return {"results": results}
 
 
-def show_plans(state: dict) -> None:
-    if "missing" in state:
-        st.warning(
-            f"No converted image at `{state['missing']}` yet. The plan "
-            "measures the run on it, so convert first: below, choose "
-            "**Convert only** and launch it; when that job is DONE "
-            "(Jobs tab), plan again. Or just launch the whole run, which "
-            "converts first.",
-            icon=":material/hourglass_empty:",
-        )
+def check_on_cluster(client, wf_dir, setup, files) -> dict:
+    """Upload the configs and run ``scripts/check.py`` on them there.
+
+    On the cluster, in the run's environment: the installed Cellpose
+    models, the plugins and the converted image are all there to check
+    against, as the run itself will.
+    """
+    upload(client, files)
+    rc, out, err = run(
+        client,
+        core.inner_command(
+            wf_dir, setup, core.check_command(run_config_path(files))
+        ),
+        timeout=600,
+    )
+    report = core.parse_json_output(out)
+    if report is None:
+        return {
+            "error": core.last_error_line(err or out) or f"exit {rc}",
+            "output": (out + err)[-20000:],
+        }
+    return report
+
+
+def show_check(report: dict) -> None:
+    """Problems first, then the plan of every segmentation."""
+    if "error" in report:
+        st.error(f"check could not run: {report['error']}")
+        with st.expander("output", icon=":material/terminal:"):
+            st.code(report.get("output") or "(none)", language="text")
         return
-    results = state["results"]
+    for problem in report["shared_problems"]:
+        st.error(problem, icon=":material/error:")
+    for seg in report["segmentations"]:
+        for problem in seg["problems"]:
+            st.error(f"**{seg['label_name']}**: {problem}")
+        if seg.get("plan_error"):
+            st.error(f"**{seg['label_name']}**: {seg['plan_error']}")
     rows = [
-        core.plan_row(label, r["plan"])
-        for label, r in results.items()
-        if r["plan"]
+        core.plan_row(seg["label_name"], seg["plan"])
+        for seg in report["segmentations"]
+        if seg.get("plan")
     ]
+    if report["valid"]:
+        st.success("Every config is valid.", icon=":material/check_circle:")
     if rows:
         st.dataframe(rows, hide_index=True)
-    for label, r in results.items():
-        if r["plan"] is None:
-            reason = core.last_error_line(r["err"] or r["out"]) or (
-                f"exit code {r['rc']}"
-            )
-            st.error(f"**{label}**: plan failed — {reason}")
-        with st.expander(f"{label}: full output", icon=":material/terminal:"):
-            st.code(
-                ((r["out"] or "") + (r["err"] or ""))[-20000:] or "(no output)",
-                language="text",
-            )
+    elif report["valid"] and not report["converted"]:
+        st.info(
+            "Not converted yet, so no plan: launch **Convert only** below, "
+            "and check again once that job is DONE (Jobs tab).",
+            icon=":material/hourglass_empty:",
+        )
+
+
+def start_job(
+    client, *, wf_dir, setup, inner, name, mode, slurm, record
+) -> dict | None:
+    """Start *inner* as a SLURM job or detached on the login node, and
+    record it on the cluster so the Jobs tab finds it again."""
+    log_dir = f"{wf_dir}/{core.LOG_DIR}"
+    log = f"{log_dir}/{name}.log"
+    rc, _, err = run(client, f"mkdir -p {shlex.quote(log_dir)}", login=False)
+    if rc:
+        st.error(f"could not create {log_dir}: {err}")
+        return None
+    job = {
+        **record,
+        "name": name,
+        "log": log,
+        "started": name.rsplit("_", 1)[-1],
+        "mode": mode,
+        # What Relaunch and Unlock need, later and from any browser.
+        "setup": setup,
+        "inner": inner,
+        "slurm": slurm,
+    }
+    if mode == core.SLURM_JOB:
+        script = f"{log_dir}/{name}.sbatch"
+        write_remote(client, script, core.controller_job_script(inner, **slurm))
+        label = name.rsplit("_", 1)[0]
+        rc, out, err = run(
+            client,
+            core.inner_command(
+                wf_dir,
+                setup,
+                core.sbatch_command(script, name=f"pw-{label}", log=log),
+            ),
+        )
+        job["slurm_job"] = core.parse_sbatch(out)
+        if rc or not job["slurm_job"]:
+            st.error(f"sbatch failed ({rc}):\n{out}\n{err}")
+            return None
+        st.success(f"submitted as SLURM job {job['slurm_job']}")
+    else:
+        rc, out, err = run(client, core.detached_command(inner, log))
+        job["pid"] = core.parse_tag(out, "PID")
+        if not job["pid"]:
+            st.error(f"failed to start:\n{out}\n{err}")
+            return None
+        st.success(f"started on the login node (PID {job['pid']})")
+    write_remote(
+        client,
+        f"{wf_dir}/{core.REGISTRY}",
+        core.registry_line(job),
+        append=True,
+    )
+    st.caption(f"log: {log} — follow it in the Jobs tab")
+    return job
 
 
 def launch(
@@ -811,25 +875,15 @@ def launch(
     """
     if convert_only:
         name = f"convert_{name.rsplit('_', 1)[-1]}"
-    log_dir = f"{wf_dir}/{core.LOG_DIR}"
-    log = f"{log_dir}/{name}.log"
-    rc, _, err = run(client, f"mkdir -p {shlex.quote(log_dir)}", login=False)
-    if rc:
-        st.error(f"could not create {log_dir}: {err}")
-        return
-    for path in files:
-        parent = path.rsplit("/", 1)[0]
-        run(client, f"mkdir -p {shlex.quote(parent)}", login=False)
-    for path, content in files.items():
-        write_remote(client, path, yaml.safe_dump(content, sort_keys=False))
+    upload(client, files)
     multi = next((p for p in files if p.endswith("/multi.yaml")), None)
     first = next(p for p in files if not p.endswith("/multi.yaml"))
+    work_dir = files[first]["work_dir"]
     if convert_only:
-        cfg = files[first]
-        state = f"{cfg['work_dir'].rstrip('/')}/.snakemake_convert"
+        state = f"{work_dir.rstrip('/')}/.snakemake_convert"
         run(client, f"mkdir -p {shlex.quote(state)}", login=False)
         command = core.convert_command(
-            first, cfg, mode, workflow_dir=wf_dir, profile=profile
+            first, files[first], mode, workflow_dir=wf_dir, profile=profile
         )
         multi = None
     elif multi:
@@ -846,49 +900,308 @@ def launch(
             (out + err)[-20000:] or "(no output)", language="text", height=400
         )
         return
-
-    label = name.rsplit("_", 1)[0]
-    job = {
-        "name": name,
-        "config": multi or first,
-        "log": log,
-        "started": name.rsplit("_", 1)[-1],
-        "mode": mode,
-        "kind": "convert" if convert_only else "multi" if multi else "single",
-    }
-    if mode == core.SLURM_JOB:
-        script = f"{log_dir}/{name}.sbatch"
-        write_remote(client, script, core.controller_job_script(inner, **slurm))
-        rc, out, err = run(
-            client,
-            core.inner_command(
-                wf_dir,
-                setup_cmd,
-                core.sbatch_command(script, name=f"pw-{label}", log=log),
-            ),
-        )
-        job["slurm_job"] = core.parse_sbatch(out)
-        if rc or not job["slurm_job"]:
-            st.error(f"sbatch failed ({rc}):\n{out}\n{err}")
-            return
-        st.success(f"controller submitted as SLURM job {job['slurm_job']}")
-    else:
-        rc, out, err = run(client, core.detached_command(inner, log))
-        job["pid"] = core.parse_tag(out, "PID")
-        if not job["pid"]:
-            st.error(f"failed to start:\n{out}\n{err}")
-            return
-        st.success(f"started on the login node (PID {job['pid']})")
-    write_remote(
+    start_job(
         client,
-        f"{wf_dir}/{core.REGISTRY}",
-        core.registry_line(job),
-        append=True,
+        wf_dir=wf_dir,
+        setup=setup_cmd,
+        inner=inner,
+        name=name,
+        mode=mode,
+        slurm=slurm,
+        record={
+            "config": multi or first,
+            "work_dir": work_dir,
+            "kind": "convert"
+            if convert_only
+            else "multi"
+            if multi
+            else "single",
+        },
     )
-    st.caption(f"log: {log} · config: {job['config']} — see the Jobs tab")
+
+
+def submit_timing(client, *, wf_dir, setup, files, name, segment, account):
+    """A short GPU job timing the method on real tiles (check --sample).
+
+    It runs where the segment jobs run -- their partition, QOS and GPU --
+    so the seconds per tile are the ones the run will see.
+    """
+    upload(client, files)
+    inner = core.inner_command(
+        wf_dir, setup, core.check_command(run_config_path(files), sample=3)
+    )
+    mem = core.first_attempt(segment.get("mem_mb")) or 16000
+    return start_job(
+        client,
+        wf_dir=wf_dir,
+        setup=setup,
+        inner=inner,
+        name=f"timing_{name.rsplit('_', 1)[-1]}",
+        mode=core.SLURM_JOB,
+        slurm={
+            "time": "01:00:00",
+            "mem": f"{mem}M",
+            "partition": segment.get("slurm_partition") or "",
+            "qos": segment.get("qos") or "",
+            "account": account,
+            "gres": segment.get("gres") or "",
+            "cpus": int(segment.get("cpus_per_task") or 4),
+        },
+        record={"config": run_config_path(files), "kind": "check"},
+    )
+
+
+def resources_editor(resources: dict) -> dict:
+    """The profile's resources per rule, editable; returns the overrides."""
+    rules = [
+        r for r in ("segment", "convert", "prepare", "merge") if r in resources
+    ]
+    rows = [
+        {
+            "rule": rule,
+            "partition": resources[rule].get("slurm_partition") or "",
+            "qos": resources[rule].get("qos") or "",
+            "gres": resources[rule].get("gres") or "",
+            "runtime (min)": core.first_attempt(resources[rule].get("runtime")),
+            "memory (MB, 1st try)": core.first_attempt(
+                resources[rule].get("mem_mb")
+            ),
+        }
+        for rule in rules
+    ]
+    edited = st.data_editor(
+        rows,
+        hide_index=True,
+        disabled=["rule"],
+        key=f"resources_{hash(str(rows))}",
+        column_config={
+            "runtime (min)": st.column_config.NumberColumn(min_value=1),
+            "memory (MB, 1st try)": st.column_config.NumberColumn(
+                min_value=1000, help="each retry asks for this much more"
+            ),
+        },
+    )
+    overrides: dict = {}
+    names = {
+        "partition": "slurm_partition",
+        "qos": "qos",
+        "gres": "gres",
+        "runtime (min)": "runtime",
+        "memory (MB, 1st try)": "mem_mb",
+    }
+    for before, after in zip(rows, edited):
+        for column, key in names.items():
+            if after[column] != before[column]:
+                overrides.setdefault(after["rule"], {})[key] = after[column]
+    return overrides
 
 
 STATE_COLORS = {"RUNNING": "green", "PENDING": "orange", "DONE": "gray"}
+
+
+def job_actions(job: dict, state: str, alive: bool, setup: str) -> None:
+    """The job's state, and Stop / Unlock / Relaunch."""
+    ident = job.get("slurm_job") or job.get("pid")
+    kind = "SLURM job" if job.get("slurm_job") else "PID"
+    color = STATE_COLORS.get(state, "red")
+    with st.container(border=True):
+        c1, c2, c3, c4 = st.columns(4)
+        c1.markdown(f"**state**  \n:{color}[**{state}**]")
+        c2.markdown(f"**{kind}**  \n{ident}")
+        c3.markdown(f"**started**  \n{job['started']}")
+        c4.button("Refresh", icon=":material/refresh:", key="refresh_job")
+        st.caption(f"config: `{job.get('config')}`")
+        c1, c2, c3 = st.columns(3)
+        if alive:
+            with c1.popover("Stop", icon=":material/stop_circle:"):
+                st.markdown(
+                    "Stops the run as Ctrl-C would: Snakemake cancels the "
+                    "jobs it submitted, then exits. Finished steps stay "
+                    "done; launching again resumes."
+                )
+                if st.button("Stop it", type="primary", key="stop"):
+                    rc, out, err = run(
+                        client,
+                        core.inner_command(
+                            wf_dir, setup_cmd, core.stop_command(job)
+                        )
+                        if job.get("slurm_job")
+                        else core.stop_command(job),
+                        login=bool(job.get("slurm_job")),
+                        timeout=60,
+                    )
+                    (st.success if rc == 0 else st.error)(
+                        "asked to stop" if rc == 0 else f"{out}{err}"
+                    )
+                if st.button("Force stop", key="kill"):
+                    rc, out, err = run(
+                        client,
+                        core.inner_command(
+                            wf_dir,
+                            setup_cmd,
+                            core.stop_command(job, force=True),
+                        )
+                        if job.get("slurm_job")
+                        else core.stop_command(job, force=True),
+                        login=bool(job.get("slurm_job")),
+                        timeout=60,
+                    )
+                    (st.success if rc == 0 else st.error)(
+                        "killed" if rc == 0 else f"{out}{err}"
+                    )
+                    st.caption(
+                        "Jobs it had submitted may keep running: "
+                        "`squeue --me` lists them."
+                    )
+        unlock = core.unlock_command(job, wf_dir)
+        if not alive and unlock:
+            if c2.button(
+                "Unlock",
+                icon=":material/lock_open:",
+                help="after a run was killed: Snakemake then refuses to "
+                "start again (directory cannot be locked) until unlocked",
+            ):
+                rc, out, err = run(
+                    client,
+                    core.inner_command(wf_dir, setup, unlock),
+                    timeout=300,
+                )
+                (st.success if rc == 0 else st.error)(
+                    "unlocked" if rc == 0 else core.last_error_line(err or out)
+                )
+        if not alive and job.get("inner"):
+            if c3.button(
+                "Relaunch",
+                icon=":material/replay:",
+                help="the same command again: it resumes where this one "
+                "stopped",
+            ):
+                stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+                start_job(
+                    client,
+                    wf_dir=wf_dir,
+                    setup=job.get("setup", setup_cmd),
+                    inner=job["inner"],
+                    name=f"{job['name'].rsplit('_', 1)[0]}_{stamp}",
+                    mode=job["mode"],
+                    slurm=job.get("slurm") or {},
+                    record={
+                        k: job[k]
+                        for k in ("config", "work_dir", "kind")
+                        if k in job
+                    },
+                )
+
+
+def job_progress(job: dict, setup: str) -> None:
+    """How far the run got (scripts/status.py), and what it made."""
+    rc, out, err = run(
+        client,
+        core.inner_command(
+            wf_dir, setup, core.run_status_command(job["config"])
+        ),
+        timeout=60,
+    )
+    status = core.parse_json_output(out)
+    if not status or "segmentations" not in status:
+        st.caption(f"progress unavailable: {core.last_error_line(err or out)}")
+        return
+    with section(":material/data_usage: Progress", f"`{status['work_dir']}`"):
+        for seg in status["segmentations"]:
+            total, done = seg["batches"], seg["batches_done"]
+            if seg["stage"] == "done":
+                frac, what = 1.0, "merged"
+            elif total:
+                frac, what = done / total, f"{done}/{total} GPU jobs done"
+            else:
+                frac, what = 0.0, seg["stage"]
+            st.progress(frac, text=f"**{seg['label_name']}** · {what}")
+    done = [s for s in status["segmentations"] if s["stage"] == "done"]
+    if not done and not status.get("relations"):
+        return
+    with section(":material/inventory_2: Results"):
+        rows = []
+        for seg in done:
+            row = {"segmentation": seg["label_name"], "objects": seg["objects"]}
+            for ax, rates in (seg.get("seams") or {}).items():
+                row[f"seam {ax} (%)"] = round(
+                    100 * (rates["seam_rate"] or 0), 1
+                )
+                inner = rates["interior_rate"]
+                row[f"inside {ax} (%)"] = (
+                    None if inner is None else round(100 * inner, 1)
+                )
+            rows.append(row)
+        if rows:
+            st.dataframe(rows, hide_index=True)
+            st.caption(
+                "seam: objects ending on a tile seam, against inside: on an "
+                "arbitrary plane inside the tiles. Far more at the seams "
+                "means the stitching cut objects."
+            )
+        for rel in status.get("relations", []):
+            name = f"{rel['a']} → {rel['b']}"
+            if not rel["files"]:
+                st.caption(f"{name}: not yet")
+            for path in rel["files"]:
+                download_button(path, f"{name}: {path.rsplit('/', 1)[-1]}")
+        store = f"{status['work_dir'].rstrip('/')}/image.zarr"
+        bundle = status.get("bundle")
+        st.markdown("**Look at it**")
+        st.code(
+            f"# on the cluster (needs a display)\n"
+            f"cd {wf_dir} && pixi run -e viewer napari {store}\n"
+            f"cd {wf_dir} && pixi run -e viewer review {store}\n"
+            + (
+                f"# or on your computer: copy the bundle, then\n"
+                f"scp {st.session_state['ssh_target'].rsplit(':', 1)[0]}:"
+                f"{bundle} .\n"
+                f"cd patchworks/workflow/viewer && pixi run napari "
+                f"{bundle.rsplit('/', 1)[-1]}"
+                if bundle
+                else ""
+            ),
+            language="bash",
+        )
+
+
+MAX_DOWNLOAD = 200 * 1024**2
+
+
+def _fetch(path: str, key: str) -> None:
+    sftp = get_sftp()
+    with sftp.open(path) as fh:
+        st.session_state[key] = fh.read()
+
+
+def download_button(path: str, label: str) -> None:
+    """Fetch a result file from the cluster on demand, then download it."""
+    key = f"dl_{path}"
+    data = st.session_state.get(key)
+    if data is None:
+        try:
+            size = get_sftp().stat(path).st_size or 0
+        except OSError:
+            st.caption(f"{label}: missing")
+            return
+        if size > MAX_DOWNLOAD:
+            st.caption(f"{label}: {size / 1024**2:.0f} MB, copy it with scp")
+            return
+        st.button(
+            f"{label} ({size / 1024**2:.1f} MB)",
+            icon=":material/cloud_download:",
+            key=f"get_{path}",
+            on_click=_fetch,
+            args=(path, key),
+        )
+        return
+    st.download_button(
+        f"Save {label}",
+        data,
+        file_name=path.rsplit("/", 1)[-1],
+        icon=":material/download:",
+        key=f"save_{path}",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1158,22 +1471,93 @@ with tab_launch:
             st.code(run_setup or "(nothing)", language="bash")
 
         with section(
-            ":material/straighten: Plan",
-            "Before spending GPU hours: how many tiles, how many hold "
-            "signal, the memory per tile and the size of the result. It "
-            "reads the converted image and segments nothing, so it is "
-            "quick and safe on the login node."
-            + (" Every segmentation is planned." if many else ""),
+            ":material/dns: Cluster resources",
+            "What each step's jobs ask SLURM for, from the workflow "
+            "profile. Change a cell to change it for this run only.",
         ):
-            if st.button(
-                "Plan all segmentations" if many else "Plan",
-                icon=":material/play_arrow:",
-            ):
-                st.session_state["plans"] = plan_all(
-                    client, wf_dir, run_setup, seg_cfgs
+            profile = st.text_input(
+                "workflow profile",
+                preset.get("profile", "profile/slurm"),
+                help="a folder in the workflow holding config.yaml",
+            )
+            profile_text = read_remote(
+                client, f"{wf_dir}/{profile.rstrip('/')}/config.yaml"
+            )
+            resources: dict = {}
+            overrides: dict = {}
+            if profile_text is None:
+                st.warning(
+                    f"No `{profile}/config.yaml` in the workflow folder."
                 )
-            if st.session_state.get("plans"):
-                show_plans(st.session_state["plans"])
+            else:
+                resources = core.profile_resources(profile_text)
+                overrides = resources_editor(resources)
+                for rule, values in overrides.items():
+                    resources[rule] = {**resources[rule], **values}
+                if "mem_mb" in overrides.get("segment", {}):
+                    st.caption(
+                        "prepare gets the segment memory too: it sizes "
+                        '`tile_shape: "auto"` from its own allocation.'
+                    )
+                c1, c2 = st.columns([1, 3], vertical_alignment="center")
+                if c1.button(
+                    "Check against my account", icon=":material/verified_user:"
+                ):
+                    _, out, _ = run(
+                        client,
+                        core.inner_command(
+                            wf_dir, setup_cmd, core.ACCOUNT_LIMITS_COMMAND
+                        ),
+                        timeout=60,
+                    )
+                    st.session_state["limits"] = core.parse_account_limits(out)
+                limits = st.session_state.get("limits")
+                if limits is not None:
+                    problems = core.resource_problems(resources, limits)
+                    if not limits["assoc"]:
+                        c2.warning("sacctmgr gave nothing to check against.")
+                    elif problems:
+                        for problem in problems:
+                            st.error(problem, icon=":material/block:")
+                    else:
+                        c2.success(
+                            "Every partition, QOS and runtime fits your "
+                            "account.",
+                            icon=":material/check_circle:",
+                        )
+
+        with section(
+            ":material/fact_check: Check and plan",
+            "Checks the configs on the cluster, in the environment above, "
+            "as the run will. Once the image is converted it also plans "
+            "each segmentation: tiles, how many hold signal, GPU jobs, "
+            "memory per tile, size of the result.",
+        ):
+            c1, c2 = st.columns(2)
+            if c1.button("Check and plan", icon=":material/play_arrow:"):
+                with st.spinner("checking on the cluster…"):
+                    st.session_state["report"] = check_on_cluster(
+                        client, wf_dir, run_setup, files
+                    )
+            if c2.button(
+                "Time it on a GPU",
+                icon=":material/timer:",
+                help="a short SLURM job on the segment partition times the "
+                "method on 3 real tiles, for the hours a job and the run "
+                "take; its result shows in the Jobs tab",
+                disabled="segment" not in resources,
+            ):
+                submit_timing(
+                    client,
+                    wf_dir=wf_dir,
+                    setup=run_setup,
+                    files=files,
+                    name=st.session_state["run_name"],
+                    segment=resources.get("segment", {}),
+                    account=preset.get("controller_account", ""),
+                )
+            if st.session_state.get("report"):
+                show_check(st.session_state["report"])
 
         with section(
             ":material/rocket_launch: Launch",
@@ -1195,10 +1579,7 @@ with tab_launch:
             )
             convert_only = what == "Convert only"
             mode = st.radio("run mode", core.RUN_MODES)
-            profile = "profile/slurm"
             slurm: dict = {}
-            if mode != core.DRY_RUN:
-                profile = st.text_input("--workflow-profile", "profile/slurm")
             if mode == core.SLURM_JOB:
                 st.caption(
                     "The controller only submits and watches jobs: one CPU, "
@@ -1228,6 +1609,15 @@ with tab_launch:
                     "node, where a reboot or a process reaper ends it. Prefer "
                     "the SLURM-job mode unless your cluster forbids it."
                 )
+            if overrides and mode != core.DRY_RUN:
+                st.caption(
+                    ":material/tune: with your resource changes: "
+                    + "; ".join(
+                        f"{r}: "
+                        + ", ".join(f"{k}={v}" for k, v in vals.items())
+                        for r, vals in overrides.items()
+                    )
+                )
             with st.expander("Files to upload", icon=":material/upload:"):
                 st.code("\n".join(files), language=None)
             if st.button(
@@ -1235,6 +1625,23 @@ with tab_launch:
                 type="primary",
                 icon=":material/rocket_launch:",
             ):
+                run_profile = profile
+                if overrides and mode != core.DRY_RUN:
+                    # This run's own copy of the profile, with the changes.
+                    run_profile = (
+                        f"{wf_dir}/config/launcher_"
+                        f"{st.session_state['run_name']}_profile"
+                    )
+                    run(
+                        client,
+                        f"mkdir -p {shlex.quote(run_profile)}",
+                        login=False,
+                    )
+                    write_remote(
+                        client,
+                        f"{run_profile}/config.yaml",
+                        core.profile_with_overrides(profile_text, overrides),
+                    )
                 launch(
                     client,
                     wf_dir=wf_dir,
@@ -1242,7 +1649,7 @@ with tab_launch:
                     files=files,
                     name=st.session_state["run_name"],
                     mode=mode,
-                    profile=profile,
+                    profile=run_profile,
                     slurm=slurm,
                     convert_only=convert_only,
                 )
@@ -1261,12 +1668,16 @@ with tab_jobs:
             pick = c1.selectbox(
                 "job",
                 range(len(jobs)),
-                format_func=lambda i: f"{jobs[i]['name']} · {jobs[i]['mode']}",
+                format_func=lambda i: (
+                    f"{jobs[i]['name']} · {jobs[i].get('kind', '')} · "
+                    f"{jobs[i]['mode']}"
+                ),
             )
             auto = c2.toggle("auto-refresh every 15 s", value=False)
 
         @st.fragment(run_every=15 if auto else None)
         def monitor(job=jobs[pick]):
+            setup = job.get("setup", setup_cmd)
             # squeue may live behind `module load`, so SLURM jobs are
             # checked through the setup line; a PID check and a tail need
             # neither it nor a login shell.
@@ -1279,28 +1690,34 @@ with tab_jobs:
                 timeout=30,
             )
             state = state.strip() or "unknown"
-            ident = job.get("slurm_job") or job.get("pid")
-            kind = "SLURM job" if job.get("slurm_job") else "PID"
-            color = STATE_COLORS.get(state, "red")
-            with st.container(border=True):
-                c1, c2, c3, c4 = st.columns([1, 1, 1, 1])
-                c1.markdown(f"**state**  \n:{color}[**{state}**]")
-                c2.markdown(f"**{kind}**  \n{ident}")
-                c3.markdown(f"**started**  \n{job['started']}")
-                c4.button(
-                    "Refresh",
-                    icon=":material/refresh:",
-                    key="refresh_job",
+            alive = state in ("RUNNING", "PENDING", "CONFIGURING", "COMPLETING")
+            job_actions(job, state, alive, setup)
+            if job.get("kind") == "check":
+                if not alive:
+                    _, log, _ = run(
+                        client,
+                        f"cat {shlex.quote(job['log'])}",
+                        login=False,
+                        timeout=30,
+                    )
+                    report = core.parse_json_output(log)
+                    if report:
+                        with section(":material/timer: Timing"):
+                            show_check(report)
+            elif job.get("config"):
+                job_progress(job, setup)
+            with st.expander("Log", icon=":material/terminal:", expanded=alive):
+                st.caption(f"`{job['log']}`")
+                _, tail, _ = run(
+                    client,
+                    f"tail -n 300 {shlex.quote(job['log'])}",
+                    login=False,
+                    timeout=30,
                 )
-                st.caption(f"log: `{job['log']}` · config: `{job['config']}`")
-            _, tail, _ = run(
-                client,
-                f"tail -n 300 {shlex.quote(job['log'])}",
-                login=False,
-                timeout=30,
-            )
-            st.code(
-                tail or "(log is empty so far)", language="text", height=500
-            )
+                st.code(
+                    tail or "(log is empty so far)",
+                    language="text",
+                    height=500,
+                )
 
         monitor()

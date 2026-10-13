@@ -658,8 +658,13 @@ def controller_job_script(
     partition: str = "",
     qos: str = "",
     account: str = "",
+    gres: str = "",
+    cpus: int = 1,
 ) -> str:
     """An sbatch script running the Snakemake *controller* as a small job.
+
+    (Or, with *gres*, a short GPU job: ``check --sample`` timing tiles where
+    the segment jobs run.)
 
     The controller only submits and watches the real jobs, so it needs one
     CPU and little memory -- but it must outlive every job it submits, and
@@ -673,7 +678,7 @@ def controller_job_script(
     """
     lines = [
         "#!/bin/bash -l",
-        "#SBATCH --cpus-per-task=1",
+        f"#SBATCH --cpus-per-task={cpus}",
         f"#SBATCH --mem={mem}",
         f"#SBATCH --time={time}",
     ]
@@ -681,6 +686,7 @@ def controller_job_script(
         ("partition", partition),
         ("qos", qos),
         ("account", account),
+        ("gres", gres),
     ):
         if value:
             lines.append(f"#SBATCH --{flag}={value}")
@@ -739,6 +745,227 @@ def parse_sbatch(output: str) -> str | None:
     return None
 
 
+def stop_command(job: dict[str, Any], *, force: bool = False) -> str:
+    """Stop a launched run, letting Snakemake cancel the jobs it submitted.
+
+    SIGINT is Ctrl-C: Snakemake then cancels its SLURM jobs before it
+    exits, which a plain kill does not give it the chance to. *force* kills
+    outright, for a run that does not stop.
+    """
+    if job.get("slurm_job"):
+        jid = shlex.quote(str(job["slurm_job"]))
+        if force:
+            return f"scancel {jid}"
+        # --full: the batch script's processes too (the controller).
+        return f"scancel --full --signal=INT {jid}"
+    # setsid made the run a process group of its own: signal all of it.
+    pid = shlex.quote(str(job["pid"]))
+    return f"kill -{'KILL' if force else 'INT'} -- -{pid}"
+
+
+def unlock_command(job: dict[str, Any], workflow_dir: str) -> str | None:
+    """Release the Snakemake lock a killed run left behind."""
+    config = job.get("config")
+    if not config:
+        return None
+    kind = job.get("kind")
+    if kind == "multi":
+        args = ["python", "scripts/run_multi.py", "--config", config]
+    elif kind == "convert":
+        if not job.get("work_dir"):
+            return None
+        args = [
+            "snakemake",
+            "-s",
+            f"{workflow_dir}/Snakefile",
+            "--configfile",
+            config,
+            "--directory",
+            f"{job['work_dir'].rstrip('/')}/.snakemake_convert",
+        ]
+    elif kind == "single":
+        args = ["snakemake", "-s", "Snakefile", "--configfile", config]
+    else:
+        return None
+    return " ".join(shlex.quote(a) for a in [*args, "--unlock"])
+
+
+def check_command(config: str, *, sample: int = 0) -> str:
+    """``scripts/check.py`` on a run's config (or multi config), as JSON."""
+    args = ["python", "scripts/check.py", config, "--json"]
+    if sample:
+        args += ["--sample", str(sample)]
+    return " ".join(shlex.quote(a) for a in args)
+
+
+def run_status_command(config: str) -> str:
+    """``scripts/status.py`` on a run's config (or multi config), as JSON."""
+    return " ".join(
+        shlex.quote(a)
+        for a in ("python", "scripts/status.py", config, "--json")
+    )
+
+
+def parse_json_output(output: str) -> dict[str, Any] | None:
+    """The last JSON object a script printed (logs may come before it)."""
+    for line in reversed(output.strip().splitlines()):
+        line = line.strip()
+        if line.startswith("{"):
+            try:
+                data = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(data, dict):
+                return data
+    return None
+
+
+# ---------------------------------------------------------------------------
+# SLURM resources: the workflow profile, and what the account may use
+# ---------------------------------------------------------------------------
+
+# The resources the launcher lets you change, per rule.
+RESOURCE_KEYS = ("slurm_partition", "qos", "gres", "runtime", "mem_mb")
+
+
+def profile_resources(text: str | None) -> dict[str, dict[str, Any]]:
+    """Each rule's resources in a workflow profile, defaults filled in."""
+    profile = yaml.safe_load(text or "") or {}
+    defaults = profile.get("default-resources") or {}
+    rules = profile.get("set-resources") or {}
+    return {
+        rule: {**defaults, **(values or {})}
+        for rule, values in {"default": {}, **rules}.items()
+    }
+
+
+def first_attempt(value: Any) -> int | None:
+    """A profile memory or time for the first attempt (``"attempt * 64000"``)."""
+    import re
+
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return int(value)
+    numbers = re.findall(r"\d+", str(value))
+    return int(numbers[0]) if len(numbers) == 1 else None
+
+
+def profile_with_overrides(
+    text: str, overrides: dict[str, dict[str, Any]]
+) -> str:
+    """The profile *text* with *overrides* (``{rule: {key: value}}``).
+
+    A memory set for ``segment`` grows with each attempt like the profile's
+    own (``attempt * N``), and goes to ``prepare`` too: prepare sizes
+    ``tile_shape: "auto"`` from its own allocation, standing in for the
+    segment job's.
+    """
+    profile = yaml.safe_load(text or "") or {}
+    rules = profile.setdefault("set-resources", {}) or {}
+    profile["set-resources"] = rules
+    overrides = {r: dict(v) for r, v in overrides.items()}
+    seg_mem = (overrides.get("segment") or {}).get("mem_mb")
+    if seg_mem is not None:
+        overrides.setdefault("prepare", {})["mem_mb"] = seg_mem
+    for rule, values in overrides.items():
+        target = rules.setdefault(rule, {}) or {}
+        rules[rule] = target
+        for key, value in values.items():
+            if value in (None, ""):
+                target.pop(key, None)
+            elif key == "mem_mb":
+                target[key] = f"attempt * {int(value)}"
+            else:
+                target[key] = value
+    return yaml.safe_dump(profile, sort_keys=False)
+
+
+def slurm_minutes(text: str) -> int | None:
+    """SLURM's ``[D-]HH:MM:SS`` (or ``MM:SS``, ``MM``) as minutes."""
+    text = (text or "").strip()
+    if not text or text.upper() in ("UNLIMITED", "INFINITE"):
+        return None
+    days = 0
+    if "-" in text:
+        d, text = text.split("-", 1)
+        days = int(d)
+    parts = [int(p) for p in text.split(":")]
+    if len(parts) == 3:
+        h, m, sec = parts
+    elif len(parts) == 2:
+        h, m, sec = 0, *parts
+    else:
+        h, m, sec = 0, parts[0], 0
+    return days * 1440 + h * 60 + m + (1 if sec else 0)
+
+
+ACCOUNT_LIMITS_COMMAND = (
+    'echo "#assoc"; sacctmgr -nP show assoc user="$USER" '
+    "format=partition,qos; "
+    'echo "#qos"; sacctmgr -nP show qos format=name,maxwall'
+)
+
+
+def parse_account_limits(output: str) -> dict[str, Any]:
+    """The QOS each partition allows this account, and each QOS's MaxWall."""
+    assoc: dict[str, set[str]] = {}
+    maxwall: dict[str, int | None] = {}
+    part = None
+    for line in output.splitlines():
+        line = line.strip()
+        if line in ("#assoc", "#qos"):
+            part = line
+            continue
+        if not line or "|" not in line:
+            continue
+        a, b = line.split("|", 1)
+        if part == "#assoc":
+            assoc.setdefault(a, set()).update(q for q in b.split(",") if q)
+        elif part == "#qos":
+            maxwall[a] = slurm_minutes(b)
+    return {"assoc": assoc, "maxwall": maxwall}
+
+
+def resource_problems(
+    resources: dict[str, dict[str, Any]], limits: dict[str, Any]
+) -> list[str]:
+    """What sbatch would refuse: a QOS the account lacks, a runtime over it.
+
+    A job asking for more time than its QOS allows is refused and never
+    starts (QOSMaxWallDurationPerJobLimit), with an empty log.
+    """
+    assoc, maxwall = limits["assoc"], limits["maxwall"]
+    allowed = set().union(*assoc.values()) if assoc else set()
+    problems = []
+    for rule, res in resources.items():
+        if rule == "default":
+            continue
+        qos = res.get("qos")
+        runtime = first_attempt(res.get("runtime"))
+        part = res.get("slurm_partition")
+        if part and assoc and part not in assoc and "" not in assoc:
+            problems.append(
+                f"{rule}: your account has no association with partition "
+                f"{part!r} (it has: {', '.join(sorted(p for p in assoc if p))})"
+            )
+        # The QOS allowed with this partition, or on any if unknown.
+        usable = assoc.get(part) or assoc.get("") or allowed
+        if qos and assoc and qos not in usable:
+            problems.append(
+                f"{rule}: QOS {qos!r} is not one your account may use "
+                f"{'on ' + repr(part) + ' ' if part in assoc else ''}"
+                f"({', '.join(sorted(usable))})"
+            )
+        limit = maxwall.get(qos) if qos else None
+        if runtime and limit and runtime > limit:
+            problems.append(
+                f"{rule}: runtime {runtime} min is over QOS {qos!r}'s MaxWall "
+                f"of {limit} min; sbatch would refuse the job"
+            )
+    return problems
+
+
 def status_command(job: dict[str, Any]) -> str:
     """Shell line printing RUNNING/PENDING/DONE for a registered job."""
     if job.get("slurm_job"):
@@ -748,87 +975,16 @@ def status_command(job: dict[str, Any]) -> str:
     return f"kill -0 {pid} 2>/dev/null && echo RUNNING || echo DONE"
 
 
-def image_store(cfg: dict[str, Any]) -> str:
-    """The converted image the workflow writes (``<work_dir>/image.zarr``)."""
-    return f"{cfg['work_dir'].rstrip('/')}/image.zarr"
-
-
-def store_exists_command(store: str) -> str:
-    """Shell line printing YES when *store* holds a converted image."""
-    q = shlex.quote(store)
-    return (
-        f"if [ -e {q}/zarr.json ] || [ -e {q}/.zgroup ]; "
-        "then echo YES; else echo NO; fi"
-    )
-
-
-def plan_command(cfg: dict[str, Any]) -> str | None:
-    """``patchworks segment --plan`` for the run's converted image.
-
-    Planning reads the converted store, so it needs ``convert`` to have run
-    once; it runs no segmentation (no sampling), so it is safe on a login
-    node. None when the method has no CLI equivalent.
-    """
-    args = ["patchworks", "segment", image_store(cfg), "--plan"]
-    tile = cfg.get("tile_shape")
-    if isinstance(tile, (list, tuple)):
-        args += ["--tile-shape", ",".join(str(t) for t in tile)]
-    elif tile == "auto":
-        args += ["--tile-shape", "auto"]
-    ov = cfg.get("overlap")
-    if ov is not None:
-        args += [
-            "--overlap",
-            ",".join(str(o) for o in ov) if isinstance(ov, list) else str(ov),
-        ]
-    args += ["--level", str(cfg.get("level", 0))]
-    ch = cfg.get("channel")
-    args += ["--channel", "none" if ch is None else str(ch)]
-    if cfg.get("skip_empty"):
-        args.append("--skip-empty")
-    args += ["--stitch", cfg.get("stitch", "touch")]
-    if cfg["method"] == "threshold":
-        args += ["--method", "threshold"]
-    elif cfg["method"] == "cellpose":
-        cp = cfg.get("cellpose", {})
-        args += ["--method", "cellpose", "--model", str(cp.get("model"))]
-        if cp.get("diameter"):
-            args += ["--diameter", str(cp["diameter"])]
-        if cp.get("do_3D"):
-            args.append("--do-3d")
-    else:
-        custom = cfg.get("custom", {})
-        args += [
-            "--method",
-            "custom",
-            "--fn",
-            f"{custom.get('module')}:{custom.get('function', 'segment')}",
-            "--fn-kwargs",
-            json.dumps(custom.get("kwargs") or {}),
-        ]
-    return " ".join(shlex.quote(a) for a in args)
-
-
-def parse_plan(output: str) -> dict[str, Any] | None:
-    """The JSON plan ``patchworks segment --plan`` printed, if any."""
-    start = output.find("{")
-    end = output.rfind("}")
-    if start < 0 or end < start:
-        return None
-    try:
-        plan = json.loads(output[start : end + 1])
-    except ValueError:
-        return None
-    return plan if isinstance(plan, dict) else None
-
-
 def plan_row(label: str, plan: dict[str, Any]) -> dict[str, Any]:
-    """One readable table row for a plan."""
+    """One readable table row for a plan (``_pw.plan_run``)."""
 
     def axes(value: Any) -> str:
         if isinstance(value, (list, tuple)):
             return " × ".join(str(v) for v in value)
         return "" if value is None else str(value)
+
+    def known(value: Any) -> Any:
+        return "?" if value is None else value
 
     gib = 1024**3
     row = {
@@ -837,7 +993,8 @@ def plan_row(label: str, plan: dict[str, Any]) -> dict[str, Any]:
         "tile shape": axes(plan.get("tile_shape")),
         "grid": axes(plan.get("grid")),
         "tiles": plan.get("tiles"),
-        "with signal": plan.get("tiles_with_signal"),
+        "with signal": known(plan.get("tiles_with_signal")),
+        "GPU jobs": known(plan.get("gpu_jobs")),
         "read per tile (GiB)": round(
             (plan.get("tile_read_bytes") or 0) / gib, 2
         ),
@@ -845,8 +1002,11 @@ def plan_row(label: str, plan: dict[str, Any]) -> dict[str, Any]:
             (plan.get("labels_bytes_uncompressed") or 0) / gib, 1
         ),
     }
-    if plan.get("estimated_seconds") is not None:
-        row["estimate (h)"] = round(plan["estimated_seconds"] / 3600, 1)
+    if plan.get("seconds_per_tile") is not None:
+        row["s / tile"] = round(plan["seconds_per_tile"], 1)
+    if plan.get("hours_per_job") is not None:
+        row["h / job"] = round(plan["hours_per_job"], 2)
+        row["GPU hours"] = round(plan["gpu_hours"], 1)
     return row
 
 
