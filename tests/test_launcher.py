@@ -616,3 +616,55 @@ def test_a_folder_of_tiffs_becomes_a_glob_and_a_pattern():
     assert any("sequence_pattern" in p for p in core.config_problems(cfg))
     cfg["sequence_pattern"] = pattern
     assert not core.config_problems(cfg)
+
+
+def test_stitch_is_per_segmentation(tmp_path):
+    """touch for the nuclei, iou for the cells, in one multi run."""
+    import run_multi
+    from _pw import validate_config
+
+    shared = {"input": "/data/scan.czi", "work_dir": str(tmp_path / "run")}
+    segs = [
+        {"label_name": "nuclei", "method": "threshold", "stitch": "touch"},
+        {
+            "label_name": "cells",
+            "method": "custom",
+            "custom_module": "patchworks.plugins.watershed",
+            "stitch": "iou",
+            "iou_threshold": 0.3,
+        },
+    ]
+    files = core.build_multi(shared, segs, [], directory=str(tmp_path / "c"))
+    paths = [p for p in files if not p.endswith("multi.yaml")]
+    cfgs = [files[p] for p in paths]
+    assert [c["stitch"] for c in cfgs] == ["touch", "iou"]
+    assert cfgs[1]["iou_threshold"] == 0.3
+    for cfg in cfgs:
+        validate_config(cfg)
+        assert not core.config_problems(cfg)
+    assert core.multi_problems(files) == []
+    from pathlib import Path
+
+    assert run_multi._validate_configs([Path(p) for p in paths], cfgs)
+
+    # A method that fills space, stitched by touch: refused, as the
+    # workflow would.
+    touch = core.build_config({**shared, **segs[1], "stitch": "touch"})
+    assert core.config_problems(touch)
+    with pytest.raises(ValueError, match="iou"):
+        validate_config(touch)
+
+
+def test_fills_space_lists_the_plugins_that_say_so():
+    import importlib
+
+    for module in core.FILLS_SPACE:
+        try:
+            plugin = importlib.import_module(module)
+        except ImportError:
+            continue
+        assert getattr(plugin.segment, "patchworks_stitch", None) == "iou"
+    assert core.fills_space(
+        {"method": "custom", "custom_module": "patchworks.plugins.plantseg"}
+    )
+    assert not core.fills_space({"method": "cellpose"})

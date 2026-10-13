@@ -60,8 +60,10 @@ it where only the people it's for can reach it.
    - Shared settings (input, work_dir, conversion, compression, tiling, GPU,
      merge/pyramid) are entered once.
    - Each segmentation gets its own label name, channel, method (cellpose,
-     threshold, DoG with optional deconvolution, custom plugin), overlap
-     and post-processing.
+     threshold, DoG with optional deconvolution, custom plugin), overlap,
+     stitching and post-processing. Stitch nuclei with `touch` and cells
+     with `iou` in the same run; PlantSeg and the watershed get `iou` by
+     default, since they need it.
    - A multi run adds a relations table (`a` → `b` → `.xlsx`), plus
      optional SLURM settings for the relate jobs and a bundle format.
    - Each config is complete: the workflow fills in its defaults and

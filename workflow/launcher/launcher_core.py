@@ -238,9 +238,33 @@ def missing_fields(cfg: dict[str, Any]) -> list[str]:
     return missing
 
 
+# Methods giving every voxel to some cell (their function says so with
+# ``patchworks_stitch = "iou"``): cells touch at every tile seam.
+FILLS_SPACE = ("patchworks.plugins.plantseg", "patchworks.plugins.watershed")
+
+
+def fills_space(v: dict[str, Any]) -> bool:
+    """Whether the form values *v* pick a method that needs iou stitching."""
+    return (
+        v.get("method") == "custom"
+        and str(v.get("custom_module", "")).strip() in FILLS_SPACE
+    )
+
+
 def config_problems(cfg: dict[str, Any]) -> list[str]:
     """What the form holds that the workflow would get wrong."""
     problems = []
+    module = (cfg.get("custom") or {}).get("module")
+    if (
+        cfg.get("method") == "custom"
+        and module in FILLS_SPACE
+        and cfg.get("stitch") != "iou"
+    ):
+        problems.append(
+            f"{cfg['label_name']}: {module} gives every voxel to a cell, so "
+            'cells touch at every tile seam and stitch "touch" would join '
+            'them: use stitch "iou"'
+        )
     work_dir = str(cfg.get("work_dir") or "").strip()
     if work_dir and not work_dir.startswith("/"):
         problems.append(

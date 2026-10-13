@@ -399,16 +399,8 @@ def outputs_form() -> dict:
     """Merging, the label pyramid, the object table and mail."""
     v: dict = {}
     with st.expander("Merge and label pyramid", icon=":material/join:"):
-        c1, c2, c3 = st.columns(3)
-        v["stitch"] = c1.selectbox(
-            "stitch",
-            ["touch", "iou"],
-            help="iou keeps touching cells at a seam apart; needs overlap",
-        )
-        v["iou_threshold"] = c2.number_input(
-            "iou_threshold", min_value=0.05, max_value=1.0, value=0.5
-        )
-        v["sequential_labels"] = c3.checkbox("sequential_labels", value=True)
+        st.caption("How tiles are stitched is set per segmentation.")
+        v["sequential_labels"] = st.checkbox("sequential_labels", value=True)
         c1, c2, c3, c4 = st.columns(4)
         v["pyramid_levels"] = c1.number_input(
             "pyramid_levels", min_value=1, value=5
@@ -542,6 +534,31 @@ def segmentation_form(k: str = "", label: str = "labels") -> dict:
         )
         v["custom_kwargs"] = st.text_area(
             "custom.kwargs (YAML mapping)", "", key=f"{k}ck", height=68
+        )
+
+    st.divider()
+    st.markdown("**Stitching across tiles**")
+    # PlantSeg and the watershed give every voxel to a cell, so cells touch
+    # at every seam: they need iou. The key carries that, so the default
+    # follows the method when it changes.
+    fills = core.fills_space(v)
+    c1, c2, _ = st.columns([1, 1, 2])
+    v["stitch"] = c1.selectbox(
+        "stitch",
+        ["touch", "iou"],
+        index=1 if fills else 0,
+        help="touch: objects touching across a seam are one (nuclei, "
+        "sparse objects). iou: matched by overlap in the shared margin, so "
+        "touching cells stay apart (cells, membranes); needs overlap",
+        key=f"{k}stitch_{fills}",
+    )
+    if v["stitch"] == "iou":
+        v["iou_threshold"] = c2.number_input(
+            "iou_threshold",
+            min_value=0.05,
+            max_value=1.0,
+            value=0.5,
+            key=f"{k}iou",
         )
 
     st.divider()
