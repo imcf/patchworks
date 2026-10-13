@@ -48,8 +48,9 @@ it where only the people it's for can reach it.
    folders open, image files and `.zarr` stores are picked, and a folder
    field can also take a new folder inside the current one. In a folder of
    single-plane TIFFs, the input browser offers it as a glob instead: all
-   its TIFFs, or one channel when the names end in one (ScanR's
-   `…--488nm.tif`). Then set *sequence_pattern* under Conversion.
+   its TIFFs, or one channel when the names end in a channel tag
+   (`…_ch1.tif`, `…_ch2.tif`). Then set *sequence_pattern* under
+   Conversion.
 1. **Configure tab.** Choose *One segmentation* or *Several
    segmentations + relations*. The form is split into blocks: image, tiling,
    segmentation(s) (one tab each), relations and review, outputs, and a

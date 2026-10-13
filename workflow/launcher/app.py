@@ -360,7 +360,7 @@ def image_form() -> dict:
         st.warning(
             "The input is a TIFF glob: set *sequence_pattern* under "
             "Conversion, a regex naming the axes in the file names, e.g. "
-            r"`--Z(?P<Z>\d+)` for ScanR files of one position and channel."
+            r"`_z(?P<Z>\d+)` for files named `..._z000_ch1.tif`."
         )
     return v
 

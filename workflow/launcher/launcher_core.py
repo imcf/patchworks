@@ -803,7 +803,7 @@ def tiff_globs(names: list[str]) -> list[tuple[str, int]]:
     A folder of TIFF planes is one image, given to the workflow as a glob
     (with ``sequence_pattern``), so the file browser offers globs rather
     than files. One glob takes every TIFF of the folder; when the names
-    end in a channel tag (ScanR's ``...--488nm.tif``), there is also one
+    end in a channel tag (``..._ch1.tif``, ``..._ch2.tif``), there is also one
     glob per channel.
 
     Parameters

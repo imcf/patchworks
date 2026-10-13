@@ -426,15 +426,11 @@ def test_browse_entries_and_paths():
 
 
 def test_tiff_globs():
-    scanr = [
-        f"A1--W00001--P00001--Z{z:05d}--T00000--{c}.tif"
-        for z in range(3)
-        for c in ("405nm", "488nm")
-    ]
-    assert core.tiff_globs([*scanr, "metadata.ome.xml"]) == [
+    planes = [f"stack_z{z:03d}_ch{c}.tif" for z in range(3) for c in (1, 2)]
+    assert core.tiff_globs([*planes, "notes.txt"]) == [
         ("*.tif", 6),
-        ("*--405nm.tif", 3),
-        ("*--488nm.tif", 3),
+        ("*_ch1.tif", 3),
+        ("*_ch2.tif", 3),
     ]
     # Numbered planes are not channels; the extension's case is kept.
     planes = [f"img_{i:04d}.TIF" for i in range(5)]
@@ -459,13 +455,11 @@ class _FakeSFTP:
         "/home/u/patchworks": ["workflow"],
         "/home/u/patchworks/workflow": ["Snakefile", "config"],
         "/home/u/data": ["scan.czi", "old.zarr"],
-        # A ScanR acquisition: single-plane TIFFs, one per z and channel.
-        "/home/u/scanr": [
-            f"A1--W00001--P00001--Z{z:05d}--T00000--{c}.tif"
-            for z in range(3)
-            for c in ("405nm", "488nm")
+        # Single-plane TIFFs, one per z and channel.
+        "/home/u/planes": [
+            f"stack_z{z:03d}_ch{c}.tif" for z in range(3) for c in (1, 2)
         ]
-        + ["metadata.ome.xml"],
+        + ["notes.txt"],
     }
 
     class sock:
@@ -568,19 +562,17 @@ def test_app_picks_a_folder_of_tiffs_as_a_glob():
     at.session_state["ssh_target"] = "u@host:22"
     at.session_state["wf_dir"] = "/home/u/patchworks/workflow"
     at.run()
-    # Start the browser inside the ScanR folder, as from a typed path.
-    at.text_input(key="input").set_value(
-        "/home/u/scanr/A1--W00001--P00001--Z00000--T00000--405nm.tif"
-    )
+    # Start the browser inside the TIFF folder, as from a typed path.
+    at.text_input(key="input").set_value("/home/u/planes/stack_z000_ch1.tif")
     at.run()
     at.button(key="input__browse").click().run()
     assert not at.exception
     labels = [b.label for b in at.button]
-    assert "*.tif (6)" in labels and "*--488nm.tif (3)" in labels
+    assert "*.tif (6)" in labels and "*_ch2.tif (3)" in labels
 
     at.button(key="input__glob2").click().run()
     assert not at.exception
-    assert at.text_input(key="input").value == "/home/u/scanr/*--488nm.tif"
+    assert at.text_input(key="input").value == "/home/u/planes/*_ch2.tif"
     assert any("sequence_pattern" in w.value for w in at.warning)
 
 
