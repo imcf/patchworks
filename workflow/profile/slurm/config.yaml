@@ -33,8 +33,9 @@ set-resources:
     cpus_per_task: 16
     runtime: 360
   prepare:
-    # Keep equal to segment's mem_mb: tile_shape "auto" sizes tiles to it.
-    mem_mb: "attempt * 128000"
+    # The segment jobs' memory, one value for both (segment uses it below
+    # by name): prepare sizes tile_shape "auto" tiles to its own memory.
+    mem_mb: &gpu_job_mem "attempt * 128000"
     runtime: 120
   segment:
     slurm_partition: "rtx4090"
@@ -42,7 +43,7 @@ set-resources:
     qos: "rtx4090-1day"
     # Memory and time cover `tiles_per_job` tiles; a whole-z 3-D tile can
     # take several hours.
-    mem_mb: "attempt * 128000"
+    mem_mb: *gpu_job_mem # set above, with prepare
     cpus_per_task: 4
     runtime: 1400 # under the QOS's 24 h
   merge:

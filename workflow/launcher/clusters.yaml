@@ -15,6 +15,12 @@
 #   workflow_dir_hint      example path shown for the workflow directory
 #   setup_cmd              shell line run before snakemake (activate the
 #                          environment that has snakemake + patchworks)
+#   profile                the workflow profile for this cluster (default
+#                          profile/slurm); copy profile/slurm to
+#                          profile/<cluster>/ and adapt its partitions
+#   templates_dir          where "Save as template" keeps settings (default
+#                          <workflow dir>/config/templates); a folder the
+#                          whole lab can read shares them
 #   controller_time / controller_mem / controller_partition /
 #   controller_qos / controller_account
 #                          defaults for the small SLURM job that runs the
@@ -28,5 +34,6 @@ scicore:
   host_key_fingerprints: []
   workflow_dir_hint: "/scicore/home/<group>/<user>/patchworks/workflow"
   setup_cmd: 'eval "$(pixi shell-hook)"'
+  profile: "profile/slurm"
   controller_time: "3-00:00:00"
   controller_mem: "4G"

@@ -21,6 +21,31 @@ SLURM_JOB = "Submit — controller as a SLURM job (recommended)"
 LOGIN_NODE = "Submit — controller on the login node"
 RUN_MODES = (DRY_RUN, SLURM_JOB, LOGIN_NODE)
 
+# The methods the form has fields for that run a plugin: they fill space
+# from a membrane stain, PlantSeg with a U-Net, the watershed from nuclei.
+SEEDED = {
+    "plantseg": "patchworks.plugins.plantseg",
+    "watershed": "patchworks.plugins.watershed",
+}
+# PlantSeg's zoo models for cells from a membrane stain; any other can be
+# typed (patchworks.plugins.plantseg.available_models() lists them all).
+PLANTSEG_MODELS = (
+    "generic_confocal_3D_unet",
+    "generic_light_sheet_3D_unet",
+    "confocal_3D_unet_ovules_ds2x",
+    "lightsheet_3D_unet_root_ds1x",
+)
+PLANTSEG_SEGMENTATIONS = (
+    "gasp",
+    "mutex_ws",
+    "multicut",
+    "dt_watershed",
+    "lifted_multicut",
+    "nuclei_watershed",
+)
+# The PlantSeg modes that use nuclei: from a channel or another segmentation.
+PLANTSEG_NUCLEI = ("lifted_multicut", "nuclei_watershed")
+
 LOG_DIR = ".streamlit_launcher_logs"
 REGISTRY = f"{LOG_DIR}/jobs.jsonl"
 
@@ -157,7 +182,12 @@ def build_config(v: dict[str, Any]) -> dict[str, Any]:
         "fill_holes": v.get("fill_holes") or False,
         "open_radius": v.get("open_radius", 0),
         "dilate": v.get("dilate", 0),
+        "dilate_gpu": bool(v.get("dilate_gpu", False)),
         "min_volume": v.get("min_volume"),
+        # Grow from another segmentation's objects (one cell per nucleus).
+        "seed_labels": v.get("seed_labels") or None,
+        # Cellpose: one intensity range for every tile, or each its own.
+        "normalize": v.get("normalize", "image"),
         "max_volume": v.get("max_volume"),
         # merge
         "stitch": v.get("stitch", "touch"),
@@ -211,6 +241,28 @@ def build_config(v: dict[str, Any]) -> dict[str, Any]:
             "function": "segment",
             "kwargs": kwargs,
         }
+    elif method in SEEDED:
+        kwargs: dict[str, Any] = {}
+        if method == "plantseg":
+            kwargs = {
+                "model": v.get("ps_model") or PLANTSEG_MODELS[0],
+                "segmentation": v.get("ps_segmentation", "gasp"),
+                "beta": float(v.get("ps_beta", 0.6)),
+                "post_minsize": int(v.get("ps_post_minsize", 100)),
+            }
+        else:
+            kwargs = {"nuclei_min_size": int(v.get("ws_nuclei_min_size", 50))}
+        foreground = v.get("foreground", "otsu")
+        kwargs["foreground"] = None if foreground == "none" else foreground
+        if v.get("max_radius_um"):
+            kwargs["max_radius_um"] = float(v["max_radius_um"])
+        kwargs.update(_yaml_or(v.get("extra_kwargs", ""), {}) or {})
+        cfg["method"] = "custom"
+        cfg["custom"] = {
+            "module": SEEDED[method],
+            "function": "segment",
+            "kwargs": kwargs,
+        }
     elif method == "custom":
         cfg["custom"] = {
             "module": v["custom_module"],
@@ -238,9 +290,66 @@ def missing_fields(cfg: dict[str, Any]) -> list[str]:
     return missing
 
 
+# Methods giving every voxel to some cell (their function says so with
+# ``patchworks_stitch = "iou"``): cells touch at every tile seam.
+FILLS_SPACE = ("patchworks.plugins.plantseg", "patchworks.plugins.watershed")
+
+
+def fills_space(v: dict[str, Any]) -> bool:
+    """Whether the form values *v* pick a method that needs iou stitching."""
+    return v.get("method") in SEEDED or (
+        v.get("method") == "custom"
+        and str(v.get("custom_module", "")).strip() in FILLS_SPACE
+    )
+
+
 def config_problems(cfg: dict[str, Any]) -> list[str]:
     """What the form holds that the workflow would get wrong."""
     problems = []
+    module = (cfg.get("custom") or {}).get("module")
+    kwargs = (cfg.get("custom") or {}).get("kwargs") or {}
+    seeds = cfg.get("seed_labels")
+    if seeds and cfg.get("nuclei_channel") is not None:
+        problems.append(
+            f"{cfg['label_name']}: nuclei from a channel or from "
+            f"{seeds!r}, not both (clear nuclei_channel)"
+        )
+    if seeds and seeds == cfg.get("label_name"):
+        problems.append(f"{cfg['label_name']}: cannot grow from itself")
+    if (
+        module == SEEDED["watershed"]
+        and not seeds
+        and (cfg.get("nuclei_channel") is None)
+    ):
+        problems.append(
+            f"{cfg['label_name']}: the watershed grows cells from nuclei: give "
+            "a nuclei channel, or another segmentation's nuclei"
+        )
+    if module == SEEDED["plantseg"]:
+        needs = kwargs.get("segmentation") in PLANTSEG_NUCLEI
+        has = seeds or cfg.get("nuclei_channel") is not None
+        if needs and not has:
+            problems.append(
+                f"{cfg['label_name']}: segmentation "
+                f"{kwargs.get('segmentation')!r} uses nuclei: give a nuclei "
+                "channel, or another segmentation's nuclei"
+            )
+        if seeds and not needs:
+            problems.append(
+                f"{cfg['label_name']}: only segmentation "
+                f"{' or '.join(PLANTSEG_NUCLEI)} grows from "
+                f"{seeds!r}; {kwargs.get('segmentation')!r} would ignore it"
+            )
+    if (
+        cfg.get("method") == "custom"
+        and module in FILLS_SPACE
+        and cfg.get("stitch") != "iou"
+    ):
+        problems.append(
+            f"{cfg['label_name']}: {module} gives every voxel to a cell, so "
+            'cells touch at every tile seam and stitch "touch" would join '
+            'them: use stitch "iou"'
+        )
     work_dir = str(cfg.get("work_dir") or "").strip()
     if work_dir and not work_dir.startswith("/"):
         problems.append(
@@ -634,8 +743,13 @@ def controller_job_script(
     partition: str = "",
     qos: str = "",
     account: str = "",
+    gres: str = "",
+    cpus: int = 1,
 ) -> str:
     """An sbatch script running the Snakemake *controller* as a small job.
+
+    (Or, with *gres*, a short GPU job: ``check --sample`` timing tiles where
+    the segment jobs run.)
 
     The controller only submits and watches the real jobs, so it needs one
     CPU and little memory -- but it must outlive every job it submits, and
@@ -649,7 +763,7 @@ def controller_job_script(
     """
     lines = [
         "#!/bin/bash -l",
-        "#SBATCH --cpus-per-task=1",
+        f"#SBATCH --cpus-per-task={cpus}",
         f"#SBATCH --mem={mem}",
         f"#SBATCH --time={time}",
     ]
@@ -657,6 +771,7 @@ def controller_job_script(
         ("partition", partition),
         ("qos", qos),
         ("account", account),
+        ("gres", gres),
     ):
         if value:
             lines.append(f"#SBATCH --{flag}={value}")
@@ -715,6 +830,530 @@ def parse_sbatch(output: str) -> str | None:
     return None
 
 
+def stop_command(job: dict[str, Any], *, force: bool = False) -> str:
+    """Stop a launched run, letting Snakemake cancel the jobs it submitted.
+
+    SIGINT is Ctrl-C: Snakemake then cancels its SLURM jobs before it
+    exits, which a plain kill does not give it the chance to. *force* kills
+    outright, for a run that does not stop.
+    """
+    if job.get("slurm_job"):
+        jid = shlex.quote(str(job["slurm_job"]))
+        if force:
+            return f"scancel {jid}"
+        # --full: the batch script's processes too (the controller).
+        return f"scancel --full --signal=INT {jid}"
+    # setsid made the run a process group of its own: signal all of it.
+    pid = shlex.quote(str(job["pid"]))
+    return f"kill -{'KILL' if force else 'INT'} -- -{pid}"
+
+
+def unlock_command(job: dict[str, Any], workflow_dir: str) -> str | None:
+    """Release the Snakemake lock a killed run left behind."""
+    config = job.get("config")
+    if not config:
+        return None
+    kind = job.get("kind")
+    if kind == "multi":
+        args = ["python", "scripts/run_multi.py", "--config", config]
+    elif kind == "convert":
+        if not job.get("work_dir"):
+            return None
+        args = [
+            "snakemake",
+            "-s",
+            f"{workflow_dir}/Snakefile",
+            "--configfile",
+            config,
+            "--directory",
+            f"{job['work_dir'].rstrip('/')}/.snakemake_convert",
+        ]
+    elif kind == "single":
+        args = ["snakemake", "-s", "Snakefile", "--configfile", config]
+    else:
+        return None
+    return " ".join(shlex.quote(a) for a in [*args, "--unlock"])
+
+
+def check_command(
+    config: str, *, sample: int = 0, preview: str | None = None
+) -> str:
+    """``scripts/check.py`` on a run's config (or multi config), as JSON;
+    with *preview*, a picture of one segmented tile per segmentation."""
+    args = ["python", "scripts/check.py", config, "--json"]
+    if sample:
+        args += ["--sample", str(sample)]
+    if preview:
+        args += ["--preview", preview]
+    return " ".join(shlex.quote(a) for a in args)
+
+
+def fetch_command(config: str) -> str:
+    """``scripts/fetch_models.py``: the run's models, downloaded now."""
+    return " ".join(
+        shlex.quote(a) for a in ("python", "scripts/fetch_models.py", config)
+    )
+
+
+def channels_command(config: str) -> str:
+    """``scripts/channels.py``: a picture per channel of the converted image."""
+    return " ".join(
+        shlex.quote(a)
+        for a in ("python", "scripts/channels.py", config, "--json")
+    )
+
+
+# The pretrained models the cluster's Cellpose accepts (v3: cyto3, nuclei
+# ...; v4: cpsam ...), printed after a tag so log lines cannot confuse it.
+CELLPOSE_MODELS_COMMAND = (
+    "python -c 'import json; "
+    "from patchworks.plugins.cellpose import available_models; "
+    'print("MODELS:" + json.dumps(available_models()))\''
+)
+# When the cluster cannot say: Cellpose 4's model, then Cellpose 3's.
+CELLPOSE_FALLBACK_MODELS = ["cpsam", "cyto3", "nuclei", "cyto2"]
+
+
+def parse_models(output: str) -> list[str]:
+    """The model names CELLPOSE_MODELS_COMMAND printed ([] if none)."""
+    tag = parse_tag(output, "MODELS")
+    try:
+        names = json.loads(tag) if tag else []
+    except ValueError:
+        return []
+    return [str(n) for n in names] if isinstance(names, list) else []
+
+
+def run_status_command(config: str) -> str:
+    """``scripts/status.py`` on a run's config (or multi config), as JSON."""
+    return " ".join(
+        shlex.quote(a)
+        for a in ("python", "scripts/status.py", config, "--json")
+    )
+
+
+def parse_json_output(output: str) -> dict[str, Any] | None:
+    """The last JSON object a script printed (logs may come before it)."""
+    for line in reversed(output.strip().splitlines()):
+        line = line.strip()
+        if line.startswith("{"):
+            try:
+                data = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(data, dict):
+                return data
+    return None
+
+
+# ---------------------------------------------------------------------------
+# SLURM resources: the workflow profile, and what the account may use
+# ---------------------------------------------------------------------------
+
+# The resources the launcher lets you change, per rule.
+RESOURCE_KEYS = ("slurm_partition", "qos", "gres", "runtime", "mem_mb")
+
+
+def profile_resources(text: str | None) -> dict[str, dict[str, Any]]:
+    """Each rule's resources in a workflow profile, defaults filled in."""
+    profile = yaml.safe_load(text or "") or {}
+    defaults = profile.get("default-resources") or {}
+    rules = profile.get("set-resources") or {}
+    return {
+        rule: {**defaults, **(values or {})}
+        for rule, values in {"default": {}, **rules}.items()
+    }
+
+
+def first_attempt(value: Any) -> int | None:
+    """A profile memory or time for the first attempt (``"attempt * 64000"``)."""
+    import re
+
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return int(value)
+    numbers = re.findall(r"\d+", str(value))
+    return int(numbers[0]) if len(numbers) == 1 else None
+
+
+def profile_with_overrides(
+    text: str, overrides: dict[str, dict[str, Any]]
+) -> str:
+    """The profile *text* with *overrides* (``{rule: {key: value}}``).
+
+    A memory set for ``segment`` grows with each attempt like the profile's
+    own (``attempt * N``), and goes to ``prepare`` too: prepare sizes
+    ``tile_shape: "auto"`` from its own allocation, standing in for the
+    segment job's.
+    """
+    profile = yaml.safe_load(text or "") or {}
+    rules = profile.setdefault("set-resources", {}) or {}
+    profile["set-resources"] = rules
+    overrides = {r: dict(v) for r, v in overrides.items()}
+    seg_mem = (overrides.get("segment") or {}).get("mem_mb")
+    if seg_mem is not None:
+        overrides.setdefault("prepare", {})["mem_mb"] = seg_mem
+    for rule, values in overrides.items():
+        target = rules.setdefault(rule, {}) or {}
+        rules[rule] = target
+        for key, value in values.items():
+            if value in (None, ""):
+                target.pop(key, None)
+            elif key == "mem_mb":
+                target[key] = f"attempt * {int(value)}"
+            else:
+                target[key] = value
+    return yaml.safe_dump(profile, sort_keys=False)
+
+
+def slurm_minutes(text: str) -> int | None:
+    """SLURM's ``[D-]HH:MM:SS`` (or ``MM:SS``, ``MM``) as minutes."""
+    text = (text or "").strip()
+    if not text or text.upper() in ("UNLIMITED", "INFINITE"):
+        return None
+    days = 0
+    try:
+        if "-" in text:
+            d, text = text.split("-", 1)
+            days = int(d)
+        parts = [int(p) for p in text.split(":")]
+    except ValueError:
+        return None  # not a time: nothing to check against
+    if len(parts) == 3:
+        h, m, sec = parts
+    elif len(parts) == 2:
+        h, m, sec = 0, *parts
+    else:
+        h, m, sec = 0, parts[0], 0
+    return days * 1440 + h * 60 + m + (1 if sec else 0)
+
+
+# What the cluster offers and this account may use, in one round trip:
+# partitions (sinfo: availability, time limit, GPUs, CPUs
+# allocated/idle/other/total), associations (account, partition, QOS) and
+# each QOS's MaxWall.
+CLUSTER_INFO_COMMAND = (
+    'echo "#partitions"; sinfo -h -o "%P|%a|%l|%G|%C" 2>/dev/null; '
+    'echo "#assoc"; sacctmgr -nP show assoc user="$USER" '
+    "format=account,partition,qos 2>/dev/null; "
+    'echo "#qos"; sacctmgr -nP show qos format=name,maxwall 2>/dev/null'
+)
+
+
+def _gres_options(gres: str) -> set[str]:
+    """What a job may ask for of a node's ``%G`` (``gpu:rtx4090:8(S:0-1)``):
+    one GPU, of any type and of this type."""
+    options = set()
+    for item in gres.split(","):
+        item = item.split("(")[0].strip()
+        parts = item.split(":")
+        if len(parts) >= 2 and parts[0] and parts[0] != "(null)":
+            options.add(f"{parts[0]}:1")
+            if len(parts) == 3 and not parts[1].isdigit():
+                options.add(f"{parts[0]}:{parts[1]}:1")
+    return options
+
+
+def parse_cluster_info(output: str) -> dict[str, Any]:
+    """Partitions, the QOS and accounts this account may use, QOS limits."""
+    partitions: dict[str, dict[str, Any]] = {}
+    assoc: dict[str, set[str]] = {}
+    accounts: list[str] = []
+    maxwall: dict[str, int | None] = {}
+    default = None
+    part = None
+    for line in output.splitlines():
+        line = line.strip()
+        if line in ("#partitions", "#assoc", "#qos"):
+            part = line
+            continue
+        if not line or "|" not in line:
+            continue
+        fields = line.split("|")
+        if part == "#partitions" and len(fields) >= 5:
+            name, avail, limit, gres, cpus = fields[:5]
+            if name.endswith("*"):  # sinfo marks the default partition
+                name = name[:-1]
+                default = name
+            entry = partitions.setdefault(
+                name,
+                {
+                    "up": avail == "up",
+                    "timelimit": slurm_minutes(limit),
+                    "gres": set(),
+                    "idle_cpus": 0,
+                    "cpus": 0,
+                },
+            )
+            entry["gres"] |= _gres_options(gres)
+            # %C is allocated/idle/other/total; a partition may span lines.
+            counts = cpus.split("/")
+            if len(counts) == 4 and all(c.isdigit() for c in counts):
+                entry["idle_cpus"] += int(counts[1])
+                entry["cpus"] += int(counts[3])
+        elif part == "#assoc":
+            if len(fields) == 3:
+                account, partition, qos = fields
+                if account and account not in accounts:
+                    accounts.append(account)
+            else:
+                partition, qos = fields[0], fields[-1]
+            assoc.setdefault(partition, set()).update(
+                q for q in qos.split(",") if q
+            )
+        elif part == "#qos":
+            maxwall[fields[0]] = slurm_minutes(fields[-1])
+    for entry in partitions.values():
+        entry["gres"] = sorted(entry["gres"])
+    return {
+        "partitions": partitions,
+        "default_partition": default,
+        "assoc": assoc,
+        "accounts": accounts,
+        "maxwall": maxwall,
+    }
+
+
+def usable_qos(info: dict[str, Any], partition: str | None = None) -> list[str]:
+    """The QOS this account may use, on *partition* when known."""
+    assoc = info.get("assoc") or {}
+    if not assoc:
+        return []
+    if partition is None:
+        return sorted(set().union(*assoc.values()))
+    # An association without a partition holds on every partition.
+    return sorted(assoc.get(partition, set()) | assoc.get("", set()))
+
+
+def partition_rows(info: dict[str, Any]) -> list[dict[str, Any]]:
+    """The cluster's partitions as a readable table, GPU ones first."""
+    rows = []
+    for name, p in info.get("partitions", {}).items():
+        limit = p["timelimit"]
+        rows.append(
+            {
+                "partition": name
+                + (
+                    " (default)"
+                    if name == info.get("default_partition")
+                    else ""
+                ),
+                "state": "up" if p["up"] else "DOWN",
+                "time limit": "none"
+                if limit is None
+                else f"{limit // 1440}-{limit % 1440 // 60:02d}:{limit % 60:02d}"
+                if limit >= 1440
+                else f"{limit // 60}:{limit % 60:02d}",
+                "GPUs": ", ".join(p["gres"]) or "-",
+                "idle CPUs": f"{p['idle_cpus']} / {p['cpus']}",
+                "your QOS": ", ".join(usable_qos(info, name)) or "-",
+            }
+        )
+    return sorted(rows, key=lambda r: (r["GPUs"] == "-", r["partition"]))
+
+
+# Memory of common GPU types (GB), as SLURM names them in a node's gres.
+# Where a type comes in two sizes (A100 40/80 GB, V100 16/32 GB) the
+# smaller: a tile sized for it fits both.
+GPU_MEMORY_GB = {
+    "a100": 40,
+    "a10": 24,
+    "a30": 24,
+    "a40": 48,
+    "a6000": 48,
+    "rtx_a6000": 48,
+    "a5000": 24,
+    "rtx_a5000": 24,
+    "a4000": 16,
+    "h100": 80,
+    "h200": 141,
+    "l4": 24,
+    "l40": 48,
+    "l40s": 48,
+    "rtx2080ti": 11,
+    "rtx3090": 24,
+    "rtx4090": 24,
+    "rtx6000": 24,
+    "rtx8000": 48,
+    "titanrtx": 24,
+    "gtx1080ti": 11,
+    "p100": 16,
+    "t4": 16,
+    "v100": 16,
+}
+
+
+def gpu_memory_gb(
+    resources: dict[str, Any], info: dict[str, Any] | None
+) -> tuple[int | None, str]:
+    """The segment GPU's memory, from its gres or its partition's GPUs.
+
+    Returns ``(GB, which GPU)``; ``(None, why)`` when not known. With
+    several types on the partition, the smallest: the job may land on any.
+    """
+    gres = str(resources.get("gres") or "")
+    parts = gres.split(":")
+    if len(parts) == 3 and not parts[1].isdigit():
+        types = [parts[1]]
+    else:
+        part = resources.get("slurm_partition") or (info or {}).get(
+            "default_partition"
+        )
+        offered = ((info or {}).get("partitions") or {}).get(part, {})
+        types = [
+            g.split(":")[1]
+            for g in offered.get("gres", [])
+            if g.count(":") == 2
+        ]
+    known = {
+        t: GPU_MEMORY_GB[t.lower()] for t in types if t.lower() in GPU_MEMORY_GB
+    }
+    if not known:
+        return None, (
+            f"GPU type {', '.join(types)} unknown" if types else "no GPU type"
+        )
+    gpu = min(known, key=known.get)
+    return known[gpu], gpu
+
+
+def needs_gpu_memory(cfg: dict[str, Any]) -> bool:
+    """Cellpose on the GPU with ``tile_shape: "auto"`` and no
+    ``gpu_memory_gb``: prepare would size its tiles for an 8 GB GPU (the
+    workflow's ``_pw.sized_for_fallback_gpu``)."""
+    return (
+        cfg.get("tile_shape", "auto") == "auto"
+        and not cfg.get("gpu_memory_gb")
+        and cfg.get("method") == "cellpose"
+        and bool((cfg.get("cellpose") or {}).get("gpu", True))
+    )
+
+
+def with_gpu_memory(files: dict[str, dict], gb: int) -> dict[str, dict]:
+    """*files* with ``gpu_memory_gb`` set where tiles would be sized for
+    the 8 GB fallback."""
+    return {
+        path: {**cfg, "gpu_memory_gb": gb}
+        if "label_name" in cfg and needs_gpu_memory(cfg)
+        else cfg
+        for path, cfg in files.items()
+    }
+
+
+def resource_problems(
+    resources: dict[str, dict[str, Any]], info: dict[str, Any]
+) -> list[str]:
+    """What sbatch would refuse, or what would never start.
+
+    A partition that does not exist or is down, a QOS the account lacks,
+    a runtime over the QOS's MaxWall or the partition's time limit: sbatch
+    refuses such a job (QOSMaxWallDurationPerJobLimit ...) or it waits
+    forever, with an empty log either way.
+    """
+    assoc, maxwall = info.get("assoc") or {}, info.get("maxwall") or {}
+    partitions = info.get("partitions") or {}
+    allowed = set().union(*assoc.values()) if assoc else set()
+    problems = []
+    for rule, res in resources.items():
+        if rule == "default":
+            continue
+        qos = res.get("qos")
+        runtime = first_attempt(res.get("runtime"))
+        part = res.get("slurm_partition") or info.get("default_partition")
+        if part and partitions:
+            if part not in partitions:
+                problems.append(
+                    f"{rule}: there is no partition {part!r} on this cluster "
+                    f"({', '.join(sorted(partitions))})"
+                )
+            elif not partitions[part]["up"]:
+                problems.append(f"{rule}: partition {part!r} is down")
+            else:
+                limit = partitions[part]["timelimit"]
+                if runtime and limit and runtime > limit:
+                    problems.append(
+                        f"{rule}: runtime {runtime} min is over partition "
+                        f"{part!r}'s time limit of {limit} min"
+                    )
+                if res.get("gres") and not partitions[part]["gres"]:
+                    problems.append(
+                        f"{rule}: asks for {res['gres']} on {part!r}, which "
+                        "has no GPUs"
+                    )
+        if part and assoc and part not in assoc and "" not in assoc:
+            problems.append(
+                f"{rule}: your account has no association with partition "
+                f"{part!r} (it has: {', '.join(sorted(p for p in assoc if p))})"
+            )
+        # The QOS allowed with this partition, or on any if unknown.
+        usable = assoc.get(part) or assoc.get("") or allowed
+        if qos and assoc and qos not in usable:
+            problems.append(
+                f"{rule}: QOS {qos!r} is not one your account may use "
+                f"{'on ' + repr(part) + ' ' if part in assoc else ''}"
+                f"({', '.join(sorted(usable))})"
+            )
+        limit = maxwall.get(qos) if qos else None
+        if runtime and limit and runtime > limit:
+            problems.append(
+                f"{rule}: runtime {runtime} min is over QOS {qos!r}'s MaxWall "
+                f"of {limit} min; sbatch would refuse the job"
+            )
+    return problems
+
+
+# Your patchworks jobs in the queue: the run's controller (pw-<label>), its
+# segmentations' jobs (pw-<label>_<uuid>) and a single run's (patchworks_).
+QUEUE_COMMAND = 'squeue --me -h -o "%i|%j|%T|%r|%M|%l|%P" 2>/dev/null'
+
+# Why a job waits, in words, and whether it ever starts.
+PENDING_REASONS = {
+    "Priority": "waiting its turn: other jobs come first",
+    "Resources": "next in line, waiting for a node to free up",
+    "Dependency": "waiting for the job it depends on",
+    "QOSMaxJobsPerUserLimit": "you already run as many jobs as this QOS allows",
+    "QOSMaxGRESPerUser": "you already use as many GPUs as this QOS allows",
+    "AssocGrpGRES": "your group already uses all its GPUs",
+    "AssocMaxJobsLimit": "your account already runs its most jobs",
+    "QOSGrpCpuLimit": "the QOS's CPUs are all in use",
+    "ReqNodeNotAvail": "the nodes it needs are down or reserved",
+    "BeginTime": "starts later, as asked",
+    "QOSMaxWallDurationPerJobLimit": "NEVER STARTS: its time is over the "
+    "QOS's limit; cancel it, raise the QOS or lower the runtime",
+    "PartitionTimeLimit": "NEVER STARTS: its time is over the partition's "
+    "limit; cancel it and lower the runtime",
+    "PartitionNodeLimit": "NEVER STARTS: asks for more nodes than the "
+    "partition has",
+    "InvalidQOS": "NEVER STARTS: a QOS the account may not use",
+}
+
+
+def parse_queue(output: str) -> list[dict[str, str]]:
+    """Your patchworks jobs in the queue, with why each waits."""
+    rows = []
+    for line in output.splitlines():
+        fields = line.strip().split("|")
+        if len(fields) < 7:
+            continue
+        jid, name, state, reason, elapsed, limit, partition = fields[:7]
+        if not name.startswith(("pw-", "patchworks")):
+            continue
+        rows.append(
+            {
+                "job": jid,
+                "name": name,
+                "state": state,
+                "partition": partition,
+                "running for": elapsed if state == "RUNNING" else "",
+                "time limit": limit,
+                "why it waits": ""
+                if state == "RUNNING"
+                else PENDING_REASONS.get(reason, reason),
+            }
+        )
+    return rows
+
+
 def status_command(job: dict[str, Any]) -> str:
     """Shell line printing RUNNING/PENDING/DONE for a registered job."""
     if job.get("slurm_job"):
@@ -724,87 +1363,16 @@ def status_command(job: dict[str, Any]) -> str:
     return f"kill -0 {pid} 2>/dev/null && echo RUNNING || echo DONE"
 
 
-def image_store(cfg: dict[str, Any]) -> str:
-    """The converted image the workflow writes (``<work_dir>/image.zarr``)."""
-    return f"{cfg['work_dir'].rstrip('/')}/image.zarr"
-
-
-def store_exists_command(store: str) -> str:
-    """Shell line printing YES when *store* holds a converted image."""
-    q = shlex.quote(store)
-    return (
-        f"if [ -e {q}/zarr.json ] || [ -e {q}/.zgroup ]; "
-        "then echo YES; else echo NO; fi"
-    )
-
-
-def plan_command(cfg: dict[str, Any]) -> str | None:
-    """``patchworks segment --plan`` for the run's converted image.
-
-    Planning reads the converted store, so it needs ``convert`` to have run
-    once; it runs no segmentation (no sampling), so it is safe on a login
-    node. None when the method has no CLI equivalent.
-    """
-    args = ["patchworks", "segment", image_store(cfg), "--plan"]
-    tile = cfg.get("tile_shape")
-    if isinstance(tile, (list, tuple)):
-        args += ["--tile-shape", ",".join(str(t) for t in tile)]
-    elif tile == "auto":
-        args += ["--tile-shape", "auto"]
-    ov = cfg.get("overlap")
-    if ov is not None:
-        args += [
-            "--overlap",
-            ",".join(str(o) for o in ov) if isinstance(ov, list) else str(ov),
-        ]
-    args += ["--level", str(cfg.get("level", 0))]
-    ch = cfg.get("channel")
-    args += ["--channel", "none" if ch is None else str(ch)]
-    if cfg.get("skip_empty"):
-        args.append("--skip-empty")
-    args += ["--stitch", cfg.get("stitch", "touch")]
-    if cfg["method"] == "threshold":
-        args += ["--method", "threshold"]
-    elif cfg["method"] == "cellpose":
-        cp = cfg.get("cellpose", {})
-        args += ["--method", "cellpose", "--model", str(cp.get("model"))]
-        if cp.get("diameter"):
-            args += ["--diameter", str(cp["diameter"])]
-        if cp.get("do_3D"):
-            args.append("--do-3d")
-    else:
-        custom = cfg.get("custom", {})
-        args += [
-            "--method",
-            "custom",
-            "--fn",
-            f"{custom.get('module')}:{custom.get('function', 'segment')}",
-            "--fn-kwargs",
-            json.dumps(custom.get("kwargs") or {}),
-        ]
-    return " ".join(shlex.quote(a) for a in args)
-
-
-def parse_plan(output: str) -> dict[str, Any] | None:
-    """The JSON plan ``patchworks segment --plan`` printed, if any."""
-    start = output.find("{")
-    end = output.rfind("}")
-    if start < 0 or end < start:
-        return None
-    try:
-        plan = json.loads(output[start : end + 1])
-    except ValueError:
-        return None
-    return plan if isinstance(plan, dict) else None
-
-
 def plan_row(label: str, plan: dict[str, Any]) -> dict[str, Any]:
-    """One readable table row for a plan."""
+    """One readable table row for a plan (``_pw.plan_run``)."""
 
     def axes(value: Any) -> str:
         if isinstance(value, (list, tuple)):
             return " × ".join(str(v) for v in value)
         return "" if value is None else str(value)
+
+    def known(value: Any) -> Any:
+        return "?" if value is None else value
 
     gib = 1024**3
     row = {
@@ -813,7 +1381,8 @@ def plan_row(label: str, plan: dict[str, Any]) -> dict[str, Any]:
         "tile shape": axes(plan.get("tile_shape")),
         "grid": axes(plan.get("grid")),
         "tiles": plan.get("tiles"),
-        "with signal": plan.get("tiles_with_signal"),
+        "with signal": known(plan.get("tiles_with_signal")),
+        "GPU jobs": known(plan.get("gpu_jobs")),
         "read per tile (GiB)": round(
             (plan.get("tile_read_bytes") or 0) / gib, 2
         ),
@@ -821,8 +1390,11 @@ def plan_row(label: str, plan: dict[str, Any]) -> dict[str, Any]:
             (plan.get("labels_bytes_uncompressed") or 0) / gib, 1
         ),
     }
-    if plan.get("estimated_seconds") is not None:
-        row["estimate (h)"] = round(plan["estimated_seconds"] / 3600, 1)
+    if plan.get("seconds_per_tile") is not None:
+        row["s / tile"] = round(plan["seconds_per_tile"], 1)
+    if plan.get("hours_per_job") is not None:
+        row["h / job"] = round(plan["hours_per_job"], 2)
+        row["GPU hours"] = round(plan["gpu_hours"], 1)
     return row
 
 
@@ -913,3 +1485,280 @@ def parse_registry(text: str) -> list[dict[str, Any]]:
         if isinstance(job, dict):
             jobs.append(job)
     return jobs[::-1]
+
+
+# ---------------------------------------------------------------------------
+# A config back into the form (reopen a past run)
+# ---------------------------------------------------------------------------
+
+DOG_MODULE = "patchworks.plugins.dog"
+COMPRESSIONS = ("zstd", "zstd:3", "blosc", "blosc:lz4", "none")
+RUN_KINDS = ("One segmentation", "Several segmentations + relations")
+
+
+def _flow(value: Any) -> str:
+    """*value* as the one-line YAML a text field holds (``[4, 30, 30]``)."""
+    if value is None:
+        return ""
+    if isinstance(value, (list, tuple, dict)):
+        return yaml.safe_dump(value, default_flow_style=True).strip()
+    return str(value)
+
+
+def _text(value: Any) -> str:
+    return "" if value is None else str(value)
+
+
+def shared_state(cfg: dict[str, Any]) -> dict[str, Any]:
+    """Form values of what a run's segmentations share."""
+    compression = str(cfg.get("compression", "zstd"))
+    return {
+        "input": _text(cfg.get("input")),
+        "work_dir": _text(cfg.get("work_dir")),
+        "sequence_pattern": _text(cfg.get("sequence_pattern")),
+        "reuse_pyramid": bool(cfg.get("reuse_pyramid", False)),
+        "shard": bool(cfg.get("shard", False)),
+        "ngff_version": str(cfg.get("ngff_version", "auto")),
+        "compression": compression if compression in COMPRESSIONS else "zstd",
+        "convert_chunks": _flow(cfg.get("convert_chunks")),
+        "level": int(cfg.get("level", 0)),
+        "tile_shape": _flow(cfg.get("tile_shape", "auto")),
+        "tiles_per_job": int(cfg.get("tiles_per_job", 4)),
+        "gpu_memory_gb": int(cfg.get("gpu_memory_gb") or 0),
+        "skip_empty": bool(cfg.get("skip_empty", True)),
+        "empty_threshold": _text(cfg.get("empty_threshold")),
+        "sequential_labels": bool(cfg.get("sequential_labels", True)),
+        "pyramid_levels": int(cfg.get("pyramid_levels", 5)),
+        "pyramid_downscale": int(cfg.get("pyramid_downscale", 2)),
+        "shard_labels": bool(cfg.get("shard_labels", False)),
+        "seam_report": bool(cfg.get("seam_report", True)),
+        "merge_workers": _text(cfg.get("merge_workers")),
+        "object_table": bool(cfg.get("object_table", True)),
+        "table_channels": ",".join(
+            str(c) for c in cfg.get("table_channels") or []
+        ),
+        "notify_email": _text(cfg.get("notify_email")),
+        "notify_events": list(cfg.get("notify_events") or ["finish", "error"]),
+    }
+
+
+def segmentation_state(cfg: dict[str, Any], k: str = "") -> dict[str, Any]:
+    """Form values of one segmentation; *k* prefixes the keys."""
+    custom = cfg.get("custom") or {}
+    method = cfg.get("method", "cellpose")
+    if method == "custom" and custom.get("module") == DOG_MODULE:
+        method = "dog"
+    for name, module in SEEDED.items():
+        if method == "custom" and custom.get("module") == module:
+            method = name
+    v: dict[str, Any] = {
+        "lbl": _text(cfg.get("label_name", "labels")),
+        "ch": int(cfg.get("channel") or 0),
+        "nuc": _text(cfg.get("nuclei_channel")),
+        "ov": _flow(cfg.get("overlap", 0)),
+        "method": method,
+    }
+    if method == "cellpose":
+        cp = dict(cfg.get("cellpose") or {})
+        v["cpm"] = _text(cp.pop("model", "cyto3"))
+        v["cpd"] = float(cp.pop("diameter", None) or 0.0)
+        v["cp3"] = bool(cp.pop("do_3D", False))
+        v["cpg"] = bool(cp.pop("gpu", True))
+        v["cpx"] = yaml.safe_dump(cp, sort_keys=False).strip() if cp else ""
+        v["norm"] = cfg.get("normalize", "image")
+    elif method in SEEDED:
+        kw = dict(custom.get("kwargs") or {})
+        if method == "plantseg":
+            v["psm"] = _text(kw.pop("model", PLANTSEG_MODELS[0]))
+            v["pss"] = kw.pop("segmentation", "gasp")
+            v["psb"] = float(kw.pop("beta", 0.6))
+            v["psmin"] = int(kw.pop("post_minsize", 100))
+        else:
+            v["nmin"] = int(kw.pop("nuclei_min_size", 50))
+        # The plugins' own default when left out: PlantSeg none, the
+        # watershed Otsu.
+        fg = kw.pop("foreground", None if method == "plantseg" else "otsu")
+        v["fg"] = "none" if fg is None else str(fg)
+        v["rad"] = _text(kw.pop("max_radius_um", None))
+        kw.pop("seeds", None)  # the workflow sets it from seed_labels
+        v["px"] = yaml.safe_dump(kw, sort_keys=False).strip() if kw else ""
+        if cfg.get("seed_labels"):
+            v["seed_from"] = "labels"
+            v["seed"] = cfg["seed_labels"]
+    elif method == "dog":
+        kw = dict(custom.get("kwargs") or {})
+        v["dl"] = float(kw.get("low_sigma", 1.0))
+        v["dh"] = float(kw.get("high_sigma", 3.0))
+        v["dt"] = float(kw.get("threshold", 0.02))
+        v["du"] = kw.get("sigma_units", "px")
+        v["dg"] = bool(kw.get("use_gpu", False))
+        decon = kw.get("decon_kwargs") or {}
+        v["psf"] = _text(decon.get("psf"))
+        if decon:
+            # Left out, these are the plugin's (and pycudadecon's) defaults,
+            # not the form's: keep what the config meant.
+            v["wl"] = int(decon.get("wavelength", 520))
+            v["na"] = float(decon.get("na", 1.25))
+            v["ni"] = float(decon.get("nimm", 1.3))
+            dup = decon.get("dup_rev_z")
+            v["dup"] = "auto" if dup == "auto" else "on" if dup else "off"
+    elif method == "custom":
+        v["cm"] = _text(custom.get("module"))
+        v["cf"] = _text(custom.get("function", "segment"))
+        kwargs = custom.get("kwargs") or {}
+        v["ck"] = (
+            yaml.safe_dump(kwargs, sort_keys=False).strip() if kwargs else ""
+        )
+    fills = fills_space(
+        {"method": cfg.get("method"), "custom_module": custom.get("module", "")}
+    )
+    v[f"stitch_{fills}"] = cfg.get("stitch", "touch")
+    v["iou"] = float(cfg.get("iou_threshold", 0.5))
+    holes = cfg.get("fill_holes", False)
+    v["holes"] = {False: "off", True: "3-D", "per_plane": "per plane"}.get(
+        holes, "off"
+    )
+    v["open"] = int(cfg.get("open_radius") or 0)
+    v["dil"] = int(cfg.get("dilate") or 0)
+    v["dgpu"] = bool(cfg.get("dilate_gpu", False))
+    v["minv"] = _text(cfg.get("min_volume"))
+    v["maxv"] = _text(cfg.get("max_volume"))
+    return {f"{k}{key}": value for key, value in v.items()}
+
+
+def form_state(
+    seg_cfgs: list[dict[str, Any]], multi: dict[str, Any] | None = None
+) -> tuple[dict[str, Any], list[str]]:
+    """Every form value for these configs, and the settings it cannot hold.
+
+    The form holds what :func:`build_config` writes; a config written by
+    hand may hold more (``seed_labels``, ``denoise:`` ...), which would be
+    lost: those keys are returned, to be said.
+    """
+    state = shared_state(seg_cfgs[0])
+    state["run_kind"] = RUN_KINDS[0 if multi is None else 1]
+    if multi is None:
+        state.update(segmentation_state(seg_cfgs[0]))
+    else:
+        state["n_segs"] = len(seg_cfgs)
+        for i, cfg in enumerate(seg_cfgs):
+            state.update(segmentation_state(cfg, f"s{i}_"))
+        relate = multi.get("relate") or {}
+        state.update(
+            {
+                "relate_partition": _text(relate.get("partition")),
+                "relate_mem": _text(relate.get("mem")),
+                "relate_cpus": int(relate.get("cpus") or 0),
+                "relate_time": int(relate.get("time") or 0),
+                "relate_qos": _text(relate.get("qos")),
+            }
+        )
+        bundle = multi.get("bundle")
+        state["bundle_format"] = (
+            "none"
+            if bundle is False
+            else ((bundle or {}).get("format") or "zip")
+        )
+        review = multi.get("review") or {}
+        state["min_overlap"] = float(review.get("min_overlap") or 0.5)
+        state["loaded_relations"] = [
+            {
+                "a": r.get("a"),
+                "b": r.get("b"),
+                "output": r.get("output"),
+                **(
+                    {"max_distance_um": r["max_distance_um"]}
+                    if r.get("max_distance_um") is not None
+                    else {}
+                ),
+            }
+            for r in multi.get("relations") or []
+        ]
+        rules = []
+        for parent, children in (review.get("expect") or {}).items():
+            for child, count in children.items():
+                lo, hi = (count, count) if isinstance(count, int) else count
+                rules.append(
+                    {"parent": parent, "child": child, "min": lo, "max": hi}
+                )
+        state["loaded_rules"] = rules
+        for child, rule in (review.get("position") or {}).items():
+            state["pos_child"] = child
+            state["pos_parent"] = rule.get("parent")
+            apical = str(rule.get("apical", ""))
+            state["pos_apical"] = (
+                apical if apical in ("+z", "-z") else f"away from {apical}"
+            )
+            break
+    known = {
+        key
+        for method in ("cellpose", "custom")
+        for key in build_config(
+            {
+                "input": "",
+                "work_dir": "",
+                "label_name": "",
+                "method": method,
+                "custom_module": "m",
+            }
+        )
+    }
+    ignored = sorted(
+        {key for cfg in seg_cfgs for key in cfg if key not in known}
+    )
+    return state, ignored
+
+
+# ---------------------------------------------------------------------------
+# Templates: a config kept under a name, to start the next run from
+# ---------------------------------------------------------------------------
+
+# What makes a config one image's run rather than a way of segmenting.
+IMAGE_KEYS = ("input", "work_dir", "sequence_pattern")
+
+
+def template_files(
+    files: dict[str, dict], name: str, directory: str, *, with_image=False
+) -> dict[str, dict]:
+    """The run's files as a template named *name* in *directory*.
+
+    One config is ``<name>.yaml``; a multi run a folder ``<name>/`` with
+    its ``multi.yaml`` naming the segmentations next to it (relative, so
+    the folder can be copied or shared). Without *with_image*, input and
+    work_dir are left out: loading the template keeps the form's.
+    """
+    name = safe_name(name)
+
+    def strip(cfg: dict) -> dict:
+        return (
+            dict(cfg)
+            if with_image
+            else {k: v for k, v in cfg.items() if k not in IMAGE_KEYS}
+        )
+
+    multi = next(
+        (c for p, c in files.items() if p.endswith("/multi.yaml")), None
+    )
+    if multi is None:
+        (cfg,) = files.values()
+        return {f"{directory}/{name}.yaml": strip(cfg)}
+    folder = f"{directory}/{name}"
+    out = {}
+    segs = []
+    for path in multi["segmentations"]:
+        file = path.rsplit("/", 1)[-1]
+        out[f"{folder}/{file}"] = strip(files[path])
+        segs.append(file)
+    out[f"{folder}/multi.yaml"] = {**multi, "segmentations": segs}
+    return out
+
+
+def template_choices(entries: list[tuple[str, bool]], directory: str) -> dict:
+    """Template name -> the file to load, from a listing of *directory*."""
+    out = {}
+    for name, is_dir in sorted(entries):
+        if is_dir:
+            out[name] = f"{directory}/{name}/multi.yaml"
+        elif name.endswith((".yaml", ".yml")):
+            out[name.rsplit(".", 1)[0]] = f"{directory}/{name}"
+    return out

@@ -42,8 +42,15 @@ GPU; tell pixi a driver is there: `export CONDA_OVERRIDE_CUDA=12.0`.
 
 ## 2. Configure
 
-Edit `config/config.yaml` (or keep your own copy and add `--configfile
-my_config.yaml` to the commands below):
+Copy `config/config.yaml` into `config/local/`, which git ignores, and edit
+the copy: the shipped files then stay untouched, so `git pull` never
+conflicts with your settings. Add `--configfile` to the commands below; it
+replaces the shipped config rather than adding to it:
+
+```bash
+mkdir -p config/local && cp config/config.yaml config/local/my_run.yaml
+pixi run dry --configfile config/local/my_run.yaml
+```
 
 ```yaml
 input: "/data/scan.ims"        # .ims/.czi/.lif/.nd2/OME-TIFF/.zarr
@@ -63,7 +70,12 @@ the `#` to change one. In a multi run, settings shared by every
 segmentation are listed in `common.yaml`, the rest in each segmentation's
 config. The options most worth knowing are [below](#options-worth-knowing). Then edit
 `profile/slurm/config.yaml` for your cluster: partitions, the GPU request,
-`jobs:` (how many jobs at once).
+`jobs:` (how many jobs at once). It ships with sciCORE's values; for
+another cluster, copy the folder to `profile/<cluster>/` and pass
+`--workflow-profile profile/<cluster>` (`--profile` to run_multi), or name
+it as the preset's `profile:` in the launcher. The segment jobs' memory is
+set once, under `prepare:`, and used by both: prepare sizes
+`tile_shape: "auto"` tiles to it.
 
 !!! warning "`runtime` is capped by the QOS"
     A job asking for more time than its QOS allows is refused by `sbatch`
@@ -74,14 +86,34 @@ config. The options most worth knowing are [below](#options-worth-knowing). Then
 ## 3. Run
 
 ```bash
-pixi run dry      # the plan, nothing run
-pixi run go       # locally, on this machine
-pixi run slurm    # on the cluster: submits and follows the jobs
+C=config/local/my_run.yaml
+pixi run check $C               # the config's problems; once converted, the plan
+pixi run fetch $C               # its models, here (GPU nodes are often offline)
+pixi run channels $C            # once converted: a picture per channel
+pixi run dry   --configfile $C   # checks the config, lists the steps; runs nothing
+pixi run go    --configfile $C   # locally, on this machine
+pixi run slurm --configfile $C   # on the cluster: submits and follows the jobs
+pixi run status $C               # how far it got (from another shell)
 ```
 
-Run it in `tmux` on the login node: it follows the jobs until the end. A
-run that stops (or fails) resumes where it was when started again with the
-same command; finished steps are not redone.
+The dry run checks the whole config first (unknown keys, wrong values,
+packages the environment lacks), so a mistake shows in seconds rather
+than after the conversion. Run `slurm` in `tmux` on the login node: it
+follows the jobs until the end. A run that stops (or fails) resumes where
+it was when started again with the same command; finished steps are not
+redone. Once the image is converted, `check` also plans each
+segmentation with the run's own tile sizing: tiles, how many hold signal,
+GPU jobs, memory per tile, size of the result. `check $C --sample 3` times
+the method on 3 real tiles for the hours a job and the run will take, and
+`--preview DIR` adds a picture of one of them per segmentation, its
+objects outlined, to judge the settings before the run: run it where the
+jobs run (`srun` with the segment job's partition and GPU).
+`status` reads what the run left in work_dir: converted or not,
+tiles segmented out of how many, merged with how many objects, the seam
+report, and for a multi config its relations and bundle. A step that
+failed is named with the line of its log that says why and, for the
+usual causes (GPU or RAM out of memory, a time limit, a missing package,
+a download on an offline node, a full disk, a stale lock), what to do.
 
 ## Several segmentations and their relations
 

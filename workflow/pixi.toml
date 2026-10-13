@@ -3,6 +3,8 @@
 #   pixi run dry | go | slurm                       # one segmentation (config/config.yaml)
 #   pixi run multi-dry | multi | multi-slurm \
 #     --config my_multi.yaml                        # several, related
+#   pixi run check  <config or multi config>        # its problems, and the plan
+#   pixi run status <config or multi config>        # how far a run has got
 #   pixi run -e viewer napari <image.zarr[.zip]>    # look at a result (needs a display)
 # Keep this folder on a filesystem the compute nodes can read.
 
@@ -97,6 +99,10 @@ slurm = "snakemake --workflow-profile profile/slurm --configfile config/config.y
 multi-dry = "python scripts/run_multi.py -n"
 multi = "python scripts/run_multi.py"
 multi-slurm = "python scripts/run_multi.py --profile profile/slurm"
+check = "python scripts/check.py" # <config or multi config>: before running
+fetch = "python scripts/fetch_models.py" # <config or multi config>: models, on the login node
+channels = "python scripts/channels.py" # <config>: a picture per channel, once converted
+status = "python scripts/status.py" # <config or multi config>: how far it got
 zip = "python scripts/export_iso.py --format zip" # --store image.zarr
 iso = "python scripts/export_iso.py" # needs xorriso, genisoimage or mkisofs
 reshard = "python scripts/reshard_store.py" # --store image.zarr: repack with shards

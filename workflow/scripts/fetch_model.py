@@ -1,21 +1,12 @@
 """Snakemake (local) script: cache the segmentation model before segmenting.
 
-Runs on the submit host, which has network access, so the offline GPU nodes
-never try to download Cellpose weights at run time (they read the shared
-``$HOME/.cellpose`` cache instead).
+Runs on the submit host, so the offline GPU nodes never try to download
+weights at run time. When the submit host is itself a compute node without
+internet (the launcher's controller job), fetch first on the login node:
+``pixi run fetch <config>`` (scripts/fetch_models.py).
 """
 
-from _pw import start_log
+from _pw import fetch_models, start_log
 
 start_log(snakemake.log[0])  # noqa: F821
-cfg = snakemake.config  # noqa: F821
-
-if cfg.get("method", "cellpose") == "cellpose":
-    # _get_model downloads + caches the weights keyed by (model, gpu).
-    from patchworks.plugins.cellpose import _get_model
-
-    model = cfg["cellpose"]["model"]
-    _get_model({"model": model, "gpu": False})
-    print(f"[patchworks] cached segmentation model: {model}")
-else:
-    print(f"[patchworks] method={cfg.get('method')!r}; no model to prefetch")
+print(f"[patchworks] {fetch_models(snakemake.config)}")  # noqa: F821
