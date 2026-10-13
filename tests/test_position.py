@@ -134,6 +134,21 @@ def test_merged_cells_keep_exact_spread(store):
     assert merged["cov_zz"] == pytest.approx(before.loc[1, "cov_zz"])
 
 
+def test_a_merge_applies_and_leaves_the_table_alone(store):
+    """Under pandas 3, a Series made from the table's RangeIndex shared its
+    cached values: the merge was written into the index itself, compared
+    with itself, and never applied."""
+    rv = Review(store)
+    index = rv.tables["cyto_labels"].index.to_numpy().copy()
+    rv.decide("cyto_labels", 2, "merge", into=1)
+    merged = rv.effective("cyto_labels")
+    assert 2 not in merged.index
+    assert merged.loc[1, "area_voxels"] == 2 * 24 * 24 * 40
+    np.testing.assert_array_equal(
+        rv.tables["cyto_labels"].index.to_numpy(), index
+    )
+
+
 def test_relation_workbook_has_positions(store, tmp_path):
     openpyxl = pytest.importorskip("openpyxl")
     rv = Review(store, position=RULE)
