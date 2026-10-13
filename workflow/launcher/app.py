@@ -329,8 +329,16 @@ def section(title: str, caption: str | None = None):
     return box
 
 
+def _init(key: str, **default) -> dict:
+    """``key=`` and the widget's default, unless the key already holds a
+    value (one a past run's config put there): a widget given both warns."""
+    if key in st.session_state:
+        return {"key": key}
+    return {"key": key, **default}
+
+
 def _opt_float(label: str, container=st, help=None, key=None):
-    text = container.text_input(label, value="", help=help, key=key)
+    text = container.text_input(label, help=help, **_init(key, value=""))
     return float(text) if text.strip() else None
 
 
@@ -373,17 +381,23 @@ def image_form() -> dict:
         )
     with st.expander("Conversion", icon=":material/transform:"):
         c1, c2, c3, c4 = st.columns(4)
-        v["reuse_pyramid"] = c1.checkbox("reuse_pyramid", value=False)
-        v["shard"] = c2.checkbox("shard", value=False)
-        v["ngff_version"] = c3.selectbox("ngff_version", ["auto", "0.4", "0.5"])
+        v["reuse_pyramid"] = c1.checkbox(
+            "reuse_pyramid", **_init("reuse_pyramid", value=False)
+        )
+        v["shard"] = c2.checkbox("shard", **_init("shard", value=False))
+        v["ngff_version"] = c3.selectbox(
+            "ngff_version", ["auto", "0.4", "0.5"], **_init("ngff_version")
+        )
         v["compression"] = c4.selectbox(
             "compression",
-            ["zstd", "zstd:3", "blosc", "blosc:lz4", "none"],
+            core.COMPRESSIONS,
+            **_init("compression"),
             help="zstd: best for labels; zstd:3 ~10% smaller raw images; "
             "blosc for older Java viewers without zstd",
         )
         v["convert_chunks"] = st.text_input(
-            "convert_chunks (YAML, e.g. [8, 512, 512]; blank = auto)", ""
+            "convert_chunks (YAML, e.g. [8, 512, 512]; blank = auto)",
+            **_init("convert_chunks", value=""),
         )
     return v
 
@@ -391,19 +405,29 @@ def image_form() -> dict:
 def tiling_form() -> dict:
     v: dict = {}
     c1, c2, c3, c4 = st.columns(4)
-    v["level"] = c1.number_input("level", min_value=0, value=0, step=1)
+    v["level"] = c1.number_input(
+        "level", min_value=0, step=1, **_init("level", value=0)
+    )
     v["tile_shape"] = c2.text_input(
-        "tile_shape", value="auto", help='"auto" or e.g. [16, 1024, 1024]'
+        "tile_shape",
+        help='"auto" or e.g. [16, 1024, 1024]',
+        **_init("tile_shape", value="auto"),
     )
     v["tiles_per_job"] = c3.number_input(
-        "tiles_per_job", min_value=1, value=4, step=1
+        "tiles_per_job", min_value=1, step=1, **_init("tiles_per_job", value=4)
     )
     v["gpu_memory_gb"] = c4.number_input(
-        "gpu_memory_gb (0 = detect)", min_value=0, value=0
+        "gpu_memory_gb (0 = detect)",
+        min_value=0,
+        **_init("gpu_memory_gb", value=0),
     )
     c1, c2, _, _ = st.columns(4)
-    v["skip_empty"] = c1.checkbox("skip_empty", value=True)
-    v["empty_threshold"] = _opt_float("empty_threshold (blank = Otsu)", c2)
+    v["skip_empty"] = c1.checkbox(
+        "skip_empty", **_init("skip_empty", value=True)
+    )
+    v["empty_threshold"] = _opt_float(
+        "empty_threshold (blank = Otsu)", c2, key="empty_threshold"
+    )
     return v
 
 
@@ -412,61 +436,183 @@ def outputs_form() -> dict:
     v: dict = {}
     with st.expander("Merge and label pyramid", icon=":material/join:"):
         st.caption("How tiles are stitched is set per segmentation.")
-        v["sequential_labels"] = st.checkbox("sequential_labels", value=True)
+        v["sequential_labels"] = st.checkbox(
+            "sequential_labels", **_init("sequential_labels", value=True)
+        )
         c1, c2, c3, c4 = st.columns(4)
         v["pyramid_levels"] = c1.number_input(
-            "pyramid_levels", min_value=1, value=5
+            "pyramid_levels", min_value=1, **_init("pyramid_levels", value=5)
         )
         v["pyramid_downscale"] = c2.number_input(
-            "pyramid_downscale", min_value=2, value=2
+            "pyramid_downscale",
+            min_value=2,
+            **_init("pyramid_downscale", value=2),
         )
-        v["shard_labels"] = c3.checkbox("shard_labels", value=False)
-        v["seam_report"] = c4.checkbox("seam_report", value=True)
-        workers = st.text_input("merge_workers (blank = auto)", "")
+        v["shard_labels"] = c3.checkbox(
+            "shard_labels", **_init("shard_labels", value=False)
+        )
+        v["seam_report"] = c4.checkbox(
+            "seam_report", **_init("seam_report", value=True)
+        )
+        workers = st.text_input(
+            "merge_workers (blank = auto)", **_init("merge_workers", value="")
+        )
         v["merge_workers"] = int(workers) if workers.strip() else None
     with st.expander("Object table", icon=":material/table:"):
         c1, c2 = st.columns(2)
         v["object_table"] = c1.checkbox(
             "object table (for `patchworks review`)",
-            value=True,
             help="one row per object in labels/<name>/table: size, "
             "centroid, bounding box",
+            **_init("object_table", value=True),
         )
         chans = c2.text_input(
             "table_channels (e.g. 0,2; blank = none)",
-            "",
             help="adds each object's mean/std intensity in these channels",
+            **_init("table_channels", value=""),
         )
         v["table_channels"] = [
             int(c) for c in chans.replace(" ", "").split(",") if c
         ]
     with st.expander("Notifications", icon=":material/mail:"):
         c1, c2 = st.columns(2)
-        v["notify_email"] = c1.text_input("notify_email", "")
+        v["notify_email"] = c1.text_input(
+            "notify_email", **_init("notify_email", value="")
+        )
         v["notify_events"] = c2.multiselect(
             "notify_events",
             ["start", "finish", "error"],
-            default=["finish", "error"],
+            **_init("notify_events", default=["finish", "error"]),
         )
     return v
+
+
+def _remote_yaml(path: str) -> dict:
+    text = read_remote(get_client(), path)
+    if text is None:
+        raise FileNotFoundError(path)
+    return yaml.safe_load(text) or {}
+
+
+def load_run(path: str, wf_dir: str) -> None:
+    """Fill the form from a run's config (a callback: before the widgets).
+
+    A multi config's segmentations and common file resolve as run_multi
+    resolves them: next to the multi config, then in the workflow folder.
+    """
+    try:
+        cfg = _remote_yaml(path)
+        multi = None
+        if "segmentations" in cfg:
+            multi = cfg
+            here = core.parent_dir(path)
+
+            def resolve(p: str) -> str:
+                if p.startswith("/"):
+                    return p
+                for base in (here, wf_dir):
+                    candidate = core.join_remote(base, p)
+                    if read_remote(get_client(), candidate) is not None:
+                        return candidate
+                return core.join_remote(here, p)
+
+            common = (
+                _remote_yaml(resolve(cfg["common"]))
+                if cfg.get("common")
+                else {}
+            )
+            segs = [
+                {**common, **_remote_yaml(resolve(p))}
+                for p in cfg["segmentations"]
+            ]
+        else:
+            segs = [cfg]
+        state, ignored = core.form_state(segs, multi)
+    except Exception as exc:  # shown, not raised: a UI
+        st.session_state["load_note"] = (
+            "error",
+            f"could not load {path}: {exc}",
+        )
+        return
+    for key in ("loaded_relations", "loaded_rules"):
+        st.session_state.pop(key, None)
+    st.session_state.update(state)
+    st.session_state["loaded"] = st.session_state.get("loaded", 0) + 1
+    st.session_state["load_note"] = (
+        "ok",
+        f"loaded {path}"
+        + (
+            f". Not in the form, so left out: {', '.join(ignored)}"
+            if ignored
+            else ""
+        ),
+    )
+
+
+def start_from_form(wf_dir: str, jobs: list[dict]) -> None:
+    """Reopen a past launch's config, or any config file on the cluster."""
+    past = list(
+        dict.fromkeys(
+            j["config"]
+            for j in jobs
+            if j.get("config") and j.get("kind") in ("single", "multi")
+        )
+    )
+    c1, c2 = st.columns([3, 1], vertical_alignment="bottom")
+    choice = c1.selectbox(
+        "a past launch",
+        past,
+        index=None,
+        placeholder="newest first" if past else "no launches yet",
+        format_func=lambda p: p.rsplit("/config/", 1)[-1],
+    )
+    c2.button(
+        "Load",
+        icon=":material/upload_file:",
+        key="load_past",
+        disabled=choice is None,
+        on_click=load_run,
+        args=(choice, wf_dir),
+    )
+    c1, c2 = st.columns([3, 1], vertical_alignment="bottom")
+    with c1:
+        other = remote_path("or a config file (or a multi config)", "load_path")
+    c2.button(
+        "Load",
+        icon=":material/upload_file:",
+        key="load_file",
+        disabled=not other,
+        on_click=load_run,
+        args=(other, wf_dir),
+    )
+    note = st.session_state.pop("load_note", None)
+    if note:
+        (st.success if note[0] == "ok" else st.error)(note[1])
 
 
 def segmentation_form(k: str = "", label: str = "labels") -> dict:
     """One segmentation: what to label, how, and how to post-process it.
 
-    *k* prefixes every widget key, so several can sit on one page.
+    *k* prefixes every widget key, so several can sit on one page; the keys
+    are the ones :func:`launcher_core.segmentation_state` fills in.
     """
     v: dict = {}
     st.markdown("**What to segment**")
     c1, c2, c3, c4 = st.columns(4)
-    v["label_name"] = c1.text_input("label_name", value=label, key=f"{k}lbl")
-    v["channel"] = c2.number_input(
-        "channel", min_value=0, value=0, step=1, key=f"{k}ch"
+    v["label_name"] = c1.text_input(
+        "label_name", **_init(f"{k}lbl", value=label)
     )
-    nuc = c3.text_input("nuclei_channel (blank = none)", "", key=f"{k}nuc")
+    v["channel"] = c2.number_input(
+        "channel", min_value=0, step=1, **_init(f"{k}ch", value=0)
+    )
+    nuc = c3.text_input(
+        "nuclei_channel (blank = none)", **_init(f"{k}nuc", value="")
+    )
     v["nuclei_channel"] = int(nuc) if nuc.strip() else None
     v["overlap"] = c4.text_input(
-        "overlap", value="30", help="N, or per axis [z, y, x]", key=f"{k}ov"
+        "overlap",
+        help="N, or per axis [z, y, x]",
+        **_init(f"{k}ov", value="30"),
     )
 
     st.divider()
@@ -475,48 +621,53 @@ def segmentation_form(k: str = "", label: str = "labels") -> dict:
         st.segmented_control(
             "method",
             ["cellpose", "dog", "threshold", "custom"],
-            default="cellpose",
             format_func=lambda m: {"dog": "DoG (+ deconvolution)"}.get(m, m),
-            key=f"{k}method",
             label_visibility="collapsed",
+            **_init(f"{k}method", default="cellpose"),
         )
         or "cellpose"
     )
     if v["method"] == "cellpose":
         c1, c2, c3, c4 = st.columns(4)
         v["cp_model"] = c1.text_input(
-            "cellpose.model", value="cyto3", key=f"{k}cpm"
+            "cellpose.model", **_init(f"{k}cpm", value="cyto3")
         )
         v["cp_diameter"] = c2.number_input(
             "cellpose.diameter (0 = estimate)",
             min_value=0.0,
-            value=30.0,
-            key=f"{k}cpd",
+            **_init(f"{k}cpd", value=30.0),
         )
-        v["cp_do_3d"] = c3.checkbox("cellpose.do_3D", False, key=f"{k}cp3")
-        v["cp_gpu"] = c4.checkbox("cellpose.gpu", True, key=f"{k}cpg")
+        v["cp_do_3d"] = c3.checkbox(
+            "cellpose.do_3D", **_init(f"{k}cp3", value=False)
+        )
+        v["cp_gpu"] = c4.checkbox(
+            "cellpose.gpu", **_init(f"{k}cpg", value=True)
+        )
         v["cp_extra_kwargs"] = st.text_area(
             "extra cellpose kwargs (YAML mapping)",
-            "",
             help="e.g. flow_threshold: 0.4",
-            key=f"{k}cpx",
             height=68,
+            **_init(f"{k}cpx", value=""),
         )
     elif v["method"] == "dog":
         c1, c2, c3, c4 = st.columns(4)
-        v["dog_low_sigma"] = c1.number_input("low_sigma", 1.0, key=f"{k}dl")
-        v["dog_high_sigma"] = c2.number_input("high_sigma", 3.0, key=f"{k}dh")
+        v["dog_low_sigma"] = c1.number_input(
+            "low_sigma", min_value=0.0, **_init(f"{k}dl", value=1.0)
+        )
+        v["dog_high_sigma"] = c2.number_input(
+            "high_sigma", min_value=0.0, **_init(f"{k}dh", value=3.0)
+        )
         v["dog_threshold"] = c3.number_input(
-            "threshold", value=0.02, format="%.4f", key=f"{k}dt"
+            "threshold", format="%.4f", **_init(f"{k}dt", value=0.02)
         )
         v["dog_sigma_units"] = c4.selectbox(
             "sigma_units",
             ["px", "um"],
             help="um: the same physical blur along z and x/y",
-            key=f"{k}du",
+            **_init(f"{k}du"),
         )
         v["dog_use_gpu"] = st.checkbox(
-            "blur/label on GPU (cupy)", False, key=f"{k}dg"
+            "blur/label on GPU (cupy)", **_init(f"{k}dg", value=False)
         )
         v["dog_psf"] = remote_path(
             "deconvolution PSF (blank = no deconvolution)", f"{k}psf"
@@ -524,28 +675,32 @@ def segmentation_form(k: str = "", label: str = "labels") -> dict:
         if v["dog_psf"]:
             c1, c2, c3, c4 = st.columns(4)
             v["dog_wavelength"] = c1.number_input(
-                "wavelength (nm)", value=525, key=f"{k}wl"
+                "wavelength (nm)", **_init(f"{k}wl", value=525)
             )
-            v["dog_na"] = c2.number_input("NA", value=1.4, key=f"{k}na")
+            v["dog_na"] = c2.number_input("NA", **_init(f"{k}na", value=1.4))
             v["dog_nimm"] = c3.number_input(
-                "immersion n", value=1.515, key=f"{k}ni"
+                "immersion n", **_init(f"{k}ni", value=1.515)
             )
             v["dog_dup_rev_z"] = c4.selectbox(
                 "dup_rev_z",
                 ["auto", "on", "off"],
                 help="mirror in z against FFT wrap-around ghosts on thin tiles",
-                key=f"{k}dup",
+                **_init(f"{k}dup"),
             )
     elif v["method"] == "threshold":
         st.caption("Otsu threshold and connected components: no settings.")
     elif v["method"] == "custom":
         c1, c2 = st.columns(2)
-        v["custom_module"] = c1.text_input("custom.module", "", key=f"{k}cm")
+        v["custom_module"] = c1.text_input(
+            "custom.module", **_init(f"{k}cm", value="")
+        )
         v["custom_function"] = c2.text_input(
-            "custom.function", "segment", key=f"{k}cf"
+            "custom.function", **_init(f"{k}cf", value="segment")
         )
         v["custom_kwargs"] = st.text_area(
-            "custom.kwargs (YAML mapping)", "", key=f"{k}ck", height=68
+            "custom.kwargs (YAML mapping)",
+            height=68,
+            **_init(f"{k}ck", value=""),
         )
 
     st.divider()
@@ -558,26 +713,24 @@ def segmentation_form(k: str = "", label: str = "labels") -> dict:
     v["stitch"] = c1.selectbox(
         "stitch",
         ["touch", "iou"],
-        index=1 if fills else 0,
         help="touch: objects touching across a seam are one (nuclei, "
         "sparse objects). iou: matched by overlap in the shared margin, so "
         "touching cells stay apart (cells, membranes); needs overlap",
-        key=f"{k}stitch_{fills}",
+        **_init(f"{k}stitch_{fills}", index=1 if fills else 0),
     )
     if v["stitch"] == "iou":
         v["iou_threshold"] = c2.number_input(
             "iou_threshold",
             min_value=0.05,
             max_value=1.0,
-            value=0.5,
-            key=f"{k}iou",
+            **_init(f"{k}iou", value=0.5),
         )
 
     st.divider()
     st.markdown("**Clean-up**")
     c1, c2, c3, c4, c5 = st.columns(5)
     holes = c1.selectbox(
-        "fill_holes", ["off", "3-D", "per plane"], key=f"{k}holes"
+        "fill_holes", ["off", "3-D", "per plane"], **_init(f"{k}holes")
     )
     v["fill_holes"] = {"off": False, "3-D": True, "per plane": "per_plane"}[
         holes
@@ -585,11 +738,12 @@ def segmentation_form(k: str = "", label: str = "labels") -> dict:
     v["open_radius"] = c2.number_input(
         "open_radius",
         min_value=0,
-        value=0,
         help="cuts spurs thinner than ~2r+1 voxels -- not for cilia",
-        key=f"{k}open",
+        **_init(f"{k}open", value=0),
     )
-    v["dilate"] = c3.number_input("dilate (px)", 0, value=0, key=f"{k}dil")
+    v["dilate"] = c3.number_input(
+        "dilate (px)", min_value=0, **_init(f"{k}dil", value=0)
+    )
     v["min_volume"] = _opt_float("min_volume (um³)", c4, key=f"{k}minv")
     v["max_volume"] = _opt_float("max_volume (um³)", c5, key=f"{k}maxv")
     return v
@@ -601,7 +755,11 @@ DEFAULT_LABELS = ["nuclei_labels", "cyto_labels", "cilia_labels"]
 def segmentations_form() -> list[dict]:
     """Several segmentations, one tab each."""
     n = st.columns(4)[0].number_input(
-        "how many segmentations", min_value=1, max_value=8, value=2, step=1
+        "how many segmentations",
+        min_value=1,
+        max_value=8,
+        step=1,
+        **_init("n_segs", value=2),
     )
     defaults = [
         DEFAULT_LABELS[i] if i < len(DEFAULT_LABELS) else f"labels_{i + 1}"
@@ -625,10 +783,16 @@ def relations_form(labels: list[str]) -> tuple[list[dict], dict, dict]:
         "Each row relates every object of `a` to the `b` object it overlaps "
         "most, written as a two-sheet Excel workbook in work_dir."
     )
+    # A loaded config brings its own rows; the key changes with each load,
+    # since an editor only takes its rows when first drawn.
+    loaded = st.session_state.get("loaded", 0)
     rows = st.data_editor(
-        [{"a": labels[0], "b": labels[-1], "output": "relations.xlsx"}]
-        if len(labels) > 1
-        else [],
+        st.session_state.get(
+            "loaded_relations",
+            [{"a": labels[0], "b": labels[-1], "output": "relations.xlsx"}]
+            if len(labels) > 1
+            else [],
+        ),
         num_rows="dynamic",
         column_config={
             "a": st.column_config.SelectboxColumn("a", options=labels),
@@ -641,7 +805,7 @@ def relations_form(labels: list[str]) -> tuple[list[dict], dict, dict]:
                 "within this distance (blank: overlap only)",
             ),
         },
-        key="relations",
+        key=f"relations_{loaded}",
     )
     relations = [
         r for r in rows if r.get("a") and r.get("b") and r.get("output")
@@ -649,15 +813,33 @@ def relations_form(labels: list[str]) -> tuple[list[dict], dict, dict]:
     with st.expander("Relate and bundle jobs (SLURM)", icon=":material/dns:"):
         c1, c2, c3, c4, c5 = st.columns(5)
         relate = {
-            "partition": c1.text_input("relate partition", ""),
-            "mem": c2.text_input("relate mem", ""),
-            "cpus": int(c3.number_input("relate cpus (0 = default)", 0))
+            "partition": c1.text_input(
+                "relate partition", **_init("relate_partition", value="")
+            ),
+            "mem": c2.text_input("relate mem", **_init("relate_mem", value="")),
+            "cpus": int(
+                c3.number_input(
+                    "relate cpus (0 = default)",
+                    min_value=0,
+                    **_init("relate_cpus", value=0),
+                )
+            )
             or None,
-            "time": int(c4.number_input("relate minutes (0 = default)", 0))
+            "time": int(
+                c4.number_input(
+                    "relate minutes (0 = default)",
+                    min_value=0,
+                    **_init("relate_time", value=0),
+                )
+            )
             or None,
-            "qos": c5.text_input("relate qos", ""),
+            "qos": c5.text_input("relate qos", **_init("relate_qos", value="")),
         }
-        fmt = st.selectbox("bundle the finished store", ["zip", "iso", "none"])
+        fmt = st.selectbox(
+            "bundle the finished store",
+            ["zip", "iso", "none"],
+            **_init("bundle_format"),
+        )
         bundle = {"format": None if fmt == "none" else fmt}
     with st.expander(
         "Review rules (what `patchworks review` flags)",
@@ -670,7 +852,7 @@ def relations_form(labels: list[str]) -> tuple[list[dict], dict, dict]:
             "flagged too."
         )
         rules = st.data_editor(
-            [],
+            st.session_state.get("loaded_rules", []),
             num_rows="dynamic",
             column_config={
                 "parent": st.column_config.SelectboxColumn(
@@ -686,20 +868,29 @@ def relations_form(labels: list[str]) -> tuple[list[dict], dict, dict]:
                     "max", min_value=0, step=1
                 ),
             },
-            key="review_rules",
+            key=f"review_rules_{loaded}",
         )
         min_overlap = st.number_input(
-            "min_overlap", min_value=0.0, max_value=1.0, value=0.5, step=0.05
+            "min_overlap",
+            min_value=0.0,
+            max_value=1.0,
+            step=0.05,
+            **_init("min_overlap", value=0.5),
         )
         st.markdown("**Position** (apical / basal / lateral / central)")
         c1, c2, c3 = st.columns(3)
-        pos_child = c1.selectbox("classify", ["(none)"] + labels)
-        pos_parent = c2.selectbox("in", labels, index=min(1, len(labels) - 1))
+        pos_child = c1.selectbox(
+            "classify", ["(none)"] + labels, **_init("pos_child")
+        )
+        pos_parent = c2.selectbox(
+            "in", labels, **_init("pos_parent", index=min(1, len(labels) - 1))
+        )
         pos_apical = c3.selectbox(
             "apical is",
             [f"away from {n}" for n in labels] + ["+z", "-z"],
             help="away from the nuclei: for epithelia with basal nuclei; "
             "+z: apical is up the stack",
+            **_init("pos_apical"),
         )
     expect: dict = {}
     for r in rules:
@@ -1328,15 +1519,22 @@ tab_config, tab_launch, tab_jobs = st.tabs(
 )
 
 with tab_config:
+    with st.expander("Start from a past run", icon=":material/history:"):
+        start_from_form(
+            wf_dir,
+            core.parse_registry(
+                read_remote(client, f"{wf_dir}/{core.REGISTRY}") or ""
+            ),
+        )
     with section(":material/alt_route: Run"):
         kind = (
             st.segmented_control(
                 "run",
-                ["One segmentation", "Several segmentations + relations"],
-                default="One segmentation",
+                core.RUN_KINDS,
                 label_visibility="collapsed",
+                **_init("run_kind", default=core.RUN_KINDS[0]),
             )
-            or "One segmentation"
+            or core.RUN_KINDS[0]
         )
     single = kind.startswith("One")
 

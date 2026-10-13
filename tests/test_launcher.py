@@ -927,3 +927,170 @@ def test_a_dropped_connection_asks_to_log_in_again():
         "connection to the cluster was lost" in w.value for w in at.warning
     )
     assert any("Connect to a cluster" in i.value for i in at.info)
+
+
+def _roundtrip_files(directory):
+    shared = {
+        "input": "/data/planes/*.tif",
+        "sequence_pattern": "_Z(?P<Z>\\d+)",
+        "work_dir": "/scratch/run",
+        "tile_shape": "[16, 512, 512]",
+        "compression": "zstd:3",
+        "level": 1,
+        "tiles_per_job": 2,
+        "gpu_memory_gb": 24,
+        "skip_empty": False,
+        "empty_threshold": 120.0,
+        "pyramid_levels": 4,
+        "table_channels": [0, 2],
+        "notify_email": "me@example.org",
+        "notify_events": ["error"],
+        "merge_workers": 8,
+    }
+    segs = [
+        {
+            "label_name": "nuclei",
+            "method": "cellpose",
+            "channel": 1,
+            "overlap": "[4, 30, 30]",
+            "cp_model": "nuclei",
+            "cp_diameter": 17.0,
+            "cp_do_3d": True,
+            "cp_extra_kwargs": "flow_threshold: 0.6",
+            "fill_holes": "per_plane",
+            "min_volume": 5.0,
+        },
+        {
+            "label_name": "cells",
+            "method": "custom",
+            "channel": 0,
+            "nuclei_channel": 1,
+            "custom_module": "patchworks.plugins.plantseg",
+            "custom_kwargs": "model: generic_confocal_3D_unet",
+            "stitch": "iou",
+            "iou_threshold": 0.3,
+            "dilate": 2,
+        },
+        {
+            "label_name": "cilia",
+            "method": "dog",
+            "channel": 2,
+            "dog_low_sigma": 0.5,
+            "dog_high_sigma": 2.0,
+            "dog_threshold": 0.05,
+            "dog_sigma_units": "um",
+            "dog_use_gpu": True,
+            "dog_psf": "/psf.tif",
+            "dog_wavelength": 488,
+            "dog_na": 1.1,
+            "dog_nimm": 1.33,
+            "dog_dup_rev_z": "on",
+            "open_radius": 1,
+        },
+    ]
+    return core.build_multi(
+        shared,
+        segs,
+        [
+            {"a": "nuclei", "b": "cells", "output": "n_c.xlsx"},
+            {
+                "a": "cilia",
+                "b": "cells",
+                "output": "c_c.xlsx",
+                "max_distance_um": 1.5,
+            },
+        ],
+        directory=directory,
+        relate={"partition": "gpu", "mem": "64G", "cpus": 8, "time": 90},
+        bundle={"format": "iso"},
+        review={
+            "expect": {"cells": {"nuclei": 1, "cilia": [0, 2]}},
+            "min_overlap": 0.7,
+            "position": {"cilia": {"parent": "cells", "apical": "nuclei"}},
+        },
+    )
+
+
+def test_a_past_run_loads_back_into_the_form_unchanged():
+    """Every setting the form writes comes back from the config files."""
+    pytest.importorskip("paramiko")
+    import yaml
+
+    directory = f"{WF}/config/launcher_multi_1"
+    files = _roundtrip_files(directory)
+    multi_path = f"{directory}/multi.yaml"
+    remote = {p: yaml.safe_dump(c).encode() for p, c in files.items()}
+    remote[f"{WF}/{core.REGISTRY}"] = core.registry_line(
+        _job(config=multi_path, kind="multi")
+    ).encode()
+    at = _app(_FakeSSH({"squeue": "DONE"}, files=remote))
+    at.run()
+    assert not at.exception
+    past = next(s for s in at.selectbox if s.label == "a past launch")
+    past.set_value(multi_path).run()
+    next(b for b in at.button if b.key == "load_past").click().run()
+    assert not at.exception
+    note = next(s.value for s in at.success if "loaded" in s.value)
+    assert "left out" not in note
+    rebuilt = at.session_state["files"]
+    by_label = {
+        c["label_name"]: c
+        for p, c in rebuilt.items()
+        if not p.endswith("multi.yaml")
+    }
+    for path, cfg in files.items():
+        if path.endswith("multi.yaml"):
+            continue
+        assert by_label[cfg["label_name"]] == cfg, cfg["label_name"]
+    new_multi = next(c for p, c in rebuilt.items() if p.endswith("multi.yaml"))
+    old_multi = files[multi_path]
+    for key in ("relations", "relate", "bundle", "review"):
+        assert new_multi.get(key) == old_multi.get(key), key
+
+
+def test_form_state_says_what_the_form_cannot_hold():
+    cfg = core.build_config({**BASE, "method": "threshold"})
+    cfg["seed_labels"] = "nuclei"
+    cfg["denoise"] = {"model": "n2v"}
+    state, ignored = core.form_state([cfg])
+    assert ignored == ["denoise", "seed_labels"]
+    assert (
+        state["run_kind"] == core.RUN_KINDS[0]
+        and state["method"] == "threshold"
+    )
+
+
+def test_a_decon_without_optics_keeps_the_plugins_defaults():
+    """The form's defaults (an oil objective) are not what a config that
+    leaves them out meant: the plugin's own are."""
+    cfg = core.build_config(
+        {**BASE, "method": "dog", "dog_psf": "/p.tif", "dog_wavelength": 488}
+    )
+    del cfg["custom"]["kwargs"]["decon_kwargs"]["wavelength"]
+    state, _ = core.form_state([cfg])
+    assert (state["wl"], state["na"], state["ni"]) == (520, 1.25, 1.3)
+
+
+def test_a_config_file_loads_into_the_one_segmentation_form():
+    pytest.importorskip("paramiko")
+    import yaml
+
+    cfg = core.build_config(
+        {
+            **BASE,
+            "method": "custom",
+            "custom_module": "patchworks.plugins.watershed",
+            "stitch": "iou",
+            "overlap": "[2, 20, 20]",
+            "max_volume": 900.0,
+            "shard": True,
+        }
+    )
+    path = "/home/u/my_run.yaml"
+    at = _app(_FakeSSH(files={path: yaml.safe_dump(cfg).encode()}))
+    at.run()
+    at.text_input(key="load_path").set_value(path).run()
+    next(b for b in at.button if b.key == "load_file").click().run()
+    assert not at.exception
+    (rebuilt,) = at.session_state["files"].values()
+    assert rebuilt == cfg

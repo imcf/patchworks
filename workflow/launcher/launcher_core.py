@@ -1097,3 +1097,201 @@ def parse_registry(text: str) -> list[dict[str, Any]]:
         if isinstance(job, dict):
             jobs.append(job)
     return jobs[::-1]
+
+
+# ---------------------------------------------------------------------------
+# A config back into the form (reopen a past run)
+# ---------------------------------------------------------------------------
+
+DOG_MODULE = "patchworks.plugins.dog"
+COMPRESSIONS = ("zstd", "zstd:3", "blosc", "blosc:lz4", "none")
+RUN_KINDS = ("One segmentation", "Several segmentations + relations")
+
+
+def _flow(value: Any) -> str:
+    """*value* as the one-line YAML a text field holds (``[4, 30, 30]``)."""
+    if value is None:
+        return ""
+    if isinstance(value, (list, tuple, dict)):
+        return yaml.safe_dump(value, default_flow_style=True).strip()
+    return str(value)
+
+
+def _text(value: Any) -> str:
+    return "" if value is None else str(value)
+
+
+def shared_state(cfg: dict[str, Any]) -> dict[str, Any]:
+    """Form values of what a run's segmentations share."""
+    compression = str(cfg.get("compression", "zstd"))
+    return {
+        "input": _text(cfg.get("input")),
+        "work_dir": _text(cfg.get("work_dir")),
+        "sequence_pattern": _text(cfg.get("sequence_pattern")),
+        "reuse_pyramid": bool(cfg.get("reuse_pyramid", False)),
+        "shard": bool(cfg.get("shard", False)),
+        "ngff_version": str(cfg.get("ngff_version", "auto")),
+        "compression": compression if compression in COMPRESSIONS else "zstd",
+        "convert_chunks": _flow(cfg.get("convert_chunks")),
+        "level": int(cfg.get("level", 0)),
+        "tile_shape": _flow(cfg.get("tile_shape", "auto")),
+        "tiles_per_job": int(cfg.get("tiles_per_job", 4)),
+        "gpu_memory_gb": int(cfg.get("gpu_memory_gb") or 0),
+        "skip_empty": bool(cfg.get("skip_empty", True)),
+        "empty_threshold": _text(cfg.get("empty_threshold")),
+        "sequential_labels": bool(cfg.get("sequential_labels", True)),
+        "pyramid_levels": int(cfg.get("pyramid_levels", 5)),
+        "pyramid_downscale": int(cfg.get("pyramid_downscale", 2)),
+        "shard_labels": bool(cfg.get("shard_labels", False)),
+        "seam_report": bool(cfg.get("seam_report", True)),
+        "merge_workers": _text(cfg.get("merge_workers")),
+        "object_table": bool(cfg.get("object_table", True)),
+        "table_channels": ",".join(
+            str(c) for c in cfg.get("table_channels") or []
+        ),
+        "notify_email": _text(cfg.get("notify_email")),
+        "notify_events": list(cfg.get("notify_events") or ["finish", "error"]),
+    }
+
+
+def segmentation_state(cfg: dict[str, Any], k: str = "") -> dict[str, Any]:
+    """Form values of one segmentation; *k* prefixes the keys."""
+    custom = cfg.get("custom") or {}
+    method = cfg.get("method", "cellpose")
+    if method == "custom" and custom.get("module") == DOG_MODULE:
+        method = "dog"
+    v: dict[str, Any] = {
+        "lbl": _text(cfg.get("label_name", "labels")),
+        "ch": int(cfg.get("channel") or 0),
+        "nuc": _text(cfg.get("nuclei_channel")),
+        "ov": _flow(cfg.get("overlap", 0)),
+        "method": method,
+    }
+    if method == "cellpose":
+        cp = dict(cfg.get("cellpose") or {})
+        v["cpm"] = _text(cp.pop("model", "cyto3"))
+        v["cpd"] = float(cp.pop("diameter", None) or 0.0)
+        v["cp3"] = bool(cp.pop("do_3D", False))
+        v["cpg"] = bool(cp.pop("gpu", True))
+        v["cpx"] = yaml.safe_dump(cp, sort_keys=False).strip() if cp else ""
+    elif method == "dog":
+        kw = dict(custom.get("kwargs") or {})
+        v["dl"] = float(kw.get("low_sigma", 1.0))
+        v["dh"] = float(kw.get("high_sigma", 3.0))
+        v["dt"] = float(kw.get("threshold", 0.02))
+        v["du"] = kw.get("sigma_units", "px")
+        v["dg"] = bool(kw.get("use_gpu", False))
+        decon = kw.get("decon_kwargs") or {}
+        v["psf"] = _text(decon.get("psf"))
+        if decon:
+            # Left out, these are the plugin's (and pycudadecon's) defaults,
+            # not the form's: keep what the config meant.
+            v["wl"] = int(decon.get("wavelength", 520))
+            v["na"] = float(decon.get("na", 1.25))
+            v["ni"] = float(decon.get("nimm", 1.3))
+            dup = decon.get("dup_rev_z")
+            v["dup"] = "auto" if dup == "auto" else "on" if dup else "off"
+    elif method == "custom":
+        v["cm"] = _text(custom.get("module"))
+        v["cf"] = _text(custom.get("function", "segment"))
+        kwargs = custom.get("kwargs") or {}
+        v["ck"] = (
+            yaml.safe_dump(kwargs, sort_keys=False).strip() if kwargs else ""
+        )
+    fills = fills_space(
+        {"method": cfg.get("method"), "custom_module": custom.get("module", "")}
+    )
+    v[f"stitch_{fills}"] = cfg.get("stitch", "touch")
+    v["iou"] = float(cfg.get("iou_threshold", 0.5))
+    holes = cfg.get("fill_holes", False)
+    v["holes"] = {False: "off", True: "3-D", "per_plane": "per plane"}.get(
+        holes, "off"
+    )
+    v["open"] = int(cfg.get("open_radius") or 0)
+    v["dil"] = int(cfg.get("dilate") or 0)
+    v["minv"] = _text(cfg.get("min_volume"))
+    v["maxv"] = _text(cfg.get("max_volume"))
+    return {f"{k}{key}": value for key, value in v.items()}
+
+
+def form_state(
+    seg_cfgs: list[dict[str, Any]], multi: dict[str, Any] | None = None
+) -> tuple[dict[str, Any], list[str]]:
+    """Every form value for these configs, and the settings it cannot hold.
+
+    The form holds what :func:`build_config` writes; a config written by
+    hand may hold more (``seed_labels``, ``denoise:`` ...), which would be
+    lost: those keys are returned, to be said.
+    """
+    state = shared_state(seg_cfgs[0])
+    state["run_kind"] = RUN_KINDS[0 if multi is None else 1]
+    if multi is None:
+        state.update(segmentation_state(seg_cfgs[0]))
+    else:
+        state["n_segs"] = len(seg_cfgs)
+        for i, cfg in enumerate(seg_cfgs):
+            state.update(segmentation_state(cfg, f"s{i}_"))
+        relate = multi.get("relate") or {}
+        state.update(
+            {
+                "relate_partition": _text(relate.get("partition")),
+                "relate_mem": _text(relate.get("mem")),
+                "relate_cpus": int(relate.get("cpus") or 0),
+                "relate_time": int(relate.get("time") or 0),
+                "relate_qos": _text(relate.get("qos")),
+            }
+        )
+        bundle = multi.get("bundle")
+        state["bundle_format"] = (
+            "none"
+            if bundle is False
+            else ((bundle or {}).get("format") or "zip")
+        )
+        review = multi.get("review") or {}
+        state["min_overlap"] = float(review.get("min_overlap") or 0.5)
+        state["loaded_relations"] = [
+            {
+                "a": r.get("a"),
+                "b": r.get("b"),
+                "output": r.get("output"),
+                **(
+                    {"max_distance_um": r["max_distance_um"]}
+                    if r.get("max_distance_um") is not None
+                    else {}
+                ),
+            }
+            for r in multi.get("relations") or []
+        ]
+        rules = []
+        for parent, children in (review.get("expect") or {}).items():
+            for child, count in children.items():
+                lo, hi = (count, count) if isinstance(count, int) else count
+                rules.append(
+                    {"parent": parent, "child": child, "min": lo, "max": hi}
+                )
+        state["loaded_rules"] = rules
+        for child, rule in (review.get("position") or {}).items():
+            state["pos_child"] = child
+            state["pos_parent"] = rule.get("parent")
+            apical = str(rule.get("apical", ""))
+            state["pos_apical"] = (
+                apical if apical in ("+z", "-z") else f"away from {apical}"
+            )
+            break
+    known = {
+        key
+        for method in ("cellpose", "custom")
+        for key in build_config(
+            {
+                "input": "",
+                "work_dir": "",
+                "label_name": "",
+                "method": method,
+                "custom_module": "m",
+            }
+        )
+    }
+    ignored = sorted(
+        {key for cfg in seg_cfgs for key in cfg if key not in known}
+    )
+    return state, ignored
