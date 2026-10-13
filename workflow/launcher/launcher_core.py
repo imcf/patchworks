@@ -9,7 +9,9 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import re
 import shlex
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -793,6 +795,54 @@ def browse_entries(
             kind = "image" if name.lower().endswith(IMAGE_SUFFIXES) else "file"
         out.append((name, kind))
     return sorted(out, key=lambda e: (rank[e[1]], e[0].lower()))
+
+
+def tiff_globs(names: list[str]) -> list[tuple[str, int]]:
+    """Globs that pick a folder of single-plane TIFFs as the input.
+
+    A folder of TIFF planes is one image, given to the workflow as a glob
+    (with ``sequence_pattern``), so the file browser offers globs rather
+    than files. One glob takes every TIFF of the folder; when the names
+    end in a channel tag (ScanR's ``...--488nm.tif``), there is also one
+    glob per channel.
+
+    Parameters
+    ----------
+    names : list of str
+        File names in the folder.
+
+    Returns
+    -------
+    list of tuple of (str, int)
+        ``(glob, number of files)``, relative to the folder; empty if the
+        folder holds fewer than two TIFFs.
+    """
+    tiffs = [
+        n
+        for n in names
+        if not n.startswith(".") and n.lower().endswith((".tif", ".tiff"))
+    ]
+    if len(tiffs) < 2:
+        return []
+    split = [n.rsplit(".", 1) for n in tiffs]
+    # Globs are case-sensitive on the cluster: keep the extension as it is.
+    out = [
+        (f"*.{ext}", count)
+        for ext, count in Counter(ext for _, ext in split).most_common()
+    ]
+    tags: Counter = Counter()
+    for stem, ext in split:
+        m = re.search(r"(--|_)([^-_]+)$", stem)
+        if m:
+            tags[(m.group(1) + m.group(2), ext)] += 1
+    # Channels: several tags, each on several files, covering them all.
+    if (
+        len(tags) > 1
+        and min(tags.values()) > 1
+        and sum(tags.values()) == len(tiffs)
+    ):
+        out += [(f"*{tag}.{ext}", n) for (tag, ext), n in sorted(tags.items())]
+    return out
 
 
 def parent_dir(path: str) -> str:

@@ -220,6 +220,26 @@ def browse(key: str, label: str, dirs_only: bool) -> None:
     except OSError as exc:
         st.error(f"cannot list {cwd}: {exc}")
         return
+    if not dirs_only:
+        # A folder of TIFF planes is one image: offer it as a glob.
+        globs = core.tiff_globs([n for n, kind in entries if kind != "dir"])
+        if globs:
+            box = st.container(border=True)
+            box.markdown(
+                f"**This folder holds {globs[0][1]} TIFFs.** A folder of "
+                "single-plane TIFFs is read as one image through a glob; "
+                "set *sequence_pattern* under Conversion to name its axes."
+            )
+            cols = box.columns(min(len(globs), 4))
+            for i, (pattern, count) in enumerate(globs):
+                cols[i % len(cols)].button(
+                    f"{pattern} ({count})",
+                    key=f"{key}__glob{i}",
+                    icon=":material/burst_mode:",
+                    type="primary" if i == 0 else "secondary",
+                    on_click=_pick,
+                    args=(key, core.join_remote(cwd, pattern)),
+                )
     if needle:
         entries = [e for e in entries if needle in e[0].lower()]
     with st.container(height=380):
@@ -307,8 +327,8 @@ def image_form() -> dict:
         v["input"] = remote_path(
             "input image",
             "input",
-            help=".ims/.czi/.lif/.nd2/ome-tiff/.zarr, or a TIFF glob "
-            "(type the glob in)",
+            help=".ims/.czi/.lif/.nd2/ome-tiff/.zarr, or a folder of TIFF "
+            "planes: open the folder in the browser and pick its glob",
         )
     with c2:
         v["work_dir"] = remote_path(
@@ -335,6 +355,12 @@ def image_form() -> dict:
         )
         v["sequence_pattern"] = c2.text_input(
             "sequence_pattern (regex, only for a TIFF glob input)", ""
+        )
+    if "*" in v["input"] and not v["sequence_pattern"].strip():
+        st.warning(
+            "The input is a TIFF glob: set *sequence_pattern* under "
+            "Conversion, a regex naming the axes in the file names, e.g. "
+            r"`--Z(?P<Z>\d+)` for ScanR files of one position and channel."
         )
     return v
 

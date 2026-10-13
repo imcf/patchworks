@@ -425,6 +425,24 @@ def test_browse_entries_and_paths():
     assert core.join_remote("/a/", "x") == "/a/x"
 
 
+def test_tiff_globs():
+    scanr = [
+        f"A1--W00001--P00001--Z{z:05d}--T00000--{c}.tif"
+        for z in range(3)
+        for c in ("405nm", "488nm")
+    ]
+    assert core.tiff_globs([*scanr, "metadata.ome.xml"]) == [
+        ("*.tif", 6),
+        ("*--405nm.tif", 3),
+        ("*--488nm.tif", 3),
+    ]
+    # Numbered planes are not channels; the extension's case is kept.
+    planes = [f"img_{i:04d}.TIF" for i in range(5)]
+    assert core.tiff_globs(planes) == [("*.TIF", 5)]
+    # One TIFF is a file to pick, not a folder of planes.
+    assert core.tiff_globs(["a.tif", "notes.txt"]) == []
+
+
 class _FakeAttr:
     def __init__(self, name, is_dir):
         import stat
@@ -441,6 +459,13 @@ class _FakeSFTP:
         "/home/u/patchworks": ["workflow"],
         "/home/u/patchworks/workflow": ["Snakefile", "config"],
         "/home/u/data": ["scan.czi", "old.zarr"],
+        # A ScanR acquisition: single-plane TIFFs, one per z and channel.
+        "/home/u/scanr": [
+            f"A1--W00001--P00001--Z{z:05d}--T00000--{c}.tif"
+            for z in range(3)
+            for c in ("405nm", "488nm")
+        ]
+        + ["metadata.ome.xml"],
     }
 
     class sock:
@@ -530,6 +555,33 @@ def test_app_connected_flow_validates_and_explains_a_missing_image():
     assert any("/scratch/run/image.zarr" in w.value for w in at.warning)
     # Only the existence check ran: no plan on a missing image.
     assert not any("--plan" in c for c in ssh.commands)
+
+
+def test_app_picks_a_folder_of_tiffs_as_a_glob():
+    """The input browser offers a TIFF folder as globs, all or per channel."""
+    pytest.importorskip("paramiko")
+    testing = pytest.importorskip("streamlit.testing.v1")
+    at = testing.AppTest.from_file(
+        str(ROOT / "workflow/launcher/app.py"), default_timeout=30
+    )
+    at.session_state["ssh_client"] = _FakeSSH()
+    at.session_state["ssh_target"] = "u@host:22"
+    at.session_state["wf_dir"] = "/home/u/patchworks/workflow"
+    at.run()
+    # Start the browser inside the ScanR folder, as from a typed path.
+    at.text_input(key="input").set_value(
+        "/home/u/scanr/A1--W00001--P00001--Z00000--T00000--405nm.tif"
+    )
+    at.run()
+    at.button(key="input__browse").click().run()
+    assert not at.exception
+    labels = [b.label for b in at.button]
+    assert "*.tif (6)" in labels and "*--488nm.tif (3)" in labels
+
+    at.button(key="input__glob2").click().run()
+    assert not at.exception
+    assert at.text_input(key="input").value == "/home/u/scanr/*--488nm.tif"
+    assert any("sequence_pattern" in w.value for w in at.warning)
 
 
 class _FakeSSHWithImage(_FakeSSH):
