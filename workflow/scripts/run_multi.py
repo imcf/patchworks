@@ -691,17 +691,29 @@ def zarr_root_file(cfg: dict) -> str:
 
 
 def _validate_configs(paths: list[Path], cfgs: list[dict]) -> str:
-    """Check the cross-config invariants before anything is submitted.
-
-    These used to surface hours later -- as a shape mismatch from
-    label_relations, or not at all when two configs quietly overwrote each
-    other's label group. Only ``work_dir`` was checked, and only when
-    relations were configured and it was not a dry run.
+    """Check the cross-config invariants, or exit naming what is wrong.
 
     Returns
     -------
     str
         The shared ``work_dir``.
+    """
+    problems = config_set_problems(paths, cfgs)
+    if problems:
+        for p in problems:
+            print(f"[run_multi] ERROR: {p}", file=sys.stderr)
+        sys.exit(1)
+    return cfgs[0].get("work_dir")
+
+
+def config_set_problems(paths: list[Path], cfgs: list[dict]) -> list[str]:
+    """What is wrong across the configs of a multi run, checked before
+    anything is submitted.
+
+    These used to surface hours later -- as a shape mismatch from
+    label_relations, or not at all when two configs quietly overwrote each
+    other's label group. Only ``work_dir`` was checked, and only when
+    relations were configured and it was not a dry run.
     """
     problems = []
 
@@ -789,11 +801,7 @@ def _validate_configs(paths: list[Path], cfgs: list[dict]) -> str:
             f"image.zarr/labels/<name>/; repeated: {sorted(duplicates)}"
         )
 
-    if problems:
-        for p in problems:
-            print(f"[run_multi] ERROR: {p}", file=sys.stderr)
-        sys.exit(1)
-    return work_dirs.pop()
+    return problems
 
 
 def _resolve_shared_tile_shape(

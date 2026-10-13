@@ -82,6 +82,7 @@ config. The options most worth knowing are [below](#options-worth-knowing). Then
 
 ```bash
 C=config/local/my_run.yaml
+pixi run check $C               # the config's problems; once converted, the plan
 pixi run dry   --configfile $C   # checks the config, lists the steps; runs nothing
 pixi run go    --configfile $C   # locally, on this machine
 pixi run slurm --configfile $C   # on the cluster: submits and follows the jobs
@@ -93,7 +94,12 @@ packages the environment lacks), so a mistake shows in seconds rather
 than after the conversion. Run `slurm` in `tmux` on the login node: it
 follows the jobs until the end. A run that stops (or fails) resumes where
 it was when started again with the same command; finished steps are not
-redone. `status` reads what the run left in work_dir: converted or not,
+redone. Once the image is converted, `check` also plans each
+segmentation with the run's own tile sizing: tiles, how many hold signal,
+GPU jobs, memory per tile, size of the result. `check $C --sample 3` times
+the method on 3 real tiles for the hours a job and the run will take: run
+it where the jobs run (`srun` with the segment job's partition and GPU).
+`status` reads what the run left in work_dir: converted or not,
 tiles segmented out of how many, merged with how many objects, the seam
 report, and for a multi config its relations and bundle.
 

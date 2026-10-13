@@ -259,6 +259,173 @@ def tile_channels(cfg) -> int:
     return 2 if two else 1
 
 
+def resolve_tile_shape(cfg, image, work_dir) -> tuple[int, ...]:
+    """The tile shape a run uses: the config's, or sized for its GPU.
+
+    ``"auto"`` sizes the tile to the segment GPU's memory (``gpu_memory_gb``,
+    from the config: prepare runs on a CPU node), charging per channel, and
+    for Cellpose 3-D for the tile it resizes by the anisotropy.
+    """
+    from patchworks import auto_tile_shape, auto_tile_shape_cellpose
+
+    ts = cfg.get("tile_shape", "auto")
+    if ts != "auto":
+        return tuple(ts)
+    gpu_gb = cfg.get("gpu_memory_gb")
+    gpu_bytes = int(gpu_gb * 1024**3) if gpu_gb else None
+    # A second channel doubles a tile's bytes.
+    n_channels = tile_channels(cfg)
+    if cfg.get("method", "cellpose") == "cellpose":
+        cp = cfg["cellpose"]
+        # Cellpose resizes z by the anisotropy: budget for the resized tile.
+        anisotropy = cp.get("anisotropy")
+        if anisotropy is None and cp.get("do_3D", False):
+            from patchworks.plugins.cellpose import cellpose_anisotropy
+            from patchworks.plugins.ome_zarr import read_pixel_size
+
+            anisotropy = cellpose_anisotropy(
+                read_pixel_size(
+                    str(Path(work_dir) / "image.zarr"),
+                    level=int(cfg.get("level", 0)),
+                )
+            )
+        sizer = partial(
+            auto_tile_shape_cellpose,
+            do_3D=cp.get("do_3D", False),
+            use_gpu=cp.get("gpu", True),
+            diameter=cp.get("diameter"),
+            gpu_memory=gpu_bytes,
+            n_channels=n_channels,
+            anisotropy=anisotropy,
+        )
+    else:
+        sizer = partial(
+            auto_tile_shape,
+            use_gpu=gpu_bytes is not None,
+            gpu_memory=gpu_bytes,
+            n_channels=n_channels,
+        )
+    return tuple(int(t) for t in sizer(image.shape, image.dtype))
+
+
+def check_overlap(overlap, tile_shape) -> None:
+    """Refuse a halo as wide as the tile: it re-segments the neighbours."""
+    for axis, (ov, extent) in enumerate(zip(overlap, tile_shape)):
+        if ov >= extent:
+            raise ValueError(
+                f"overlap[{axis}]={ov} >= tile_shape[{axis}]={extent}: each "
+                "tile would read past its neighbours. Use a per-axis overlap, "
+                f"e.g. overlap: {list(max(1, t // 4) for t in tile_shape)}"
+            )
+
+
+def plan_run(cfg, sample: int = 0) -> dict:
+    """What a run will do, from its converted image, without running it.
+
+    The tiles prepare would make (the same sizing), how many hold signal
+    (when the occupancy map is built: ``convert`` builds it), the GPU jobs,
+    and the size of the result. With *sample*, the method runs on that many
+    real tiles (the first only loads the model) for a time per tile: run it
+    where the jobs would run, on a GPU for a GPU method.
+    """
+    import time
+
+    import numpy as np
+    from patchworks import (
+        auto_empty_threshold,
+        normalize_overlap,
+        spatial_tiles,
+        tile_occupancy,
+    )
+
+    work_dir = cfg["work_dir"]
+    store = str(Path(work_dir) / "image.zarr")
+    image = open_image(work_dir, cfg["channel"], cfg["level"])
+    tile_shape = resolve_tile_shape(cfg, image, work_dir)
+    overlap = normalize_overlap(
+        cfg.get("overlap", 0), len(tile_shape), tile_shape=tile_shape
+    )
+    check_overlap(overlap, tile_shape)
+    tiles = spatial_tiles(image.shape, tile_shape)
+    occupied = None
+    if not cfg.get("skip_empty", True):
+        occupied = list(range(len(tiles)))
+    else:
+        try:
+            threshold = cfg.get("empty_threshold")
+            if threshold is None:
+                threshold = auto_empty_threshold(
+                    image, cfg["channel"], cfg["level"]
+                )
+            info = tile_occupancy(
+                store,
+                tile_shape,
+                channel=cfg["channel"],
+                threshold=threshold,
+                level=cfg["level"],
+            )
+            occupied = [int(i) for i in np.flatnonzero(info["occupancy"])]
+        except (FileNotFoundError, KeyError, ValueError) as exc:
+            # No occupancy map yet: the run builds it.
+            logging.getLogger(__name__).info("occupancy unknown: %s", exc)
+    per_job = max(1, int(cfg.get("tiles_per_job", 1)))
+    read = [
+        min(t + 2 * o, n) for t, o, n in zip(tile_shape, overlap, image.shape)
+    ]
+    plan = {
+        "label_name": cfg.get("label_name", "labels"),
+        "shape": [int(n) for n in image.shape],
+        "tile_shape": list(tile_shape),
+        "overlap": list(overlap),
+        "grid": [-(-n // t) for n, t in zip(image.shape, tile_shape)],
+        "tiles": len(tiles),
+        "tiles_with_signal": None if occupied is None else len(occupied),
+        "gpu_jobs": None if occupied is None else -(-len(occupied) // per_job),
+        "tiles_per_job": per_job,
+        "tile_read_bytes": int(np.prod(read))
+        * image.dtype.itemsize
+        * tile_channels(cfg),
+        "labels_bytes_uncompressed": int(np.prod(image.shape)) * 4,
+        "seconds_per_tile": None,
+    }
+    if sample <= 0:
+        return plan
+    pool = occupied if occupied else list(range(len(tiles)))
+    pick = [
+        pool[int(i)]
+        for i in np.linspace(0, len(pool) - 1, min(sample, len(pool)))
+    ]
+    # The tile exactly as segment hands it to the method: the halo, and the
+    # nuclei channel or seeds stacked on a leading axis.
+    stacked = open_image(
+        work_dir,
+        cfg["channel"],
+        cfg["level"],
+        cfg.get("nuclei_channel"),
+        cfg.get("seed_labels"),
+    )
+    lead = (slice(None),) if stacked.ndim > image.ndim else ()
+    fn = build_fn(cfg)
+    times = []
+    for index in pick:
+        sl = tuple(
+            slice(max(0, s.start - h), min(n, s.stop + h))
+            for s, n, h in zip(tiles[index], image.shape, overlap)
+        )
+        block = np.asarray(stacked[lead + sl])
+        started = time.perf_counter()
+        fn(block)
+        times.append(time.perf_counter() - started)
+    steady = times[1:] if len(times) > 1 else times
+    per_tile = float(np.mean(steady))
+    plan["seconds_per_tile"] = per_tile
+    plan["sampled_tiles"] = len(times)
+    if occupied is not None:
+        plan["gpu_hours"] = per_tile * len(occupied) / 3600
+        plan["hours_per_job"] = per_tile * per_job / 3600
+    return plan
+
+
 def check_seed_labels(work_dir, cfg) -> None:
     """Fail early when ``seed_labels`` names labels that are not there yet.
 
