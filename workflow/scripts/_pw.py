@@ -259,6 +259,18 @@ def tile_channels(cfg) -> int:
     return 2 if two else 1
 
 
+def sized_for_fallback_gpu(cfg) -> bool:
+    """Whether ``tile_shape: "auto"`` falls back to an 8 GB GPU: Cellpose on
+    the GPU without ``gpu_memory_gb`` (prepare, on a CPU node, cannot ask
+    the segment GPU). Other methods are sized to the host's memory."""
+    return (
+        cfg.get("tile_shape", "auto") == "auto"
+        and not cfg.get("gpu_memory_gb")
+        and cfg.get("method", "cellpose") == "cellpose"
+        and bool((cfg.get("cellpose") or {}).get("gpu", True))
+    )
+
+
 def resolve_tile_shape(cfg, image, work_dir) -> tuple[int, ...]:
     """The tile shape a run uses: the config's, or sized for its GPU.
 
@@ -273,6 +285,19 @@ def resolve_tile_shape(cfg, image, work_dir) -> tuple[int, ...]:
         return tuple(ts)
     gpu_gb = cfg.get("gpu_memory_gb")
     gpu_bytes = int(gpu_gb * 1024**3) if gpu_gb else None
+    if gpu_bytes is None and sized_for_fallback_gpu(cfg):
+        # prepare runs on a CPU node: no GPU to ask, so the sizer assumes
+        # 8 GB -- small tiles, many jobs, on a larger GPU.
+        logging.getLogger(__name__).warning(
+            'tile_shape "auto" without gpu_memory_gb: sized for an 8 GB '
+            "GPU. Set gpu_memory_gb to the segment GPU's memory (24 for an "
+            "RTX 4090) for tiles that use it."
+        )
+        print(
+            '[patchworks] tile_shape "auto" sized for an 8 GB GPU: set '
+            "gpu_memory_gb to the segment GPU's memory for larger tiles",
+            flush=True,
+        )
     # A second channel doubles a tile's bytes.
     n_channels = tile_channels(cfg)
     if cfg.get("method", "cellpose") == "cellpose":
@@ -382,6 +407,7 @@ def plan_run(cfg, sample: int = 0) -> dict:
         "tiles_with_signal": None if occupied is None else len(occupied),
         "gpu_jobs": None if occupied is None else -(-len(occupied) // per_job),
         "tiles_per_job": per_job,
+        "gpu_fallback": sized_for_fallback_gpu(cfg),
         "tile_read_bytes": int(np.prod(read))
         * image.dtype.itemsize
         * tile_channels(cfg),

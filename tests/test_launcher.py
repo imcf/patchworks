@@ -777,6 +777,12 @@ def test_app_resources_change_for_one_run():
     assert fetched < submitted  # the models first, on the login node
     record = json.loads(ssh.files[f"{WF}/{core.REGISTRY}"].decode())
     assert record["slurm_job"] == "123" and record["kind"] == "single"
+    # Cellpose's "auto" tiles: sized for the segment partition's RTX 4090,
+    # not the 8 GB fallback.
+    import yaml
+
+    uploaded = yaml.safe_load(ssh.files[record["config"]])
+    assert uploaded["gpu_memory_gb"] == 24
     assert record["inner"] and record["setup"] is not None
 
 
@@ -1216,3 +1222,38 @@ def test_seed_rules():
         "uses nuclei"
         in problems(method="plantseg", ps_segmentation="lifted_multicut")[0]
     )
+
+
+def test_gpu_memory_from_the_segment_gpu():
+    info = core.parse_cluster_info(CLUSTER)
+    rtx = {"slurm_partition": "rtx4090", "gres": "gpu:1"}
+    assert core.gpu_memory_gb(rtx, info) == (24, "rtx4090")
+    assert core.gpu_memory_gb({"gres": "gpu:a100:1"}, info) == (40, "a100")
+    assert core.gpu_memory_gb({"gres": "gpu:mystery:1"}, info)[0] is None
+    assert core.gpu_memory_gb({"slurm_partition": "scicore"}, info)[0] is None
+
+    cellpose = core.build_config({**BASE, "method": "cellpose"})
+    threshold = core.build_config({**BASE, "method": "threshold"})
+    fixed = core.build_config(
+        {**BASE, "method": "cellpose", "tile_shape": "[16, 512, 512]"}
+    )
+    assert core.needs_gpu_memory(cellpose)
+    assert not core.needs_gpu_memory(threshold)  # sized to host memory
+    assert not core.needs_gpu_memory(fixed)
+    files = core.with_gpu_memory({"a": cellpose, "b": threshold, "m": {}}, 24)
+    assert files["a"]["gpu_memory_gb"] == 24
+    assert files["b"]["gpu_memory_gb"] is None and files["m"] == {}
+
+
+def test_launcher_and_workflow_agree_on_the_8gb_fallback():
+    from _pw import sized_for_fallback_gpu, with_defaults
+
+    for extra in (
+        {"method": "cellpose"},
+        {"method": "cellpose", "cp_gpu": False},
+        {"method": "threshold"},
+        {"method": "cellpose", "gpu_memory_gb": 24},
+        {"method": "cellpose", "tile_shape": "[8, 256, 256]"},
+    ):
+        cfg = with_defaults(core.build_config({**BASE, **extra}))
+        assert core.needs_gpu_memory(cfg) == sized_for_fallback_gpu(cfg), extra

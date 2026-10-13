@@ -115,6 +115,11 @@ def format_report(report: dict) -> str:
                 f"of up to {plan['tiles_per_job']}"
             )
         )
+        if plan.get("gpu_fallback"):
+            lines.append(
+                '  tile_shape "auto" sized for an 8 GB GPU: set gpu_memory_gb '
+                "to the segment GPU's memory for larger tiles, fewer jobs"
+            )
         lines.append(
             f"  {_gib(plan['tile_read_bytes'])} read per tile; labels "
             f"{_gib(plan['labels_bytes_uncompressed'])} before compression"

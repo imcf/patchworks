@@ -1920,6 +1920,31 @@ with tab_launch:
                 overrides = resources_editor(resources, cluster_info())
                 for rule, values in overrides.items():
                     resources[rule] = {**resources[rule], **values}
+                # Cellpose's "auto" tiles, sized for the GPU the segment
+                # jobs get rather than an 8 GB guess.
+                if any(core.needs_gpu_memory(c) for c in seg_cfgs):
+                    gb, gpu = core.gpu_memory_gb(
+                        resources.get("segment", {}), cluster_info()
+                    )
+                    if gb:
+                        files = core.with_gpu_memory(files, gb)
+                        seg_cfgs = [
+                            c
+                            for p, c in files.items()
+                            if not p.endswith("multi.yaml")
+                        ]
+                        st.caption(
+                            f":material/memory: tiles sized for the segment "
+                            f"GPU, {gpu}: gpu_memory_gb {gb} (set it in "
+                            "Tiling to override)"
+                        )
+                    else:
+                        st.warning(
+                            f'tile_shape "auto" will be sized for an 8 GB GPU '
+                            f"({gpu}): set gpu_memory_gb in Tiling to the "
+                            "segment GPU's memory for larger tiles.",
+                            icon=":material/memory:",
+                        )
                 if "mem_mb" in overrides.get("segment", {}):
                     st.caption(
                         "prepare gets the segment memory too: it sizes "

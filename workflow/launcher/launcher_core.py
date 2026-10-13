@@ -1119,6 +1119,93 @@ def partition_rows(info: dict[str, Any]) -> list[dict[str, Any]]:
     return sorted(rows, key=lambda r: (r["GPUs"] == "-", r["partition"]))
 
 
+# Memory of common GPU types (GB), as SLURM names them in a node's gres.
+# Where a type comes in two sizes (A100 40/80 GB, V100 16/32 GB) the
+# smaller: a tile sized for it fits both.
+GPU_MEMORY_GB = {
+    "a100": 40,
+    "a10": 24,
+    "a30": 24,
+    "a40": 48,
+    "a6000": 48,
+    "rtx_a6000": 48,
+    "a5000": 24,
+    "rtx_a5000": 24,
+    "a4000": 16,
+    "h100": 80,
+    "h200": 141,
+    "l4": 24,
+    "l40": 48,
+    "l40s": 48,
+    "rtx2080ti": 11,
+    "rtx3090": 24,
+    "rtx4090": 24,
+    "rtx6000": 24,
+    "rtx8000": 48,
+    "titanrtx": 24,
+    "gtx1080ti": 11,
+    "p100": 16,
+    "t4": 16,
+    "v100": 16,
+}
+
+
+def gpu_memory_gb(
+    resources: dict[str, Any], info: dict[str, Any] | None
+) -> tuple[int | None, str]:
+    """The segment GPU's memory, from its gres or its partition's GPUs.
+
+    Returns ``(GB, which GPU)``; ``(None, why)`` when not known. With
+    several types on the partition, the smallest: the job may land on any.
+    """
+    gres = str(resources.get("gres") or "")
+    parts = gres.split(":")
+    if len(parts) == 3 and not parts[1].isdigit():
+        types = [parts[1]]
+    else:
+        part = resources.get("slurm_partition") or (info or {}).get(
+            "default_partition"
+        )
+        offered = ((info or {}).get("partitions") or {}).get(part, {})
+        types = [
+            g.split(":")[1]
+            for g in offered.get("gres", [])
+            if g.count(":") == 2
+        ]
+    known = {
+        t: GPU_MEMORY_GB[t.lower()] for t in types if t.lower() in GPU_MEMORY_GB
+    }
+    if not known:
+        return None, (
+            f"GPU type {', '.join(types)} unknown" if types else "no GPU type"
+        )
+    gpu = min(known, key=known.get)
+    return known[gpu], gpu
+
+
+def needs_gpu_memory(cfg: dict[str, Any]) -> bool:
+    """Cellpose on the GPU with ``tile_shape: "auto"`` and no
+    ``gpu_memory_gb``: prepare would size its tiles for an 8 GB GPU (the
+    workflow's ``_pw.sized_for_fallback_gpu``)."""
+    return (
+        cfg.get("tile_shape", "auto") == "auto"
+        and not cfg.get("gpu_memory_gb")
+        and cfg.get("method") == "cellpose"
+        and bool((cfg.get("cellpose") or {}).get("gpu", True))
+    )
+
+
+def with_gpu_memory(files: dict[str, dict], gb: int) -> dict[str, dict]:
+    """*files* with ``gpu_memory_gb`` set where tiles would be sized for
+    the 8 GB fallback."""
+    return {
+        path: {**cfg, "gpu_memory_gb": gb}
+        if "label_name" in cfg and needs_gpu_memory(cfg)
+        else cfg
+        for path, cfg in files.items()
+    }
+
+
 def resource_problems(
     resources: dict[str, dict[str, Any]], info: dict[str, Any]
 ) -> list[str]:
