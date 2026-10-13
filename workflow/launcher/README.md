@@ -54,10 +54,13 @@ it where only the people it's for can reach it.
    check. Once the image is converted, *See the channels* shows each
    channel (its maximum over z) and the voxel size, to pick the channels
    by.
-1. **Configure tab.** *Start from a past run* loads a past launch, or
-   any config or multi config on the cluster, back into the form (a
-   setting the form cannot hold, such as `seed_labels`, is named, not
-   dropped silently). Choose *One segmentation* or *Several
+1. **Configure tab.** *Start from a template or a past run* loads a
+   template, a past launch, or any config or multi config on the cluster,
+   back into the form (a setting the form cannot hold is named, not
+   dropped silently). *Save as template* (in *Check*) keeps the form's
+   settings under a name, without the image unless asked: loaded for the
+   next image, it keeps the form's image and work_dir. Templates live in
+   `config/templates/`, or a preset's `templates_dir:` a lab shares. Choose *One segmentation* or *Several
    segmentations + relations*. The form is split into blocks: image, tiling,
    segmentation(s) (one tab each), relations and review, outputs, and a
    final *Check* that lists anything still missing (an empty input or

@@ -591,6 +591,10 @@ def load_run(path: str, wf_dir: str) -> None:
             f"could not load {path}: {exc}",
         )
         return
+    if not segs[0].get("input"):
+        # A template: the form keeps its own image and work_dir.
+        for key in core.IMAGE_KEYS:
+            state.pop(key, None)
     for key in ("loaded_relations", "loaded_rules"):
         st.session_state.pop(key, None)
     st.session_state.update(state)
@@ -606,6 +610,38 @@ def load_run(path: str, wf_dir: str) -> None:
     )
 
 
+def templates_dir() -> str:
+    """Where templates live: the preset's (a lab may share one), or the
+    workflow's own config/templates/."""
+    preset = st.session_state.get("preset", {})
+    return preset.get("templates_dir") or f"{wf_dir}/config/templates"
+
+
+def save_template_form(draft: dict) -> None:
+    """Keep the form's settings under a name, to start the next run from."""
+    with st.popover("Save as template", icon=":material/bookmark_add:"):
+        name = st.text_input(
+            "name", key="template_name", placeholder="nuclei_cells_cilia"
+        )
+        with_image = st.checkbox(
+            "with the image and work_dir",
+            key="template_with_image",
+            help="off: loading it keeps the form's image (the usual: the "
+            "same settings for the next image)",
+        )
+        if st.button("Save", type="primary", disabled=not name.strip()):
+            out = core.template_files(
+                draft, name, templates_dir(), with_image=with_image
+            )
+            folder = core.parent_dir(next(iter(out)))
+            run(get_client(), f"mkdir -p {shlex.quote(folder)}", login=False)
+            for path, cfg in out.items():
+                write_remote(
+                    get_client(), path, yaml.safe_dump(cfg, sort_keys=False)
+                )
+            st.success(f"saved as {core.safe_name(name)} in {templates_dir()}")
+
+
 def start_from_form(wf_dir: str, jobs: list[dict]) -> None:
     """Reopen a past launch's config, or any config file on the cluster."""
     past = list(
@@ -614,6 +650,27 @@ def start_from_form(wf_dir: str, jobs: list[dict]) -> None:
             for j in jobs
             if j.get("config") and j.get("kind") in ("single", "multi")
         )
+    )
+    directory = templates_dir()
+    try:
+        templates = core.template_choices(list_remote(directory), directory)
+    except OSError:
+        templates = {}
+    c1, c2 = st.columns([3, 1], vertical_alignment="bottom")
+    template = c1.selectbox(
+        "a template",
+        list(templates),
+        index=None,
+        placeholder="saved with Save as template" if not templates else "",
+        help=f"from {directory}",
+    )
+    c2.button(
+        "Load",
+        icon=":material/upload_file:",
+        key="load_template",
+        disabled=template is None,
+        on_click=load_run,
+        args=(templates.get(template), wf_dir),
     )
     c1, c2 = st.columns([3, 1], vertical_alignment="bottom")
     choice = c1.selectbox(
@@ -1904,7 +1961,9 @@ tab_config, tab_launch, tab_jobs = st.tabs(
 )
 
 with tab_config:
-    with st.expander("Start from a past run", icon=":material/history:"):
+    with st.expander(
+        "Start from a template or a past run", icon=":material/history:"
+    ):
         start_from_form(
             wf_dir,
             core.parse_registry(
@@ -1982,6 +2041,7 @@ with tab_config:
         problems = [f"the config is not valid yet: {exc}"]
 
     with section(":material/fact_check: Check"):
+        draft = files  # what the form holds, even with problems left
         if problems:
             files = {}
             for problem in problems:
@@ -1998,6 +2058,8 @@ with tab_config:
                 ):
                     st.caption(f"`{path}`")
                     st.code(yaml.safe_dump(content, sort_keys=False), "yaml")
+        if draft:
+            save_template_form(draft)
     st.session_state["files"] = files
     st.session_state["run_name"] = name if files else None
 

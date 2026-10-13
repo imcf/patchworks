@@ -47,8 +47,9 @@ not live in a terminal, and it never starts a run with a typo in a key.
    work_dir or a PSF instead of typing it. A folder of
    single-plane TIFFs is picked with *Use this folder's TIFFs as one
    image*, which also guesses its `sequence_pattern` from the file names.
-2. **Configure**: start from a past run's config if you like (*Start from
-   a past run*), then one segmentation, or several with the relations between them
+2. **Configure**: start from a template or a past run's config if you like
+   (*Save as template* keeps the settings for the next image), then one
+   segmentation, or several with the relations between them
    (the form of a [multi config](snakemake.md#several-segmentations-and-their-relations)).
    Settings mean the same as in the [config](snakemake.md#2-configure). The
    form validates as you type and shows the configs it will upload.

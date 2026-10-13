@@ -1707,3 +1707,58 @@ def form_state(
         {key for cfg in seg_cfgs for key in cfg if key not in known}
     )
     return state, ignored
+
+
+# ---------------------------------------------------------------------------
+# Templates: a config kept under a name, to start the next run from
+# ---------------------------------------------------------------------------
+
+# What makes a config one image's run rather than a way of segmenting.
+IMAGE_KEYS = ("input", "work_dir", "sequence_pattern")
+
+
+def template_files(
+    files: dict[str, dict], name: str, directory: str, *, with_image=False
+) -> dict[str, dict]:
+    """The run's files as a template named *name* in *directory*.
+
+    One config is ``<name>.yaml``; a multi run a folder ``<name>/`` with
+    its ``multi.yaml`` naming the segmentations next to it (relative, so
+    the folder can be copied or shared). Without *with_image*, input and
+    work_dir are left out: loading the template keeps the form's.
+    """
+    name = safe_name(name)
+
+    def strip(cfg: dict) -> dict:
+        return (
+            dict(cfg)
+            if with_image
+            else {k: v for k, v in cfg.items() if k not in IMAGE_KEYS}
+        )
+
+    multi = next(
+        (c for p, c in files.items() if p.endswith("/multi.yaml")), None
+    )
+    if multi is None:
+        (cfg,) = files.values()
+        return {f"{directory}/{name}.yaml": strip(cfg)}
+    folder = f"{directory}/{name}"
+    out = {}
+    segs = []
+    for path in multi["segmentations"]:
+        file = path.rsplit("/", 1)[-1]
+        out[f"{folder}/{file}"] = strip(files[path])
+        segs.append(file)
+    out[f"{folder}/multi.yaml"] = {**multi, "segmentations": segs}
+    return out
+
+
+def template_choices(entries: list[tuple[str, bool]], directory: str) -> dict:
+    """Template name -> the file to load, from a listing of *directory*."""
+    out = {}
+    for name, is_dir in sorted(entries):
+        if is_dir:
+            out[name] = f"{directory}/{name}/multi.yaml"
+        elif name.endswith((".yaml", ".yml")):
+            out[name.rsplit(".", 1)[0]] = f"{directory}/{name}"
+    return out

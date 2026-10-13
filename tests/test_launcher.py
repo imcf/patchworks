@@ -569,11 +569,18 @@ class _FakeSFTP:
         raise FileNotFoundError(path)
 
     def listdir_attr(self, path):
-        if path not in self.tree:
+        # Files written in this test show in their folders too.
+        written = {}
+        for f in self.files:
+            if f.startswith(path.rstrip("/") + "/"):
+                rest = f[len(path.rstrip("/")) + 1 :]
+                written[rest.split("/")[0]] = "/" in rest
+        if path not in self.tree and not written:
             raise FileNotFoundError(path)
         return [
-            _FakeAttr(n, self._is_dir(f"{path}/{n}")) for n in self.tree[path]
-        ]
+            _FakeAttr(n, self._is_dir(f"{path}/{n}"))
+            for n in self.tree.get(path, [])
+        ] + [_FakeAttr(n, d) for n, d in written.items()]
 
     def open(self, path, mode="r"):
         import io
@@ -1403,3 +1410,68 @@ def test_cellpose_model_dropdown_lists_the_clusters_models():
     at.run()
     assert sum("available_models" in c for c in ssh.commands) == 1
     assert core.parse_models("Traceback") == []
+
+
+def test_template_files():
+    single = {
+        "/w/config/launcher_a.yaml": core.build_config(
+            {**BASE, "method": "threshold"}
+        )
+    }
+    ((path, cfg),) = core.template_files(single, "my run", "/t").items()
+    assert path == "/t/my-run.yaml"
+    assert "input" not in cfg and "work_dir" not in cfg
+    kept = core.template_files(single, "x", "/t", with_image=True)
+    assert kept["/t/x.yaml"]["input"] == BASE["input"]
+
+    files = _roundtrip_files("/w/config/launcher_multi_1")
+    out = core.template_files(files, "lab", "/t")
+    multi = out["/t/lab/multi.yaml"]
+    assert multi["segmentations"] == [
+        "seg_nuclei.yaml",
+        "seg_cells.yaml",
+        "seg_cilia.yaml",
+    ]
+    assert (
+        multi["relations"]
+        == files["/w/config/launcher_multi_1/multi.yaml"]["relations"]
+    )
+    assert "input" not in out["/t/lab/seg_cells.yaml"]
+    assert core.template_choices(
+        [("lab", True), ("my-run.yaml", False), ("notes.txt", False)], "/t"
+    ) == {"lab": "/t/lab/multi.yaml", "my-run": "/t/my-run.yaml"}
+
+
+def test_save_a_template_and_start_the_next_run_from_it():
+    """Settings saved without the image; loaded, the form keeps its own."""
+    pytest.importorskip("paramiko")
+    ssh = _FakeSSH()
+    at = _app(ssh, input="/data/first.czi", work_dir="/scratch/first")
+    at.run()
+    at.selectbox(key="cpm").set_value("nuclei")
+    at.text_input(key="ov").set_value("[4, 20, 20]").run()
+    at.text_input(key="template_name").set_value("nuclei 3D").run()
+    next(b for b in at.button if b.label == "Save").click().run()
+    assert not at.exception
+    saved = f"{WF}/config/templates/nuclei-3D.yaml"
+    import yaml
+
+    template = yaml.safe_load(ssh.files[saved])
+    assert template["cellpose"]["model"] == "nuclei" and "input" not in template
+
+    # The next image: another form, its own image, the template's settings.
+    at = _app(ssh, input="/data/second.czi", work_dir="/scratch/second")
+    at.run()
+    next(s for s in at.selectbox if s.label == "a template").set_value(
+        "nuclei-3D"
+    ).run()
+    at.button(key="load_template").click().run()
+    assert not at.exception
+    (cfg,) = at.session_state["files"].values()
+    assert cfg["input"] == "/data/second.czi"
+    assert cfg["work_dir"] == "/scratch/second"
+    assert cfg["cellpose"]["model"] == "nuclei" and cfg["overlap"] == [
+        4,
+        20,
+        20,
+    ]
