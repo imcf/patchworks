@@ -887,10 +887,13 @@ def slurm_minutes(text: str) -> int | None:
     if not text or text.upper() in ("UNLIMITED", "INFINITE"):
         return None
     days = 0
-    if "-" in text:
-        d, text = text.split("-", 1)
-        days = int(d)
-    parts = [int(p) for p in text.split(":")]
+    try:
+        if "-" in text:
+            d, text = text.split("-", 1)
+            days = int(d)
+        parts = [int(p) for p in text.split(":")]
+    except ValueError:
+        return None  # not a time: nothing to check against
     if len(parts) == 3:
         h, m, sec = parts
     elif len(parts) == 2:
@@ -900,42 +903,142 @@ def slurm_minutes(text: str) -> int | None:
     return days * 1440 + h * 60 + m + (1 if sec else 0)
 
 
-ACCOUNT_LIMITS_COMMAND = (
+# What the cluster offers and this account may use, in one round trip:
+# partitions (sinfo: availability, time limit, GPUs, CPUs
+# allocated/idle/other/total), associations (account, partition, QOS) and
+# each QOS's MaxWall.
+CLUSTER_INFO_COMMAND = (
+    'echo "#partitions"; sinfo -h -o "%P|%a|%l|%G|%C" 2>/dev/null; '
     'echo "#assoc"; sacctmgr -nP show assoc user="$USER" '
-    "format=partition,qos; "
-    'echo "#qos"; sacctmgr -nP show qos format=name,maxwall'
+    "format=account,partition,qos 2>/dev/null; "
+    'echo "#qos"; sacctmgr -nP show qos format=name,maxwall 2>/dev/null'
 )
 
 
-def parse_account_limits(output: str) -> dict[str, Any]:
-    """The QOS each partition allows this account, and each QOS's MaxWall."""
+def _gres_options(gres: str) -> set[str]:
+    """What a job may ask for of a node's ``%G`` (``gpu:rtx4090:8(S:0-1)``):
+    one GPU, of any type and of this type."""
+    options = set()
+    for item in gres.split(","):
+        item = item.split("(")[0].strip()
+        parts = item.split(":")
+        if len(parts) >= 2 and parts[0] and parts[0] != "(null)":
+            options.add(f"{parts[0]}:1")
+            if len(parts) == 3 and not parts[1].isdigit():
+                options.add(f"{parts[0]}:{parts[1]}:1")
+    return options
+
+
+def parse_cluster_info(output: str) -> dict[str, Any]:
+    """Partitions, the QOS and accounts this account may use, QOS limits."""
+    partitions: dict[str, dict[str, Any]] = {}
     assoc: dict[str, set[str]] = {}
+    accounts: list[str] = []
     maxwall: dict[str, int | None] = {}
+    default = None
     part = None
     for line in output.splitlines():
         line = line.strip()
-        if line in ("#assoc", "#qos"):
+        if line in ("#partitions", "#assoc", "#qos"):
             part = line
             continue
         if not line or "|" not in line:
             continue
-        a, b = line.split("|", 1)
-        if part == "#assoc":
-            assoc.setdefault(a, set()).update(q for q in b.split(",") if q)
+        fields = line.split("|")
+        if part == "#partitions" and len(fields) >= 5:
+            name, avail, limit, gres, cpus = fields[:5]
+            if name.endswith("*"):  # sinfo marks the default partition
+                name = name[:-1]
+                default = name
+            entry = partitions.setdefault(
+                name,
+                {
+                    "up": avail == "up",
+                    "timelimit": slurm_minutes(limit),
+                    "gres": set(),
+                    "idle_cpus": 0,
+                    "cpus": 0,
+                },
+            )
+            entry["gres"] |= _gres_options(gres)
+            # %C is allocated/idle/other/total; a partition may span lines.
+            counts = cpus.split("/")
+            if len(counts) == 4 and all(c.isdigit() for c in counts):
+                entry["idle_cpus"] += int(counts[1])
+                entry["cpus"] += int(counts[3])
+        elif part == "#assoc":
+            if len(fields) == 3:
+                account, partition, qos = fields
+                if account and account not in accounts:
+                    accounts.append(account)
+            else:
+                partition, qos = fields[0], fields[-1]
+            assoc.setdefault(partition, set()).update(
+                q for q in qos.split(",") if q
+            )
         elif part == "#qos":
-            maxwall[a] = slurm_minutes(b)
-    return {"assoc": assoc, "maxwall": maxwall}
+            maxwall[fields[0]] = slurm_minutes(fields[-1])
+    for entry in partitions.values():
+        entry["gres"] = sorted(entry["gres"])
+    return {
+        "partitions": partitions,
+        "default_partition": default,
+        "assoc": assoc,
+        "accounts": accounts,
+        "maxwall": maxwall,
+    }
+
+
+def usable_qos(info: dict[str, Any], partition: str | None = None) -> list[str]:
+    """The QOS this account may use, on *partition* when known."""
+    assoc = info.get("assoc") or {}
+    if not assoc:
+        return []
+    if partition is None:
+        return sorted(set().union(*assoc.values()))
+    # An association without a partition holds on every partition.
+    return sorted(assoc.get(partition, set()) | assoc.get("", set()))
+
+
+def partition_rows(info: dict[str, Any]) -> list[dict[str, Any]]:
+    """The cluster's partitions as a readable table, GPU ones first."""
+    rows = []
+    for name, p in info.get("partitions", {}).items():
+        limit = p["timelimit"]
+        rows.append(
+            {
+                "partition": name
+                + (
+                    " (default)"
+                    if name == info.get("default_partition")
+                    else ""
+                ),
+                "state": "up" if p["up"] else "DOWN",
+                "time limit": "none"
+                if limit is None
+                else f"{limit // 1440}-{limit % 1440 // 60:02d}:{limit % 60:02d}"
+                if limit >= 1440
+                else f"{limit // 60}:{limit % 60:02d}",
+                "GPUs": ", ".join(p["gres"]) or "-",
+                "idle CPUs": f"{p['idle_cpus']} / {p['cpus']}",
+                "your QOS": ", ".join(usable_qos(info, name)) or "-",
+            }
+        )
+    return sorted(rows, key=lambda r: (r["GPUs"] == "-", r["partition"]))
 
 
 def resource_problems(
-    resources: dict[str, dict[str, Any]], limits: dict[str, Any]
+    resources: dict[str, dict[str, Any]], info: dict[str, Any]
 ) -> list[str]:
-    """What sbatch would refuse: a QOS the account lacks, a runtime over it.
+    """What sbatch would refuse, or what would never start.
 
-    A job asking for more time than its QOS allows is refused and never
-    starts (QOSMaxWallDurationPerJobLimit), with an empty log.
+    A partition that does not exist or is down, a QOS the account lacks,
+    a runtime over the QOS's MaxWall or the partition's time limit: sbatch
+    refuses such a job (QOSMaxWallDurationPerJobLimit ...) or it waits
+    forever, with an empty log either way.
     """
-    assoc, maxwall = limits["assoc"], limits["maxwall"]
+    assoc, maxwall = info.get("assoc") or {}, info.get("maxwall") or {}
+    partitions = info.get("partitions") or {}
     allowed = set().union(*assoc.values()) if assoc else set()
     problems = []
     for rule, res in resources.items():
@@ -943,7 +1046,27 @@ def resource_problems(
             continue
         qos = res.get("qos")
         runtime = first_attempt(res.get("runtime"))
-        part = res.get("slurm_partition")
+        part = res.get("slurm_partition") or info.get("default_partition")
+        if part and partitions:
+            if part not in partitions:
+                problems.append(
+                    f"{rule}: there is no partition {part!r} on this cluster "
+                    f"({', '.join(sorted(partitions))})"
+                )
+            elif not partitions[part]["up"]:
+                problems.append(f"{rule}: partition {part!r} is down")
+            else:
+                limit = partitions[part]["timelimit"]
+                if runtime and limit and runtime > limit:
+                    problems.append(
+                        f"{rule}: runtime {runtime} min is over partition "
+                        f"{part!r}'s time limit of {limit} min"
+                    )
+                if res.get("gres") and not partitions[part]["gres"]:
+                    problems.append(
+                        f"{rule}: asks for {res['gres']} on {part!r}, which "
+                        "has no GPUs"
+                    )
         if part and assoc and part not in assoc and "" not in assoc:
             problems.append(
                 f"{rule}: your account has no association with partition "

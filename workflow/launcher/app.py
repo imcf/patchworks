@@ -811,10 +811,14 @@ def relations_form(labels: list[str]) -> tuple[list[dict], dict, dict]:
         r for r in rows if r.get("a") and r.get("b") and r.get("output")
     ]
     with st.expander("Relate and bundle jobs (SLURM)", icon=":material/dns:"):
+        info = cluster_info()
         c1, c2, c3, c4, c5 = st.columns(5)
         relate = {
-            "partition": c1.text_input(
-                "relate partition", **_init("relate_partition", value="")
+            "partition": slurm_choice(
+                c1,
+                "relate partition",
+                "relate_partition",
+                sorted((info or {}).get("partitions", {})),
             ),
             "mem": c2.text_input("relate mem", **_init("relate_mem", value="")),
             "cpus": int(
@@ -833,7 +837,14 @@ def relations_form(labels: list[str]) -> tuple[list[dict], dict, dict]:
                 )
             )
             or None,
-            "qos": c5.text_input("relate qos", **_init("relate_qos", value="")),
+            "qos": slurm_choice(
+                c5,
+                "relate qos",
+                "relate_qos",
+                core.usable_qos(
+                    info or {}, st.session_state.get("relate_partition") or None
+                ),
+            ),
         }
         fmt = st.selectbox(
             "bundle the finished store",
@@ -1142,8 +1153,62 @@ def submit_timing(client, *, wf_dir, setup, files, name, segment, account):
     )
 
 
-def resources_editor(resources: dict) -> dict:
-    """The profile's resources per rule, editable; returns the overrides."""
+def cluster_info(refresh: bool = False) -> dict | None:
+    """Partitions, QOS and accounts (sinfo, sacctmgr), once per connection.
+
+    None when the cluster answers neither (not SLURM, or no such commands
+    on the login shell's PATH): the fields are then typed in.
+    """
+    if refresh or "cluster_info" not in st.session_state:
+        _, out, _ = run(get_client(), core.CLUSTER_INFO_COMMAND, timeout=60)
+        info = core.parse_cluster_info(out)
+        st.session_state["cluster_info"] = (
+            info if info["partitions"] or info["assoc"] else None
+        )
+    return st.session_state["cluster_info"]
+
+
+def slurm_choice(
+    container,
+    label: str,
+    key: str,
+    options: list[str],
+    default: str = "",
+    help: str | None = None,
+) -> str:
+    """A dropdown of what the cluster offers; anything else can be typed.
+
+    Blank means SLURM's default (the default partition, the account's
+    default QOS).
+    """
+    if not options:
+        return container.text_input(
+            label, help=help, **_init(key, value=default)
+        )
+    choices = ["", *options]
+    if default and default not in choices:
+        choices.append(default)
+    if key in st.session_state and st.session_state[key] not in choices:
+        choices.append(st.session_state[key])
+    return (
+        container.selectbox(
+            label,
+            choices,
+            format_func=lambda o: o or "(default)",
+            accept_new_options=True,
+            help=help,
+            **_init(key, index=choices.index(default)),
+        )
+        or ""
+    )
+
+
+def resources_editor(resources: dict, info: dict | None = None) -> dict:
+    """The profile's resources per rule, editable; returns the overrides.
+
+    With the cluster's *info*, partition, QOS and GPU are picked from what
+    it has and the account may use.
+    """
     rules = [
         r for r in ("segment", "convert", "prepare", "merge") if r in resources
     ]
@@ -1160,12 +1225,35 @@ def resources_editor(resources: dict) -> dict:
         }
         for rule in rules
     ]
+    pick: dict = {}
+    if info:
+
+        def column(name, values, help):
+            current = {r[name] for r in rows if r[name]}
+            return st.column_config.SelectboxColumn(
+                name, options=sorted(set(values) | current), help=help
+            )
+
+        pick = {
+            "partition": column(
+                "partition", info["partitions"], "from sinfo: see Partitions"
+            ),
+            "qos": column(
+                "qos", core.usable_qos(info), "the QOS your account may use"
+            ),
+            "gres": column(
+                "gres",
+                {g for p in info["partitions"].values() for g in p["gres"]},
+                "a GPU of any type (gpu:1) or of one type",
+            ),
+        }
     edited = st.data_editor(
         rows,
         hide_index=True,
         disabled=["rule"],
         key=f"resources_{hash(str(rows))}",
         column_config={
+            **pick,
             "runtime (min)": st.column_config.NumberColumn(min_value=1),
             "memory (MB, 1st try)": st.column_config.NumberColumn(
                 min_value=1000, help="each retry asks for this much more"
@@ -1689,7 +1777,7 @@ with tab_launch:
                 )
             else:
                 resources = core.profile_resources(profile_text)
-                overrides = resources_editor(resources)
+                overrides = resources_editor(resources, cluster_info())
                 for rule, values in overrides.items():
                     resources[rule] = {**resources[rule], **values}
                 if "mem_mb" in overrides.get("segment", {}):
@@ -1697,32 +1785,37 @@ with tab_launch:
                         "prepare gets the segment memory too: it sizes "
                         '`tile_shape: "auto"` from its own allocation.'
                     )
-                c1, c2 = st.columns([1, 3], vertical_alignment="center")
-                if c1.button(
-                    "Check against my account", icon=":material/verified_user:"
-                ):
-                    _, out, _ = run(
-                        client,
-                        core.inner_command(
-                            wf_dir, setup_cmd, core.ACCOUNT_LIMITS_COMMAND
-                        ),
-                        timeout=60,
+                # Checked as you change it, against what the cluster has
+                # and the account may use.
+                info = cluster_info()
+                if info is None:
+                    st.caption(
+                        "sinfo/sacctmgr gave nothing here, so partitions and "
+                        "QOS are typed in and not checked."
                     )
-                    st.session_state["limits"] = core.parse_account_limits(out)
-                limits = st.session_state.get("limits")
-                if limits is not None:
-                    problems = core.resource_problems(resources, limits)
-                    if not limits["assoc"]:
-                        c2.warning("sacctmgr gave nothing to check against.")
-                    elif problems:
-                        for problem in problems:
-                            st.error(problem, icon=":material/block:")
-                    else:
-                        c2.success(
-                            "Every partition, QOS and runtime fits your "
-                            "account.",
+                else:
+                    problems = core.resource_problems(resources, info)
+                    for problem in problems:
+                        st.error(problem, icon=":material/block:")
+                    if not problems:
+                        st.success(
+                            "Every partition, QOS, GPU and runtime fits the "
+                            "cluster and your account.",
                             icon=":material/check_circle:",
                         )
+            if cluster_info() is not None:
+                with st.expander("Partitions", icon=":material/view_list:"):
+                    st.dataframe(
+                        core.partition_rows(cluster_info()), hide_index=True
+                    )
+                    st.button(
+                        "Refresh",
+                        icon=":material/refresh:",
+                        key="refresh_cluster",
+                        on_click=cluster_info,
+                        args=(True,),
+                        help="idle CPUs change all the time",
+                    )
 
         with section(
             ":material/fact_check: Check and plan",
@@ -1752,7 +1845,9 @@ with tab_launch:
                     files=files,
                     name=st.session_state["run_name"],
                     segment=resources.get("segment", {}),
-                    account=preset.get("controller_account", ""),
+                    account=st.session_state.get(
+                        "ctrl_account", preset.get("controller_account", "")
+                    ),
                 )
             if st.session_state.get("report"):
                 show_check(st.session_state["report"])
@@ -1791,16 +1886,44 @@ with tab_launch:
                     "mem": c2.text_input(
                         "mem", preset.get("controller_mem", "4G")
                     ),
-                    "partition": c3.text_input(
-                        "partition", preset.get("controller_partition", "")
+                    "partition": slurm_choice(
+                        c3,
+                        "partition",
+                        "ctrl_partition",
+                        sorted((cluster_info() or {}).get("partitions", {})),
+                        preset.get("controller_partition", ""),
                     ),
-                    "qos": c4.text_input(
-                        "qos", preset.get("controller_qos", "")
+                    "qos": slurm_choice(
+                        c4,
+                        "qos",
+                        "ctrl_qos",
+                        core.usable_qos(
+                            cluster_info() or {},
+                            st.session_state.get("ctrl_partition") or None,
+                        ),
+                        preset.get("controller_qos", ""),
+                        help="it must allow the controller's time",
                     ),
-                    "account": c5.text_input(
-                        "account", preset.get("controller_account", "")
+                    "account": slurm_choice(
+                        c5,
+                        "account",
+                        "ctrl_account",
+                        (cluster_info() or {}).get("accounts", []),
+                        preset.get("controller_account", ""),
                     ),
                 }
+                if cluster_info() is not None:
+                    for problem in core.resource_problems(
+                        {
+                            "controller": {
+                                "slurm_partition": slurm["partition"],
+                                "qos": slurm["qos"],
+                                "runtime": core.slurm_minutes(slurm["time"]),
+                            }
+                        },
+                        cluster_info(),
+                    ):
+                        st.error(problem, icon=":material/block:")
             elif mode == core.LOGIN_NODE:
                 st.warning(
                     "The controller runs for the whole workflow on the login "

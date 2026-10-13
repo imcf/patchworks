@@ -270,30 +270,54 @@ def test_profile_overrides_and_account_limits():
     assert new["set-resources"]["prepare"]["mem_mb"] == "attempt * 96000"
     assert new["executor"] == "slurm"  # the rest of the profile is kept
 
-    limits = core.parse_account_limits(
-        "#assoc\nscicore|6hours,1day\nrtx4090|rtx4090-6hours\n"
-        "#qos\n6hours|06:00:00\n1day|1-00:00:00\nrtx4090-6hours|06:00:00\n"
-    )
-    assert limits["maxwall"]["1day"] == 1440
+    info = core.parse_cluster_info(CLUSTER)
+    assert info["default_partition"] == "scicore"
+    assert info["accounts"] == ["biehlmai"]
+    assert info["maxwall"]["1day"] == 1440
+    gpu = info["partitions"]["rtx4090"]
+    # Two sinfo lines (node groups) of one partition add up.
+    assert gpu["gres"] == ["gpu:1", "gpu:rtx4090:1"] and gpu["cpus"] == 192
+    assert core.usable_qos(info, "rtx4090") == [
+        "rtx4090-1day",
+        "rtx4090-6hours",
+    ]
+    assert core.usable_qos(info, "a100") == []
     ok = {
         "segment": {
             "slurm_partition": "rtx4090",
             "qos": "rtx4090-6hours",
+            "gres": "gpu:1",
             "runtime": 300,
         }
     }
-    assert core.resource_problems(ok, limits) == []
+    assert core.resource_problems(ok, info) == []
     too_long = {"segment": {**ok["segment"], "runtime": 1400}}
-    assert "over QOS" in core.resource_problems(too_long, limits)[0]
+    assert "over QOS" in core.resource_problems(too_long, info)[0]
     wrong_qos = {"segment": {**ok["segment"], "qos": "1day"}}
     assert (
         "not one your account may use on"
-        in core.resource_problems(wrong_qos, limits)[0]
+        in core.resource_problems(wrong_qos, info)[0]
     )
-    no_part = {"merge": {"slurm_partition": "a100", "runtime": 10}}
-    assert "no association" in core.resource_problems(no_part, limits)[0]
+    down = core.resource_problems(
+        {"merge": {"slurm_partition": "a100", "runtime": 10}}, info
+    )
+    assert "is down" in down[0] and "no association" in down[1]
+    unknown = {"merge": {"slurm_partition": "h100"}}
+    assert "no partition 'h100'" in core.resource_problems(unknown, info)[0]
+    # No partition named: the cluster's default, and its time limit.
+    long_merge = {"merge": {"runtime": 2000}}
+    assert (
+        "'scicore''s time limit" in core.resource_problems(long_merge, info)[0]
+    )
+    no_gpu = {"segment": {"slurm_partition": "scicore", "gres": "gpu:1"}}
+    assert "has no GPUs" in core.resource_problems(no_gpu, info)[0]
+    rows = core.partition_rows(info)
+    assert rows[-1]["partition"] == "scicore (default)"  # GPU ones first
+    assert rows[1]["idle CPUs"] == "82 / 192"
+    assert core.parse_cluster_info("")["partitions"] == {}
     assert core.slurm_minutes("2-03:04:05") == 2 * 1440 + 3 * 60 + 5
     assert core.slurm_minutes("UNLIMITED") is None
+    assert core.slurm_minutes("3 days") is None
 
 
 def test_app_renders_the_login_screen():
@@ -606,6 +630,21 @@ class _FakeSSH:
 
 WF = "/home/u/patchworks/workflow"
 
+CLUSTER = """#partitions
+scicore*|up|1-00:00:00|(null)|1200/400/0/1600
+rtx4090|up|7-00:00:00|gpu:rtx4090:8(S:0-1)|100/60/0/160
+rtx4090|up|7-00:00:00|gpu:rtx4090:4|10/22/0/32
+a100|down|2-00:00:00|gpu:a100:4|0/0/64/64
+#assoc
+biehlmai|scicore|1day,6hours
+biehlmai|rtx4090|rtx4090-1day,rtx4090-6hours
+#qos
+1day|1-00:00:00
+6hours|06:00:00
+rtx4090-1day|1-00:00:00
+rtx4090-6hours|06:00:00
+"""
+
 
 def _app(ssh, **state):
     testing = pytest.importorskip("streamlit.testing.v1")
@@ -705,18 +744,28 @@ def test_app_resources_change_for_one_run():
     """A changed resource goes into this run's own copy of the profile."""
     pytest.importorskip("paramiko")
     profile = (ROOT / "workflow/profile/slurm/config.yaml").read_bytes()
+    cluster = CLUSTER.replace("rtx4090-1day,", "")  # not the profile's QOS
     ssh = _FakeSSH(
-        {"sbatch": "123\n", "sacctmgr": "#assoc\nrtx4090|other\n#qos\n"},
+        {"sbatch": "123\n", "#partitions": cluster},
         files={f"{WF}/profile/slurm/config.yaml": profile},
     )
     at = _app(ssh, input="/home/u/data/scan.czi", work_dir="/scratch/run")
     at.run()
     assert not at.exception
-    next(
-        b for b in at.button if b.label == "Check against my account"
-    ).click().run()
-    assert any("rtx4090-1day" in e.value for e in at.error)
+    # Checked as soon as shown: the profile's segment QOS is not the account's.
+    assert any("'rtx4090-1day' is not one" in e.value for e in at.error)
+    partitions = next(
+        d.value for d in at.dataframe if "partition" in d.value.columns
+    )
+    assert "rtx4090" in partitions["partition"].tolist()
     at.radio[0].set_value(core.SLURM_JOB).run()
+    # The controller's partition, QOS and account are dropdowns of what
+    # the cluster has; anything else may still be typed.
+    assert "rtx4090" in at.selectbox(key="ctrl_partition").options
+    assert at.selectbox(key="ctrl_account").options == ["(default)", "biehlmai"]
+    at.selectbox(key="ctrl_partition").set_value("scicore").run()
+    assert "1day" in at.selectbox(key="ctrl_qos").options
+    assert "rtx4090-6hours" not in at.selectbox(key="ctrl_qos").options
     next(b for b in at.button if b.label == "Launch").click().run()
     assert not at.exception
     assert any("sbatch" in c for c in ssh.commands)
