@@ -948,7 +948,9 @@ def test_stitch_is_per_segmentation(tmp_path):
     assert cfgs[1]["iou_threshold"] == 0.3
     for cfg in cfgs:
         validate_config(cfg)
-        assert not core.config_problems(cfg)
+        # The launcher wants a path on the (Linux) cluster: tmp_path is a
+        # C:\ path on Windows.
+        assert not core.config_problems({**cfg, "work_dir": "/scratch/run"})
     assert core.multi_problems(files) == []
     from pathlib import Path
 
@@ -957,7 +959,8 @@ def test_stitch_is_per_segmentation(tmp_path):
     # A method that fills space, stitched by touch: refused, as the
     # workflow would.
     touch = core.build_config({**shared, **segs[1], "stitch": "touch"})
-    assert core.config_problems(touch)
+    (problem,) = core.config_problems({**touch, "work_dir": "/scratch/run"})
+    assert 'use stitch "iou"' in problem
     with pytest.raises(ValueError, match="iou"):
         validate_config(touch)
 
