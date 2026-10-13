@@ -27,6 +27,12 @@ coordinates, in µm, so all acquisitions of a sample overlay:
   on that ScanR field grid: centred on it, scaled so the fields land on
   their stage positions. ``Scan`` is mirrored in x by default
   (``--flip-x``/``--flip-y`` NAME change that).
+- A dataset whose XML places nothing (every tile at the origin, as
+  probability maps or segmentations computed tile by tile usually are)
+  takes the place of the reference's tiles: each tile is matched by its
+  position number (``P00012`` in its tile, setup or file name), or by
+  order when both have as many tiles, and mapped onto that tile's pixels
+  (scaled if downsampled). A dataset with positions keeps them.
 - Datasets with other calibrations are scaled from their pixels to µm.
 - ``--offset NAME=DX,DY`` fine-tunes a dataset (by its folder name).
 
@@ -213,6 +219,7 @@ class Source:
     meta: dict | None = None
     matrix: tuple | None = None
     table: Path | None = None
+    setup_matrix: dict | None = None
 
     @property
     def is_3d(self):
@@ -255,15 +262,27 @@ class Source:
                     ys.append(m[4] * x + m[5] * y + m[7])
         return (min(xs), max(xs)), (min(ys), max(ys))
 
-    def affine(self):
-        """MoBIE ``affine`` cell, from this XML's world units to µm.
+    def transform(self, setup=None):
+        """Affine from this XML's world units to stage µm.
 
-        Either the placement computed from stage metadata (`matrix`), or
-        a scaling to µm, mirrored about the dataset's centre if asked;
-        then ``--offset`` and the z shift.
+        Either a per-setup placement (`setup_matrix`, from the tiles of
+        another dataset), the placement computed from stage metadata
+        (`matrix`), or a scaling to µm, mirrored about the dataset's
+        centre if asked; then ``--offset`` and the z shift.
+
+        Parameters
+        ----------
+        setup : SetupInfo, optional
+            The setup the row is for; needed with `setup_matrix`.
+
+        Returns
+        -------
+        tuple of float
         """
         ox, oy, oz = self.offset
-        if self.matrix is not None:
+        if self.setup_matrix is not None and setup is not None:
+            m = list(self.setup_matrix[setup.index])
+        elif self.matrix is not None:
             m = list(self.matrix)
         else:
             sc = self.scale
@@ -276,7 +295,12 @@ class Source:
         m[3] += ox
         m[7] += oy
         m[11] += oz + self.dz
-        if tuple(m) == IDENTITY:
+        return tuple(m)
+
+    def affine(self, setup=None):
+        """MoBIE ``affine`` cell: `transform`, empty if the identity."""
+        m = self.transform(setup)
+        if m == IDENTITY:
             return ""
         return "(" + ",".join(fmt(v) for v in m) + ")"
 
@@ -470,6 +494,112 @@ def place_on_grid(src, meta, flip):
         )
     )
     return matrix, note
+
+
+def has_positions(src):
+    """Whether a BDV XML places its tiles anywhere.
+
+    Parameters
+    ----------
+    src : Source
+
+    Returns
+    -------
+    bool
+        True if a registration translates in x or y, or a tile has a
+        non-zero ``<location>``; False if everything sits at the origin.
+    """
+    for st in src.setups:
+        if abs(st.reg[3]) > 1e-9 or abs(st.reg[7]) > 1e-9:
+            return True
+    return any(abs(v) > 1e-9 for t in tile_geometry(src.path) for v in t["loc"])
+
+
+def _position_number(*texts):
+    for text in texts:
+        m = re.search(r"(?:^|[^A-Za-z])P0*(\d+)", text or "")
+        if m:
+            return int(m.group(1))
+    return None
+
+
+def place_on_tiles(src, ref):
+    """Give each setup of an unplaced dataset the place of a reference tile.
+
+    For data derived tile by tile from the reference (probability maps,
+    segmentations...) that kept no position. Each setup is matched to a
+    reference tile by its position number (``P00012`` in its tile name,
+    setup name or file name), or else by tile order when both have as
+    many tiles. Its pixels are mapped onto that tile's pixels, scaled if
+    the sizes differ (e.g. a downsampled map), so it lands exactly where
+    the tile is.
+
+    Parameters
+    ----------
+    src : Source
+        The dataset without positions.
+    ref : Source
+        The tiled reference, already placed.
+
+    Returns
+    -------
+    dict of int to tuple or None
+        Setup index to affine (world -> stage µm), None if nothing
+        matched.
+    """
+    ref_tiles = {}
+    for st in ref.setups:
+        ref_tiles.setdefault(st.tile, st)
+    by_number = {}
+    for name, st in ref_tiles.items():
+        n = _position_number(name, st.name)
+        if n is not None:
+            by_number[n] = st
+    order = list(ref_tiles.values())
+    own_tiles = list(dict.fromkeys(st.tile for st in src.setups))
+    # Without positions, a stage frame for the reference is only shifts.
+    to_stage = ref.transform()
+    out = {}
+    for st in src.setups:
+        target = by_number.get(
+            _position_number(st.tile, st.name, src.path.stem)
+        )
+        if target is None and len(own_tiles) == len(order):
+            target = order[own_tiles.index(st.tile)]
+        if target is None:
+            continue
+        try:
+            tw, th, sw, sh = (int(v) for v in (*target.size[:2], *st.size[:2]))
+        except ValueError:
+            continue
+        # Same field of view: same aspect ratio (a mosaic is not a tile).
+        if abs(tw / th - sw / sh) > 0.01 * tw / th:
+            continue
+        scale = []
+        for a, b in zip(target.size, st.size, strict=True):
+            try:
+                scale.append(int(a) / int(b) if int(b) > 1 else 1.0)
+            except ValueError:
+                scale.append(1.0)
+        pixel_map = (
+            scale[0],
+            0,
+            0,
+            0,
+            0,
+            scale[1],
+            0,
+            0,
+            0,
+            0,
+            scale[2],
+            0,
+        )
+        m = compose(
+            to_stage, compose(target.reg, compose(pixel_map, invert(st.reg)))
+        )
+        out[st.index] = m
+    return out or None
 
 
 def stage_offset(ref, spots):
@@ -1283,12 +1413,52 @@ def main(argv=None):
         if ref is not None:
             lo, hi = ref.z_range_um
             mid = (lo + hi) / 2
-        for s in members:
-            if s.kind != "intensities" or s.is_3d or s is ref:
-                continue
-            meta = s.meta or (
+
+        # Datasets without any position (e.g. probability maps made tile
+        # by tile) take the places of the reference's tiles.
+        def grid_meta(s, sample_metas=sample_metas):
+            # Stitched 2D data goes on a ScanR grid, if one is known.
+            if s.kind != "intensities" or s.is_3d:
+                return None
+            return s.meta or (
                 sample_metas[0] if len(sample_metas) == 1 else None
             )
+
+        for s in members:
+            if (
+                s.kind != "intensities"
+                or s is ref
+                or ref is None
+                or grid_meta(s) is not None
+            ):
+                continue
+            if has_positions(s):
+                notes.append(f"{s.view}: uses the positions in its own XML")
+                continue
+            placed = place_on_tiles(s, ref)
+            if placed is None:
+                notes.append(
+                    f"WARNING: {s.view} has no positions and its tiles do not "
+                    f"match those of {ref.view}; left at the origin"
+                )
+                continue
+            s.setup_matrix = placed
+            if not s.is_3d:
+                s.dz = mid
+            notes.append(
+                f"{s.view}: no positions of its own; {len(placed)}/"
+                f"{len(s.setups)} setups placed on the tiles of {ref.view}"
+                + (" (2D, at mid-stack)" if not s.is_3d else "")
+            )
+        for s in members:
+            if (
+                s.kind != "intensities"
+                or s.is_3d
+                or s is ref
+                or s.setup_matrix is not None
+            ):
+                continue
+            meta = grid_meta(s)
             if meta is not None:
                 s.matrix, note = place_on_grid(s, meta, s.flip)
                 notes.append(note)
@@ -1385,7 +1555,6 @@ def main(argv=None):
         problem = check_image_file(src.path)
         if problem:
             problems.append(problem)
-        affine = src.affine()
         for s in src.setups:
             rows.append(
                 {
@@ -1408,7 +1577,7 @@ def main(argv=None):
                     else src.view,
                     "color": channel_color(s.channel),
                     "contrast_limits": contrast,
-                    "affine": affine,
+                    "affine": src.affine(s),
                     "sample": src.sample.name,
                     "tile": s.tile,
                 }
