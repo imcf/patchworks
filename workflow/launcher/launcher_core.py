@@ -1031,12 +1031,12 @@ def slurm_minutes(text: str) -> int | None:
 
 # What the cluster offers and this account may use, in one round trip:
 # partitions (sinfo: availability, time limit, GPUs, CPUs
-# allocated/idle/other/total), associations (account, partition, QOS) and
-# each QOS's MaxWall.
+# allocated/idle/other/total), associations (account, partition, QOS,
+# default QOS) and each QOS's MaxWall.
 CLUSTER_INFO_COMMAND = (
     'echo "#partitions"; sinfo -h -o "%P|%a|%l|%G|%C" 2>/dev/null; '
     'echo "#assoc"; sacctmgr -nP show assoc user="$USER" '
-    "format=account,partition,qos 2>/dev/null; "
+    "format=account,partition,qos,defaultqos 2>/dev/null; "
     'echo "#qos"; sacctmgr -nP show qos format=name,maxwall 2>/dev/null'
 )
 
@@ -1061,6 +1061,7 @@ def parse_cluster_info(output: str) -> dict[str, Any]:
     assoc: dict[str, set[str]] = {}
     accounts: list[str] = []
     maxwall: dict[str, int | None] = {}
+    default_qos: dict[str, str] = {}
     default = None
     part = None
     for line in output.splitlines():
@@ -1093,10 +1094,14 @@ def parse_cluster_info(output: str) -> dict[str, Any]:
                 entry["idle_cpus"] += int(counts[1])
                 entry["cpus"] += int(counts[3])
         elif part == "#assoc":
-            if len(fields) == 3:
-                account, partition, qos = fields
+            if len(fields) >= 3:
+                account, partition, qos = fields[:3]
                 if account and account not in accounts:
                     accounts.append(account)
+                # The QOS a job gets with none asked for (the first
+                # association's, the account's default, comes first).
+                if len(fields) >= 4 and fields[3]:
+                    default_qos.setdefault(partition, fields[3])
             else:
                 partition, qos = fields[0], fields[-1]
             assoc.setdefault(partition, set()).update(
@@ -1112,7 +1117,48 @@ def parse_cluster_info(output: str) -> dict[str, Any]:
         "assoc": assoc,
         "accounts": accounts,
         "maxwall": maxwall,
+        "default_qos": default_qos,
     }
+
+
+def default_qos(info: dict[str, Any], partition: str | None = None) -> str:
+    """The QOS a job gets on *partition* when it asks for none ("" when
+    not known)."""
+    defaults = info.get("default_qos") or {}
+    part = partition or info.get("default_partition") or ""
+    return defaults.get(part) or defaults.get("") or ""
+
+
+def fitting_qos(
+    info: dict[str, Any], partition: str | None, minutes: int | None
+) -> str:
+    """The QOS this account may use on *partition* whose MaxWall allows
+    *minutes*, the shortest such (shorter ones usually start sooner); ""
+    when none is known to."""
+    maxwall = info.get("maxwall") or {}
+    fitting = [
+        q
+        for q in usable_qos(info, partition)
+        if q in maxwall
+        and (not minutes or maxwall[q] is None or maxwall[q] >= minutes)
+    ]
+    return min(
+        fitting, key=lambda q: (maxwall[q] is None, maxwall[q] or 0), default=""
+    )
+
+
+def qos_for(
+    info: dict[str, Any], partition: str | None, minutes: int | None
+) -> str:
+    """The QOS to ask for so a job of *minutes* is accepted: "" when the
+    default QOS allows it (or nothing is known), else :func:`fitting_qos`."""
+    if not minutes:
+        return ""
+    default = default_qos(info, partition)
+    limit = (info.get("maxwall") or {}).get(default, None)
+    if not default or limit is None or limit >= minutes:
+        return ""
+    return fitting_qos(info, partition, minutes)
 
 
 def usable_qos(info: dict[str, Any], partition: str | None = None) -> list[str]:
@@ -1293,13 +1339,82 @@ def resource_problems(
                 f"{'on ' + repr(part) + ' ' if part in assoc else ''}"
                 f"({', '.join(sorted(usable))})"
             )
-        limit = maxwall.get(qos) if qos else None
+        # No QOS asked for: the account's default QOS applies.
+        effective = qos or default_qos(info, part)
+        limit = maxwall.get(effective) if effective else None
         if runtime and limit and runtime > limit:
+            better = fitting_qos(info, part, runtime)
             problems.append(
-                f"{rule}: runtime {runtime} min is over QOS {qos!r}'s MaxWall "
-                f"of {limit} min; sbatch would refuse the job"
+                f"{rule}: runtime {runtime} min is over "
+                + (
+                    f"QOS {qos!r}'s"
+                    if qos
+                    else f"your default QOS {effective!r}'s (QOS left blank)"
+                )
+                + f" MaxWall of {limit} min; sbatch would refuse the job: "
+                + (f"choose QOS {better!r}" if better else "lower the runtime")
             )
     return problems
+
+
+# What sbatch's refusals mean, and what to change.
+SBATCH_ERRORS = {
+    "QOSMaxWallDurationPerJobLimit": "the time asked for is over what the "
+    "QOS allows (with QOS left blank, your default QOS)",
+    "InvalidQOS": "the QOS is not one your account may use on this partition",
+    "Invalid qos specification": "the QOS is not one your account may use "
+    "on this partition",
+    "Invalid account": "the account is not one you belong to, or not on "
+    "this partition",
+    "invalid partition": "there is no such partition",
+    "PartitionTimeLimit": "the time asked for is over the partition's limit",
+    "AssocMaxSubmitJobLimit": "your account already has as many jobs "
+    "queued as it may",
+    "QOSMaxSubmitJobPerUserLimit": "you already have as many jobs queued "
+    "as this QOS allows",
+    "Requested node configuration is not available": "no node of the "
+    "partition has the memory, CPUs or GPUs asked for",
+}
+
+
+def explain_sbatch_error(
+    text: str, info: dict[str, Any] | None, slurm: dict[str, Any]
+) -> str | None:
+    """Why sbatch refused the controller job, and what to choose instead."""
+    lowered = text.lower()
+    reason = next(
+        (why for key, why in SBATCH_ERRORS.items() if key.lower() in lowered),
+        None,
+    )
+    if reason is None:
+        return None
+    info = info or {}
+    part = slurm.get("partition") or None
+    lines = [reason[0].upper() + reason[1:] + "."]
+    if "time" in reason or "qos" in reason.lower():
+        minutes = slurm_minutes(str(slurm.get("time") or ""))
+        better = fitting_qos(info, part, minutes) if minutes else ""
+        if better and better != slurm.get("qos"):
+            lines.append(
+                f"Choose QOS {better!r}, which allows {slurm['time']}."
+            )
+        maxwall = info.get("maxwall") or {}
+        offered = [
+            f"{q} ({'no limit' if maxwall.get(q) is None else _duration(maxwall[q])})"
+            if q in maxwall
+            else q
+            for q in usable_qos(info, part)
+        ]
+        if offered:
+            lines.append("Your QOS: " + ", ".join(offered) + ".")
+    return " ".join(lines)
+
+
+def _duration(minutes: int) -> str:
+    """*minutes* as SLURM writes a time: D-HH:MM:SS or HH:MM:SS."""
+    days, rest = divmod(minutes, 1440)
+    clock = f"{rest // 60:02d}:{rest % 60:02d}:00"
+    return f"{days}-{clock}" if days else clock
 
 
 # Your patchworks jobs in the queue: the run's controller (pw-<label>), its

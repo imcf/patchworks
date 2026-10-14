@@ -296,7 +296,10 @@ HELP = {
     "jobs.\n\nExample: `4G`",
     "ctrl_partition": "The partition for the controller job: one whose time "
     "limit covers the whole run. Blank: the cluster's default.",
-    "ctrl_qos": "The QOS for the controller job: it must allow its time. "
-    "Blank: the account's default.",
+    "ctrl_qos": "The QOS for the controller job: its MaxWall must cover the "
+    "time above, or sbatch refuses the job (QOSMaxWallDurationPerJobLimit). "
+    "Blank: the account's default QOS, often a short one (sciCORE: 6 hours); "
+    "when that is too short, one that allows the time is chosen for you."
+    "\n\nExample: `1week` for a 3-day run on sciCORE",
     "ctrl_account": "The SLURM account to charge. Blank: your default.",
 }

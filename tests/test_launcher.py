@@ -315,6 +315,26 @@ def test_profile_overrides_and_account_limits():
     assert rows[-1]["partition"] == "scicore (default)"  # GPU ones first
     assert rows[1]["idle CPUs"] == "82 / 192"
     assert core.parse_cluster_info("")["partitions"] == {}
+    # QOS left blank: the default QOS's MaxWall holds (sciCORE: 6 hours).
+    assert core.default_qos(info) == "6hours"
+    assert core.default_qos(info, "rtx4090") == "rtx4090-6hours"
+    controller = {"controller": {"runtime": 1000}}
+    (problem,) = core.resource_problems(controller, info)
+    assert "default QOS '6hours'" in problem and "QOS '1day'" in problem
+    assert core.qos_for(info, None, 3 * 1440) == "1week"
+    assert core.qos_for(info, None, 300) == ""  # the default allows it
+    assert core.qos_for(info, "scicore", 1000) == "1day"  # the shortest
+    assert core.qos_for(info, None, 30 * 1440) == ""  # none allows it
+    # Older output without the defaultqos column still parses.
+    old = core.parse_cluster_info("#assoc\nbiehlmai|scicore|1day")
+    assert old["assoc"] == {"scicore": {"1day"}} and old["default_qos"] == {}
+    why = core.explain_sbatch_error(
+        "sbatch: error: QOSMaxWallDurationPerJobLimit",
+        info,
+        {"time": "3-00:00:00", "partition": "", "qos": ""},
+    )
+    assert "Choose QOS '1week'" in why and "1week (7-00:00:00)" in why
+    assert core.explain_sbatch_error("sbatch: error: other", info, {}) is None
     assert core.slurm_minutes("2-03:04:05") == 2 * 1440 + 3 * 60 + 5
     assert core.slurm_minutes("UNLIMITED") is None
     assert core.slurm_minutes("3 days") is None
@@ -646,10 +666,11 @@ rtx4090|up|7-00:00:00|gpu:rtx4090:8(S:0-1)|100/60/0/160
 rtx4090|up|7-00:00:00|gpu:rtx4090:4|10/22/0/32
 a100|down|2-00:00:00|gpu:a100:4|0/0/64/64
 #assoc
-biehlmai|scicore|1day,6hours
-biehlmai|rtx4090|rtx4090-1day,rtx4090-6hours
+biehlmai|scicore|1day,1week,6hours|6hours
+biehlmai|rtx4090|rtx4090-1day,rtx4090-6hours|rtx4090-6hours
 #qos
 1day|1-00:00:00
+1week|7-00:00:00
 6hours|06:00:00
 rtx4090-1day|1-00:00:00
 rtx4090-6hours|06:00:00
@@ -778,6 +799,9 @@ def test_app_resources_change_for_one_run():
     at.selectbox(key="ctrl_partition").set_value("scicore").run()
     assert "1day" in at.selectbox(key="ctrl_qos").options
     assert "rtx4090-6hours" not in at.selectbox(key="ctrl_qos").options
+    # The default QOS (6 hours) is too short for the controller's 3 days:
+    # one that allows them is chosen.
+    assert at.selectbox(key="ctrl_qos").value == "1week"
     next(b for b in at.button if b.label == "Launch").click().run()
     assert not at.exception
     fetched = next(

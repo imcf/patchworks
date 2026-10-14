@@ -1412,6 +1412,11 @@ def start_job(
         job["slurm_job"] = core.parse_sbatch(out)
         if rc or not job["slurm_job"]:
             st.error(f"sbatch failed ({rc}):\n{out}\n{err}")
+            why = core.explain_sbatch_error(
+                f"{out}\n{err}", cluster_info(), slurm
+            )
+            if why:
+                st.info(why, icon=":material/lightbulb:")
             return None
         st.success(f"submitted as SLURM job {job['slurm_job']}")
     else:
@@ -2376,12 +2381,13 @@ with tab_launch:
                     "little memory, but it must outlive the whole run."
                 )
                 c1, c2, c3, c4, c5 = st.columns(5)
+                ctrl_time = c1.text_input(
+                    "time",
+                    preset.get("controller_time", "3-00:00:00"),
+                    help=HELP["ctrl_time"],
+                )
                 slurm = {
-                    "time": c1.text_input(
-                        "time",
-                        preset.get("controller_time", "3-00:00:00"),
-                        help=HELP["ctrl_time"],
-                    ),
+                    "time": ctrl_time,
                     "mem": c2.text_input(
                         "mem",
                         preset.get("controller_mem", "4G"),
@@ -2402,7 +2408,14 @@ with tab_launch:
                             cluster_info() or {},
                             st.session_state.get("ctrl_partition") or None,
                         ),
-                        preset.get("controller_qos", ""),
+                        # Unset in the preset: one that allows the time,
+                        # when the default QOS does not.
+                        preset.get("controller_qos")
+                        or core.qos_for(
+                            cluster_info() or {},
+                            st.session_state.get("ctrl_partition") or None,
+                            core.slurm_minutes(ctrl_time),
+                        ),
                     ),
                     "account": slurm_choice(
                         c5,
