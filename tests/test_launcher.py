@@ -1573,12 +1573,20 @@ def test_an_older_workflow_on_the_cluster_is_said_and_updated():
         updated = False
 
         def open_sftp(self):
-            sftp = _FakeSFTP(self.files)
-            sftp.tree = {
-                **_FakeSFTP.tree,
-                scripts: _FakeSFTP.tree[scripts] if self.updated else old,
-            }
-            return sftp
+            ssh = self
+
+            class Live(_FakeSFTP):
+                # What the clone holds now: one SFTP channel is reused.
+                @property
+                def tree(self):
+                    return {
+                        **_FakeSFTP.tree,
+                        scripts: _FakeSFTP.tree[scripts]
+                        if ssh.updated
+                        else old,
+                    }
+
+            return Live(self.files)
 
         def exec_command(self, command, timeout=None):
             if "git pull" in command:
