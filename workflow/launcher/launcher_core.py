@@ -1762,3 +1762,40 @@ def template_choices(entries: list[tuple[str, bool]], directory: str) -> dict:
         elif name.endswith((".yaml", ".yml")):
             out[name.rsplit(".", 1)[0]] = f"{directory}/{name}"
     return out
+
+
+# ---------------------------------------------------------------------------
+# The workflow on the cluster, against this launcher
+# ---------------------------------------------------------------------------
+
+# Scripts of the workflow this launcher runs on the cluster. A clone older
+# than the launcher (pulled on your computer, not on the cluster) lacks some.
+REQUIRED_SCRIPTS = (
+    "scripts/run_multi.py",
+    "scripts/check.py",
+    "scripts/status.py",
+    "scripts/fetch_models.py",
+    "scripts/channels.py",
+)
+
+
+def update_command(workflow_dir: str) -> str:
+    """``git pull`` the cluster's clone, fast-forward only (never a merge)."""
+    return f"cd {shlex.quote(workflow_dir)} && git pull --ff-only 2>&1"
+
+
+def explain_remote_error(text: str) -> str:
+    """The line worth showing of a failed remote command: for a script the
+    cluster's workflow does not have yet, what to do about it."""
+    import re
+
+    missing = re.search(
+        r"can't open file '([^']*/(scripts/[\w.]+))'", text or ""
+    )
+    if missing:
+        return (
+            f"the workflow on the cluster has no {missing.group(2)}: it is "
+            "older than this launcher. Update it: `git pull` in the clone "
+            "on the cluster, or *Update it* in the sidebar."
+        )
+    return last_error_line(text)

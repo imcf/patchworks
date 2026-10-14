@@ -535,7 +535,10 @@ class _FakeSFTP:
     tree: ClassVar[dict[str, list[str]]] = {
         "/home/u": ["patchworks", "data"],
         "/home/u/patchworks": ["workflow"],
-        "/home/u/patchworks/workflow": ["Snakefile", "config"],
+        "/home/u/patchworks/workflow": ["Snakefile", "config", "scripts"],
+        "/home/u/patchworks/workflow/scripts": [
+            s.split("/")[-1] for s in core.REQUIRED_SCRIPTS
+        ],
         "/home/u/data": ["scan.czi", "old.zarr"],
     }
 
@@ -1557,3 +1560,52 @@ def test_help_keys_point_at_texts():
     targets = [ast.literal_eval(v) for v in short.values]
     assert [t for t in targets if t not in HELP] == []
     assert all(len(text) > 20 for text in HELP.values())
+
+
+def test_an_older_workflow_on_the_cluster_is_said_and_updated():
+    """The launcher pulled on a computer, the cluster's clone not: its new
+    scripts are missing there. Said in the sidebar, with Update it."""
+    pytest.importorskip("paramiko")
+    scripts = f"{WF}/scripts"
+    old = [n for n in _FakeSFTP.tree[scripts] if n != "channels.py"]
+
+    class Old(_FakeSSH):
+        updated = False
+
+        def open_sftp(self):
+            sftp = _FakeSFTP(self.files)
+            sftp.tree = {
+                **_FakeSFTP.tree,
+                scripts: _FakeSFTP.tree[scripts] if self.updated else old,
+            }
+            return sftp
+
+        def exec_command(self, command, timeout=None):
+            if "git pull" in command:
+                self.updated = True
+            return super().exec_command(command, timeout)
+
+    ssh = Old({"git pull": "Fast-forward\n 5 files changed\n"})
+    at = _app(ssh, input="/x.czi", work_dir="/scratch/run")
+    at.run()
+    assert any(
+        "older than this launcher" in w.value for w in at.sidebar.warning
+    )
+    at.button(key="update_workflow").click().run()
+    assert any("git pull --ff-only" in c for c in ssh.commands)
+    assert any(
+        "updated: 5 files changed" in m.value for m in at.sidebar.success
+    )
+    assert not any(
+        "older than this launcher" in w.value for w in at.sidebar.warning
+    )
+
+
+def test_a_missing_script_says_what_to_do():
+    error = (
+        "python: can't open file '/scicore/home/lab/me/patchworks/workflow/"
+        "scripts/channels.py': [Errno 2] No such file or directory"
+    )
+    said = core.explain_remote_error(error)
+    assert "no scripts/channels.py" in said and "git pull" in said
+    assert core.explain_remote_error("x\nValueError: y") == "ValueError: y"

@@ -290,6 +290,51 @@ def browse(
         )
 
 
+def _update_workflow(wf_dir: str) -> None:
+    rc, out, _ = run(get_client(), core.update_command(wf_dir), timeout=300)
+    st.session_state["update_note"] = (rc, out.strip()[-2000:])
+    # What the clone has, looked at again.
+    st.session_state.pop("missing_scripts", None)
+    st.session_state.pop("cellpose_models", None)
+
+
+def workflow_version_check(wf_dir: str) -> None:
+    """Warn when the cluster's clone is older than this launcher (it lacks
+    scripts the launcher runs), and offer to update it."""
+    missing = st.session_state.setdefault("missing_scripts", {})
+    if wf_dir not in missing:
+        absent = []
+        for script in core.REQUIRED_SCRIPTS:
+            try:
+                get_sftp().stat(f"{wf_dir}/{script}")
+            except OSError:
+                absent.append(script)
+        missing[wf_dir] = absent
+    note = st.session_state.pop("update_note", None)
+    if note:
+        rc, out = note
+        (st.success if rc == 0 else st.error)(
+            ("updated: " if rc == 0 else "git pull failed: ")
+            + (out.splitlines()[-1].strip() if out else "")
+        )
+    if missing[wf_dir]:
+        st.warning(
+            "The workflow on the cluster is older than this launcher: it has "
+            f"no {', '.join(s.split('/')[-1] for s in missing[wf_dir])}. "
+            "Update it (git pull in the clone).",
+            icon=":material/update:",
+        )
+        st.button(
+            "Update it",
+            icon=":material/download:",
+            key="update_workflow",
+            on_click=_update_workflow,
+            args=(wf_dir,),
+            help="Runs `git pull --ff-only` in the clone on the cluster: "
+            "it never merges, so local changes there stop it and say so.",
+        )
+
+
 def remote_path(
     label: str,
     key: str,
@@ -488,7 +533,7 @@ def channels_view(work_dir: str) -> None:
                 timeout=600,
             )
             st.session_state[key] = core.parse_json_output(out) or {
-                "error": core.last_error_line(err or out) or f"exit {rc}"
+                "error": core.explain_remote_error(err or out) or f"exit {rc}"
             }
         info = st.session_state.get(key)
         if not info:
@@ -1271,7 +1316,7 @@ def check_on_cluster(client, wf_dir, setup, files) -> dict:
     report = core.parse_json_output(out)
     if report is None:
         return {
-            "error": core.last_error_line(err or out) or f"exit {rc}",
+            "error": core.explain_remote_error(err or out) or f"exit {rc}",
             "output": (out + err)[-20000:],
         }
     return report
@@ -1438,7 +1483,7 @@ def launch(
         if rc:
             st.warning(
                 "Could not fetch the models here: "
-                f"{core.last_error_line(err or out)}. The run fetches them "
+                f"{core.explain_remote_error(err or out)}. The run fetches them "
                 "itself, which fails if its nodes have no internet access.",
                 icon=":material/cloud_off:",
             )
@@ -1712,7 +1757,9 @@ def job_actions(job: dict, state: str, alive: bool, setup: str) -> None:
                     timeout=300,
                 )
                 (st.success if rc == 0 else st.error)(
-                    "unlocked" if rc == 0 else core.last_error_line(err or out)
+                    "unlocked"
+                    if rc == 0
+                    else core.explain_remote_error(err or out)
                 )
         if not alive and job.get("inner"):
             if c3.button(
@@ -1770,7 +1817,9 @@ def job_progress(job: dict, setup: str) -> None:
     )
     status = core.parse_json_output(out)
     if not status or "segmentations" not in status:
-        st.caption(f"progress unavailable: {core.last_error_line(err or out)}")
+        st.caption(
+            f"progress unavailable: {core.explain_remote_error(err or out)}"
+        )
         return
     failed = list(status.get("failures") or []) + [
         {**f, "step": f"{seg['label_name']}: {f['step']}"}
@@ -1983,6 +2032,7 @@ with st.sidebar:
                     checked[wf_dir] = False
             if checked[wf_dir]:
                 st.caption(":green[:material/check_circle: Snakefile found]")
+                workflow_version_check(wf_dir)
             else:
                 st.warning(
                     "No Snakefile in this folder: pick the clone's "
