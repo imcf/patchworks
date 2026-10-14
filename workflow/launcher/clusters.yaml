@@ -23,7 +23,7 @@
 scicore:
   # TODO: confirm the login-node hostname and fill in the fingerprints with
   # sciCORE before relying on this preset.
-  host: "login.scicore.unibas.ch"
+  host: "login12.scicore.unibas.ch"
   port: 22
   host_key_fingerprints: []
   workflow_dir_hint: "/scicore/home/<group>/<user>/patchworks/workflow"
