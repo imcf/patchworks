@@ -1478,3 +1478,82 @@ def test_save_a_template_and_start_the_next_run_from_it():
         20,
         20,
     ]
+
+
+INPUTS = (
+    "TextInput",
+    "NumberInput",
+    "Selectbox",
+    "Checkbox",
+    "TextArea",
+    "Radio",
+    "Multiselect",
+    "ButtonGroup",
+)
+
+
+@pytest.mark.parametrize(
+    "method",
+    ["cellpose", "plantseg", "watershed", "dog", "threshold", "custom"],
+)
+def test_every_setting_explains_itself(method):
+    """Each field has its question mark: what it does, and an example."""
+    pytest.importorskip("paramiko")
+    profile = (ROOT / "workflow/profile/slurm/config.yaml").read_bytes()
+    ssh = _FakeSSH(
+        {"#partitions": CLUSTER},
+        files={f"{WF}/profile/slurm/config.yaml": profile},
+    )
+    at = _app(
+        ssh,
+        input="/data/planes/*.tif",
+        sequence_pattern="_Z(?P<Z>\\d+)",
+        work_dir="/scratch/run",
+    )
+    at.run()
+    at.button_group[0].set_value(core.RUN_KINDS[1]).run()
+    next(b for b in at.button_group if b.proto.label == "method").set_value(
+        method
+    ).run()
+    # The fields shown only once others are set, and what a method needs
+    # before the launch settings show: nuclei for the watershed, a module.
+    for key, value in (
+        ("s0_psf", "/psf.tif"),
+        ("s0_nuc", "1" if method == "watershed" else ""),
+        ("s0_cm", "my_seg"),
+    ):
+        try:
+            at.text_input(key=key).set_value(value).run()
+        except KeyError:
+            pass  # not this method's field
+    at.number_input(key="s0_dil").set_value(1).run()
+    next(r for r in at.radio if r.label == "run mode").set_value(
+        core.SLURM_JOB
+    ).run()
+    assert not at.exception
+    silent = sorted(
+        {
+            e.proto.label
+            for e in list(at.main) + list(at.sidebar)
+            if type(e).__name__ in INPUTS and not e.proto.help
+        }
+    )
+    assert silent == []
+
+
+def test_help_keys_point_at_texts():
+    """Every short key of a segmentation's fields names an explanation."""
+    import ast
+
+    from help_text import HELP
+
+    tree = ast.parse((ROOT / "workflow/launcher/app.py").read_text())
+    short = next(
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and getattr(node.targets[0], "id", "") == "SHORT_KEYS"
+    )
+    targets = [ast.literal_eval(v) for v in short.values]
+    assert [t for t in targets if t not in HELP] == []
+    assert all(len(text) > 20 for text in HELP.values())

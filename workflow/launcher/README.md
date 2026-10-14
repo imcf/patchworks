@@ -41,6 +41,10 @@ it where only the people it's for can reach it.
 
 ## Using it
 
+Every field has a question mark beside it: hover over it for what the
+setting does, its usual values and an example (the texts are in
+`help_text.py`).
+
 0. **Sidebar.** Connect, then choose the workflow folder. A clone at
    `~/patchworks/workflow` is filled in by itself; the sidebar confirms it
    holds a `Snakefile`. Every path field (workflow folder, input image,
