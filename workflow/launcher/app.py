@@ -17,6 +17,7 @@ See README.md for the security model before sharing a deployment.
 from __future__ import annotations
 
 import io
+import re
 import shlex
 import stat
 from datetime import datetime
@@ -27,6 +28,7 @@ import streamlit as st
 import yaml
 
 import launcher_core as core
+from help_text import HELP
 
 st.set_page_config(
     page_title="patchworks launcher",
@@ -304,7 +306,7 @@ def remote_path(
     c1, c2 = st.columns(
         [3, 1] if narrow else [6, 1], vertical_alignment="bottom"
     )
-    value = c1.text_input(label, key=key, help=help)
+    value = c1.text_input(label, key=key, help=help or help_for(key))
     if c2.button(
         ":material/folder_open:",
         key=f"{key}__browse",
@@ -329,16 +331,74 @@ def section(title: str, caption: str | None = None):
     return box
 
 
-def _init(key: str, **default) -> dict:
-    """``key=`` and the widget's default, unless the key already holds a
-    value (one a past run's config put there): a widget given both warns."""
+# A segmentation's fields have short keys (``s0_cpm``): what they explain.
+SHORT_KEYS = {
+    "lbl": "label_name",
+    "ch": "channel",
+    "nuc": "nuclei_channel",
+    "ov": "overlap",
+    "cpm": "cp_model",
+    "cpd": "cp_diameter",
+    "cp3": "cp_do_3d",
+    "cpg": "cp_gpu",
+    "cpx": "cp_extra_kwargs",
+    "norm": "normalize",
+    "psm": "ps_model",
+    "pss": "ps_segmentation",
+    "psb": "ps_beta",
+    "psmin": "ps_post_minsize",
+    "nmin": "ws_nuclei_min_size",
+    "seed": "seed_labels",
+    "rad": "max_radius_um",
+    "fg": "foreground",
+    "px": "extra_kwargs",
+    "dl": "dog_low_sigma",
+    "dh": "dog_high_sigma",
+    "dt": "dog_threshold",
+    "du": "dog_sigma_units",
+    "dg": "dog_use_gpu",
+    "psf": "dog_psf",
+    "wl": "dog_wavelength",
+    "na": "dog_na",
+    "ni": "dog_nimm",
+    "dup": "dog_dup_rev_z",
+    "cm": "custom_module",
+    "cf": "custom_function",
+    "ck": "custom_kwargs",
+    "stitch_True": "stitch",
+    "stitch_False": "stitch",
+    "iou": "iou_threshold",
+    "holes": "fill_holes",
+    "open": "open_radius",
+    "dil": "dilate",
+    "dgpu": "dilate_gpu",
+    "minv": "min_volume",
+    "maxv": "max_volume",
+}
+
+
+def help_for(key: str | None) -> str | None:
+    """The explanation of the field with widget key *key* (help_text.HELP)."""
+    if not key:
+        return None
+    if key in HELP:
+        return HELP[key]
+    short = re.sub(r"^s\d+_", "", key)
+    return HELP.get(SHORT_KEYS.get(short, short))
+
+
+def _init(key: str, help: str | None = None, **default) -> dict:
+    """``key=``, its explanation (``help=``, the question mark beside the
+    field) and the widget's default, unless the key already holds a value
+    (one a past run's config put there): a widget given both warns."""
+    out = {"key": key, "help": help or help_for(key)}
     if key in st.session_state:
-        return {"key": key}
-    return {"key": key, **default}
+        return out
+    return {**out, **default}
 
 
 def _opt_float(label: str, container=st, help=None, key=None):
-    text = container.text_input(label, help=help, **_init(key, value=""))
+    text = container.text_input(label, **_init(key, help=help, value=""))
     return float(text) if text.strip() else None
 
 
@@ -350,9 +410,6 @@ def image_form() -> dict:
         v["input"] = remote_path(
             "input image",
             "input",
-            help=".ims/.czi/.lif/.nd2/ome-tiff/.zarr, or a folder of "
-            "single-plane TIFFs as a glob (folder/*.tif): browse into the "
-            "folder and use its TIFFs",
             tiff_folder=True,
         )
     with c2:
@@ -360,8 +417,6 @@ def image_form() -> dict:
             "work_dir (results)",
             "work_dir",
             dirs_only=True,
-            help="everything is written under here, on the cluster; the "
-            "converted image goes to <work_dir>/image.zarr",
         )
     picked = st.session_state.pop("sequence_pattern__picked", None)
     if picked is not None:
@@ -394,8 +449,6 @@ def image_form() -> dict:
             "compression",
             core.COMPRESSIONS,
             **_init("compression"),
-            help="zstd: best for labels; zstd:3 ~10% smaller raw images; "
-            "blosc for older Java viewers without zstd",
         )
         v["convert_chunks"] = st.text_input(
             "convert_chunks (YAML, e.g. [8, 512, 512]; blank = auto)",
@@ -467,7 +520,6 @@ def tiling_form() -> dict:
     )
     v["tile_shape"] = c2.text_input(
         "tile_shape",
-        help='"auto" or e.g. [16, 1024, 1024]',
         **_init("tile_shape", value="auto"),
     )
     v["tiles_per_job"] = c3.number_input(
@@ -519,13 +571,10 @@ def outputs_form() -> dict:
         c1, c2 = st.columns(2)
         v["object_table"] = c1.checkbox(
             "object table (for `patchworks review`)",
-            help="one row per object in labels/<name>/table: size, "
-            "centroid, bounding box",
             **_init("object_table", value=True),
         )
         chans = c2.text_input(
             "table_channels (e.g. 0,2; blank = none)",
-            help="adds each object's mean/std intensity in these channels",
             **_init("table_channels", value=""),
         )
         v["table_channels"] = [
@@ -621,13 +670,15 @@ def save_template_form(draft: dict) -> None:
     """Keep the form's settings under a name, to start the next run from."""
     with st.popover("Save as template", icon=":material/bookmark_add:"):
         name = st.text_input(
-            "name", key="template_name", placeholder="nuclei_cells_cilia"
+            "name",
+            key="template_name",
+            placeholder="nuclei_cells_cilia",
+            help=HELP["template_name"],
         )
         with_image = st.checkbox(
             "with the image and work_dir",
             key="template_with_image",
-            help="off: loading it keeps the form's image (the usual: the "
-            "same settings for the next image)",
+            help=HELP["template_with_image"],
         )
         if st.button("Save", type="primary", disabled=not name.strip()):
             out = core.template_files(
@@ -662,7 +713,7 @@ def start_from_form(wf_dir: str, jobs: list[dict]) -> None:
         list(templates),
         index=None,
         placeholder="saved with Save as template" if not templates else "",
-        help=f"from {directory}",
+        help=f"{HELP['template']}\n\nFrom `{directory}`.",
     )
     c2.button(
         "Load",
@@ -679,6 +730,7 @@ def start_from_form(wf_dir: str, jobs: list[dict]) -> None:
         index=None,
         placeholder="newest first" if past else "no launches yet",
         format_func=lambda p: p.rsplit("/config/", 1)[-1],
+        help=HELP["past_launch"],
     )
     c2.button(
         "Load",
@@ -727,12 +779,10 @@ def segmentation_form(
     v["nuclei_channel"] = int(nuc) if nuc.strip() else None
     v["overlap"] = c4.text_input(
         "overlap",
-        help="N, or per axis [z, y, x]",
         **_init(f"{k}ov", value="30"),
     )
 
     st.divider()
-    st.markdown("**Method**")
     v["method"] = (
         st.segmented_control(
             "method",
@@ -742,7 +792,6 @@ def segmentation_form(
                 "plantseg": "PlantSeg (cells, membranes)",
                 "watershed": "watershed (cells from nuclei)",
             }.get(m, m),
-            label_visibility="collapsed",
             **_init(f"{k}method", default="cellpose"),
         )
         or "cellpose"
@@ -757,8 +806,6 @@ def segmentation_form(
             "cellpose.model",
             models,
             accept_new_options=True,
-            help="the models the cluster's Cellpose has (v3 and v4 name "
-            "them differently); or type the path of your own",
             **_init(f"{k}cpm", index=models.index(default)),
         )
         v["cp_diameter"] = c2.number_input(
@@ -774,7 +821,6 @@ def segmentation_form(
         )
         v["cp_extra_kwargs"] = st.text_area(
             "extra cellpose kwargs (YAML mapping)",
-            help="e.g. flow_threshold: 0.4",
             height=68,
             **_init(f"{k}cpx", value=""),
         )
@@ -804,7 +850,6 @@ def segmentation_form(
         v["dog_sigma_units"] = c4.selectbox(
             "sigma_units",
             ["px", "um"],
-            help="um: the same physical blur along z and x/y",
             **_init(f"{k}du"),
         )
         v["dog_use_gpu"] = st.checkbox(
@@ -825,7 +870,6 @@ def segmentation_form(
             v["dog_dup_rev_z"] = c4.selectbox(
                 "dup_rev_z",
                 ["auto", "on", "off"],
-                help="mirror in z against FFT wrap-around ghosts on thin tiles",
                 **_init(f"{k}dup"),
             )
     elif v["method"] == "threshold":
@@ -854,9 +898,6 @@ def segmentation_form(
     v["stitch"] = c1.selectbox(
         "stitch",
         ["touch", "iou"],
-        help="touch: objects touching across a seam are one (nuclei, "
-        "sparse objects). iou: matched by overlap in the shared margin, so "
-        "touching cells stay apart (cells, membranes); needs overlap",
         **_init(f"{k}stitch_{fills}", index=1 if fills else 0),
     )
     if v["stitch"] == "iou":
@@ -879,7 +920,6 @@ def segmentation_form(
     v["open_radius"] = c2.number_input(
         "open_radius",
         min_value=0,
-        help="cuts spurs thinner than ~2r+1 voxels -- not for cilia",
         **_init(f"{k}open", value=0),
     )
     v["dilate"] = c3.number_input(
@@ -887,7 +927,7 @@ def segmentation_form(
     )
     if v["dilate"]:
         v["dilate_gpu"] = c3.checkbox(
-            "on the GPU", help="cupy", **_init(f"{k}dgpu", value=False)
+            "on the GPU", **_init(f"{k}dgpu", value=False)
         )
     v["min_volume"] = _opt_float("min_volume (um³)", c4, key=f"{k}minv")
     v["max_volume"] = _opt_float("max_volume (um³)", c5, key=f"{k}maxv")
@@ -926,15 +966,11 @@ def plantseg_form(v: dict, k: str, others: list[str]) -> None:
             "model",
             models,
             accept_new_options=True,
-            help="PlantSeg zoo model; fetched before the run (GPU nodes are "
-            "often offline)",
             **_init(f"{k}psm"),
         )
         v["ps_segmentation"] = c2.selectbox(
             "segmentation",
             core.PLANTSEG_SEGMENTATIONS,
-            help="gasp: the usual; nuclei_watershed / lifted_multicut use "
-            "nuclei",
             **_init(f"{k}pss"),
         )
         v["ps_beta"] = c3.number_input(
@@ -942,7 +978,6 @@ def plantseg_form(v: dict, k: str, others: list[str]) -> None:
             min_value=0.0,
             max_value=1.0,
             step=0.05,
-            help="lower merges more, higher splits more",
             **_init(f"{k}psb", value=0.6),
         )
         v["ps_post_minsize"] = c4.number_input(
@@ -968,8 +1003,6 @@ def plantseg_form(v: dict, k: str, others: list[str]) -> None:
                 "labels": "another segmentation",
             }[s],
             disabled=not others,
-            help="another segmentation: one cell grows from each of its "
-            "objects (e.g. Cellpose's nuclei); it runs first",
             **_init(f"{k}seed_from"),
         )
         if source == "labels" and others:
@@ -986,13 +1019,10 @@ def plantseg_form(v: dict, k: str, others: list[str]) -> None:
     v["foreground"] = c1.selectbox(
         "foreground",
         ["otsu", "none"],
-        help="otsu: stop at the tissue edge (a boundary U-Net puts cells "
-        "everywhere, empty space included)",
         **_init(f"{k}fg"),
     )
     v["extra_kwargs"] = c2.text_area(
         "more settings (YAML mapping)",
-        help="any other keyword of the plugin, e.g. patch: [64, 128, 128]",
         height=68,
         **_init(f"{k}px", value=""),
     )
@@ -1048,9 +1078,24 @@ def relations_form(labels: list[str]) -> tuple[list[dict], dict, dict]:
         ),
         num_rows="dynamic",
         column_config={
-            "a": st.column_config.SelectboxColumn("a", options=labels),
-            "b": st.column_config.SelectboxColumn("b", options=labels),
-            "output": st.column_config.TextColumn("output (.xlsx)"),
+            "a": st.column_config.SelectboxColumn(
+                "a",
+                options=labels,
+                help="The objects to relate, one row each in the workbook "
+                "(say the nuclei).",
+            ),
+            "b": st.column_config.SelectboxColumn(
+                "b",
+                options=labels,
+                help="What each of them is related to: the b object it "
+                "overlaps most (say the cell holding the nucleus).",
+            ),
+            "output": st.column_config.TextColumn(
+                "output (.xlsx)",
+                help="The workbook's file name, in work_dir: a sheet per "
+                "a object and one per b object (with its count of a).\n\n"
+                "Example: `nuclei_to_cells.xlsx`",
+            ),
             "max_distance_um": st.column_config.NumberColumn(
                 "max distance (µm)",
                 min_value=0.0,
@@ -1120,16 +1165,28 @@ def relations_form(labels: list[str]) -> tuple[list[dict], dict, dict]:
             num_rows="dynamic",
             column_config={
                 "parent": st.column_config.SelectboxColumn(
-                    "parent", options=labels
+                    "parent",
+                    options=labels,
+                    help="The objects that hold others (say the cells).",
                 ),
                 "child": st.column_config.SelectboxColumn(
-                    "child", options=labels
+                    "child",
+                    options=labels,
+                    help="What they should hold (say the nuclei).",
                 ),
                 "min": st.column_config.NumberColumn(
-                    "min", min_value=0, step=1
+                    "min",
+                    min_value=0,
+                    step=1,
+                    help="The fewest a parent should hold; fewer is flagged."
+                    "\n\nExample: 1 nucleus per cell",
                 ),
                 "max": st.column_config.NumberColumn(
-                    "max", min_value=0, step=1
+                    "max",
+                    min_value=0,
+                    step=1,
+                    help="The most; blank: the same as min.\n\n"
+                    "Example: 2 cilia per cell",
                 ),
             },
             key=f"review_rules_{loaded}",
@@ -1152,8 +1209,6 @@ def relations_form(labels: list[str]) -> tuple[list[dict], dict, dict]:
         pos_apical = c3.selectbox(
             "apical is",
             [f"away from {n}" for n in labels] + ["+z", "-z"],
-            help="away from the nuclei: for epithelia with basal nuclei; "
-            "+z: apical is up the stack",
             **_init("pos_apical"),
         )
     expect: dict = {}
@@ -1495,7 +1550,7 @@ def slurm_choice(
     """
     if not options:
         return container.text_input(
-            label, help=help, **_init(key, value=default)
+            label, **_init(key, help=help, value=default)
         )
     choices = ["", *options]
     if default and default not in choices:
@@ -1508,8 +1563,7 @@ def slurm_choice(
             choices,
             format_func=lambda o: o or "(default)",
             accept_new_options=True,
-            help=help,
-            **_init(key, index=choices.index(default)),
+            **_init(key, help=help, index=choices.index(default)),
         )
         or ""
     )
@@ -1850,12 +1904,17 @@ with st.sidebar:
                 "Jobs keep running.",
                 icon=":material/link_off:",
             )
-        name = st.selectbox("preset", ["Custom"] + sorted(CLUSTERS))
+        name = st.selectbox(
+            "preset", ["Custom"] + sorted(CLUSTERS), help=HELP["preset"]
+        )
         preset = CLUSTERS.get(name, {})
         fps = preset.get("host_key_fingerprints", [])
-        host = st.text_input("host", value=preset.get("host", ""))
+        host = st.text_input(
+            "host", value=preset.get("host", ""), help=HELP["host"]
+        )
         port = st.number_input(
             "port",
+            help=HELP["port"],
             value=int(preset.get("port", 22)),
             min_value=1,
             max_value=65535,
@@ -1868,13 +1927,16 @@ with st.sidebar:
             )
             allow_unverified = st.checkbox(
                 "allow an unverified host key (only if you run this app "
-                "yourself)"
+                "yourself)",
+                help=HELP["allow_unverified"],
             )
         # A form that clears on submit: the password does not linger in
         # the session's widget state after the connection is made.
         with st.form("login", clear_on_submit=True):
-            username = st.text_input("username")
-            password = st.text_input("password", type="password")
+            username = st.text_input("username", help=HELP["username"])
+            password = st.text_input(
+                "password", type="password", help=HELP["password"]
+            )
             submitted = st.form_submit_button("Connect", type="primary")
         if submitted and host and username:
             try:
@@ -1973,9 +2035,8 @@ with tab_config:
     with section(":material/alt_route: Run"):
         kind = (
             st.segmented_control(
-                "run",
+                "how many label images",
                 core.RUN_KINDS,
-                label_visibility="collapsed",
                 **_init("run_kind", default=core.RUN_KINDS[0]),
             )
             or core.RUN_KINDS[0]
@@ -2092,6 +2153,7 @@ with tab_launch:
                 index=available.index(suggested) if suggested else 0,
                 # A new suggestion (the config changed) resets the choice.
                 key=f"pixi_env_{suggested}",
+                help=HELP["pixi_env"],
             )
             for reason in reasons:
                 st.caption(f":material/info: {reason}")
@@ -2123,7 +2185,9 @@ with tab_launch:
             profile = st.text_input(
                 "workflow profile",
                 preset.get("profile", "profile/slurm"),
-                help="a folder in the workflow holding config.yaml",
+                help="A folder of the workflow holding the SLURM settings "
+                "(`config.yaml`): partitions, GPUs, memory and time per step. "
+                "A preset may name its own.\n\nExample: `profile/slurm`",
             )
             profile_text = read_remote(
                 client, f"{wf_dir}/{profile.rstrip('/')}/config.yaml"
@@ -2249,14 +2313,12 @@ with tab_launch:
                     "what to run",
                     ["Everything", "Convert only"],
                     default="Everything",
-                    help="Convert only: just the conversion to OME-Zarr (the "
-                    "run's first step), so you can plan before segmenting. A "
-                    "later full run goes straight on from it.",
+                    help=HELP["what_to_run"],
                 )
                 or "Everything"
             )
             convert_only = what == "Convert only"
-            mode = st.radio("run mode", core.RUN_MODES)
+            mode = st.radio("run mode", core.RUN_MODES, help=HELP["run_mode"])
             slurm: dict = {}
             if mode == core.SLURM_JOB:
                 st.caption(
@@ -2266,10 +2328,14 @@ with tab_launch:
                 c1, c2, c3, c4, c5 = st.columns(5)
                 slurm = {
                     "time": c1.text_input(
-                        "time", preset.get("controller_time", "3-00:00:00")
+                        "time",
+                        preset.get("controller_time", "3-00:00:00"),
+                        help=HELP["ctrl_time"],
                     ),
                     "mem": c2.text_input(
-                        "mem", preset.get("controller_mem", "4G")
+                        "mem",
+                        preset.get("controller_mem", "4G"),
+                        help=HELP["ctrl_mem"],
                     ),
                     "partition": slurm_choice(
                         c3,
@@ -2287,7 +2353,6 @@ with tab_launch:
                             st.session_state.get("ctrl_partition") or None,
                         ),
                         preset.get("controller_qos", ""),
-                        help="it must allow the controller's time",
                     ),
                     "account": slurm_choice(
                         c5,
