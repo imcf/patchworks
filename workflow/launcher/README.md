@@ -41,6 +41,10 @@ it where only the people it's for can reach it.
 
 ## Using it
 
+Every field has a question mark beside it: hover over it for what the
+setting does, its usual values and an example (the texts are in
+`help_text.py`).
+
 0. **Sidebar.** Connect, then choose the workflow folder. A clone at
    `~/patchworks/workflow` is filled in by itself; the sidebar confirms it
    holds a `Snakefile`. Every path field (workflow folder, input image,
@@ -51,8 +55,16 @@ it where only the people it's for can reach it.
    this folder's TIFFs as one image*: the input becomes `folder/*.tif`,
    and a `sequence_pattern` (which part of each file name is the z plane,
    channel or time point) is guessed from the file names, for you to
-   check.
-1. **Configure tab.** Choose *One segmentation* or *Several
+   check. Once the image is converted, *See the channels* shows each
+   channel (its maximum over z) and the voxel size, to pick the channels
+   by.
+1. **Configure tab.** *Start from a template or a past run* loads a
+   template, a past launch, or any config or multi config on the cluster,
+   back into the form (a setting the form cannot hold is named, not
+   dropped silently). *Save as template* (in *Check*) keeps the form's
+   settings under a name, without the image unless asked: loaded for the
+   next image, it keeps the form's image and work_dir. Templates live in
+   `config/templates/`, or a preset's `templates_dir:` a lab shares. Choose *One segmentation* or *Several
    segmentations + relations*. The form is split into blocks: image, tiling,
    segmentation(s) (one tab each), relations and review, outputs, and a
    final *Check* that lists anything still missing (an empty input or
@@ -60,8 +72,10 @@ it where only the people it's for can reach it.
    - Shared settings (input, work_dir, conversion, compression, tiling, GPU,
      merge/pyramid) are entered once.
    - Each segmentation gets its own label name, channel, method (cellpose,
-     threshold, DoG with optional deconvolution, custom plugin), overlap
-     and post-processing.
+     threshold, DoG with optional deconvolution, custom plugin), overlap,
+     stitching and post-processing. Stitch nuclei with `touch` and cells
+     with `iou` in the same run; PlantSeg and the watershed get `iou` by
+     default, since they need it.
    - A multi run adds a relations table (`a` → `b` → `.xlsx`), plus
      optional SLURM settings for the relate jobs and a bundle format.
    - Each config is complete: the workflow fills in its defaults and
@@ -75,12 +89,22 @@ it where only the people it's for can reach it.
      the config needs (PlantSeg: `plantseg`; `use_gpu` or `dilate_gpu`:
      cupy, `cuda12`; `denoise`: `careamics`) and swaps it into the
      `pixi shell-hook` of the sidebar's setup line.
-   - *Plan* runs `patchworks segment --plan` on the converted image, for
-     every segmentation of the run, and shows tiles, memory and size in
-     one table, before any GPU time is spent. It needs
-     `<work_dir>/image.zarr`: launch with *Convert only* first (the same
-     conversion step a full run starts with, which a later run then
-     skips), or plan after a full run has converted.
+   - *Cluster resources*: each step's partition, QOS, GPU, runtime and
+     memory, from the workflow profile (a preset's `profile:`, default
+     `profile/slurm`). Change a cell to change it for this run only: the
+     run gets its own copy of the profile. *Check against my account*
+     reads `sacctmgr` and says what sbatch would refuse: a partition or
+     QOS the account lacks, a runtime over the QOS's MaxWall.
+   - *Check and plan* uploads the configs and runs `scripts/check.py` on
+     them on the cluster, in the run's environment: every problem the
+     run would hit, and once the image is converted the workflow's own
+     plan per segmentation (tiles, how many hold signal, GPU jobs, memory
+     per tile, size of the result). The image comes from launching with
+     *Convert only* (the run's first step, which a later run skips).
+     *Try it on a GPU* submits a short job on the segment partition that
+     runs the method on 3 real tiles: a picture of one tile per
+     segmentation with its objects outlined (to judge diameter, threshold
+     and the rest before the run), and the hours a job and the run take.
    - Then pick a mode:
      - **Dry run**: `snakemake -n`, or `run_multi.py -n`. The output is
        shown right away.
@@ -94,12 +118,26 @@ it where only the people it's for can reach it.
        Fine for short runs only.
 3. **Jobs tab.** Launched jobs are recorded on the cluster in
    `<workflow dir>/.streamlit_launcher_logs/jobs.jsonl`. After a reload, a
-   new browser or another machine, the app finds them again. It shows the
-   SLURM/process state and tails the log, with optional auto-refresh.
+   new browser or another machine, the app finds them again. For each:
+   - the SLURM/process state, **Stop** (as Ctrl-C: Snakemake cancels the
+     jobs it submitted; or force), **Unlock** after a killed run, and
+     **Relaunch** (the same command again: it resumes);
+   - progress per segmentation (`scripts/status.py`: GPU jobs done out of
+     how many, merged), and any step that failed with why and what to do;
+   - while it runs, your patchworks jobs in the SLURM queue and why each
+     waits (its turn, a QOS limit ...), flagging one that never starts;
+   - once merged, the results: object counts, the seam report, the
+     relation workbooks to download, and how to open the store or the
+     bundle;
+   - the log, with optional auto-refresh.
 
 Generated configs go to `<workflow dir>/config/launcher_<name>.yaml`. A
 multi run goes to `<workflow dir>/config/launcher_multi_<stamp>/`, with one
 `seg_<label>.yaml` per segmentation plus `multi.yaml`.
+
+If the SSH connection drops (an idle tab behind a firewall; the app
+sends a keepalive every 30 s), the sidebar asks to log in again. Runs are
+not affected.
 
 ## Known limitations
 

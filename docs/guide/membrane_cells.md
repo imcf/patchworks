@@ -48,7 +48,7 @@ a GPU, set `CONDA_OVERRIDE_CUDA` first, see [Set up](snakemake.md#1-set-up)):
 
 ```bash
 pixi install -e plantseg
-pixi run -e plantseg plantseg-fetch generic_confocal_3D_unet   # once, with internet
+pixi run -e plantseg fetch my_config.yaml   # its models, once, with internet (the login node)
 ```
 
 ```yaml

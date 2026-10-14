@@ -458,8 +458,14 @@ class Review:
                 df[col] = _remap(df[col].to_numpy(dtype=np.int64), proots)
         roots = self.roots(name)
         if roots:
-            target = pd.Series(df.index, index=df.index)
-            target.update(pd.Series(roots))
+            # A new array: a Series made from a RangeIndex shares its cached
+            # values under pandas 3, and updating it in place rewrote them --
+            # the merge was compared with itself and never applied.
+            target = pd.Series(
+                [roots.get(int(i), int(i)) for i in df.index],
+                index=df.index,
+                dtype=np.int64,
+            )
             df = df[target != 0]
             target = target[target != 0]
             if (target != target.index).any():

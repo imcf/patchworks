@@ -12,3 +12,10 @@ site/
 
 # graft's local graph cache — regenerable, not committed (run `graft build`).
 graft/
+
+# Your own run configs (workflow/config/local/), and what the web launcher
+# writes into the workflow folder.
+workflow/config/local/
+workflow/config/templates/
+workflow/config/launcher_*
+workflow/.streamlit_launcher_logs/

@@ -1526,6 +1526,7 @@ def test_main_runs_with_an_explicit_tile_shape_seeds_first(
         yaml.safe_dump(
             {
                 "input": str(tmp_path / "scan.zarr"),
+                "method": "threshold",
                 "work_dir": str(tmp_path / "results"),
                 "tile_shape": [16, 512, 512],
                 "level": 0,
@@ -1534,7 +1535,16 @@ def test_main_runs_with_an_explicit_tile_shape_seeds_first(
     )
     cells = tmp_path / "cells.yaml"
     cells.write_text(
-        yaml.safe_dump({"label_name": "cyto_labels", "seed_labels": "nuclei"})
+        yaml.safe_dump(
+            {
+                "label_name": "cyto_labels",
+                "seed_labels": "nuclei",
+                # A seeded method, which fills space: stitched by IoU.
+                "method": "custom",
+                "custom": {"module": "patchworks.plugins.watershed"},
+                "stitch": "iou",
+            }
+        )
     )
     nuclei = tmp_path / "nuclei.yaml"
     nuclei.write_text(yaml.safe_dump({"label_name": "nuclei"}))
@@ -1573,6 +1583,7 @@ def test_config_option_resolves_from_where_pixi_runs(tmp_path, monkeypatch):
     (project / "configs").mkdir(parents=True)
     common = {
         "input": str(tmp_path / "scan.zarr"),
+        "method": "threshold",
         "work_dir": str(tmp_path / "results"),
         "tile_shape": [16, 512, 512],
         "level": 0,
@@ -1756,6 +1767,7 @@ def test_a_config_failing_on_a_stale_lock_says_how_to_unlock(
         yaml.safe_dump(
             {
                 "input": str(tmp_path / "scan.zarr"),
+                "method": "threshold",
                 "work_dir": str(work),
                 "tile_shape": [16, 512, 512],
                 "level": 0,
@@ -1933,6 +1945,7 @@ def test_relations_on_labels_a_run_left_missing_are_skipped(
         yaml.safe_dump(
             {
                 "input": str(tmp_path / "scan.zarr"),
+                "method": "threshold",
                 "work_dir": str(work),
                 "tile_shape": [16, 512, 512],
                 "level": 0,
@@ -2194,3 +2207,48 @@ def test_every_setting_is_listed_where_it_belongs():
             path,
             keys(path) - set(DEFAULTS) - extra,
         )
+
+
+def test_a_bad_config_stops_before_the_conversion(
+    tmp_path, monkeypatch, capsys
+):
+    """validate_config used to run first in prepare, after hours of
+    converting; run_multi now runs it on every config before anything."""
+    import run_multi
+
+    common = tmp_path / "common.yaml"
+    common.write_text(
+        yaml.safe_dump(
+            {
+                "input": str(tmp_path / "scan.zarr"),
+                "work_dir": str(tmp_path / "results"),
+                "method": "threshold",
+            }
+        )
+    )
+    cells = tmp_path / "cells.yaml"
+    cells.write_text(yaml.safe_dump({"label_name": "cells", "stitch": "tuoch"}))
+    multi = tmp_path / "multi.yaml"
+    multi.write_text(
+        yaml.safe_dump({"common": str(common), "segmentations": [str(cells)]})
+    )
+
+    def never(cmd, wd):
+        raise AssertionError(f"ran {cmd}")
+
+    monkeypatch.setattr(run_multi, "_run", never)
+    monkeypatch.setattr(sys, "argv", ["run_multi.py", "--config", str(multi)])
+    with pytest.raises(SystemExit) as stop:
+        run_multi.main()
+    assert stop.value.code == 1
+    err = capsys.readouterr().err
+    assert "cells.yaml: invalid config" in err and "tuoch" in err
+
+
+def test_the_snakefile_validates_in_the_main_process_only():
+    """A dry run refuses a bad config; cluster jobs do not re-check it."""
+    snakefile = (
+        Path(__file__).parents[1] / "workflow" / "Snakefile"
+    ).read_text()
+    assert 'if getattr(workflow, "is_main_process", True):' in snakefile
+    assert "    validate_config(config)" in snakefile

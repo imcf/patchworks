@@ -691,17 +691,29 @@ def zarr_root_file(cfg: dict) -> str:
 
 
 def _validate_configs(paths: list[Path], cfgs: list[dict]) -> str:
-    """Check the cross-config invariants before anything is submitted.
-
-    These used to surface hours later -- as a shape mismatch from
-    label_relations, or not at all when two configs quietly overwrote each
-    other's label group. Only ``work_dir`` was checked, and only when
-    relations were configured and it was not a dry run.
+    """Check the cross-config invariants, or exit naming what is wrong.
 
     Returns
     -------
     str
         The shared ``work_dir``.
+    """
+    problems = config_set_problems(paths, cfgs)
+    if problems:
+        for p in problems:
+            print(f"[run_multi] ERROR: {p}", file=sys.stderr)
+        sys.exit(1)
+    return cfgs[0].get("work_dir")
+
+
+def config_set_problems(paths: list[Path], cfgs: list[dict]) -> list[str]:
+    """What is wrong across the configs of a multi run, checked before
+    anything is submitted.
+
+    These used to surface hours later -- as a shape mismatch from
+    label_relations, or not at all when two configs quietly overwrote each
+    other's label group. Only ``work_dir`` was checked, and only when
+    relations were configured and it was not a dry run.
     """
     problems = []
 
@@ -789,11 +801,7 @@ def _validate_configs(paths: list[Path], cfgs: list[dict]) -> str:
             f"image.zarr/labels/<name>/; repeated: {sorted(duplicates)}"
         )
 
-    if problems:
-        for p in problems:
-            print(f"[run_multi] ERROR: {p}", file=sys.stderr)
-        sys.exit(1)
-    return work_dirs.pop()
+    return problems
 
 
 def _resolve_shared_tile_shape(
@@ -1229,13 +1237,18 @@ def main() -> None:
         sys.exit(_test_email(seg_cfgs[0]))
 
     work_dir = _validate_configs(seg_config_paths, seg_cfgs)
-    # Every package a config needs, in this environment (the jobs run from it).
-    from _pw import environment_problems
+    # Each config on its own (every package it needs included: the jobs run
+    # from this environment), before converting rather than in prepare.
+    from _pw import validate_config
 
-    missing = [p for cfg in seg_cfgs for p in environment_problems(cfg)]
-    if missing:
-        for p in missing:
-            print(f"[run_multi] ERROR: {p}", file=sys.stderr)
+    invalid = False
+    for path, cfg in zip(seg_config_paths, seg_cfgs):
+        try:
+            validate_config(cfg)
+        except ValueError as exc:
+            print(f"[run_multi] ERROR: {path.name}: {exc}", file=sys.stderr)
+            invalid = True
+    if invalid:
         sys.exit(1)
     review_rules = _review_rules(
         multi_cfg, [str(c.get("label_name")) for c in seg_cfgs]

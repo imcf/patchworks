@@ -3,7 +3,6 @@ threshold, intensity range, thresholds), and create the store they go to."""
 
 import json
 import shutil
-from functools import partial
 from pathlib import Path
 
 import numpy as np
@@ -12,8 +11,6 @@ import zarr
 from patchworks import (
     set_compression,
     auto_empty_threshold,
-    auto_tile_shape,
-    auto_tile_shape_cellpose,
     block_for_tile,
     build_occupancy_map,
     capped_output_chunks,
@@ -25,13 +22,14 @@ from patchworks import (
 )
 
 from _pw import (
+    check_overlap,
     halo_path,
+    resolve_tile_shape,
     check_seed_labels,
     open_image,
     stage_path,
     start_log,
     image_wide_kwargs,
-    tile_channels,
     uses_image_range,
     validate_config,
 )
@@ -51,47 +49,7 @@ image = open_image(work_dir, cfg["channel"], cfg["level"])
 validate_config(cfg)
 check_seed_labels(work_dir, cfg)
 
-method = cfg.get("method", "cellpose")
-ts = cfg.get("tile_shape", "auto")
-if ts == "auto":
-    # This is a CPU job: the segment GPU's memory comes from the config.
-    gpu_gb = cfg.get("gpu_memory_gb")
-    gpu_bytes = int(gpu_gb * 1024**3) if gpu_gb else None
-    # A second channel doubles a tile's bytes.
-    n_channels = tile_channels(cfg)
-    if method == "cellpose":
-        cp = cfg["cellpose"]
-        # Cellpose resizes z by the anisotropy: budget for the resized tile.
-        anisotropy = cp.get("anisotropy")
-        if anisotropy is None and cp.get("do_3D", False):
-            from patchworks.plugins.cellpose import cellpose_anisotropy
-            from patchworks.plugins.ome_zarr import read_pixel_size
-
-            anisotropy = cellpose_anisotropy(
-                read_pixel_size(
-                    str(Path(work_dir) / "image.zarr"),
-                    level=int(cfg.get("level", 0)),
-                )
-            )
-        sizer = partial(
-            auto_tile_shape_cellpose,
-            do_3D=cp.get("do_3D", False),
-            use_gpu=cp.get("gpu", True),
-            diameter=cp.get("diameter"),
-            gpu_memory=gpu_bytes,
-            n_channels=n_channels,
-            anisotropy=anisotropy,
-        )
-    else:
-        sizer = partial(
-            auto_tile_shape,
-            use_gpu=gpu_bytes is not None,
-            gpu_memory=gpu_bytes,
-            n_channels=n_channels,
-        )
-    tile_shape = tuple(sizer(image.shape, image.dtype))
-else:
-    tile_shape = tuple(ts)
+tile_shape = resolve_tile_shape(cfg, image, work_dir)
 
 if len(tile_shape) >= 3:
     n_z = image.shape[0]
@@ -107,13 +65,7 @@ if len(tile_shape) >= 3:
 overlap = normalize_overlap(
     cfg.get("overlap", 0), len(tile_shape), tile_shape=tile_shape
 )
-for axis, (ov, extent) in enumerate(zip(overlap, tile_shape)):
-    if ov >= extent:
-        raise ValueError(
-            f"overlap[{axis}]={ov} >= tile_shape[{axis}]={extent}: each tile "
-            f"would read past its neighbours. Use a per-axis overlap, e.g. "
-            f"overlap: {list(max(1, t // 4) for t in tile_shape)}"
-        )
+check_overlap(overlap, tile_shape)
 # How much more each tile reads than it keeps (the halo, clipped to the image).
 read = np.prod(
     [min(t + 2 * o, s) for t, o, s in zip(tile_shape, overlap, image.shape)]
