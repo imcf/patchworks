@@ -58,13 +58,19 @@ onerror:
 
 onsuccess:
     if "finish" in NOTIFY_EVENTS:
-        from patchworks._notify import send
+        from patchworks._notify import done_message, send
 
+        # What was asked for: the labels (the default), or only the
+        # conversion (the launcher's "Convert only", run_multi's first
+        # phase) -- the mail says which.
+        _settings = getattr(workflow, "dag_settings", None)
         send(
             NOTIFY_EMAIL,
-            f"[patchworks] done: {LABEL_NAME} in {WORK}",
-            f"The patchworks workflow finished successfully.\n\n"
-            f"  work_dir : {WORK}\n"
-            f"  config   : {LABEL_NAME}\n"
-            f"  labels   : {IMAGE}/labels/{LABEL_NAME}\n",
+            *done_message(
+                getattr(_settings, "targets", None) or [],
+                work=WORK,
+                image=IMAGE,
+                occupancy=OCCUPANCY,
+                label_name=LABEL_NAME,
+            ),
         )

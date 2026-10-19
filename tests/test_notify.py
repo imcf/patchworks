@@ -7,7 +7,7 @@ segmented correctly must not report failure because an SMTP host was down.
 
 import pytest
 
-from patchworks._notify import log_tail, send, slurm_mail_extra
+from patchworks._notify import done_message, log_tail, send, slurm_mail_extra
 
 
 def test_no_address_means_no_mail_and_no_error():
@@ -146,3 +146,27 @@ def test_failing_step_degrades_quietly(tmp_path):
     clean = tmp_path / "ok.log"
     clean.write_text("Building DAG of jobs...\n3 of 3 steps (100%) done\n")
     assert failing_step(clean) == (None, None)
+
+
+def test_done_mail_says_what_the_run_made():
+    """A convert-only run must not announce labels it never wrote."""
+    where = {
+        "work": "/w",
+        "image": "/w/image.zarr",
+        "occupancy": "/w/image.occupancy.zarr/0",
+        "label_name": "cells",
+    }
+    subject, body = done_message([], **where)  # the default: the labels
+    assert subject == "[patchworks] done: cells in /w"
+    assert "/w/image.zarr/labels/cells" in body
+
+    subject, body = done_message(
+        ["/w/image.zarr/zarr.json", "/w/image.occupancy.zarr/0/zarr.json"],
+        **where,
+    )
+    assert subject == "[patchworks] converted: /w/image.zarr"
+    assert "no segmentation ran" in body and "labels" not in body
+    assert "occupancy map : /w/image.occupancy.zarr/0" in body
+
+    subject, _ = done_message(["/w/cells/labels.done"], **where)
+    assert subject == "[patchworks] done: cells in /w"
