@@ -56,6 +56,49 @@ REGISTRY = f"{LOG_DIR}/jobs.jsonl"
 # ---------------------------------------------------------------------------
 
 
+# What the launcher remembers between sessions, on this computer: how to
+# connect and where the workflow is -- never a password.
+SETTINGS_KEYS = ("preset", "host", "port", "username", "auth", "wf_dir")
+
+
+def settings_path() -> Path:
+    """``~/.config/patchworks/launcher.yaml`` (``$PATCHWORKS_LAUNCHER_SETTINGS``
+    to put it elsewhere)."""
+    import os
+
+    override = os.environ.get("PATCHWORKS_LAUNCHER_SETTINGS")
+    if override:
+        return Path(override)
+    base = os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config"
+    return Path(base) / "patchworks" / "launcher.yaml"
+
+
+def load_settings(path: Path | None = None) -> dict[str, Any]:
+    """The remembered settings; empty if none (or unreadable)."""
+    try:
+        data = yaml.safe_load((path or settings_path()).read_text()) or {}
+    except (OSError, yaml.YAMLError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {k: data[k] for k in SETTINGS_KEYS if k in data}
+
+
+def save_settings(changes: dict[str, Any], path: Path | None = None) -> None:
+    """Remember *changes* (only :data:`SETTINGS_KEYS`; a password never).
+
+    Best effort: a read-only home must not break connecting.
+    """
+    path = path or settings_path()
+    data = {**load_settings(path)}
+    data.update({k: v for k, v in changes.items() if k in SETTINGS_KEYS})
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(yaml.safe_dump(data, sort_keys=False))
+    except OSError:
+        pass
+
+
 def load_clusters(path: str | Path) -> dict[str, dict[str, Any]]:
     """Cluster presets, with fingerprints normalised to a list.
 

@@ -641,6 +641,15 @@ class _FakeSFTP:
         self.files[path] = fh.read()
 
 
+@pytest.fixture(autouse=True)
+def _own_settings_file(tmp_path, monkeypatch):
+    """The launcher's remembered settings: a file of this test's, never the
+    real ~/.config."""
+    monkeypatch.setenv(
+        "PATCHWORKS_LAUNCHER_SETTINGS", str(tmp_path / "launcher.yaml")
+    )
+
+
 def app_tail_lines():
     return 300  # app.TAIL_LINES
 
@@ -1887,3 +1896,71 @@ def test_a_connection_dropped_during_a_refresh():
     assert any(
         "connection to the cluster was lost" in w.value for w in at.warning
     )
+
+
+def test_settings_remember_how_to_connect_but_never_a_password(tmp_path):
+    path = tmp_path / "s.yaml"
+    core.save_settings(
+        {"host": "h", "username": "u", "password": "secret", "auth": "key"},
+        path,
+    )
+    core.save_settings({"wf_dir": "/w"}, path)
+    assert core.load_settings(path) == {
+        "host": "h",
+        "username": "u",
+        "auth": "key",
+        "wf_dir": "/w",
+    }
+    assert "secret" not in path.read_text()
+    assert core.load_settings(tmp_path / "missing.yaml") == {}
+
+
+def test_ssh_key_login_connects_by_itself(monkeypatch):
+    """Remembered: the scicore preset, a user, the SSH key. The launcher
+    connects at start with the keys ssh uses, no password, and the
+    workflow folder of last time is filled in."""
+    pytest.importorskip("paramiko")
+    testing = pytest.importorskip("streamlit.testing.v1")
+    import paramiko
+
+    calls = []
+    files = {f"{WF}/Snakefile": b""}
+
+    class FakeClient(_FakeSSH):
+        def __init__(self):
+            super().__init__(files=files)
+
+        def load_system_host_keys(self):
+            pass
+
+        def set_missing_host_key_policy(self, policy):
+            pass
+
+        def connect(self, host, **kw):
+            calls.append((host, kw))
+
+        def get_transport(self):
+            from types import SimpleNamespace
+
+            return SimpleNamespace(
+                is_active=lambda: True, set_keepalive=lambda s: None
+            )
+
+    monkeypatch.setattr(paramiko, "SSHClient", FakeClient)
+    preset = "scicore"
+    core.save_settings(
+        {"preset": preset, "username": "guerard", "auth": "key", "wf_dir": WF}
+    )
+    at = testing.AppTest.from_file(
+        str(ROOT / "workflow/launcher/app.py"), default_timeout=30
+    )
+    at.run()
+    assert not at.exception, at.exception
+    ((host, kw),) = calls
+    assert kw["username"] == "guerard" and kw["look_for_keys"]
+    assert kw["allow_agent"] and kw.get("password") is None
+    assert at.session_state["ssh_target"].startswith("guerard@")
+    assert at.session_state["wf_dir"] == WF
+    # Disconnect: not straight back in.
+    next(b for b in at.button if b.label == "Disconnect").click().run()
+    assert len(calls) == 1

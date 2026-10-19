@@ -16,6 +16,14 @@ HELP = {
     "username": "Your cluster account, the one you `ssh` with.",
     "password": "Your cluster password. It only opens the SSH connection: "
     "never stored, and cleared from the form once connected.",
+    "auth": "**Password**: typed at each log-in. **SSH key**: the keys "
+    "`ssh` itself uses (`~/.ssh/id_*`, or your SSH agent) -- if `ssh` "
+    "reaches the cluster without a password, so does the launcher, and it "
+    "then connects by itself when it starts and when the connection drops. "
+    "The host, user and workflow folder are remembered either way (in "
+    "`~/.config/patchworks/launcher.yaml`); a password never is.",
+    "key_passphrase": "Only if your key has a passphrase and no SSH agent "
+    "holds it. Not stored.",
     "allow_unverified": "Connect although this host's key is not pinned in "
     "`clusters.yaml`, so its identity is not checked. Only when you run "
     "this app yourself, on a network you trust.",

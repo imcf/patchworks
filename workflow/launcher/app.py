@@ -66,37 +66,64 @@ def get_client() -> paramiko.SSHClient | None:
     return client
 
 
-def connect(host, port, username, password, fingerprints, allow_unverified):
+def connect(
+    host,
+    port,
+    username,
+    password,
+    fingerprints,
+    allow_unverified,
+    use_keys=False,
+):
+    """Open the SSH connection: with the password typed, or (*use_keys*)
+    with the keys and agent ``ssh`` itself would use -- *password* is then
+    the key's passphrase, if any."""
     client = paramiko.SSHClient()
     client.load_system_host_keys()
     client.set_missing_host_key_policy(
         core.make_host_key_policy(fingerprints, allow_unverified)
     )
-    client.connect(
-        host,
-        port=port,
-        username=username,
-        password=password,
-        timeout=15,
-        # Only the password typed here: never keys or an agent that happen
-        # to be available to whoever runs this app.
-        look_for_keys=False,
-        allow_agent=False,
-    )
+    if use_keys:
+        client.connect(
+            host,
+            port=port,
+            username=username,
+            passphrase=password or None,
+            timeout=15,
+            look_for_keys=True,
+            allow_agent=True,
+        )
+    else:
+        client.connect(
+            host,
+            port=port,
+            username=username,
+            password=password,
+            timeout=15,
+            # Only the password typed here: no key or agent unless asked.
+            look_for_keys=False,
+            allow_agent=False,
+        )
     # A keepalive every 30 s: firewalls drop an idle connection, and the
     # page sits idle while you fill in the form.
     client.get_transport().set_keepalive(30)
     st.session_state["ssh_client"] = client
     st.session_state["ssh_target"] = f"{username}@{host}:{port}"
     st.session_state.pop("connection_lost", None)
-    # A clone in the home folder is the usual place: fill it in if found.
-    try:
-        sftp = get_sftp()
-        guess = core.join_remote(sftp.normalize("."), "patchworks/workflow")
-        sftp.stat(f"{guess}/Snakefile")
-        st.session_state["wf_dir__picked"] = guess
-    except OSError:
-        pass
+    # The workflow folder used last time, else a clone in the home folder
+    # (the usual place): fill it in if found.
+    sftp = get_sftp()
+    for guess in (
+        core.load_settings().get("wf_dir"),
+        core.join_remote(sftp.normalize("."), "patchworks/workflow"),
+    ):
+        try:
+            if guess:
+                sftp.stat(f"{guess}/Snakefile")
+                st.session_state["wf_dir__picked"] = guess
+                break
+        except OSError:
+            continue
 
 
 def get_sftp() -> paramiko.SFTPClient:
@@ -113,8 +140,9 @@ class ConnectionLost(Exception):
 
 
 def _forget_connection() -> None:
-    """Drop the dead connection; the sidebar then asks to log in again."""
-    for key in ("ssh_client", "sftp"):
+    """Drop the dead connection; the sidebar then asks to log in again (or,
+    with an SSH key, logs in again by itself, once)."""
+    for key in ("ssh_client", "sftp", "auto_tried"):
         st.session_state.pop(key, None)
     st.session_state["connection_lost"] = True
 
@@ -2345,18 +2373,29 @@ with st.sidebar:
                 "Jobs keep running.",
                 icon=":material/link_off:",
             )
+        # Last time's choices (this computer's settings), else the preset.
+        saved = core.load_settings()
+        names = ["Custom"] + sorted(CLUSTERS)
         name = st.selectbox(
-            "preset", ["Custom"] + sorted(CLUSTERS), help=HELP["preset"]
+            "preset",
+            names,
+            index=names.index(saved["preset"])
+            if saved.get("preset") in names
+            else 0,
+            help=HELP["preset"],
         )
         preset = CLUSTERS.get(name, {})
+        same = saved.get("preset") == name
         fps = preset.get("host_key_fingerprints", [])
         host = st.text_input(
-            "host", value=preset.get("host", ""), help=HELP["host"]
+            "host",
+            value=(same and saved.get("host")) or preset.get("host", ""),
+            help=HELP["host"],
         )
         port = st.number_input(
             "port",
             help=HELP["port"],
-            value=int(preset.get("port", 22)),
+            value=int((same and saved.get("port")) or preset.get("port", 22)),
             min_value=1,
             max_value=65535,
         )
@@ -2371,20 +2410,85 @@ with st.sidebar:
                 "yourself)",
                 help=HELP["allow_unverified"],
             )
+        auth = (
+            st.segmented_control(
+                "log in with",
+                ["Password", "SSH key"],
+                default="SSH key" if saved.get("auth") == "key" else "Password",
+                help=HELP["auth"],
+            )
+            or "Password"
+        )
+        use_keys = auth == "SSH key"
+        username_default = (same and saved.get("username")) or ""
+        # With an SSH key and last time's user: connect by itself, once a
+        # session (and once after a dropped connection) -- not after
+        # Disconnect. Never to an unverified host: its key must be pinned
+        # or in ~/.ssh/known_hosts (as after any ssh to it), else this
+        # fails and the form below is there.
+        if (
+            use_keys
+            and host
+            and username_default
+            and not st.session_state.get("auto_tried")
+            and not st.session_state.get("disconnected")
+        ):
+            st.session_state["auto_tried"] = True
+            try:
+                with st.spinner(
+                    f"connecting as {username_default} with your SSH key…"
+                ):
+                    connect(
+                        host,
+                        int(port),
+                        username_default,
+                        None,
+                        fps,
+                        False,
+                        use_keys=True,
+                    )
+                st.session_state["preset"] = preset
+                st.rerun()
+            except Exception as exc:  # shown, then the form below
+                st.info(
+                    f"Could not log in with your SSH key ({exc}): log in "
+                    "below.",
+                    icon=":material/key_off:",
+                )
         # A form that clears on submit: the password does not linger in
         # the session's widget state after the connection is made.
         with st.form("login", clear_on_submit=True):
-            username = st.text_input("username", help=HELP["username"])
+            username = st.text_input(
+                "username", value=username_default, help=HELP["username"]
+            )
             password = st.text_input(
-                "password", type="password", help=HELP["password"]
+                "key passphrase (if any)" if use_keys else "password",
+                type="password",
+                help=HELP["key_passphrase" if use_keys else "password"],
             )
             submitted = st.form_submit_button("Connect", type="primary")
         if submitted and host and username:
             try:
                 connect(
-                    host, int(port), username, password, fps, allow_unverified
+                    host,
+                    int(port),
+                    username,
+                    password,
+                    fps,
+                    allow_unverified,
+                    use_keys=use_keys,
                 )
                 st.session_state["preset"] = preset
+                st.session_state.pop("disconnected", None)
+                core.save_settings(
+                    {
+                        "preset": name,
+                        "host": host,
+                        "port": int(port),
+                        "username": username,
+                        "auth": "key" if use_keys else "password",
+                    }
+                )
                 st.rerun()
             except Exception as exc:  # shown, not raised: a UI
                 st.error(f"connection failed: {exc}")
@@ -2395,6 +2499,8 @@ with st.sidebar:
         )
         if st.button("Disconnect", icon=":material/link_off:"):
             get_client().close()
+            # Not straight back in with the SSH key: you asked to leave.
+            st.session_state["disconnected"] = True
             for key in ("ssh_client", "sftp", "preset", "pixi_envs", "plans"):
                 st.session_state.pop(key, None)
             st.rerun()
@@ -2424,6 +2530,8 @@ with st.sidebar:
                     checked[wf_dir] = False
             if checked[wf_dir]:
                 st.caption(":green[:material/check_circle: Snakefile found]")
+                if core.load_settings().get("wf_dir") != wf_dir:
+                    core.save_settings({"wf_dir": wf_dir})
                 workflow_version_check(wf_dir)
             else:
                 st.warning(
