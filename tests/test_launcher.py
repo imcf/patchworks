@@ -663,9 +663,23 @@ class _FakeSSH:
         from types import SimpleNamespace
 
         self.commands.append(command)
-        out = next(
-            (v for k, v in self.answers.items() if k in command), ""
-        ).encode()
+
+        def answer(cmd):
+            return next((v for k, v in self.answers.items() if k in cmd), "")
+
+        if core.TAIL_MARK in command:  # several logs' tails in one command
+            out = ""
+            for part in command.split("; "):
+                if part.startswith("echo "):
+                    out += part.removeprefix("echo ") + "\n"
+                else:
+                    text = answer(part)
+                    out += text + (
+                        "" if text.endswith("\n") or not text else "\n"
+                    )
+            out = out.encode()
+        else:
+            out = answer(command).encode()
         chan = SimpleNamespace(recv_exit_status=lambda: 0)
         stdout = SimpleNamespace(read=_io.BytesIO(out).read, channel=chan)
         return None, stdout, SimpleNamespace(read=lambda: b"")
@@ -1423,6 +1437,23 @@ QUEUE = """101|pw-cells|RUNNING|None|1:02:03|3-00:00:00|scicore
 103|pw-cells_3f2a|PENDING|QOSMaxWallDurationPerJobLimit|0:00|2-00:00:00|rtx4090
 104|my_other_job|PENDING|Priority|0:00|1:00:00|scicore
 """
+
+
+def test_checkpoint_steps_and_one_command_tails():
+    (step,) = core.parse_steps(
+        "checkpoint prepare:\n    log: /w/cells/logs/prepare.log\n"
+        "    jobid: 3\n"
+        "Job 3 has been submitted with SLURM jobid 9 (log: /s/9.log).\n"
+    )
+    assert step["rule"] == "prepare" and step["slurm_job"] == "9"
+    paths = ["/nope/a.log", "/w/b.log"]
+    cmd = core.tails_command(paths, 2)
+    assert cmd.count("tail -n 2") == 2 and "/w/b.log" in cmd
+    out = f"{core.TAIL_MARK}0\n{core.TAIL_MARK}1\nline 1\nline 2\n"
+    assert core.parse_tails(out, paths) == {
+        "/nope/a.log": "",
+        "/w/b.log": "line 1\nline 2",
+    }
 
 
 def test_queue_names_without_the_run_id():
