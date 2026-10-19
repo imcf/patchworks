@@ -29,6 +29,7 @@ from run_multi import (  # noqa: E402
     _resolve,
     config_set_problems,
 )
+from status import converted  # noqa: E402
 
 
 def load(path: Path) -> tuple[list[Path], list[dict], bool]:
@@ -58,9 +59,7 @@ def check(
         "segmentations": [],
     }
     store = Path(cfgs[0]["work_dir"]) / "image.zarr"
-    report["converted"] = (store / "zarr.json").exists() or (
-        store / ".zgroup"
-    ).exists()
+    report["converted"] = converted(store)
     for p, cfg in zip(paths, cfgs):
         entry: dict = {
             "label_name": cfg.get("label_name", "labels"),

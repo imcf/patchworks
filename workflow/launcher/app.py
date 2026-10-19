@@ -21,6 +21,7 @@ import re
 import shlex
 import stat
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 
@@ -35,6 +36,14 @@ st.set_page_config(
     page_title="patchworks launcher",
     page_icon=":material/grid_view:",
     layout="wide",
+)
+
+# While a part of the page re-runs (the Jobs tab's auto-refresh), Streamlit
+# fades what it shows until redrawn: keep it readable and usable instead.
+st.markdown(
+    "<style>[data-stale='true']{opacity:1 !important;transition:none "
+    "!important;}</style>",
+    unsafe_allow_html=True,
 )
 
 CLUSTERS = core.load_clusters(Path(__file__).with_name("clusters.yaml"))
@@ -1728,7 +1737,9 @@ def resources_editor(resources: dict, info: dict | None = None) -> dict:
 STATE_COLORS = {"RUNNING": "green", "PENDING": "orange", "DONE": "gray"}
 
 
-def job_actions(job: dict, state: str, alive: bool, setup: str) -> None:
+def job_actions(
+    job: dict, state: str, alive: bool, setup: str, auto: bool = False
+) -> None:
     """The job's state, and Stop / Unlock / Relaunch."""
     ident = job.get("slurm_job") or job.get("pid")
     kind = "SLURM job" if job.get("slurm_job") else "PID"
@@ -1739,6 +1750,10 @@ def job_actions(job: dict, state: str, alive: bool, setup: str) -> None:
         c2.markdown(f"**{kind}**  \n{ident}")
         c3.markdown(f"**started**  \n{job['started']}")
         c4.button("Refresh", icon=":material/refresh:", key="refresh_job")
+        c4.caption(
+            f":material/schedule: updated {time.strftime('%H:%M:%S')}"
+            + (" · every 15 s" if auto and alive else "")
+        )
         st.caption(f"config: `{job.get('config')}`")
         c1, c2, c3 = st.columns(3)
         if alive:
@@ -1824,12 +1839,10 @@ def job_actions(job: dict, state: str, alive: bool, setup: str) -> None:
                 )
 
 
-def queue_view() -> list[dict]:
+def queue_view(rows: list[dict]) -> None:
     """Your patchworks jobs in the SLURM queue, and why each waits."""
-    _, out, _ = run(client, core.QUEUE_COMMAND, timeout=30)
-    rows = core.parse_queue(out)
     if not rows:
-        return rows
+        return
     running = sum(r["state"] == "RUNNING" for r in rows)
     with section(
         ":material/queue: In the queue",
@@ -1843,21 +1856,100 @@ def queue_view() -> list[dict]:
                     f"job {row['job']} ({row['name']}): {row['why it waits']}",
                     icon=":material/block:",
                 )
-    return rows
+
+
+# The logs' last lines, fetched together once per refresh (fetch_job).
+_TAILS: dict[str, str] = {}
+TAIL_LINES = 300
+
+
+def _fetch_tails(paths) -> None:
+    paths = [p for p in dict.fromkeys(paths) if p and p not in _TAILS]
+
+    def tail(path: str) -> str:
+        cmd = f"tail -n {TAIL_LINES} {shlex.quote(path)} 2>/dev/null"
+        return run(client, cmd, login=False, timeout=30)[1]
+
+    with ThreadPoolExecutor(8) as pool:
+        _TAILS.update(zip(paths, pool.map(tail, paths)))
 
 
 def _tail(path: str, lines: int = 60) -> str:
-    _, out, _ = run(
-        client, f"tail -n {lines} {shlex.quote(path)}", login=False, timeout=30
+    if path not in _TAILS:
+        _fetch_tails([path])
+    return "\n".join(_TAILS[path].splitlines()[-lines:])
+
+
+def fetch_job(job: dict, setup: str) -> dict:
+    """Everything the Jobs tab shows of *job*, fetched first and in
+    parallel, so the page is redrawn at once rather than piece by piece."""
+    _TAILS.clear()
+    calls = {
+        # squeue may live behind `module load`, so SLURM jobs are checked
+        # through the setup line; a PID check and a tail need neither it
+        # nor a login shell.
+        "state": lambda: run(
+            client,
+            core.inner_command(wf_dir, setup_cmd, core.status_command(job))
+            if job.get("slurm_job")
+            else core.status_command(job),
+            login=bool(job.get("slurm_job")),
+            timeout=30,
+        ),
+        "log": lambda: _fetch_tails([job["log"]]),
+    }
+    if job.get("config") and job.get("kind") != "check":
+        calls |= {
+            "queue": lambda: run(client, core.QUEUE_COMMAND, timeout=30),
+            "steps": lambda: run(
+                client, core.steps_command(job["log"]), login=False, timeout=30
+            ),
+            "status": lambda: run(
+                client,
+                core.inner_command(
+                    wf_dir, setup, core.run_status_command(job["config"])
+                ),
+                timeout=60,
+            ),
+        }
+    with ThreadPoolExecutor(len(calls)) as pool:
+        got = {
+            k: f.result()
+            for k, f in {k: pool.submit(c) for k, c in calls.items()}.items()
+        }
+    data = {
+        "state": got["state"][1].strip() or "unknown",
+        "queue": core.parse_queue(got["queue"][1]) if "queue" in got else [],
+        "steps": core.parse_steps(got["steps"][1]) if "steps" in got else [],
+        "status": got.get("status"),
+    }
+    # Then the step logs the page shows: failed steps, those not done.
+    status = core.parse_json_output((data["status"] or (0, "", ""))[1]) or {}
+    _fetch_tails(
+        [
+            f["log"]
+            for f in list(status.get("failures") or [])
+            + [
+                f
+                for seg in status.get("segmentations") or []
+                for f in seg.get("failures") or []
+            ]
+        ]
+        + [
+            path
+            for step in data["steps"]
+            if step["state"] != "done"
+            for path in (step.get("log"), step.get("slurm_log"))
+        ]
     )
-    return out
+    return data
 
 
 def step_progress(step: dict | None) -> tuple[float, str]:
     """How far a running step got, from the progress lines in its log."""
     if not step or not step.get("log"):
         return 0.0, "waiting to start"
-    progress = core.last_progress(_tail(step["log"], 200))
+    progress = core.last_progress(_tail(step["log"], TAIL_LINES))
     attempt = f" (attempt {step['attempt']})" if step["attempt"] > 1 else ""
     if step["state"] == "failed":
         return 0.0, f"failed{attempt}"
@@ -1916,15 +2008,9 @@ def steps_view(steps: list[dict], queue: list[dict]) -> None:
                     )
 
 
-def job_progress(job: dict, setup: str, steps: list[dict]) -> None:
+def job_progress(job: dict, steps: list[dict], result) -> None:
     """How far the run got (scripts/status.py), and what it made."""
-    rc, out, err = run(
-        client,
-        core.inner_command(
-            wf_dir, setup, core.run_status_command(job["config"])
-        ),
-        timeout=60,
-    )
+    rc, out, err = result
     status = core.parse_json_output(out)
     if not status or "segmentations" not in status:
         st.caption(
@@ -1945,13 +2031,7 @@ def job_progress(job: dict, setup: str, steps: list[dict]) -> None:
                 with st.expander(
                     f"log: {f['log']}", icon=":material/terminal:"
                 ):
-                    _, tail, _ = run(
-                        client,
-                        f"tail -n 80 {shlex.quote(f['log'])}",
-                        login=False,
-                        timeout=30,
-                    )
-                    st.code(tail or "(empty)", language="text")
+                    st.code(_tail(f["log"], 80) or "(empty)", language="text")
     convert_only = job.get("kind") == "convert"
     with section(":material/data_usage: Progress", f"`{status['work_dir']}`"):
         # The shared steps first, while they matter: convert, occupancy.
@@ -2635,63 +2715,45 @@ with tab_jobs:
             )
             auto = c2.toggle("auto-refresh every 15 s", value=True)
 
-        @st.fragment(run_every=15 if auto else None)
+        # Refreshed while the job runs; once it has ended, nothing changes.
+        alive_key = f"alive_{jobs[pick]['name']}"
+
+        @st.fragment(
+            run_every=15
+            if auto and st.session_state.get(alive_key, True)
+            else None
+        )
         def monitor(job=jobs[pick]):
             setup = job.get("setup", setup_cmd)
-            st.caption(
-                f":material/schedule: as of {time.strftime('%H:%M:%S')}"
-                + ("" if auto else ": press Refresh for news")
-            )
-            # squeue may live behind `module load`, so SLURM jobs are
-            # checked through the setup line; a PID check and a tail need
-            # neither it nor a login shell.
-            _, state, _ = run(
-                client,
-                core.inner_command(wf_dir, setup_cmd, core.status_command(job))
-                if job.get("slurm_job")
-                else core.status_command(job),
-                login=bool(job.get("slurm_job")),
-                timeout=30,
-            )
-            state = state.strip() or "unknown"
+            data = fetch_job(job, setup)
+            state = data["state"]
             alive = state in ("RUNNING", "PENDING", "CONFIGURING", "COMPLETING")
-            job_actions(job, state, alive, setup)
+            was_alive = st.session_state.get(alive_key, True)
+            st.session_state[alive_key] = alive
+            if was_alive != alive:  # started or ended: (un)set auto-refresh
+                st.rerun()
+            job_actions(job, state, alive, setup, auto)
             if job.get("kind") == "check":
                 if not alive:
-                    _, log, _ = run(
-                        client,
-                        f"cat {shlex.quote(job['log'])}",
-                        login=False,
-                        timeout=30,
+                    report = core.parse_json_output(
+                        _tail(job["log"], TAIL_LINES)
                     )
-                    report = core.parse_json_output(log)
                     if report:
                         with section(":material/science: Tried on real tiles"):
                             show_check(report)
                             show_previews(report)
             elif job.get("config"):
-                queue = queue_view() if alive else []
-                _, text, _ = run(
-                    client,
-                    core.steps_command(job["log"]),
-                    login=False,
-                    timeout=30,
-                )
-                steps = core.parse_steps(text)
-                job_progress(job, setup, steps)
-                steps_view(steps, queue)
+                if alive:
+                    queue_view(data["queue"])
+                job_progress(job, data["steps"], data["status"])
+                steps_view(data["steps"], data["queue"])
             with st.expander(
                 "Snakemake log (the controller)",
                 icon=":material/terminal:",
                 expanded=alive and job.get("kind") == "check",
             ):
                 st.caption(f"`{job['log']}`")
-                _, tail, _ = run(
-                    client,
-                    f"tail -n 300 {shlex.quote(job['log'])}",
-                    login=False,
-                    timeout=30,
-                )
+                tail = _tail(job["log"], 300)
                 st.code(
                     tail or "(log is empty so far)",
                     language="text",
