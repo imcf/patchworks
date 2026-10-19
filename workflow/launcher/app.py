@@ -2669,11 +2669,19 @@ with tab_launch:
             mode = st.radio("run mode", core.RUN_MODES, help=HELP["run_mode"])
             slurm: dict = {}
             if mode == core.SLURM_JOB:
-                st.caption(
-                    "The controller only submits and watches jobs: one CPU, "
-                    "little memory, but it must outlive the whole run."
+                # What the controller is, in one line, filled in below once
+                # its settings (defaults, or changed in the panel) are known.
+                summary = st.container()
+                panel = st.expander(
+                    "Change the controller job",
+                    icon=":material/settings:",
+                    expanded=bool(st.session_state.get("ctrl_problems")),
                 )
-                c1, c2, c3, c4, c5 = st.columns(5)
+                panel.caption(
+                    "Only for the controller. Each step's own CPUs, memory "
+                    "and GPU are under Cluster resources above."
+                )
+                c1, c2, c3, c4, c5 = panel.columns(5)
                 ctrl_time = c1.text_input(
                     "time",
                     preset.get("controller_time", "3-00:00:00"),
@@ -2711,8 +2719,21 @@ with tab_launch:
                         preset.get("controller_account", ""),
                     ),
                 }
-                if cluster_info() is not None:
-                    for problem in core.resource_problems(
+                summary.markdown(
+                    ":material/smart_toy: A small **controller** job (1 CPU, "
+                    f"{slurm['mem']}) submits each step's jobs and waits for "
+                    "them; it ends as soon as the run ends. It may run up to "
+                    f"**{slurm['time']}**"
+                    + f" · QOS **{slurm['qos'] or 'your default'}**"
+                    + f" · partition **{slurm['partition'] or 'the default'}**"
+                    + "."
+                )
+                summary.caption(
+                    "The defaults suit a whole run. If the time runs out "
+                    "first, launch again: the run resumes where it stopped."
+                )
+                problems = (
+                    core.resource_problems(
                         {
                             "controller": {
                                 "slurm_partition": slurm["partition"],
@@ -2721,7 +2742,13 @@ with tab_launch:
                             }
                         },
                         cluster_info(),
-                    ):
+                    )
+                    if cluster_info() is not None
+                    else []
+                )
+                st.session_state["ctrl_problems"] = problems
+                if cluster_info() is not None:
+                    for problem in problems:
                         st.error(problem, icon=":material/block:")
                     better = core.better_qos(
                         cluster_info(),
