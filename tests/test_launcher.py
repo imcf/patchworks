@@ -1425,6 +1425,14 @@ QUEUE = """101|pw-cells|RUNNING|None|1:02:03|3-00:00:00|scicore
 """
 
 
+def test_queue_names_without_the_run_id():
+    (row,) = core.parse_queue(
+        "7|pw-convert_95532d08-6b48-4383-9e49-39a6642fe344|RUNNING|None|"
+        "1:00|6:00:00|scicore\n"
+    )
+    assert row["name"] == "pw-convert" and row["job"] == "7"
+
+
 def test_queue_rows_say_why_jobs_wait():
     rows = core.parse_queue(QUEUE)
     assert [r["job"] for r in rows] == ["101", "102", "103"]  # ours only

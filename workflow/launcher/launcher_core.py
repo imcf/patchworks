@@ -1495,6 +1495,11 @@ PENDING_REASONS = {
 }
 
 
+_RUN_ID = re.compile(
+    r"_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+)
+
+
 def parse_queue(output: str) -> list[dict[str, str]]:
     """Your patchworks jobs in the queue, with why each waits."""
     rows = []
@@ -1508,7 +1513,9 @@ def parse_queue(output: str) -> list[dict[str, str]]:
         rows.append(
             {
                 "job": jid,
-                "name": name,
+                # Without the run id the SLURM executor appends to every
+                # job's name (it finds its jobs by it): pw-convert, pw-cells.
+                "name": _RUN_ID.sub("", name),
                 "state": state,
                 "partition": partition,
                 "running for": elapsed if state == "RUNNING" else "",
