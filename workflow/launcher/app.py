@@ -17,6 +17,7 @@ See README.md for the security model before sharing a deployment.
 from __future__ import annotations
 
 import io
+import json
 import re
 import shlex
 import stat
@@ -1989,6 +1990,39 @@ def job_actions(
                 )
 
 
+def clear_jobs(container, jobs: list[dict], text: str, picked: dict) -> None:
+    """Shorten the job list (and Configure's past launches): this job, or
+    every job that has ended. Logs and results stay on the cluster."""
+    path = f"{wf_dir}/{core.REGISTRY}"
+    with container.popover("Clear", icon=":material/delete_sweep:"):
+        st.caption(
+            "Takes jobs off this list and off Configure's past launches. "
+            "Their logs and results stay on the cluster."
+        )
+        if st.button(
+            f"Forget {picked['name']}",
+            key="forget_one",
+            disabled=st.session_state.get(f"alive_{picked['name']}", False),
+            help="not while it runs: stop it first",
+        ):
+            write_remote(
+                client, path, core.registry_without(text, {picked["name"]})
+            )
+            st.rerun()
+        if st.button("Forget all ended jobs", key="forget_ended"):
+            _, out, _ = run(
+                client,
+                core.inner_command(
+                    wf_dir, setup_cmd, core.running_command(jobs)
+                ),
+                timeout=60,
+            )
+            ended = core.ended_jobs(jobs, out)
+            write_remote(client, path, core.registry_without(text, ended))
+            st.toast(f"forgot {len(ended)} ended job(s)")
+            st.rerun()
+
+
 def queue_view(rows: list[dict]) -> None:
     """Your patchworks jobs in the SLURM queue, and why each waits."""
     if not rows:
@@ -2327,6 +2361,23 @@ def job_failures(status: dict) -> None:
         for seg in status["segmentations"]
         for f in seg.get("failures") or []
     ]
+    dismissed_path = f"{wf_dir}/{core.DISMISSED}"
+    try:
+        dismissed = set(json.loads(read_remote(client, dismissed_path) or "[]"))
+    except ValueError:
+        dismissed = set()
+    hidden = [f for f in failed if core.failure_key(f) in dismissed]
+    failed = [f for f in failed if core.failure_key(f) not in dismissed]
+    if hidden:
+        if st.button(
+            f"Show {len(hidden)} dismissed failure(s)",
+            icon=":material/visibility:",
+            key="undismiss",
+            type="tertiary",
+        ):
+            keys = dismissed - {core.failure_key(f) for f in hidden}
+            write_remote(client, dismissed_path, json.dumps(sorted(keys)))
+            st.rerun()
     if failed:
         # Folded: the progress and steps above stay in view; the label
         # says how many failed.
@@ -2347,6 +2398,16 @@ def job_failures(status: dict) -> None:
                         language="text",
                         height=400,
                     )
+            if st.button(
+                "Dismiss these failures",
+                icon=":material/done_all:",
+                key="dismiss",
+                help="hide them (fixed, or not worth a rerun); a step that "
+                "fails again differently shows again",
+            ):
+                keys = dismissed | {core.failure_key(f) for f in failed}
+                write_remote(client, dismissed_path, json.dumps(sorted(keys)))
+                st.rerun()
 
 
 def job_results(status: dict) -> None:
@@ -3105,7 +3166,7 @@ with tab_jobs:
         )
     else:
         with section(":material/monitor_heart: Job"):
-            c1, c2 = st.columns([3, 1], vertical_alignment="bottom")
+            c1, c2, c3 = st.columns([6, 2, 1], vertical_alignment="bottom")
             pick = c1.selectbox(
                 "job",
                 range(len(jobs)),
@@ -3115,6 +3176,7 @@ with tab_jobs:
                 ),
             )
             auto = c2.toggle("auto-refresh every 15 s", value=True)
+            clear_jobs(c3, jobs, text, jobs[pick])
 
         # Refreshed while the job runs; once it has ended, nothing changes.
         alive_key = f"alive_{jobs[pick]['name']}"
