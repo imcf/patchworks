@@ -292,7 +292,10 @@ def test_profile_overrides_and_account_limits():
     }
     assert core.resource_problems(ok, info) == []
     too_long = {"segment": {**ok["segment"], "runtime": 1400}}
-    assert "over QOS" in core.resource_problems(too_long, info)[0]
+    assert (
+        "23:20:00 is longer than QOS 'rtx4090-6hours' allows (06:00:00)"
+        in core.resource_problems(too_long, info)[0]
+    )
     wrong_qos = {"segment": {**ok["segment"], "qos": "1day"}}
     assert (
         "not one your account may use on"
@@ -307,7 +310,8 @@ def test_profile_overrides_and_account_limits():
     # No partition named: the cluster's default, and its time limit.
     long_merge = {"merge": {"runtime": 2000}}
     assert (
-        "'scicore''s time limit" in core.resource_problems(long_merge, info)[0]
+        "than partition 'scicore' allows (1-00:00:00)"
+        in core.resource_problems(long_merge, info)[0]
     )
     no_gpu = {"segment": {"slurm_partition": "scicore", "gres": "gpu:1"}}
     assert "has no GPUs" in core.resource_problems(no_gpu, info)[0]
@@ -325,6 +329,13 @@ def test_profile_overrides_and_account_limits():
     assert core.qos_for(info, None, 300) == ""  # the default allows it
     assert core.qos_for(info, "scicore", 1000) == "1day"  # the shortest
     assert core.qos_for(info, None, 30 * 1440) == ""  # none allows it
+    # A QOS chosen that is too short: the one to switch to.
+    assert core.better_qos(info, None, "1day", 3 * 1440) == "1week"
+    assert core.better_qos(info, None, "1week", 3 * 1440) == ""
+    assert core.better_qos(info, None, "", 300) == ""  # the default fits
+    # Default QOS not known (inherited from the account): name one.
+    unknown = {**info, "default_qos": {}}
+    assert core.qos_for(unknown, None, 3 * 1440) == "1week"
     # Older output without the defaultqos column still parses.
     old = core.parse_cluster_info("#assoc\nbiehlmai|scicore|1day")
     assert old["assoc"] == {"scicore": {"1day"}} and old["default_qos"] == {}
@@ -802,6 +813,20 @@ def test_app_resources_change_for_one_run():
     # The default QOS (6 hours) is too short for the controller's 3 days:
     # one that allows them is chosen.
     assert at.selectbox(key="ctrl_qos").value == "1week"
+    # A QOS picked that is too short: flagged, with a button to fix it.
+    at.selectbox(key="ctrl_qos").set_value("1day").run()
+    assert any("longer than QOS '1day'" in e.value for e in at.error)
+    next(b for b in at.button if b.label == "Use QOS 1week").click().run()
+    assert at.selectbox(key="ctrl_qos").value == "1week"
+    assert not any("QOS '1day'" in e.value for e in at.error)
+    # A shorter time: the QOS chosen for the user follows it.
+    next(t for t in at.text_input if t.label == "time").set_value(
+        "04:00:00"
+    ).run()
+    assert at.selectbox(key="ctrl_qos").value == ""
+    next(t for t in at.text_input if t.label == "time").set_value(
+        "3-00:00:00"
+    ).run()
     next(b for b in at.button if b.label == "Launch").click().run()
     assert not at.exception
     fetched = next(
