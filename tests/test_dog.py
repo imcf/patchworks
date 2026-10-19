@@ -160,6 +160,35 @@ def test_decon_setup_is_built_once_per_worker(fake_decon):
     assert not fake_decon.named("decon")
 
 
+def test_decon_integers_reach_cudadecon_as_integers(fake_decon):
+    """cudaDecon's C functions take the wavelength (and krmax, fixorigin)
+    as integers: 520.0 from a config or form made ctypes refuse it."""
+    from patchworks.plugins import dog
+
+    fn = dog.dog_label_fn(
+        1.0,
+        3.0,
+        0.5,
+        decon_kwargs={"psf": "psf.tif", "wavelength": 520.0, "krmax": 0.0},
+    )
+    fn(np.zeros((4, 8, 8), "uint16"))
+    ((_, _, otf_kw),) = fake_decon.named("make_otf")
+    assert otf_kw["wavelength"] == 520 and type(otf_kw["wavelength"]) is int
+    assert type(otf_kw["krmax"]) is int
+    # The one-shot path too (a PSF given as an array).
+    dog.dog_label_fn(
+        1.0,
+        3.0,
+        0.5,
+        decon_kwargs={
+            "psf": np.ones((3, 3, 3), "float32"),
+            "wavelength": 488.0,
+        },
+    )(np.zeros((4, 8, 8), "uint16"))
+    ((_, _, kw),) = fake_decon.named("decon")
+    assert type(kw["wavelength"]) is int
+
+
 def test_decon_falls_back_for_what_the_cache_does_not_model(fake_decon):
     from patchworks.plugins import dog
 
