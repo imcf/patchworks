@@ -1585,6 +1585,39 @@ def cluster_info(refresh: bool = False) -> dict | None:
     return st.session_state["cluster_info"]
 
 
+def controller_qos_default(preset: dict, time: str) -> str:
+    """The controller's QOS: the preset's, else one that allows *time*
+    when the default QOS may not ("" for the default).
+
+    Follows *time* and the partition while the QOS shown is still the
+    one chosen here, not one the user picked.
+    """
+    if preset.get("controller_qos"):
+        return preset["controller_qos"]
+    suggested = core.qos_for(
+        cluster_info() or {},
+        st.session_state.get("ctrl_partition") or None,
+        core.slurm_minutes(time),
+    )
+    if (
+        "ctrl_qos" in st.session_state
+        and st.session_state["ctrl_qos"]
+        == st.session_state.get("ctrl_qos_auto")
+        and suggested != st.session_state["ctrl_qos"]
+    ):
+        st.session_state["ctrl_qos"] = suggested
+    st.session_state["ctrl_qos_auto"] = (
+        suggested
+        if st.session_state.get("ctrl_qos", suggested) == suggested
+        else st.session_state.get("ctrl_qos_auto")
+    )
+    return suggested
+
+
+def _set_qos(qos: str) -> None:
+    st.session_state["ctrl_qos"] = qos
+
+
 def slurm_choice(
     container,
     label: str,
@@ -2408,14 +2441,7 @@ with tab_launch:
                             cluster_info() or {},
                             st.session_state.get("ctrl_partition") or None,
                         ),
-                        # Unset in the preset: one that allows the time,
-                        # when the default QOS does not.
-                        preset.get("controller_qos")
-                        or core.qos_for(
-                            cluster_info() or {},
-                            st.session_state.get("ctrl_partition") or None,
-                            core.slurm_minutes(ctrl_time),
-                        ),
+                        controller_qos_default(preset, ctrl_time),
                     ),
                     "account": slurm_choice(
                         c5,
@@ -2437,6 +2463,19 @@ with tab_launch:
                         cluster_info(),
                     ):
                         st.error(problem, icon=":material/block:")
+                    better = core.better_qos(
+                        cluster_info(),
+                        slurm["partition"] or None,
+                        slurm["qos"],
+                        core.slurm_minutes(slurm["time"]),
+                    )
+                    if better:
+                        st.button(
+                            f"Use QOS {better}",
+                            icon=":material/build:",
+                            on_click=_set_qos,
+                            args=(better,),
+                        )
             elif mode == core.LOGIN_NODE:
                 st.warning(
                     "The controller runs for the whole workflow on the login "

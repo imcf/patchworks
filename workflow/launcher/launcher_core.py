@@ -1151,12 +1151,31 @@ def qos_for(
     info: dict[str, Any], partition: str | None, minutes: int | None
 ) -> str:
     """The QOS to ask for so a job of *minutes* is accepted: "" when the
-    default QOS allows it (or nothing is known), else :func:`fitting_qos`."""
+    default QOS allows it, else :func:`fitting_qos`."""
     if not minutes:
         return ""
     default = default_qos(info, partition)
+    if not default:
+        # Not known (sacctmgr shows no default when it is inherited from
+        # the account): name one that surely allows the time.
+        return fitting_qos(info, partition, minutes)
     limit = (info.get("maxwall") or {}).get(default, None)
-    if not default or limit is None or limit >= minutes:
+    if limit is None or limit >= minutes:
+        return ""
+    return fitting_qos(info, partition, minutes)
+
+
+def better_qos(
+    info: dict[str, Any],
+    partition: str | None,
+    qos: str | None,
+    minutes: int | None,
+) -> str:
+    """The QOS to switch to when *qos* (blank: the default QOS) is known
+    to be too short for *minutes*; "" when it is not, or none fits."""
+    effective = qos or default_qos(info, partition)
+    limit = (info.get("maxwall") or {}).get(effective) if effective else None
+    if not minutes or limit is None or limit >= minutes:
         return ""
     return fitting_qos(info, partition, minutes)
 
@@ -1318,8 +1337,9 @@ def resource_problems(
                 limit = partitions[part]["timelimit"]
                 if runtime and limit and runtime > limit:
                     problems.append(
-                        f"{rule}: runtime {runtime} min is over partition "
-                        f"{part!r}'s time limit of {limit} min"
+                        f"{rule}: {_duration(runtime)} is longer than "
+                        f"partition {part!r} allows ({_duration(limit)}): "
+                        "the job would never start"
                     )
                 if res.get("gres") and not partitions[part]["gres"]:
                     problems.append(
@@ -1343,16 +1363,21 @@ def resource_problems(
         effective = qos or default_qos(info, part)
         limit = maxwall.get(effective) if effective else None
         if runtime and limit and runtime > limit:
-            better = fitting_qos(info, part, runtime)
+            better = better_qos(info, part, qos, runtime)
             problems.append(
-                f"{rule}: runtime {runtime} min is over "
+                f"{rule}: {_duration(runtime)} is longer than "
                 + (
-                    f"QOS {qos!r}'s"
+                    f"QOS {qos!r}"
                     if qos
-                    else f"your default QOS {effective!r}'s (QOS left blank)"
+                    else f"your default QOS {effective!r} (QOS left blank)"
                 )
-                + f" MaxWall of {limit} min; sbatch would refuse the job: "
-                + (f"choose QOS {better!r}" if better else "lower the runtime")
+                + f" allows ({_duration(limit)}), so sbatch would refuse the "
+                "job: "
+                + (
+                    f"choose QOS {better!r}"
+                    if better
+                    else "no QOS of yours allows it, lower the time"
+                )
             )
     return problems
 
