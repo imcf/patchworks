@@ -233,6 +233,30 @@ def shared_failures(cfg: dict) -> list[dict]:
     return found
 
 
+def _tiles_done(manifest: dict, seg: Path) -> tuple[int, int]:
+    """Tiles in all, and segmented so far: every tile of a finished batch,
+    and of a running one those in its checkpoint (segment_tile.py writes it
+    after each tile, whatever the method)."""
+    batches = manifest.get("batches") or []
+    total = sum(len(b) for b in batches)
+    done = 0
+    for i, indices in enumerate(batches):
+        if (seg / f"{i}.done").exists():
+            done += len(indices)
+            continue
+        checkpoint = (
+            Path(manifest.get("target_path", ""))
+            / f".patchworks_segment_{i}.json"
+        )
+        try:
+            saved = json.loads(checkpoint.read_text())
+        except (OSError, ValueError):
+            continue
+        if saved.get("indices") == list(indices):
+            done += len(saved.get("counts") or {})
+    return total, done
+
+
 def segmentation_status(cfg: dict) -> dict:
     """Where one segmentation stands, from its markers in work_dir."""
     work = Path(cfg["work_dir"])
@@ -244,18 +268,23 @@ def segmentation_status(cfg: dict) -> dict:
         "converted": converted(store),
         "batches": None,
         "batches_done": 0,
+        "tiles": None,
+        "tiles_done": 0,
         "merged": (run / "labels.done").exists(),
         "objects": None,
         "seams": None,
     }
+    manifest = None
     try:
         manifest = json.loads((run / "tiles.json").read_text())
         out["batches"] = len(manifest["batches"])
     except (OSError, ValueError, KeyError):
-        pass
+        manifest = None
     seg = run / "seg"
     if seg.is_dir():
         out["batches_done"] = sum(1 for _ in seg.glob("*.done"))
+    if manifest is not None:
+        out["tiles"], out["tiles_done"] = _tiles_done(manifest, seg)
     if out["merged"]:
         level0 = _attrs(store / "labels" / label / "0")
         out["objects"] = level0.get("patchworks_n_objects")
@@ -272,6 +301,8 @@ def segmentation_status(cfg: dict) -> dict:
             pass
     if out["merged"]:
         out["stage"] = "done"
+    elif out["batches"] is not None and out["batches_done"] >= out["batches"]:
+        out["stage"] = "merging"
     elif out["batches"] is not None:
         out["stage"] = "segmenting"
     elif out["converted"]:
@@ -327,6 +358,8 @@ def format_status(status: dict) -> str:
     for s in status["segmentations"]:
         if s["batches"] is not None:
             tiles = f"{s['batches_done']}/{s['batches']} batches"
+            if s.get("tiles"):
+                tiles += f" ({s['tiles_done']}/{s['tiles']} tiles)"
         else:
             tiles = "not prepared"
         line = f"  {s['label_name']:<24} {s['stage']:<12} {tiles}"
