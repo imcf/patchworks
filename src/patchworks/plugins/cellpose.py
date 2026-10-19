@@ -391,12 +391,11 @@ def fetch_weights(model: str) -> str:
     str
         The weights' path, or what was done.
     """
-    _require_cellpose()
-    if _CELLPOSE_V4 and model in getattr(_cellpose_models, "MODEL_NAMES", ()):
-        return _cellpose_models.cache_CPSAM_model_path()
     if Path(str(model)).is_file():
         return str(model)
-    _get_model({"model": model, "gpu": False})
+    if _CELLPOSE_V4 and model in getattr(_cellpose_models, "MODEL_NAMES", ()):
+        return _cellpose_models.cache_CPSAM_model_path()
+    _get_model({"model": model, "gpu": False})  # checks cellpose is there
     return f"{model} (loaded)"
 
 
