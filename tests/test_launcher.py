@@ -2019,3 +2019,66 @@ def test_steps_of_interleaved_snakemakes_keep_their_jobs():
     )
     a, b = core.parse_steps(log)
     assert {a["slurm_job"], b["slurm_job"]} == {"11", "12"}
+
+
+def test_clear_forgets_ended_jobs_and_keeps_running_ones():
+    pytest.importorskip("paramiko")
+    running = _job(name="cells_20261013-120000", slurm_job="42")
+    ended = _job(name="nuclei_20261012-090000", slurm_job="7")
+    text = core.registry_line(ended) + core.registry_line(running)
+    assert core.ended_jobs([running, ended], "42\n") == {ended["name"]}
+    assert core.registry_without(text, {ended["name"]}) == core.registry_line(
+        running
+    )
+    ssh = _FakeSSH(
+        {"squeue --me -h -o %i 2": "42\n", "squeue": "RUNNING\n"},
+        files={f"{WF}/{core.REGISTRY}": text.encode()},
+    )
+    at = _app(ssh, input="/x.czi", work_dir="/scratch/run")
+    at.run()
+    next(
+        b for b in at.button if b.label == "Forget all ended jobs"
+    ).click().run()
+    assert not at.exception
+    left = core.parse_registry(ssh.files[f"{WF}/{core.REGISTRY}"].decode())
+    assert [j["name"] for j in left] == [running["name"]]
+
+
+def test_failures_can_be_dismissed_and_shown_again():
+    pytest.importorskip("paramiko")
+    failure = {
+        "step": "segment job 0",
+        "log": "/scratch/run/cilia/logs/segment/0.log",
+        "error": "ctypes.ArgumentError: argument 3",
+        "hint": None,
+    }
+    status = {
+        "work_dir": "/scratch/run",
+        "segmentations": [
+            {
+                "label_name": "cilia",
+                "stage": "segmenting",
+                "batches": 2,
+                "batches_done": 0,
+                "objects": None,
+                "seams": None,
+                "failures": [failure],
+            }
+        ],
+        "failures": [],
+    }
+    ssh = _FakeSSH(
+        {"squeue": "DONE\n", "scripts/status.py": json.dumps(status)},
+        files={f"{WF}/{core.REGISTRY}": core.registry_line(_job()).encode()},
+    )
+    at = _app(ssh, input="/x.czi", work_dir="/scratch/run")
+    at.run()
+    assert any(e.label.startswith("Failed: 1 step") for e in at.expander)
+    next(
+        b for b in at.button if b.label == "Dismiss these failures"
+    ).click().run()
+    assert not at.exception
+    assert not any(e.label.startswith("Failed") for e in at.expander)
+    show = next(b for b in at.button if b.label.startswith("Show 1 dismissed"))
+    show.click().run()
+    assert any(e.label.startswith("Failed: 1 step") for e in at.expander)

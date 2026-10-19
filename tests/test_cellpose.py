@@ -11,6 +11,8 @@ _with_voxel_size) is covered in tests/test_pw.py.
 
 import inspect
 
+import pytest
+
 import numpy as np
 
 
@@ -263,3 +265,62 @@ def test_fetch_weights_downloads_without_loading_the_model(
     weights.write_bytes(b"w")
     assert cp.fetch_weights(str(weights)) == str(weights)
     assert built == []
+
+
+def test_fetch_weights_uses_cellpose_42s_download_by_name(monkeypatch):
+    """Cellpose 4.2 renamed the download (cache_model_path(name)) and added
+    models; 4.0-4.1's cache_CPSAM_model_path is gone there."""
+    from types import SimpleNamespace
+
+    import patchworks.plugins.cellpose as cp
+
+    fetched = []
+    fake = SimpleNamespace(
+        MODEL_NAMES=["cpsam_v2", "cpdino", "cpsam"],
+        cache_model_path=lambda name: fetched.append(name) or f"/m/{name}",
+        CellposeModel=lambda **kw: pytest.fail("the model was loaded"),
+    )
+    monkeypatch.setattr(cp, "_cellpose_models", fake)
+    monkeypatch.setattr(cp, "_CELLPOSE_V4", True)
+    assert cp.fetch_weights("cpsam") == "/m/cpsam"
+    assert cp.fetch_weights("cpsam_v2") == "/m/cpsam_v2"
+    assert fetched == ["cpsam", "cpsam_v2"]
+
+
+def test_fetch_weights_on_cellpose_3(monkeypatch):
+    """Cellpose 3: the model and, for the classic ones, its size model --
+    downloaded, not loaded."""
+    from types import SimpleNamespace
+
+    import patchworks.plugins.cellpose as cp
+
+    fetched = []
+    fake = SimpleNamespace(
+        MODEL_NAMES=["cyto3", "nuclei", "tissuenet_cp3"],
+        model_path=lambda name, i=0: fetched.append(name) or f"/m/{name}",
+        size_model_path=lambda name: fetched.append(f"size_{name}"),
+        cache_model_path=lambda b: pytest.fail("the v4.2 path on v3"),
+        Cellpose=lambda **kw: pytest.fail("the model was loaded"),
+        CellposeModel=lambda **kw: pytest.fail("the model was loaded"),
+    )
+    monkeypatch.setattr(cp, "_cellpose_models", fake)
+    monkeypatch.setattr(cp, "_CELLPOSE_V4", False)
+    assert cp.fetch_weights("cyto3") == "/m/cyto3"
+    assert cp.fetch_weights("tissuenet_cp3") == "/m/tissuenet_cp3"
+    assert fetched == ["cyto3", "size_cyto3", "tissuenet_cp3"]
+
+
+def test_fetch_weights_on_cellpose_40(monkeypatch):
+    """Cellpose 4.0-4.1: cpsam through cache_CPSAM_model_path."""
+    from types import SimpleNamespace
+
+    import patchworks.plugins.cellpose as cp
+
+    fake = SimpleNamespace(
+        MODEL_NAMES=["cpsam"],
+        cache_CPSAM_model_path=lambda: "/m/cpsam",
+        CellposeModel=lambda **kw: pytest.fail("the model was loaded"),
+    )
+    monkeypatch.setattr(cp, "_cellpose_models", fake)
+    monkeypatch.setattr(cp, "_CELLPOSE_V4", True)
+    assert cp.fetch_weights("cpsam") == "/m/cpsam"

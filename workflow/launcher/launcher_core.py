@@ -1938,6 +1938,51 @@ def parse_registry(text: str) -> list[dict[str, Any]]:
     return jobs[::-1]
 
 
+def registry_without(text: str, names: set[str]) -> str:
+    """The registry *text* without the jobs named *names* (the list only:
+    their logs and results stay)."""
+    kept = []
+    for line in text.splitlines():
+        try:
+            job = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(job, dict) and job.get("name") not in names:
+            kept.append(line + "\n")
+    return "".join(kept)
+
+
+# Which of the registry's jobs still run: all your SLURM jobs (squeue with
+# a list of ids fails as a whole once one id is purged) and each PID.
+def running_command(jobs: list[dict[str, Any]]) -> str:
+    pids = [str(j["pid"]) for j in jobs if str(j.get("pid", "")).isdigit()]
+    return "; ".join(
+        ["squeue --me -h -o %i 2>/dev/null"]
+        + [f"kill -0 {p} 2>/dev/null && echo PID{p}" for p in pids]
+    )
+
+
+def ended_jobs(jobs: list[dict[str, Any]], output: str) -> set[str]:
+    """The names of *jobs* no longer running, from :func:`running_command`'s
+    *output*."""
+    running = {line.strip() for line in output.splitlines()}
+    return {
+        j["name"]
+        for j in jobs
+        if str(j.get("slurm_job") or "") not in running
+        and f"PID{j.get('pid')}" not in running
+    }
+
+
+DISMISSED = f"{LOG_DIR}/dismissed_failures.json"
+
+
+def failure_key(failure: dict[str, Any]) -> str:
+    """What identifies a failure: its log and its error. A step that fails
+    again differently is a new failure, shown again."""
+    return f"{failure.get('log')}|{failure.get('error')}"
+
+
 # ---------------------------------------------------------------------------
 # A config back into the form (reopen a past run)
 # ---------------------------------------------------------------------------

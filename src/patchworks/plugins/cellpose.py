@@ -371,6 +371,10 @@ def _get_model(cellpose_dict: dict[str, Any]) -> Any:
     return _model_cache[key]
 
 
+# Cellpose 3's built-in models that come with a size model.
+_V3_SIZE_MODELS = ("cyto", "cyto2", "cyto3", "nuclei")
+
+
 def fetch_weights(model: str) -> str:
     """Download *model*'s weights if they are not cached yet, without
     loading the model; return where they are.
@@ -378,8 +382,10 @@ def fetch_weights(model: str) -> str:
     Loading Cellpose-SAM takes gigabytes of RAM: done by several
     segmentations at once inside a small controller job, that got one of
     them killed. Only the file is needed before the GPU jobs start.
-    Cellpose < 4, and models given by path or name of a user model, are
-    loaded as before (they are small, or have nothing to download).
+    Cellpose 4.2 names the download ``cache_model_path(name)``, 4.0-4.1
+    ``cache_CPSAM_model_path()``, Cellpose 3 ``model_path(name)`` (plus
+    ``size_model_path`` for the classic models). A release with none of
+    these, and user models by name, are loaded as before.
 
     Parameters
     ----------
@@ -393,8 +399,21 @@ def fetch_weights(model: str) -> str:
     """
     if Path(str(model)).is_file():
         return str(model)
-    if _CELLPOSE_V4 and model in getattr(_cellpose_models, "MODEL_NAMES", ()):
-        return _cellpose_models.cache_CPSAM_model_path()
+    models = _cellpose_models
+    builtin = model in getattr(models, "MODEL_NAMES", ())
+    if builtin and _CELLPOSE_V4:
+        # 4.2 downloads any built-in model by name; 4.0-4.1 had cpsam alone.
+        if hasattr(models, "cache_model_path"):
+            return models.cache_model_path(model)
+        if model == "cpsam" and hasattr(models, "cache_CPSAM_model_path"):
+            return models.cache_CPSAM_model_path()
+    elif builtin and hasattr(models, "model_path"):
+        # Cellpose 3: the model, and the size model the classic ones have
+        # (what Cellpose(model_type=...) downloads when built).
+        path = models.model_path(model, 0)
+        if model in _V3_SIZE_MODELS and hasattr(models, "size_model_path"):
+            models.size_model_path(model)
+        return path
     _get_model({"model": model, "gpu": False})  # checks cellpose is there
     return f"{model} (loaded)"
 
