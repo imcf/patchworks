@@ -111,7 +111,16 @@ def get_sftp() -> paramiko.SFTPClient:
 def run(client, command: str, *, login: bool = True, timeout: float = 120):
     """Run *command* remotely; a login shell only when PATH needs it."""
     wrapped = f"bash -lc {shlex.quote(command)}" if login else command
-    _, stdout, stderr = client.exec_command(wrapped, timeout=timeout)
+    # The server caps the channels one connection may have open at once
+    # (OpenSSH's MaxSessions): one refused while others close is retried.
+    for attempt in range(4):
+        try:
+            _, stdout, stderr = client.exec_command(wrapped, timeout=timeout)
+            break
+        except paramiko.ChannelException:
+            if attempt == 3:
+                raise
+            time.sleep(0.5 * 2**attempt)
     out = stdout.read().decode(errors="replace")
     err = stderr.read().decode(errors="replace")
     return stdout.channel.recv_exit_status(), out, err
@@ -1869,14 +1878,17 @@ TAIL_LINES = 300
 
 
 def _fetch_tails(paths) -> None:
+    """The last lines of each log in *paths*, in one command."""
     paths = [p for p in dict.fromkeys(paths) if p and p not in _TAILS]
-
-    def tail(path: str) -> str:
-        cmd = f"tail -n {TAIL_LINES} {shlex.quote(path)} 2>/dev/null"
-        return run(client, cmd, login=False, timeout=30)[1]
-
-    with ThreadPoolExecutor(8) as pool:
-        _TAILS.update(zip(paths, pool.map(tail, paths)))
+    if not paths:
+        return
+    _, out, _ = run(
+        client,
+        core.tails_command(paths, TAIL_LINES),
+        login=False,
+        timeout=60,
+    )
+    _TAILS.update(core.parse_tails(out, paths))
 
 
 def _tail(path: str, lines: int = 60) -> str:
@@ -1917,7 +1929,8 @@ def fetch_job(job: dict, setup: str) -> dict:
                 timeout=60,
             ),
         }
-    with ThreadPoolExecutor(len(calls)) as pool:
+    # A few at once: the server caps a connection's open channels.
+    with ThreadPoolExecutor(min(4, len(calls))) as pool:
         got = {
             k: f.result()
             for k, f in {k: pool.submit(c) for k, c in calls.items()}.items()
@@ -1995,6 +2008,25 @@ def segmentation_progress(seg: dict, steps: list[dict]) -> tuple[float, str]:
         )
         frac, text = step_progress(merge)
         return frac, f"merging · {text}"
+    if not total and seg["stage"] == "converted":
+        prepare = next(
+            (
+                s
+                for s in reversed(steps)
+                if s["rule"] == "prepare"
+                and (s.get("log") or "").endswith(
+                    f"/{seg['label_name']}/logs/prepare.log"
+                )
+            ),
+            None,
+        )
+        if prepare and prepare["state"] != "done":
+            return 0.0, (
+                "preparing the tiles"
+                if prepare["state"] != "failed"
+                else "preparing the tiles failed"
+            )
+        return 0.0, "converted, waiting to prepare the tiles"
     if total:
         tiles = seg.get("tiles")
         if tiles:
@@ -2875,7 +2907,9 @@ with tab_jobs:
             with st.expander(
                 "Snakemake log (the controller)",
                 icon=":material/terminal:",
-                expanded=alive and job.get("kind") == "check",
+                # Open while running if nothing above shows the run's steps.
+                expanded=alive
+                and (job.get("kind") == "check" or not data["steps"]),
             ):
                 st.caption(f"`{job['log']}`")
                 tail = _tail(job["log"], 300)

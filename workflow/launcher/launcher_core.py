@@ -1531,7 +1531,8 @@ def parse_queue(output: str) -> list[dict[str, str]]:
 # The lines of Snakemake's log that say which step ran where: each job's
 # rule, wildcards, log and SLURM job, and whether it failed or finished.
 STEPS_FILTER = (
-    r"^(local)?rule |^\s+(log|jobid|wildcards|resources):|has been submitted|"
+    r"^(local)?(rule|checkpoint) |^\s+(log|jobid|wildcards|resources):|"
+    r"has been submitted|"
     r"^Error in rule|Finished job"
 )
 
@@ -1576,7 +1577,10 @@ def parse_steps(text: str) -> list[dict[str, Any]]:
     block: dict[str, Any] | None = None  # a "rule" or "Error in rule" block
     for line in text.splitlines():
         stripped = line.strip()
-        start = re.match(r"(?:(?:local)?rule|Error in rule) (\w+):$", stripped)
+        # A checkpoint (prepare) is announced as "checkpoint prepare:".
+        start = re.match(
+            r"(?:(?:local)?(?:rule|checkpoint)|Error in rule) (\w+):$", stripped
+        )
         if start:
             block = {
                 "rule": start.group(1),
@@ -1670,6 +1674,31 @@ _PROGRESS = re.compile(
     r"(?P<label>[^\s:][^:]*): (?P<done>[\d,]+)/(?P<total>[\d,]+) "
     r"\((?P<pct>\d+)%\) after (?P<elapsed>\S+), ~(?P<left>\S+) left"
 )
+
+
+TAIL_MARK = "@@patchworks-tail@@"
+
+
+def tails_command(paths: list[str], lines: int) -> str:
+    """The last *lines* of each of *paths*, in one command (one SSH
+    channel: servers cap how many one connection may open at once)."""
+    return "; ".join(
+        f"echo {TAIL_MARK}{i}; tail -n {int(lines)} {shlex.quote(p)} 2>/dev/null"
+        for i, p in enumerate(paths)
+    )
+
+
+def parse_tails(output: str, paths: list[str]) -> dict[str, str]:
+    """:func:`tails_command`'s output, back to ``{path: text}``."""
+    found: dict[str, list[str]] = {p: [] for p in paths}
+    current = None
+    for line in output.splitlines():
+        if line.startswith(TAIL_MARK) and line[len(TAIL_MARK) :].isdigit():
+            i = int(line[len(TAIL_MARK) :])
+            current = paths[i] if i < len(paths) else None
+        elif current is not None:
+            found[current].append(line)
+    return {p: "\n".join(lines) for p, lines in found.items()}
 
 
 def last_progress(text: str) -> dict[str, Any] | None:
