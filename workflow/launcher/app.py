@@ -1834,11 +1834,13 @@ def job_actions(
     setup: str,
     auto: bool = False,
     run_jobs: list[str] | None = None,
+    queue: list[dict] | None = None,
 ) -> None:
     """The job's state, and Stop / Cancel all / Unlock / Relaunch.
 
     *run_jobs*: this run's SLURM jobs still in the queue (its controller
-    included), for "Cancel all its jobs".
+    included), pre-selected in "Cancel jobs"; *queue*: all your patchworks
+    jobs in the queue, any of which may be added.
     """
     ident = job.get("slurm_job") or job.get("pid")
     kind = "SLURM job" if job.get("slurm_job") else "PID"
@@ -1896,31 +1898,55 @@ def job_actions(
                         "Jobs it had submitted may keep running: "
                         "**Cancel all its jobs** ends them."
                     )
-        if run_jobs:
-            with st.popover(
-                f"Cancel all its jobs ({len(run_jobs)})",
-                icon=":material/cancel:",
-            ):
+        queue = queue or []
+        run_jobs = run_jobs or []
+        if queue:
+            names = {r["job"]: r["name"] for r in queue}
+            label = (
+                f"Cancel jobs ({len(run_jobs)} of this run)"
+                if run_jobs
+                else "Cancel jobs"
+            )
+            with st.popover(label, icon=":material/cancel:"):
                 st.markdown(
-                    "Cancels every SLURM job of this run still in the queue "
-                    "-- the steps it submitted and its controller -- at "
-                    "once: running steps are lost, finished ones stay. "
-                    "Then **Unlock** before launching again.\n\n"
-                    f"Jobs: {', '.join(run_jobs)}"
+                    "Cancels the chosen SLURM jobs at once: running steps are "
+                    "lost, finished ones stay. Then **Unlock** this run "
+                    "before launching it again. Pre-selected: the jobs this "
+                    "run's log says it submitted, and its controller."
                 )
-                if st.button("Cancel them", type="primary", key="cancel_all"):
+                chosen = st.multiselect(
+                    "jobs",
+                    list(names),
+                    default=run_jobs,
+                    format_func=lambda i: (
+                        f"{i} · {names[i]}"
+                        + (" · this run" if i in run_jobs else "")
+                    ),
+                    key="cancel_ids",
+                )
+                if st.button(
+                    "Cancel them",
+                    type="primary",
+                    key="cancel_all",
+                    disabled=not chosen,
+                ):
                     rc, out, err = run(
                         client,
                         core.inner_command(
-                            wf_dir, setup_cmd, core.cancel_command(run_jobs)
+                            wf_dir, setup_cmd, core.cancel_command(chosen)
                         ),
                         timeout=60,
                     )
                     (st.success if rc == 0 else st.error)(
-                        f"cancelled {len(run_jobs)} job(s)"
+                        f"cancelled {len(chosen)} job(s)"
                         if rc == 0
                         else core.explain_remote_error(err or out)
                     )
+        elif job.get("slurm_job"):
+            st.caption(
+                ":material/check_circle: None of your patchworks jobs is in "
+                "the queue."
+            )
         unlock = core.unlock_command(job, wf_dir)
         if not alive and unlock:
             if c2.button(
@@ -2242,30 +2268,15 @@ def steps_view(steps: list[dict], queue: list[dict]) -> None:
                     )
 
 
-def job_progress(job: dict, steps: list[dict], result) -> None:
-    """How far the run got (scripts/status.py), and what it made."""
+def job_progress(job: dict, steps: list[dict], result) -> dict | None:
+    """How far the run got (scripts/status.py); returns that status."""
     rc, out, err = result
     status = core.parse_json_output(out)
     if not status or "segmentations" not in status:
         st.caption(
             f"progress unavailable: {core.explain_remote_error(err or out)}"
         )
-        return
-    failed = list(status.get("failures") or []) + [
-        {**f, "step": f"{seg['label_name']}: {f['step']}"}
-        for seg in status["segmentations"]
-        for f in seg.get("failures") or []
-    ]
-    if failed:
-        with section(":material/error: Failed", "and what to do about it"):
-            for f in failed:
-                st.error(f"**{f['step']}**: `{f['error']}`")
-                if f.get("hint"):
-                    st.markdown(f":material/lightbulb: {f['hint']}")
-                with st.expander(
-                    f"log: {f['log']}", icon=":material/terminal:"
-                ):
-                    st.code(_tail(f["log"], 80) or "(empty)", language="text")
+        return None
     convert_only = job.get("kind") == "convert"
     with section(":material/data_usage: Progress", f"`{status['work_dir']}`"):
         # The shared steps first, while they matter: convert, occupancy.
@@ -2281,7 +2292,7 @@ def job_progress(job: dict, steps: list[dict], result) -> None:
             )
             st.progress(frac, text=f"**{rule}** · {text}")
         if convert_only:
-            return
+            return status
         for seg in status["segmentations"]:
             frac, what = segmentation_progress(seg, steps)
             st.progress(frac, text=f"**{seg['label_name']}** · {what}")
@@ -2306,6 +2317,30 @@ def job_progress(job: dict, steps: list[dict], result) -> None:
                         else ""
                     ),
                 )
+    return status
+
+
+def job_failures(status: dict) -> None:
+    """The steps that failed, what to do, and their logs."""
+    failed = list(status.get("failures") or []) + [
+        {**f, "step": f"{seg['label_name']}: {f['step']}"}
+        for seg in status["segmentations"]
+        for f in seg.get("failures") or []
+    ]
+    if failed:
+        with section(":material/error: Failed", "and what to do about it"):
+            for f in failed:
+                st.error(f"**{f['step']}**: `{f['error']}`")
+                if f.get("hint"):
+                    st.markdown(f":material/lightbulb: {f['hint']}")
+                with st.expander(
+                    f"log: {f['log']}", icon=":material/terminal:"
+                ):
+                    st.code(_tail(f["log"], 80) or "(empty)", language="text")
+
+
+def job_results(status: dict) -> None:
+    """What the run made: objects, seams, relations, how to look at it."""
     done = [s for s in status["segmentations"] if s["stage"] == "done"]
     if not done and not status.get("relations"):
         return
@@ -3103,6 +3138,7 @@ with tab_jobs:
                 run_jobs=core.run_jobs_in_queue(
                     job, data["steps"], data["queue"]
                 ),
+                queue=data["queue"],
             )
             if job.get("kind") == "check":
                 if not alive:
@@ -3116,8 +3152,13 @@ with tab_jobs:
             elif job.get("config"):
                 if alive:
                     queue_view(data["queue"])
-                job_progress(job, data["steps"], data["status"])
+                # How far it got and its steps first; then what failed (with
+                # its logs) and what it made; the controller's log last.
+                status = job_progress(job, data["steps"], data["status"])
                 steps_view(data["steps"], data["queue"])
+                if status:
+                    job_failures(status)
+                    job_results(status)
             with st.expander(
                 "Snakemake log (the controller)",
                 icon=":material/terminal:",

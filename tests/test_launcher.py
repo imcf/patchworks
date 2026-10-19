@@ -2004,3 +2004,16 @@ def test_cancel_all_of_a_runs_jobs_after_a_force_stop():
         "scancel 203" in cancel and "999" not in cancel and " 42" not in cancel
     )
     assert core.cancel_command(["1", "x; rm -rf /"]) == "scancel 1"
+
+
+def test_steps_of_interleaved_snakemakes_keep_their_jobs():
+    """run_multi's Snakemake processes share the log and all number their
+    jobs from 0: each submission goes to the step waiting for it."""
+    log = (
+        "rule segment:\n    log: /w/a/logs/segment/0.log\n    jobid: 5\n"
+        "rule segment:\n    log: /w/b/logs/segment/0.log\n    jobid: 5\n"
+        "Job 5 has been submitted with SLURM jobid 11 (log: /s/11.log).\n"
+        "Job 5 has been submitted with SLURM jobid 12 (log: /s/12.log).\n"
+    )
+    a, b = core.parse_steps(log)
+    assert {a["slurm_job"], b["slurm_job"]} == {"11", "12"}
