@@ -17,6 +17,7 @@ from __future__ import annotations
 import importlib.metadata
 import logging
 from functools import partial
+from pathlib import Path
 from typing import Any, Callable
 
 import numpy as np
@@ -368,6 +369,35 @@ def _get_model(cellpose_dict: dict[str, Any]) -> Any:
                 model_type=model_type, gpu=gpu
             )
     return _model_cache[key]
+
+
+def fetch_weights(model: str) -> str:
+    """Download *model*'s weights if they are not cached yet, without
+    loading the model; return where they are.
+
+    Loading Cellpose-SAM takes gigabytes of RAM: done by several
+    segmentations at once inside a small controller job, that got one of
+    them killed. Only the file is needed before the GPU jobs start.
+    Cellpose < 4, and models given by path or name of a user model, are
+    loaded as before (they are small, or have nothing to download).
+
+    Parameters
+    ----------
+    model : str
+        A built-in model name (``"cpsam"``), or a path.
+
+    Returns
+    -------
+    str
+        The weights' path, or what was done.
+    """
+    _require_cellpose()
+    if _CELLPOSE_V4 and model in getattr(_cellpose_models, "MODEL_NAMES", ()):
+        return _cellpose_models.cache_CPSAM_model_path()
+    if Path(str(model)).is_file():
+        return str(model)
+    _get_model({"model": model, "gpu": False})
+    return f"{model} (loaded)"
 
 
 def _drop_cached_models() -> None:
