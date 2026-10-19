@@ -292,9 +292,11 @@ HELP = {
     "**Controller as a SLURM job** (the usual): a small 1-CPU job submits "
     "and follows the GPU jobs; you can close the browser. **On the login "
     "node**: for short runs only, a reboot ends it.",
-    "ctrl_time": "How long the controller job may run: the whole run, "
-    "conversion to merge. It must fit its partition's and QOS's "
-    "limits.\n\nExample: `3-00:00:00` (3 days)",
+    "ctrl_time": "The most the controller job may run: it ends as soon as "
+    "the run ends, so this is a ceiling, not a cost. Cover the whole run, "
+    "conversion to merge (with the queue's waits); if it runs out, launch "
+    "again and the run resumes. It must fit its partition's and QOS's "
+    "limits.\n\nExample: `3-00:00:00` (3 days) for a whole run",
     "ctrl_mem": "Memory of the controller job: it only follows the other "
     "jobs.\n\nExample: `4G`",
     "ctrl_partition": "The partition for the controller job: one whose time "

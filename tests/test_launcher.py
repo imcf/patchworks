@@ -813,6 +813,9 @@ def test_app_resources_change_for_one_run():
     # The default QOS (6 hours) is too short for the controller's 3 days:
     # one that allows them is chosen.
     assert at.selectbox(key="ctrl_qos").value == "1week"
+    # In one line, what the controller is and what it was given.
+    (line,) = [m.value for m in at.markdown if "**controller**" in m.value]
+    assert "**3-00:00:00**" in line and "QOS **1week**" in line
     # A QOS picked that is too short: flagged, with a button to fix it.
     at.selectbox(key="ctrl_qos").set_value("1day").run()
     assert any("longer than QOS '1day'" in e.value for e in at.error)
