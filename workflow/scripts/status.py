@@ -45,6 +45,18 @@ def _attrs(path: Path) -> dict:
     return {}
 
 
+def converted(store: Path) -> bool:
+    """Whether the conversion into *store* finished.
+
+    Not just its root ``zarr.json`` (or ``.zgroup``): that is written when
+    the conversion starts; the ``multiscales`` metadata only at its end.
+    """
+    attrs = _attrs(store)
+    return bool(
+        attrs.get("multiscales") or (attrs.get("ome") or {}).get("multiscales")
+    )
+
+
 # What a failed step's log says, and what to do about it. First match wins.
 HINTS = (
     (
@@ -204,18 +216,17 @@ def shared_failures(cfg: dict) -> list[dict]:
     store = work / "image.zarr"
     found = []
     for step, log, done in (
-        (
-            "convert",
-            work / "logs" / "convert.log",
-            [store / "zarr.json", store / ".zgroup"],
-        ),
+        ("convert", work / "logs" / "convert.log", None),
         (
             "occupancy",
             work / "logs" / "occupancy.log",
             [work / "image.occupancy.zarr" / str(level) / "zarr.json"],
         ),
     ):
-        if log.exists() and not any(d.exists() for d in done):
+        finished = (
+            converted(store) if done is None else any(d.exists() for d in done)
+        )
+        if log.exists() and not finished:
             failure = _failure(step, log)
             if failure:
                 found.append(failure)
@@ -230,8 +241,7 @@ def segmentation_status(cfg: dict) -> dict:
     store = work / "image.zarr"
     out: dict = {
         "label_name": label,
-        "converted": (store / "zarr.json").exists()
-        or (store / ".zgroup").exists(),
+        "converted": converted(store),
         "batches": None,
         "batches_done": 0,
         "merged": (run / "labels.done").exists(),
@@ -282,9 +292,7 @@ def run_status(cfgs: list[dict], multi: dict | None) -> dict:
     # The shared steps before the segmentations: convert, then occupancy.
     work, level = Path(cfgs[0]["work_dir"]), int(cfgs[0].get("level", 0))
     store = work / "image.zarr"
-    status["converted"] = (store / "zarr.json").exists() or (
-        store / ".zgroup"
-    ).exists()
+    status["converted"] = converted(store)
     status["occupancy"] = (
         work / "image.occupancy.zarr" / str(level) / "zarr.json"
     ).exists()

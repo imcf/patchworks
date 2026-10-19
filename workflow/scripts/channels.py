@@ -20,6 +20,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from check import load  # noqa: E402
 from run_multi import _config_bases, _resolve  # noqa: E402
+from status import converted  # noqa: E402
 
 # The finest pyramid level no wider than this is drawn.
 MAX_SIDE = 1024
@@ -81,10 +82,10 @@ def main() -> None:
     _, cfgs, _ = load(path)
     work = Path(cfgs[0]["work_dir"])
     store = work / "image.zarr"
-    if not ((store / "zarr.json").exists() or (store / ".zgroup").exists()):
+    if not converted(store):
         sys.exit(
             f"[channels] ERROR: {store} is not converted yet: convert first "
-            "(the run's first step)"
+            "(the run's first step), or wait for it to finish"
         )
     info = channel_pictures(str(store), work / "previews" / "channels")
     if args.json:

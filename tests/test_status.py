@@ -35,7 +35,9 @@ def _markers(work, label, *, batches=4, done=0, merged=False, objects=None):
 def test_a_multi_run_part_way(tmp_path, capsys, monkeypatch):
     work = tmp_path / "results"
     (work / "image.zarr").mkdir(parents=True)
-    (work / "image.zarr" / "zarr.json").write_text("{}")
+    (work / "image.zarr" / "zarr.json").write_text(
+        json.dumps({"attributes": {"ome": {"multiscales": [{}]}}})
+    )
     _markers(work, "nuclei", batches=4, done=4, merged=True, objects=1234)
     _markers(work, "cells", batches=10, done=3)
     (work / "n_c.xlsx").touch()
@@ -100,7 +102,9 @@ def test_one_config_not_started(tmp_path):
 def test_failures_say_what_went_wrong_and_what_to_do(tmp_path):
     work = tmp_path / "results"
     (work / "image.zarr").mkdir(parents=True)
-    (work / "image.zarr" / "zarr.json").write_text("{}")
+    (work / "image.zarr" / "zarr.json").write_text(
+        json.dumps({"attributes": {"ome": {"multiscales": [{}]}}})
+    )
     _markers(work, "cells", batches=3, done=1)
     logs = work / "cells" / "logs" / "segment"
     logs.mkdir(parents=True)
@@ -131,7 +135,8 @@ def test_failures_say_what_went_wrong_and_what_to_do(tmp_path):
         "OSError: No space left on device\n"
     )
     assert status.shared_failures(cfg) == []  # converted, so not failed
-    (work / "image.zarr" / "zarr.json").unlink()
+    # Started, not finished: the root is there, the multiscales not yet.
+    (work / "image.zarr" / "zarr.json").write_text("{}")
     (shared,) = status.shared_failures(cfg)
     assert "disk is full" in shared["hint"]
 

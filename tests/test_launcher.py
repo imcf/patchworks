@@ -1341,7 +1341,7 @@ def test_jobs_tab_shows_a_tried_tile():
     Image.new("RGB", (8, 4)).save(png, format="PNG")
     job = _job(kind="check", previews="/scratch/run/previews/1")
     ssh = _FakeSSH(
-        {"squeue": "DONE\n", "cat ": "[check] log\n" + json.dumps(report)},
+        {"squeue": "DONE\n", "tail -n": "[check] log\n" + json.dumps(report)},
         files={
             f"{WF}/{core.REGISTRY}": core.registry_line(job).encode(),
             "/scratch/run/previews/1/cells.png": png.getvalue(),
@@ -1540,6 +1540,9 @@ def test_jobs_tab_convert_only_shows_the_convert_step():
     steps = next(d.value for d in at.dataframe if "step" in d.value.columns)
     assert steps["state"].tolist() == ["running"]
     assert any("convert · running" in e.label for e in at.expander)
+    assert any(
+        "updated" in c.value and "every 15 s" in c.value for c in at.caption
+    )
 
 
 def test_cellpose_model_dropdown_lists_the_clusters_models():
