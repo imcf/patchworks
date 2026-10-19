@@ -918,6 +918,32 @@ def stop_command(job: dict[str, Any], *, force: bool = False) -> str:
     return f"kill -{'KILL' if force else 'INT'} -- -{pid}"
 
 
+def run_jobs_in_queue(
+    job: dict[str, Any],
+    steps: list[dict[str, Any]],
+    queue: list[dict[str, str]],
+) -> list[str]:
+    """The SLURM jobs of this run still in the queue: those its Snakemake
+    log says it submitted, and its controller. Nobody else's: the ids come
+    from the run's own log, not from job names."""
+    queued = {row["job"] for row in queue}
+    ids = [
+        s["slurm_job"]
+        for s in steps
+        if s.get("slurm_job") and s["slurm_job"] in queued
+    ]
+    controller = str(job.get("slurm_job") or "")
+    if controller and controller in queued:
+        ids.append(controller)
+    return list(dict.fromkeys(ids))
+
+
+def cancel_command(ids: list[str]) -> str:
+    """``scancel`` for *ids* (job numbers only)."""
+    clean = [i for i in ids if str(i).isdigit()]
+    return "scancel " + " ".join(clean) if clean else "true"
+
+
 def unlock_command(job: dict[str, Any], workflow_dir: str) -> str | None:
     """Release the Snakemake lock a killed run left behind."""
     config = job.get("config")

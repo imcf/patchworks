@@ -1828,9 +1828,18 @@ STATE_COLORS = {"RUNNING": "green", "PENDING": "orange", "DONE": "gray"}
 
 
 def job_actions(
-    job: dict, state: str, alive: bool, setup: str, auto: bool = False
+    job: dict,
+    state: str,
+    alive: bool,
+    setup: str,
+    auto: bool = False,
+    run_jobs: list[str] | None = None,
 ) -> None:
-    """The job's state, and Stop / Unlock / Relaunch."""
+    """The job's state, and Stop / Cancel all / Unlock / Relaunch.
+
+    *run_jobs*: this run's SLURM jobs still in the queue (its controller
+    included), for "Cancel all its jobs".
+    """
     ident = job.get("slurm_job") or job.get("pid")
     kind = "SLURM job" if job.get("slurm_job") else "PID"
     color = STATE_COLORS.get(state, "red")
@@ -1885,7 +1894,32 @@ def job_actions(
                     )
                     st.caption(
                         "Jobs it had submitted may keep running: "
-                        "`squeue --me` lists them."
+                        "**Cancel all its jobs** ends them."
+                    )
+        if run_jobs:
+            with st.popover(
+                f"Cancel all its jobs ({len(run_jobs)})",
+                icon=":material/cancel:",
+            ):
+                st.markdown(
+                    "Cancels every SLURM job of this run still in the queue "
+                    "-- the steps it submitted and its controller -- at "
+                    "once: running steps are lost, finished ones stay. "
+                    "Then **Unlock** before launching again.\n\n"
+                    f"Jobs: {', '.join(run_jobs)}"
+                )
+                if st.button("Cancel them", type="primary", key="cancel_all"):
+                    rc, out, err = run(
+                        client,
+                        core.inner_command(
+                            wf_dir, setup_cmd, core.cancel_command(run_jobs)
+                        ),
+                        timeout=60,
+                    )
+                    (st.success if rc == 0 else st.error)(
+                        f"cancelled {len(run_jobs)} job(s)"
+                        if rc == 0
+                        else core.explain_remote_error(err or out)
                     )
         unlock = core.unlock_command(job, wf_dir)
         if not alive and unlock:
@@ -3060,7 +3094,16 @@ with tab_jobs:
             st.session_state[alive_key] = alive
             if was_alive != alive:  # started or ended: (un)set auto-refresh
                 st.rerun()
-            job_actions(job, state, alive, setup, auto)
+            job_actions(
+                job,
+                state,
+                alive,
+                setup,
+                auto,
+                run_jobs=core.run_jobs_in_queue(
+                    job, data["steps"], data["queue"]
+                ),
+            )
             if job.get("kind") == "check":
                 if not alive:
                     report = core.parse_json_output(
