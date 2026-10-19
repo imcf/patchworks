@@ -71,6 +71,7 @@ def test_a_multi_run_part_way(tmp_path, capsys, monkeypatch):
         10,
     )
     assert stages["cilia"]["stage"] == "converted"
+    assert got["converted"] is True and got["occupancy"] is False
     assert [r["files"] != [] for r in got["relations"]] == [True, False]
     assert got["bundle"] is None
 
@@ -92,6 +93,7 @@ def test_one_config_not_started(tmp_path):
     cfg.write_text(yaml.safe_dump({"work_dir": str(tmp_path / "w")}))
     got = status.run_status(*status._configs(cfg))
     assert got["segmentations"][0]["stage"] == "not started"
+    assert got["converted"] is False
     assert "relations" not in got
 
 

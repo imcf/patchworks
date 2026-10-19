@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import re
 import shlex
 from pathlib import Path
 from typing import Any
@@ -1492,6 +1493,134 @@ def parse_queue(output: str) -> list[dict[str, str]]:
             }
         )
     return rows
+
+
+# The lines of Snakemake's log that say which step ran where: each job's
+# rule, wildcards, log and SLURM job, and whether it failed or finished.
+STEPS_FILTER = (
+    r"^(local)?rule |^\s+(log|jobid|wildcards):|has been submitted|"
+    r"^Error in rule|Finished job"
+)
+
+
+def steps_command(log: str) -> str:
+    """The step lines of the controller's log *log* (see :data:`STEPS_FILTER`)."""
+    return (
+        f"grep -E {shlex.quote(STEPS_FILTER)} {shlex.quote(log)} "
+        "2>/dev/null | tail -n 20000"
+    )
+
+
+_SUBMITTED = re.compile(
+    r"Job (\d+) has been submitted with SLURM jobid (\d+) \(log: ([^)]+)\)"
+)
+_FINISHED = re.compile(r"Finished job(?:id:)? (\d+)")
+
+
+def parse_steps(text: str) -> list[dict[str, Any]]:
+    """The steps Snakemake ran, from its log, the latest attempt of each.
+
+    Each: ``rule``, ``wildcards``, ``log`` (the step's own log),
+    ``slurm_job`` and ``slurm_log`` (when submitted to SLURM), ``attempt``
+    and ``state`` ("submitted", "failed" or "done").
+    """
+    # Keyed by job id, rule and log: run_multi's Snakemake processes share
+    # one log, each numbering its jobs from 0.
+    steps: dict[tuple, dict[str, Any]] = {}
+
+    def latest(jid: str, rule: str | None = None) -> dict[str, Any] | None:
+        return next(
+            (
+                v
+                for k, v in reversed(steps.items())
+                if k[0] == jid and rule in (None, k[1])
+            ),
+            None,
+        )
+
+    block: dict[str, Any] | None = None  # a "rule" or "Error in rule" block
+    for line in text.splitlines():
+        stripped = line.strip()
+        start = re.match(r"(?:(?:local)?rule|Error in rule) (\w+):$", stripped)
+        if start:
+            block = {
+                "rule": start.group(1),
+                "wildcards": "",
+                "log": None,
+                "jid": None,
+                "error": stripped.startswith("Error"),
+            }
+            continue
+        if block is not None and line[:1].isspace() and ":" in stripped:
+            key, value = (x.strip() for x in stripped.split(":", 1))
+            step = block.get("step")
+            if key == "jobid":
+                block["jid"] = jid = value.split()[0]
+                if block["error"]:
+                    failed = latest(jid, block["rule"])
+                    if failed:
+                        failed["state"] = "failed"
+                    continue
+                key = (jid, block["rule"], block["log"])
+                previous = steps.pop(key, None)  # re-inserted: latest last
+                steps[key] = block["step"] = {
+                    "rule": block["rule"],
+                    "wildcards": block["wildcards"],
+                    "log": block["log"],
+                    "slurm_job": None,
+                    "slurm_log": None,
+                    "attempt": previous["attempt"] + 1 if previous else 1,
+                    "state": "submitted",
+                }
+            elif key == "log" and not block["error"]:
+                block["log"] = value.split(",")[0].split(" (")[0].strip()
+            elif key == "wildcards" and not block["error"]:
+                block["wildcards"] = value
+                if step:
+                    step["wildcards"] = value
+            continue
+        block = None
+        submitted = _SUBMITTED.search(line)
+        if submitted:
+            step = latest(submitted.group(1))
+            if step:
+                step.update(
+                    slurm_job=submitted.group(2),
+                    slurm_log=submitted.group(3).strip(),
+                )
+            continue
+        finished = _FINISHED.search(line)
+        if finished:
+            rule = re.search(r"\(Rule: (\w+)\)", line)
+            step = latest(finished.group(1), rule.group(1) if rule else None)
+            if step:
+                step["state"] = "done"
+    return list(steps.values())
+
+
+_PROGRESS = re.compile(
+    r"(?P<label>[^\s:][^:]*): (?P<done>[\d,]+)/(?P<total>[\d,]+) "
+    r"\((?P<pct>\d+)%\) after (?P<elapsed>\S+), ~(?P<left>\S+) left"
+)
+
+
+def last_progress(text: str) -> dict[str, Any] | None:
+    """The last progress line a step logged (``patchworks._progress``):
+    ``label``, ``fraction``, ``elapsed``, ``left``."""
+    for line in reversed(text.splitlines()):
+        m = _PROGRESS.search(line)
+        if m:
+            done = int(m["done"].replace(",", ""))
+            total = int(m["total"].replace(",", ""))
+            return {
+                "label": m["label"].split(" - ")[-1].strip(),
+                "fraction": min(1.0, done / max(1, total)),
+                "done": done,
+                "total": total,
+                "elapsed": m["elapsed"],
+                "left": m["left"],
+            }
+    return None
 
 
 def status_command(job: dict[str, Any]) -> str:

@@ -279,6 +279,15 @@ def run_status(cfgs: list[dict], multi: dict | None) -> dict:
         "segmentations": [segmentation_status(c) for c in cfgs],
         "failures": shared_failures(cfgs[0]),
     }
+    # The shared steps before the segmentations: convert, then occupancy.
+    work, level = Path(cfgs[0]["work_dir"]), int(cfgs[0].get("level", 0))
+    store = work / "image.zarr"
+    status["converted"] = (store / "zarr.json").exists() or (
+        store / ".zgroup"
+    ).exists()
+    status["occupancy"] = (
+        work / "image.occupancy.zarr" / str(level) / "zarr.json"
+    ).exists()
     for seg, cfg in zip(status["segmentations"], cfgs):
         # A single run's Snakemake works in the workflow folder.
         seg["failures"] = failures(cfg, workflow_dir if multi is None else None)

@@ -1450,6 +1450,98 @@ def test_jobs_tab_shows_failures_and_the_queue():
     assert len(queue) == 3
 
 
+CONTROLLER_LOG = """[Mon Oct 19 09:44:01 2026]
+rule convert:
+    output: /scratch/run/image.zarr/zarr.json
+    log: /scratch/run/logs/convert.log
+    jobid: 0
+    reason: Missing output files: /scratch/run/image.zarr/zarr.json
+Job 0 has been submitted with SLURM jobid 201 (log: /s/slurm_logs/rule_convert/201.log).
+[Mon Oct 19 09:48:01 2026]
+Error in rule convert:
+    message: SLURM-job '201' failed
+    jobid: 0
+    log: /scratch/run/logs/convert.log (check log file(s) for error details)
+Trying to restart job 0.
+[Mon Oct 19 09:56:32 2026]
+rule convert:
+    output: /scratch/run/image.zarr/zarr.json
+    log: /scratch/run/logs/convert.log
+    jobid: 0
+Job 0 has been submitted with SLURM jobid 203 (log: /s/slurm_logs/rule_convert/203.log).
+"""
+
+
+def test_steps_from_the_controllers_log():
+    (step,) = core.parse_steps(CONTROLLER_LOG)
+    assert step["rule"] == "convert" and step["attempt"] == 2
+    assert step["slurm_job"] == "203" and step["state"] == "submitted"
+    assert step["log"] == "/scratch/run/logs/convert.log"
+    assert step["slurm_log"] == "/s/slurm_logs/rule_convert/203.log"
+    done = core.parse_steps(
+        CONTROLLER_LOG + "Finished jobid: 0 (Rule: convert)\n"
+    )
+    assert done[0]["state"] == "done"
+    progress = core.last_progress(
+        "12:00 INFO patchworks - image.zarr/0: 1,234/5,000 (24%) after 3m, "
+        "~9m left\nother line\n"
+    )
+    assert progress["label"] == "image.zarr/0" and progress["left"] == "9m"
+    assert round(progress["fraction"], 2) == 0.25
+    assert core.last_progress("nothing yet") is None
+
+
+def test_jobs_tab_convert_only_shows_the_convert_step():
+    """A convert-only run: its progress is the conversion's, from the step's
+    own log, not the segmentations'; each step's log is one click away."""
+    pytest.importorskip("paramiko")
+    status = {
+        "work_dir": "/scratch/run",
+        "segmentations": [
+            {
+                "label_name": "nuclei",
+                "stage": "not started",
+                "batches": None,
+                "batches_done": 0,
+                "objects": None,
+                "seams": None,
+            }
+        ],
+        "failures": [],
+        "converted": False,
+        "occupancy": False,
+    }
+    ssh = _FakeSSH(
+        {
+            "squeue --me": "203|patchworks_95|RUNNING|None|12:00|6:00:00|scicore\n",
+            "squeue": "RUNNING\n",
+            "scripts/status.py": json.dumps(status),
+            "grep -E": CONTROLLER_LOG,
+            "/scratch/run/logs/convert.log": "image.zarr/0: 1,234/5,000 "
+            "(24%) after 3m, ~9m left\n",
+            "tail -n": "the log\n",
+        },
+        files={
+            f"{WF}/{core.REGISTRY}": core.registry_line(
+                _job(kind="convert", slurm_job="42")
+            ).encode()
+        },
+    )
+    at = _app(ssh, input="/x.czi", work_dir="/scratch/run")
+    at.run()
+    assert not at.exception
+    texts = [p.proto.text for p in at.get("progress")]
+    assert any(
+        "convert** · image.zarr/0: 25%, ~9m left (attempt 2)" in t
+        for t in texts
+    ), texts
+    assert any("occupancy** · waiting to start" in t for t in texts)
+    assert not any("nuclei" in t for t in texts)
+    steps = next(d.value for d in at.dataframe if "step" in d.value.columns)
+    assert steps["state"].tolist() == ["running"]
+    assert any("convert · running" in e.label for e in at.expander)
+
+
 def test_cellpose_model_dropdown_lists_the_clusters_models():
     pytest.importorskip("paramiko")
     ssh = _FakeSSH({"available_models": 'MODELS:["cpsam"]\n'})
