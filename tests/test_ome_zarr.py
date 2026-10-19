@@ -586,8 +586,8 @@ def test_large_source_chunks_are_written_slab_by_slab(
             shard=shard,
             progress=True,
         )
-    if not shard:  # a shard spans every plane here: one slab per channel
-        assert "in 6 slab(s) of (1, 2)" in caplog.text, caplog.text
+    # A plane's pyramid (4/3 of it) is what a slab now holds: one per slab.
+    assert "in one pass, 10 slab(s) of (1, 1)" in caplog.text, caplog.text
     result = np.asarray(load_ome_zarr(out, channel=None))
     assert (
         result[:, :, 0, 0]
@@ -1118,3 +1118,69 @@ def test_fast_block_mean_matches_the_general_path(dtype):
     np.testing.assert_array_equal(
         _downsample(ties, (1, 1, 2), "mean"), [[[0, 2, 2]]]
     )
+
+
+@pytest.mark.parametrize("downsample", ["mean", "nearest", "mode"])
+@pytest.mark.parametrize("shard", [False, True])
+def test_one_pass_pyramid_is_the_level_by_level_one(
+    tmp_path, monkeypatch, caplog, shard, downsample
+):
+    """A plane per file of gigabytes: all levels from one read of each slab
+    of planes. Every level, and the metadata, must be exactly what the
+    level-by-level path writes -- odd sizes and edge blocks included."""
+    import json
+    import logging
+
+    import patchworks._chunks as chunks_mod
+    import patchworks.plugins.ome_zarr as oz
+
+    tifffile = pytest.importorskip("tifffile")
+    rng = np.random.default_rng(1)
+    n_z, n_c, ny, nx = 5, 2, 75, 61
+    src = tmp_path / "src"
+    src.mkdir()
+    for z in range(n_z):
+        for c in range(n_c):
+            tifffile.imwrite(
+                src / f"s_Z{z:03d}_C{c}_V0.tif",
+                rng.integers(0, 5, (ny, nx)).astype("uint16")
+                if downsample == "mode"
+                else rng.integers(0, 60000, (ny, nx)).astype("uint16"),
+            )
+    plane = ny * nx * 2
+    # Two planes' pyramids per slab.
+    monkeypatch.setattr(
+        chunks_mod,
+        "_get_available_memory",
+        lambda: int(2 * (plane * 4 // 3) * 3 / 0.6) + 1,
+    )
+
+    def convert(out, one_pass):
+        monkeypatch.setattr(oz, "_SLAB_SOURCE_BYTES", 1 if one_pass else 10**18)
+        caplog.clear()
+        with caplog.at_level(logging.INFO, logger="patchworks"):
+            to_ome_zarr(
+                str(src / "*.tif"),
+                out,
+                sequence_pattern=r"_Z(?P<Z>\d+)_C(?P<C>\d+)_V\d+",
+                n_levels=4,
+                shard=shard,
+                downsample=downsample,
+                progress=True,
+            )
+        return caplog.text
+
+    log = convert(tmp_path / "one.zarr", True)
+    assert "in one pass" in log, log
+    assert "in one pass" not in convert(tmp_path / "levels.zarr", False)
+
+    def meta(path):
+        attrs = zarr.open_group(str(path), mode="r").attrs.asdict()
+        return json.loads(json.dumps(attrs).replace(f'"{path.stem}"', '"X"'))
+
+    assert meta(tmp_path / "one.zarr") == meta(tmp_path / "levels.zarr")
+    for level in ("0", "1", "2", "3"):
+        one = zarr.open_array(f"{tmp_path}/one.zarr/{level}", mode="r")
+        ref = zarr.open_array(f"{tmp_path}/levels.zarr/{level}", mode="r")
+        np.testing.assert_array_equal(one[...], ref[...], err_msg=level)
+        assert one.chunks[:2] == (1, 1)  # one plane deep: whole-chunk slabs
