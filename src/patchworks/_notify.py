@@ -113,7 +113,10 @@ def send(
 
 
 def slurm_mail_extra(
-    email: Union[str, None], events: Union[list, tuple, None] = None
+    email: Union[str, None],
+    events: Union[list, tuple, None] = None,
+    attempt: int = 1,
+    retries: int = 0,
 ) -> str:
     """Build the ``slurm_extra`` fragment for per-job mail.
 
@@ -129,6 +132,11 @@ def slurm_mail_extra(
     events : sequence of str, optional
         Any of ``"start"``, ``"finish"``, ``"error"``. Defaults to finish and
         error -- a BEGIN mail per job is rarely worth the inbox.
+    attempt, retries : int, optional
+        Which attempt this job is, and how many retries Snakemake makes
+        after a failure (the profile's ``retries``). Each attempt is a new
+        SLURM job: "start" mails only for the first, "error" only for the
+        last, so a failure Snakemake retries mails nothing.
 
     Returns
     -------
@@ -142,6 +150,8 @@ def slurm_mail_extra(
     '--mail-type=FAIL --mail-user=me@example.org'
     >>> slurm_mail_extra(None)
     ''
+    >>> slurm_mail_extra("me@example.org", attempt=1, retries=2)
+    '--mail-type=END --mail-user=me@example.org'
     """
     if not email:
         return ""
@@ -153,8 +163,14 @@ def slurm_mail_extra(
             f"unknown notify_events {unknown}; use any of "
             f"{sorted(mapping)} (they map to SLURM's BEGIN/END/FAIL)"
         )
+    if attempt > 1:
+        chosen = [k for k in chosen if k != "start"]
+    if attempt <= retries:  # a failure is retried: not worth a mail yet
+        chosen = [k for k in chosen if k != "error"]
     # Keep SLURM's own order, not the config's, so the string is stable.
     types = [mapping[k] for k in ("start", "finish", "error") if k in chosen]
+    if not types:
+        return ""
     return f"--mail-type={','.join(types)} --mail-user={email}"
 
 
