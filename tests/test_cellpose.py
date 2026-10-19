@@ -238,3 +238,28 @@ def test_fragments_are_judged_against_the_diameter_in_every_tile(monkeypatch):
         np.zeros((8, 64, 64), "uint16")
     )
     assert not out.any()
+
+
+def test_fetch_weights_downloads_without_loading_the_model(
+    monkeypatch, tmp_path
+):
+    """Cellpose-SAM's file is fetched; the model (gigabytes) is not built:
+    several segmentations do this at once inside a small controller job."""
+    from types import SimpleNamespace
+
+    import patchworks.plugins.cellpose as cp
+
+    built = []
+    fake = SimpleNamespace(
+        MODEL_NAMES=["cpsam"],
+        cache_CPSAM_model_path=lambda: str(tmp_path / "cpsam"),
+        CellposeModel=lambda **kw: built.append(kw),
+    )
+    monkeypatch.setattr(cp, "_cellpose_models", fake)
+    monkeypatch.setattr(cp, "_CELLPOSE_V4", True)
+    assert cp.fetch_weights("cpsam") == str(tmp_path / "cpsam")
+    assert built == []
+    weights = tmp_path / "my_model"
+    weights.write_bytes(b"w")
+    assert cp.fetch_weights(str(weights)) == str(weights)
+    assert built == []

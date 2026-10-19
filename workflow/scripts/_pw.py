@@ -526,12 +526,12 @@ def fetch_models(cfg) -> str:
     """
     method = cfg.get("method", "cellpose")
     if method == "cellpose":
-        # _get_model downloads + caches the weights keyed by (model, gpu).
-        from patchworks.plugins.cellpose import _get_model
+        # The weights file only: loading the model takes gigabytes, and
+        # this runs in the small controller job, once per segmentation.
+        from patchworks.plugins.cellpose import fetch_weights
 
         model = cfg["cellpose"]["model"]
-        _get_model({"model": model, "gpu": False})
-        return f"cached Cellpose model {model}"
+        return f"cached Cellpose model {model}: {fetch_weights(model)}"
     custom = cfg.get("custom") or {}
     if (
         method == "custom"
