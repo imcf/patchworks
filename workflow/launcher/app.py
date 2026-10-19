@@ -108,9 +108,39 @@ def get_sftp() -> paramiko.SFTPClient:
     return sftp
 
 
+class ConnectionLost(Exception):
+    """The SSH connection dropped (network, server timeout): log in again."""
+
+
+def _forget_connection() -> None:
+    """Drop the dead connection; the sidebar then asks to log in again."""
+    for key in ("ssh_client", "sftp"):
+        st.session_state.pop(key, None)
+    st.session_state["connection_lost"] = True
+
+
+def _connection_lost(why: str):
+    """In the page's own thread: back to the log-in prompt at once. In a
+    worker thread (the Jobs tab's parallel fetches), which cannot touch the
+    page: raise :class:`ConnectionLost` for its caller to do so."""
+    from streamlit.runtime.scriptrunner import get_script_run_ctx
+
+    if get_script_run_ctx(suppress_warning=True) is not None:
+        _forget_connection()
+        st.rerun()
+    raise ConnectionLost(why)
+
+
 def run(client, command: str, *, login: bool = True, timeout: float = 120):
-    """Run *command* remotely; a login shell only when PATH needs it."""
+    """Run *command* remotely; a login shell only when PATH needs it.
+
+    A dropped connection sends the page back to the log-in prompt (see
+    :func:`_connection_lost`).
+    """
     wrapped = f"bash -lc {shlex.quote(command)}" if login else command
+    transport = client.get_transport() if client is not None else None
+    if transport is None or not transport.is_active():
+        _connection_lost("the SSH connection to the cluster dropped")
     # The server caps the channels one connection may have open at once
     # (OpenSSH's MaxSessions): one refused while others close is retried.
     for attempt in range(4):
@@ -121,6 +151,10 @@ def run(client, command: str, *, login: bool = True, timeout: float = 120):
             if attempt == 3:
                 raise
             time.sleep(0.5 * 2**attempt)
+        except (paramiko.SSHException, EOFError, OSError) as exc:
+            if not transport.is_active():
+                _connection_lost(str(exc))
+            raise
     out = stdout.read().decode(errors="replace")
     err = stderr.read().decode(errors="replace")
     return stdout.channel.recv_exit_status(), out, err
@@ -2882,7 +2916,13 @@ with tab_jobs:
         )
         def monitor(job=jobs[pick]):
             setup = job.get("setup", setup_cmd)
-            data = fetch_job(job, setup)
+            try:
+                data = fetch_job(job, setup)
+            except ConnectionLost:
+                # The whole page again: the sidebar asks to log in, and
+                # says the jobs keep running.
+                _forget_connection()
+                st.rerun()
             state = data["state"]
             alive = state in ("RUNNING", "PENDING", "CONFIGURING", "COMPLETING")
             was_alive = st.session_state.get(alive_key, True)

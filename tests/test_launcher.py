@@ -647,6 +647,7 @@ class _FakeSSH:
     def __init__(self, answers=None, files=None):
         self.commands = []
         self.active = True
+        self.drop_on = ()
         self.answers = answers or {}
         self.files = {} if files is None else files
 
@@ -663,6 +664,12 @@ class _FakeSSH:
         from types import SimpleNamespace
 
         self.commands.append(command)
+        if any(k in command for k in self.drop_on):
+            # The connection drops while the page talks to the cluster.
+            import paramiko
+
+            self.active = False
+            raise paramiko.SSHException("SSH session not active")
 
         def answer(cmd):
             return next((v for k, v in self.answers.items() if k in cmd), "")
@@ -1847,3 +1854,22 @@ def test_a_missing_script_says_what_to_do():
     said = core.explain_remote_error(error)
     assert "no scripts/channels.py" in said and "git pull" in said
     assert core.explain_remote_error("x\nValueError: y") == "ValueError: y"
+
+
+def test_a_connection_dropped_during_a_refresh():
+    """The connection drops during the Jobs tab's refresh (its fetches run
+    in worker threads): the page goes back to the log-in prompt, saying
+    the jobs keep running, instead of a traceback."""
+    pytest.importorskip("paramiko")
+    ssh = _FakeSSH(
+        {"squeue": "RUNNING\n"},
+        files={f"{WF}/{core.REGISTRY}": core.registry_line(_job()).encode()},
+    )
+    ssh.drop_on = ("status_command", "squeue -h -j")
+    at = _app(ssh, input="/x.czi", work_dir="/scratch/run")
+    at.run()
+    assert not at.exception, at.exception
+    assert at.session_state["connection_lost"]
+    assert any(
+        "connection to the cluster was lost" in w.value for w in at.warning
+    )
