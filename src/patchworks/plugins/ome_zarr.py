@@ -880,12 +880,81 @@ def _progress_ctx(progress: bool, label: str):
     return dask_progress(label, progress)
 
 
+# Source chunks this large (a stitched plane per TIFF) are written a slab at
+# a time: see _store_in_slabs.
+_SLAB_SOURCE_BYTES = 256 * 1024**2
+# Copies of a source chunk alive while it is read and split: the bytes the
+# reader returns, the decoded array, the slices being written.
+_SOURCE_COPIES = 3
+
+
+def _slab_starts(arr: da.Array, block: tuple, source_nbytes: int) -> list:
+    """Where each slab starts along the leading (non-y/x) axes.
+
+    A slab is whole write blocks deep (no two slabs touch one chunk or
+    shard), and holds as many source chunks as fit in the job's memory.
+    """
+    from .._chunks import _get_available_memory
+
+    lead = arr.ndim - 2
+    budget = 0.6 * _get_available_memory()
+    planes = max(1, int(budget // max(1, source_nbytes * _SOURCE_COPIES)))
+    # Along the last leading axis (z), as many whole blocks as fit.
+    step = list(block[:lead])
+    if lead:
+        step[-1] = block[lead - 1] * max(1, planes // max(1, block[lead - 1]))
+    return list(
+        _iproduct(*(range(0, arr.shape[i], step[i]) for i in range(lead)))
+    ), step
+
+
+def _store_in_slabs(
+    arr: da.Array,
+    target,
+    block: tuple,
+    source_nbytes: int,
+    label: str,
+    progress: bool,
+) -> None:
+    """Store *arr* into *target* one slab of leading-axis blocks at a time.
+
+    Dask holds a source chunk until every output chunk cut from it is
+    written, and starts reading the next ones meanwhile: with a whole
+    stitched plane per chunk (3.6 GB), the planes in flight -- not the
+    worker count -- set the peak, and a 64 or 128 GB job was OOM-killed.
+    Writing slab by slab bounds them by what fits in memory.
+    """
+    starts, step = _slab_starts(arr, block, source_nbytes)
+    lead = arr.ndim - 2
+    logger.info(
+        "writing %s in %d slab(s) of %s along the leading axes: source "
+        "chunks are %.2f GB",
+        label,
+        len(starts),
+        tuple(step),
+        source_nbytes / 1024**3,
+    )
+    started = _time.monotonic()
+    for n, start in enumerate(starts, 1):
+        region = (
+            tuple(
+                slice(s, min(s + st, arr.shape[i]))
+                for i, (s, st) in enumerate(zip(start, step[:lead]))
+            )
+            + (slice(None),) * 2
+        )
+        da.store(arr[region], target, regions=region, lock=False, compute=True)
+        if progress:
+            log_progress(label, n, len(starts), started)
+
+
 def _to_zarr_level(
     arr: da.Array,
     group_path: str,
     component: str,
     shard: ShardSpec,
     progress: bool = True,
+    source_nbytes: int = 0,
 ) -> None:
     """Write one array to ``group_path/component``, optionally sharded.
 
@@ -907,12 +976,18 @@ def _to_zarr_level(
         Sharding request; see :func:`_shard_for`.
     progress : bool
         Show a dask progress bar for the write.
+    source_nbytes : int, optional
+        Bytes of one chunk of the array *arr* was cut from. When large
+        (:data:`_SLAB_SOURCE_BYTES`), the write goes slab by slab
+        (:func:`_store_in_slabs`) to bound memory.
 
     Returns
     -------
     None
     """
     inner = arr.chunksize
+    label = f"{Path(group_path).name}/{component}"
+    slabs = source_nbytes >= _SLAB_SOURCE_BYTES and arr.ndim > 2
     fmt = _group_zarr_format(group_path)
     sh = _shard_for(shard, inner, arr.shape, arr.dtype, fmt)
     ctx = _progress_ctx(progress, f"{Path(group_path).name}/{component}")
@@ -928,6 +1003,11 @@ def _to_zarr_level(
             arr.chunksize,
             arr.dtype,
         )
+        if slabs:
+            _store_in_slabs(
+                arr, z, arr.chunksize, source_nbytes, label, progress
+            )
+            return
         with ctx:
             arr.store(z, lock=False, compute=True)  # type: ignore[call-arg]
         return
@@ -956,6 +1036,9 @@ def _to_zarr_level(
         n_workers,
         shard_nbytes / 1024**2,
     )
+    if slabs:
+        _store_in_slabs(arr.rechunk(sh), z, sh, source_nbytes, label, progress)
+        return
     with ctx, dask.config.set(scheduler="threads", num_workers=n_workers):
         # No lock: every block is exactly one shard (rechunked to the shard
         # grid from the origin), so no two tasks touch the same file. A lock
@@ -1216,7 +1299,12 @@ def _write_pyramid(
         )
         _warn_if_many_chunks(arr.shape, base_chunks, shard)
         _to_zarr_level(
-            arr.rechunk(base_chunks), group_path, base_name, shard, progress
+            arr.rechunk(base_chunks),
+            group_path,
+            base_name,
+            shard,
+            progress,
+            source_nbytes=int(np.prod(arr.chunksize)) * arr.dtype.itemsize,
         )
     datasets = [_dataset(base_name, base_scale, base_translation)]
 

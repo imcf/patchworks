@@ -551,6 +551,51 @@ def test_tiff_sequence_keeps_one_plane_per_chunk(tmp_path):
     ).all()
 
 
+@pytest.mark.parametrize("shard", [False, True])
+def test_large_source_chunks_are_written_slab_by_slab(
+    tmp_path, monkeypatch, caplog, shard
+):
+    """A plane per file of gigabytes: level 0 is written a few planes at a
+    time, as many as fit in memory, and still round-trips."""
+    import logging
+
+    import patchworks._chunks as chunks_mod
+    import patchworks.plugins.ome_zarr as oz
+
+    tifffile = pytest.importorskip("tifffile")
+    n_z, n_c, size = 5, 2, 8
+    for z in range(n_z):
+        for c in range(n_c):
+            tifffile.imwrite(
+                tmp_path / f"s_Z{z:03d}_C{c}_V0.tif",
+                np.full((size, size), z * 10 + c, "uint16"),
+            )
+    plane = size * size * 2
+    monkeypatch.setattr(oz, "_SLAB_SOURCE_BYTES", 1)  # these planes count
+    # Memory for two planes per slab (three copies each, 60% of it usable).
+    monkeypatch.setattr(
+        chunks_mod, "_get_available_memory", lambda: int(2 * plane * 3 / 0.6)
+    )
+    out = tmp_path / "seq.zarr"
+    with caplog.at_level(logging.INFO, logger="patchworks"):
+        to_ome_zarr(
+            str(tmp_path / "*.tif"),
+            out,
+            sequence_pattern=r"_Z(?P<Z>\d+)_C(?P<C>\d+)_V\d+",
+            n_levels=1,
+            shard=shard,
+            progress=True,
+        )
+    if not shard:  # a shard spans every plane here: one slab per channel
+        assert "in 6 slab(s) of (1, 2)" in caplog.text, caplog.text
+    result = np.asarray(load_ome_zarr(out, channel=None))
+    assert (
+        result[:, :, 0, 0]
+        == [[z * 10 + c for z in range(n_z)] for c in range(n_c)]
+    ).all()
+    assert (result[:, :, -1, -1] == result[:, :, 0, 0]).all()
+
+
 def _ome_xml(x, y, z, unit="um"):
     return (
         '<?xml version="1.0"?>'
