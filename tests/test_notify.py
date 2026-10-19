@@ -34,6 +34,20 @@ def test_slurm_mail_extra_maps_events_to_slurm_types():
     ) == slurm_mail_extra("me@x.org", ["start", "finish", "error"])
 
 
+def test_retried_attempts_mail_only_what_matters():
+    """Each attempt is its own SLURM job: a failure Snakemake retries is
+    not worth a mail, nor is each retry's start."""
+    events = ["start", "finish", "error"]
+    first = slurm_mail_extra("me@x.org", events, attempt=1, retries=2)
+    assert first == "--mail-type=BEGIN,END --mail-user=me@x.org"
+    second = slurm_mail_extra("me@x.org", events, attempt=2, retries=2)
+    assert second == "--mail-type=END --mail-user=me@x.org"
+    last = slurm_mail_extra("me@x.org", events, attempt=3, retries=2)
+    assert last == "--mail-type=END,FAIL --mail-user=me@x.org"
+    # Nothing left to mail: no option at all.
+    assert slurm_mail_extra("me@x.org", ["error"], attempt=1, retries=2) == ""
+
+
 def test_a_misspelled_event_is_rejected_up_front():
     """Better a named error before submission than silently no mail.
 

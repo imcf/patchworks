@@ -246,7 +246,10 @@ HELP = {
     "notify_email": "Mail this address when the long steps finish or fail, "
     "with the failing step's log.\n\nExample: `me@unibas.ch`",
     "notify_events": "When to mail: at the start, when it finishes, on an "
-    "error.",
+    "error. SLURM mails for each long job (convert, occupancy, merge) and "
+    "the run mails once at its end. A failed job is retried with more "
+    "memory: its retries send no start mail, and only the last attempt's "
+    "failure is mailed.",
     # relations and review
     "relate_partition": "The SLURM partition for the relate jobs, which "
     "find each object's parent (each nucleus's cell). Blank: the default.",

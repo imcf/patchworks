@@ -43,8 +43,13 @@ NOTIFY_EMAIL = config.get("notify_email") or ""
 NOTIFY_EVENTS = config.get("notify_events") or ["finish", "error"]
 
 
-def notify_extra(*_args, **_kwargs):
-    """slurm_extra fragment requesting mail for this job."""
+def notify_extra(wildcards, attempt=1):
+    """slurm_extra fragment requesting mail for this job: "start" on the
+    first attempt only, "error" on the last only (each attempt is a new
+    SLURM job; Snakemake retries a failure `retries` times)."""
     from patchworks._notify import slurm_mail_extra
 
-    return slurm_mail_extra(NOTIFY_EMAIL, NOTIFY_EVENTS)
+    # Read here, not when the Snakefile is parsed: only set by then.
+    settings = getattr(workflow, "execution_settings", None)
+    retries = getattr(settings, "retries", 0) or 0
+    return slurm_mail_extra(NOTIFY_EMAIL, NOTIFY_EVENTS, attempt, retries)
