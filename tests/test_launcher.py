@@ -1539,6 +1539,8 @@ def test_jobs_tab_shows_failures_and_the_queue():
     at.run()
     assert not at.exception
     assert any("segment job 4" in e.value for e in at.error)
+    # Folded into one panel that says how many failed.
+    assert any(e.label.startswith("Failed: 1 step,") for e in at.expander)
     assert any("GPU ran out of memory" in m.value for m in at.markdown)
     assert any("NEVER STARTS" in e.value and "103" in e.value for e in at.error)
     queue = next(
