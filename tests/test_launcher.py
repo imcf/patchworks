@@ -154,6 +154,7 @@ def test_convert_only_command_matches_run_multi_phase_a():
         cmd[cmd.index("--directory") + 1] == "/scratch/run/.snakemake_convert"
     )
     assert cmd[cmd.index("--workflow-profile") + 1] == "/w/profile/slurm"
+    assert cmd[cmd.index("--slurm-jobname-prefix") + 1] == "pw-convert"
     assert cmd[cmd.index("--") + 1 :] == [
         "/scratch/run/image.zarr/zarr.json",
         "/scratch/run/image.occupancy.zarr/1/zarr.json",
@@ -195,6 +196,10 @@ def test_commands_and_parsing():
     snake = core.snakemake_command("/w/config/x.yaml", core.SLURM_JOB)
     assert "--workflow-profile profile/slurm" in snake
     assert "-n" in core.snakemake_command("c.yaml", core.DRY_RUN).split()
+    # The run's SLURM jobs are named after what it does.
+    named = core.snakemake_command("c.yaml", core.SLURM_JOB, label="cells")
+    assert "--slurm-jobname-prefix pw-cells" in named
+    assert core.jobname_prefix("cilia/v2 (test)") == "pw-cilia-v2--test-"
     inner = core.inner_command("/w dir", 'eval "$(pixi shell-hook)"', snake)
     assert inner.startswith("cd '/w dir' && eval")
     script = core.controller_job_script(inner, partition="long", qos="1week")

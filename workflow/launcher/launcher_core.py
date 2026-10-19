@@ -541,8 +541,26 @@ def setup_with_environment(setup_cmd: str, env: str) -> str | None:
 # ---------------------------------------------------------------------------
 
 
+def jobname_prefix(label: str) -> str:
+    """What the run's SLURM jobs are named after: ``pw-<label>_<run id>``.
+
+    The SLURM executor names every job of a run after the run's id and
+    refuses a ``--job-name``; a prefix is what can make them recognisable
+    (in squeue and in SLURM's mails). As run_multi's
+    ``slurm_jobname_prefix``: alphanumerics, ``_`` and ``-``, 50 at most.
+
+    >>> jobname_prefix("nuclei_labels_cpsam")
+    'pw-nuclei_labels_cpsam'
+    """
+    return f"pw-{re.sub(r'[^A-Za-z0-9_-]', '-', label)}"[:50]
+
+
 def snakemake_command(
-    config_path: str, mode: str, *, profile: str = "profile/slurm"
+    config_path: str,
+    mode: str,
+    *,
+    profile: str = "profile/slurm",
+    label: str | None = None,
 ) -> str:
     args = [
         "snakemake",
@@ -557,6 +575,8 @@ def snakemake_command(
         args += ["--cores", "1", "-n", "-p"]
     else:
         args += ["--workflow-profile", profile]
+        if label:
+            args += ["--slurm-jobname-prefix", jobname_prefix(label)]
     return " ".join(shlex.quote(a) for a in args)
 
 
@@ -591,7 +611,13 @@ def convert_command(
     if mode == DRY_RUN:
         args += ["--cores", "1", "-n", "-p"]
     else:
-        args += ["--workflow-profile", profile]
+        # pw-convert_<run id>, as run_multi's conversion.
+        args += [
+            "--workflow-profile",
+            profile,
+            "--slurm-jobname-prefix",
+            jobname_prefix("convert"),
+        ]
     args += [
         "--",
         f"{work}/image.zarr/{root}",

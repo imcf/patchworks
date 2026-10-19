@@ -1481,7 +1481,12 @@ def launch(
     elif multi:
         command = core.multi_command(multi, mode, profile=profile)
     else:
-        command = core.snakemake_command(first, mode, profile=profile)
+        command = core.snakemake_command(
+            first,
+            mode,
+            profile=profile,
+            label=files[first].get("label_name", "labels"),
+        )
     inner = core.inner_command(wf_dir, setup_cmd, command)
 
     if mode != core.DRY_RUN and not convert_only:
