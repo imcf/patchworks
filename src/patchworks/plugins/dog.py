@@ -303,6 +303,22 @@ def _drop_decon_state() -> None:
         shutil.rmtree(otf_dir, ignore_errors=True)
 
 
+# cudaDecon's C functions take these as integers; a config or form gives
+# 520.0 as readily as 520, and ctypes refuses a float ("argument 3:
+# 'float' object cannot be interpreted as an integer").
+_DECON_INT_KEYS = ("wavelength", "krmax", "fixorigin")
+
+
+def _decon_ints(kwargs: dict[str, Any]) -> dict[str, Any]:
+    """*kwargs* with :data:`_DECON_INT_KEYS` as integers (rounded)."""
+    return {
+        k: int(round(float(v)))
+        if k in _DECON_INT_KEYS and v is not None and not isinstance(v, bool)
+        else v
+        for k, v in kwargs.items()
+    }
+
+
 def _cached_decon(img: np.ndarray, kwargs: dict[str, Any]) -> np.ndarray:
     """``pycudadecon.decon(img, **kwargs)``, with its setup cached per process.
 
@@ -315,6 +331,7 @@ def _cached_decon(img: np.ndarray, kwargs: dict[str, Any]) -> np.ndarray:
 
     import pycudadecon
 
+    kwargs = _decon_ints(kwargs)
     known = {"psf", *_OTF_KEYS, *_INIT_KEYS, *_RUN_KEYS}
     psf = kwargs.get("psf")
     if not isinstance(psf, (str, os.PathLike)) or set(kwargs) - known:
