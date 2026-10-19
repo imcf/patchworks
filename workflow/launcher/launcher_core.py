@@ -1710,7 +1710,17 @@ def parse_steps(text: str) -> list[dict[str, Any]]:
         block = None
         submitted = _SUBMITTED.search(line)
         if submitted:
-            step = latest(submitted.group(1))
+            # run_multi's processes share this log and all number from 0:
+            # the latest step with this number not yet submitted.
+            jid = submitted.group(1)
+            step = next(
+                (
+                    v
+                    for k, v in reversed(steps.items())
+                    if k[0] == jid and v["slurm_job"] is None
+                ),
+                None,
+            ) or latest(jid)
             if step:
                 step.update(
                     slurm_job=submitted.group(2),
