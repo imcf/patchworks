@@ -131,7 +131,14 @@ def _connection_lost(why: str):
     raise ConnectionLost(why)
 
 
-def run(client, command: str, *, login: bool = True, timeout: float = 120):
+def run(
+    client,
+    command: str,
+    *,
+    login: bool = True,
+    timeout: float = 120,
+    stdin_text: str | None = None,
+):
     """Run *command* remotely; a login shell only when PATH needs it.
 
     A dropped connection sends the page back to the log-in prompt (see
@@ -145,13 +152,20 @@ def run(client, command: str, *, login: bool = True, timeout: float = 120):
     # (OpenSSH's MaxSessions): one refused while others close is retried.
     for attempt in range(4):
         try:
-            _, stdout, stderr = client.exec_command(wrapped, timeout=timeout)
+            stdin, stdout, stderr = client.exec_command(
+                wrapped, timeout=timeout
+            )
+            if stdin_text is not None:
+                stdin.write(stdin_text)
+                stdin.channel.shutdown_write()
             break
         except paramiko.ChannelException:
             if attempt == 3:
                 raise
             time.sleep(0.5 * 2**attempt)
-        except (paramiko.SSHException, EOFError, OSError) as exc:
+        except EOFError as exc:  # the server closed the connection
+            _connection_lost(str(exc) or "the server closed the connection")
+        except (paramiko.SSHException, OSError) as exc:
             if not transport.is_active():
                 _connection_lost(str(exc))
             raise
@@ -1918,9 +1932,10 @@ def _fetch_tails(paths) -> None:
         return
     _, out, _ = run(
         client,
-        core.tails_command(paths, TAIL_LINES),
+        core.tails_command(TAIL_LINES),
         login=False,
         timeout=60,
+        stdin_text="".join(f"{p}\n" for p in paths),
     )
     _TAILS.update(core.parse_tails(out, paths))
 
@@ -1987,10 +2002,18 @@ def fetch_job(job: dict, setup: str) -> dict:
                 for f in seg.get("failures") or []
             ]
         ]
+        # The steps whose logs the page opens (the last few not done), and
+        # those whose progress lines fill a bar -- not every running
+        # step's: a multi run has hundreds.
         + [
             path
-            for step in data["steps"]
-            if step["state"] != "done"
+            for step in [s for s in data["steps"] if s["state"] != "done"][-5:]
+            + [
+                s
+                for s in data["steps"]
+                if s["state"] != "done"
+                and s["rule"] in ("convert", "occupancy", "merge")
+            ]
             for path in (step.get("log"), step.get("slurm_log"))
         ]
         # Why the earlier attempts failed: what SLURM wrote at their end.

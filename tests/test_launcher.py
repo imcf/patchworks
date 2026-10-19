@@ -641,6 +641,10 @@ class _FakeSFTP:
         self.files[path] = fh.read()
 
 
+def app_tail_lines():
+    return 300  # app.TAIL_LINES
+
+
 class _FakeSSH:
     """An SSH client: canned answers by command, files kept in memory."""
 
@@ -660,7 +664,6 @@ class _FakeSSH:
         return _FakeSFTP(self.files)
 
     def exec_command(self, command, timeout=None):
-        import io as _io
         from types import SimpleNamespace
 
         self.commands.append(command)
@@ -674,22 +677,27 @@ class _FakeSSH:
         def answer(cmd):
             return next((v for k, v in self.answers.items() if k in cmd), "")
 
-        if core.TAIL_MARK in command:  # several logs' tails in one command
+        sent = []  # what the app writes to the command's standard input
+
+        def read():
+            if core.TAIL_MARK not in command:
+                return answer(command).encode()
+            # The logs' tails: each path from standard input, as the shell
+            # loop would print it.
             out = ""
-            for part in command.split("; "):
-                if part.startswith("echo "):
-                    out += part.removeprefix("echo ") + "\n"
-                else:
-                    text = answer(part)
-                    out += text + (
-                        "" if text.endswith("\n") or not text else "\n"
-                    )
-            out = out.encode()
-        else:
-            out = answer(command).encode()
+            for path in "".join(sent).splitlines():
+                text = answer(f"tail -n {app_tail_lines()} {path}")
+                out += f"{core.TAIL_MARK}\n" + text
+                out += "" if text.endswith("\n") or not text else "\n"
+            return out.encode()
+
         chan = SimpleNamespace(recv_exit_status=lambda: 0)
-        stdout = SimpleNamespace(read=_io.BytesIO(out).read, channel=chan)
-        return None, stdout, SimpleNamespace(read=lambda: b"")
+        stdin = SimpleNamespace(
+            write=sent.append,
+            channel=SimpleNamespace(shutdown_write=lambda: None),
+        )
+        stdout = SimpleNamespace(read=read, channel=chan)
+        return stdin, stdout, SimpleNamespace(read=lambda: b"")
 
     def close(self):
         pass
@@ -1454,13 +1462,19 @@ def test_checkpoint_steps_and_one_command_tails():
     )
     assert step["rule"] == "prepare" and step["slurm_job"] == "9"
     paths = ["/nope/a.log", "/w/b.log"]
-    cmd = core.tails_command(paths, 2)
-    assert cmd.count("tail -n 2") == 2 and "/w/b.log" in cmd
-    out = f"{core.TAIL_MARK}0\n{core.TAIL_MARK}1\nline 1\nline 2\n"
+    out = f"{core.TAIL_MARK}\n{core.TAIL_MARK}\nline 1\nline 2\n"
     assert core.parse_tails(out, paths) == {
         "/nope/a.log": "",
         "/w/b.log": "line 1\nline 2",
     }
+
+
+def test_tails_command_stays_short_however_many_logs():
+    """The paths go on standard input: a command naming hundreds of long
+    paths exceeded the SSH server's largest message, and it dropped the
+    connection (EOFError, then \"log in again\")."""
+    cmd = core.tails_command(300)
+    assert len(cmd) < 200 and "/" not in cmd.replace("2>/dev/null", "")
 
 
 def test_queue_names_without_the_run_id():

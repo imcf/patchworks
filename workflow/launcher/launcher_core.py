@@ -1679,25 +1679,31 @@ _PROGRESS = re.compile(
 TAIL_MARK = "@@patchworks-tail@@"
 
 
-def tails_command(paths: list[str], lines: int) -> str:
-    """The last *lines* of each of *paths*, in one command (one SSH
-    channel: servers cap how many one connection may open at once)."""
-    return "; ".join(
-        f"echo {TAIL_MARK}{i}; tail -n {int(lines)} {shlex.quote(p)} 2>/dev/null"
-        for i, p in enumerate(paths)
+def tails_command(lines: int) -> str:
+    """A command printing the last *lines* of each file named on its
+    standard input, one path per line, each after a :data:`TAIL_MARK` line.
+
+    The paths go on standard input, not the command line: a multi run has
+    hundreds of logs with long paths, and a command that long exceeds the
+    largest message an SSH server accepts -- it drops the whole connection.
+    """
+    loop = (
+        "while IFS= read -r p; do "
+        f'echo "{TAIL_MARK}"; tail -n {int(lines)} -- "$p" 2>/dev/null; '
+        "done"
     )
+    return f"bash -c {shlex.quote(loop)}"  # whatever the login shell is
 
 
 def parse_tails(output: str, paths: list[str]) -> dict[str, str]:
-    """:func:`tails_command`'s output, back to ``{path: text}``."""
+    """:func:`tails_command`'s output for *paths*, back to ``{path: text}``."""
     found: dict[str, list[str]] = {p: [] for p in paths}
-    current = None
+    i = -1
     for line in output.splitlines():
-        if line.startswith(TAIL_MARK) and line[len(TAIL_MARK) :].isdigit():
-            i = int(line[len(TAIL_MARK) :])
-            current = paths[i] if i < len(paths) else None
-        elif current is not None:
-            found[current].append(line)
+        if line == TAIL_MARK:
+            i += 1
+        elif 0 <= i < len(paths):
+            found[paths[i]].append(line)
     return {p: "\n".join(lines) for p, lines in found.items()}
 
 
