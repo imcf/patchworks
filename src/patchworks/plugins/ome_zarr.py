@@ -1311,7 +1311,8 @@ def _write_pyramid_one_pass(
     grp = _open_group(group_path)
     fmt = _group_zarr_format(group_path)
     shapes = _level_shapes(arr.shape, strides, n_levels)
-    inners, blocks = [], []
+    inners: list[tuple[int, ...]] = []
+    blocks: list[tuple[int, ...]] = []
     for k, shape in enumerate(shapes):
         if k == 0:
             inner = tuple(base_chunks)
