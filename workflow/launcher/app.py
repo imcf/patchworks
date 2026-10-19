@@ -2328,15 +2328,25 @@ def job_failures(status: dict) -> None:
         for f in seg.get("failures") or []
     ]
     if failed:
-        with section(":material/error: Failed", "and what to do about it"):
+        # Folded: the progress and steps above stay in view; the label
+        # says how many failed.
+        with st.expander(
+            f"Failed: {len(failed)} step{'s' if len(failed) > 1 else ''}, "
+            "and what to do about it",
+            icon=":material/error:",
+        ):
             for f in failed:
                 st.error(f"**{f['step']}**: `{f['error']}`")
                 if f.get("hint"):
                     st.markdown(f":material/lightbulb: {f['hint']}")
-                with st.expander(
-                    f"log: {f['log']}", icon=":material/terminal:"
-                ):
-                    st.code(_tail(f["log"], 80) or "(empty)", language="text")
+                # A pop-up, not an expander: expanders do not nest.
+                with st.popover("log", icon=":material/terminal:"):
+                    st.caption(f"`{f['log']}`")
+                    st.code(
+                        _tail(f["log"], 80) or "(empty)",
+                        language="text",
+                        height=400,
+                    )
 
 
 def job_results(status: dict) -> None:
