@@ -112,6 +112,83 @@ def send(
         return False
 
 
+def done_message(
+    targets,
+    *,
+    work: str,
+    image: str,
+    occupancy: str,
+    label_name: str,
+) -> "tuple[str, str]":
+    """Subject and body of the mail when a run finishes: what it made.
+
+    A run asked for the labels -- no targets, Snakemake's default -- made
+    them; one asked only for the converted image (the launcher's "Convert
+    only", run_multi's first phase) made just that, and must not announce
+    labels it never wrote.
+
+    Parameters
+    ----------
+    targets : iterable of str
+        The targets Snakemake was given (empty: the default, the labels).
+    work, image, occupancy : str
+        work_dir, the converted image and the occupancy map's level.
+    label_name : str
+        The segmentation's label name.
+
+    Examples
+    --------
+    >>> subject, body = done_message(
+    ...     ["/w/image.zarr/zarr.json"], work="/w", image="/w/image.zarr",
+    ...     occupancy="/w/image.occupancy.zarr/0", label_name="cells")
+    >>> subject
+    '[patchworks] converted: /w/image.zarr'
+    """
+    targets = [str(t) for t in targets or []]
+    labels = not targets or any(
+        t == "all" or t.endswith("labels.done") for t in targets
+    )
+    if labels:
+        return (
+            f"[patchworks] done: {label_name} in {work}",
+            "The patchworks workflow finished successfully.\n\n"
+            f"  work_dir : {work}\n"
+            f"  config   : {label_name}\n"
+            f"  labels   : {image}/labels/{label_name}\n",
+        )
+    made = []
+    if any(t.startswith(image.rstrip("/") + "/") for t in targets):
+        made.append(f"  image         : {image}")
+    if any(t.startswith(occupancy.rsplit("/", 1)[0] + "/") for t in targets):
+        made.append(f"  occupancy map : {occupancy}")
+    made += [
+        f"  also          : {t}"
+        for t in targets
+        if not t.startswith(image.rstrip("/") + "/")
+        and not t.startswith(occupancy.rsplit("/", 1)[0] + "/")
+    ]
+    converted = any(line.startswith("  image") for line in made)
+    return (
+        f"[patchworks] converted: {image}"
+        if converted
+        else f"[patchworks] done: {', '.join(targets)}",
+        (
+            "The conversion finished successfully"
+            if converted
+            else "The steps asked for finished successfully"
+        )
+        + "; no segmentation ran (only these steps were asked for).\n\n"
+        f"  work_dir      : {work}\n"
+        + "\n".join(made)
+        + "\n\n"
+        + (
+            "A run of the segmentations starts from this image.\n"
+            if converted
+            else ""
+        ),
+    )
+
+
 def slurm_mail_extra(
     email: Union[str, None],
     events: Union[list, tuple, None] = None,
