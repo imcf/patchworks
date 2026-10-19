@@ -20,6 +20,7 @@ import io
 import re
 import shlex
 import stat
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -1823,12 +1824,12 @@ def job_actions(job: dict, state: str, alive: bool, setup: str) -> None:
                 )
 
 
-def queue_view() -> None:
+def queue_view() -> list[dict]:
     """Your patchworks jobs in the SLURM queue, and why each waits."""
     _, out, _ = run(client, core.QUEUE_COMMAND, timeout=30)
     rows = core.parse_queue(out)
     if not rows:
-        return
+        return rows
     running = sum(r["state"] == "RUNNING" for r in rows)
     with section(
         ":material/queue: In the queue",
@@ -1842,9 +1843,80 @@ def queue_view() -> None:
                     f"job {row['job']} ({row['name']}): {row['why it waits']}",
                     icon=":material/block:",
                 )
+    return rows
 
 
-def job_progress(job: dict, setup: str) -> None:
+def _tail(path: str, lines: int = 60) -> str:
+    _, out, _ = run(
+        client, f"tail -n {lines} {shlex.quote(path)}", login=False, timeout=30
+    )
+    return out
+
+
+def step_progress(step: dict | None) -> tuple[float, str]:
+    """How far a running step got, from the progress lines in its log."""
+    if not step or not step.get("log"):
+        return 0.0, "waiting to start"
+    progress = core.last_progress(_tail(step["log"], 200))
+    attempt = f" (attempt {step['attempt']})" if step["attempt"] > 1 else ""
+    if step["state"] == "failed":
+        return 0.0, f"failed{attempt}"
+    if not progress:
+        return 0.0, f"started{attempt}, no progress line yet"
+    return progress["fraction"], (
+        f"{progress['label']}: {progress['fraction']:.0%}, "
+        f"~{progress['left']} left{attempt}"
+    )
+
+
+def steps_view(steps: list[dict], queue: list[dict]) -> None:
+    """The workflow's steps (from the controller's log): where each runs,
+    and the log of each one not done."""
+    if not steps:
+        return
+    states = {r["job"]: r["state"].lower() for r in queue}
+    rows = [
+        {
+            "step": s["rule"]
+            + (f" ({s['wildcards']})" if s["wildcards"] else ""),
+            "state": states.get(s["slurm_job"] or "", s["state"]),
+            "attempt": s["attempt"],
+            "SLURM job": s["slurm_job"] or "",
+        }
+        for s in steps[-40:]
+    ]
+    with section(
+        ":material/account_tree: Steps",
+        f"{sum(s['state'] == 'done' for s in steps)} of {len(steps)} done; "
+        "the latest attempt of each",
+    ):
+        st.dataframe(rows, hide_index=True)
+        open_steps = [s for s in steps if s["state"] != "done"][-5:]
+        for s in open_steps:
+            state = states.get(s["slurm_job"] or "", s["state"])
+            name = s["rule"] + (
+                f" ({s['wildcards']})" if s["wildcards"] else ""
+            )
+            with st.expander(
+                f"{name} · {state} · its log",
+                icon=":material/terminal:",
+                expanded=state in ("running", "failed"),
+            ):
+                for label, path in (
+                    ("step log", s.get("log")),
+                    ("SLURM log", s.get("slurm_log")),
+                ):
+                    if not path:
+                        continue
+                    st.caption(f"{label}: `{path}`")
+                    st.code(
+                        _tail(path) or "(empty so far)",
+                        language="text",
+                        height=250,
+                    )
+
+
+def job_progress(job: dict, setup: str, steps: list[dict]) -> None:
     """How far the run got (scripts/status.py), and what it made."""
     rc, out, err = run(
         client,
@@ -1880,7 +1952,22 @@ def job_progress(job: dict, setup: str) -> None:
                         timeout=30,
                     )
                     st.code(tail or "(empty)", language="text")
+    convert_only = job.get("kind") == "convert"
     with section(":material/data_usage: Progress", f"`{status['work_dir']}`"):
+        # The shared steps first, while they matter: convert, occupancy.
+        latest = {s["rule"]: s for s in steps}
+        for rule, done, what in (
+            ("convert", status.get("converted"), "converted"),
+            ("occupancy", status.get("occupancy"), "occupancy map built"),
+        ):
+            if done is None or (done and not convert_only):
+                continue
+            frac, text = (
+                (1.0, what) if done else step_progress(latest.get(rule))
+            )
+            st.progress(frac, text=f"**{rule}** · {text}")
+        if convert_only:
+            return
         for seg in status["segmentations"]:
             total, done = seg["batches"], seg["batches_done"]
             if seg["stage"] == "done":
@@ -2546,11 +2633,15 @@ with tab_jobs:
                     f"{jobs[i]['mode']}"
                 ),
             )
-            auto = c2.toggle("auto-refresh every 15 s", value=False)
+            auto = c2.toggle("auto-refresh every 15 s", value=True)
 
         @st.fragment(run_every=15 if auto else None)
         def monitor(job=jobs[pick]):
             setup = job.get("setup", setup_cmd)
+            st.caption(
+                f":material/schedule: as of {time.strftime('%H:%M:%S')}"
+                + ("" if auto else ": press Refresh for news")
+            )
             # squeue may live behind `module load`, so SLURM jobs are
             # checked through the setup line; a PID check and a tail need
             # neither it nor a login shell.
@@ -2579,10 +2670,21 @@ with tab_jobs:
                             show_check(report)
                             show_previews(report)
             elif job.get("config"):
-                if alive:
-                    queue_view()
-                job_progress(job, setup)
-            with st.expander("Log", icon=":material/terminal:", expanded=alive):
+                queue = queue_view() if alive else []
+                _, text, _ = run(
+                    client,
+                    core.steps_command(job["log"]),
+                    login=False,
+                    timeout=30,
+                )
+                steps = core.parse_steps(text)
+                job_progress(job, setup, steps)
+                steps_view(steps, queue)
+            with st.expander(
+                "Snakemake log (the controller)",
+                icon=":material/terminal:",
+                expanded=alive and job.get("kind") == "check",
+            ):
                 st.caption(f"`{job['log']}`")
                 _, tail, _ = run(
                     client,
