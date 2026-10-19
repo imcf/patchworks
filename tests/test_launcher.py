@@ -879,6 +879,16 @@ def test_jobs_tab_progress_results_and_actions():
                 "stage": "segmenting",
                 "batches": 10,
                 "batches_done": 3,
+                "tiles": 40,
+                "tiles_done": 14,
+                "objects": None,
+                "seams": None,
+            },
+            {
+                "label_name": "cilia",
+                "stage": "merging",
+                "batches": 2,
+                "batches_done": 2,
                 "objects": None,
                 "seams": None,
             },
@@ -893,6 +903,10 @@ def test_jobs_tab_progress_results_and_actions():
             "scripts/status.py": json.dumps(status),
             "squeue": "DONE\n",
             "sbatch": "77\n",
+            "grep -E": "rule merge:\n    log: /scratch/run/cilia/logs/merge.log\n"
+            "    jobid: 7\n",
+            "cilia/logs/merge.log": "labels/cilia/0: 50/200 (25%) after 2m, "
+            "~6m left\n",
             "tail -n": "the log\n",
         },
         files={
@@ -904,7 +918,13 @@ def test_jobs_tab_progress_results_and_actions():
     at.run()
     assert not at.exception
     texts = [p.proto.text for p in at.get("progress")]
-    assert any("cells** · 3/10 GPU jobs done" in t for t in texts)
+    assert any(
+        "cells** · 14/40 tiles segmented (3/10 GPU jobs done)" in t
+        for t in texts
+    )
+    assert any(
+        "cilia** · merging · labels/cilia/0: 25%, ~6m left" in t for t in texts
+    ), texts
     assert any("nuclei** · merged" in t for t in texts)
     rows = next(d.value for d in at.dataframe if "objects" in d.value.columns)
     assert rows["objects"].tolist() == [1234]
@@ -1456,6 +1476,7 @@ rule convert:
     log: /scratch/run/logs/convert.log
     jobid: 0
     reason: Missing output files: /scratch/run/image.zarr/zarr.json
+    resources: tmpdir=<TBD>, mem_mb=64000, mem=64 GB, cpus_per_task=32
 Job 0 has been submitted with SLURM jobid 201 (log: /s/slurm_logs/rule_convert/201.log).
 [Mon Oct 19 09:48:01 2026]
 Error in rule convert:
@@ -1468,6 +1489,7 @@ rule convert:
     output: /scratch/run/image.zarr/zarr.json
     log: /scratch/run/logs/convert.log
     jobid: 0
+    resources: tmpdir=<TBD>, mem_mb=128000, mem=128 GB, cpus_per_task=32
 Job 0 has been submitted with SLURM jobid 203 (log: /s/slurm_logs/rule_convert/203.log).
 """
 
@@ -1478,6 +1500,19 @@ def test_steps_from_the_controllers_log():
     assert step["slurm_job"] == "203" and step["state"] == "submitted"
     assert step["log"] == "/scratch/run/logs/convert.log"
     assert step["slurm_log"] == "/s/slurm_logs/rule_convert/203.log"
+    assert step["mem_mb"] == 128000
+    assert step["earlier"] == [
+        {
+            "attempt": 1,
+            "slurm_job": "201",
+            "slurm_log": "/s/slurm_logs/rule_convert/201.log",
+            "mem_mb": 64000,
+        }
+    ]
+    assert core.why_killed("srun: error: sca02: task 0: Out Of Memory") == (
+        "out of memory"
+    )
+    assert core.why_killed("Traceback ...") is None
     done = core.parse_steps(
         CONTROLLER_LOG + "Finished jobid: 0 (Rule: convert)\n"
     )
@@ -1517,6 +1552,7 @@ def test_jobs_tab_convert_only_shows_the_convert_step():
             "squeue": "RUNNING\n",
             "scripts/status.py": json.dumps(status),
             "grep -E": CONTROLLER_LOG,
+            "201.log": "error: Detected 1 oom_kill event in StepId=201.0\n",
             "/scratch/run/logs/convert.log": "image.zarr/0: 1,234/5,000 "
             "(24%) after 3m, ~9m left\n",
             "tail -n": "the log\n",
@@ -1532,7 +1568,8 @@ def test_jobs_tab_convert_only_shows_the_convert_step():
     assert not at.exception
     texts = [p.proto.text for p in at.get("progress")]
     assert any(
-        "convert** · image.zarr/0: 25%, ~9m left (attempt 2)" in t
+        "convert** · image.zarr/0: 25%, ~9m left (attempt 2; "
+        "1: out of memory at 64 GB)" in t
         for t in texts
     ), texts
     assert any("occupancy** · waiting to start" in t for t in texts)
@@ -1540,6 +1577,8 @@ def test_jobs_tab_convert_only_shows_the_convert_step():
     steps = next(d.value for d in at.dataframe if "step" in d.value.columns)
     assert steps["state"].tolist() == ["running"]
     assert any("convert · running" in e.label for e in at.expander)
+    assert steps["earlier attempts"].tolist() == ["1: out of memory at 64 GB"]
+    assert any("ran out of memory" in w.value for w in at.warning)
     assert any(
         "updated" in c.value and "every 15 s" in c.value for c in at.caption
     )

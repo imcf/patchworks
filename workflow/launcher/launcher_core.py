@@ -1498,7 +1498,7 @@ def parse_queue(output: str) -> list[dict[str, str]]:
 # The lines of Snakemake's log that say which step ran where: each job's
 # rule, wildcards, log and SLURM job, and whether it failed or finished.
 STEPS_FILTER = (
-    r"^(local)?rule |^\s+(log|jobid|wildcards):|has been submitted|"
+    r"^(local)?rule |^\s+(log|jobid|wildcards|resources):|has been submitted|"
     r"^Error in rule|Finished job"
 )
 
@@ -1521,8 +1521,10 @@ def parse_steps(text: str) -> list[dict[str, Any]]:
     """The steps Snakemake ran, from its log, the latest attempt of each.
 
     Each: ``rule``, ``wildcards``, ``log`` (the step's own log),
-    ``slurm_job`` and ``slurm_log`` (when submitted to SLURM), ``attempt``
-    and ``state`` ("submitted", "failed" or "done").
+    ``slurm_job`` and ``slurm_log`` (when submitted to SLURM), ``mem_mb``,
+    ``attempt``, ``state`` ("submitted", "failed" or "done") and
+    ``earlier``: the attempts before, each with its SLURM job, log and
+    memory.
     """
     # Keyed by job id, rule and log: run_multi's Snakemake processes share
     # one log, each numbering its jobs from 0.
@@ -1569,9 +1571,29 @@ def parse_steps(text: str) -> list[dict[str, Any]]:
                     "log": block["log"],
                     "slurm_job": None,
                     "slurm_log": None,
+                    "mem_mb": None,
                     "attempt": previous["attempt"] + 1 if previous else 1,
                     "state": "submitted",
+                    "earlier": (
+                        previous["earlier"]
+                        + [
+                            {
+                                k: previous[k]
+                                for k in (
+                                    "attempt",
+                                    "slurm_job",
+                                    "slurm_log",
+                                    "mem_mb",
+                                )
+                            }
+                        ]
+                        if previous
+                        else []
+                    ),
                 }
+            elif key == "resources" and step and not block["error"]:
+                mem = re.search(r"\bmem_mb=(\d+)", value)
+                step["mem_mb"] = int(mem.group(1)) if mem else None
             elif key == "log" and not block["error"]:
                 block["log"] = value.split(",")[0].split(" (")[0].strip()
             elif key == "wildcards" and not block["error"]:
@@ -1596,6 +1618,19 @@ def parse_steps(text: str) -> list[dict[str, Any]]:
             if step:
                 step["state"] = "done"
     return list(steps.values())
+
+
+# How SLURM itself ended a job, in its log (the executor's slurm_logs).
+KILLED = (
+    (r"oom[_-]kill|Out Of Memory|OUT_OF_MEMORY", "out of memory"),
+    (r"DUE TO TIME LIMIT", "out of time"),
+    (r"CANCELLED", "cancelled"),
+)
+
+
+def why_killed(text: str) -> str | None:
+    """Why SLURM ended a job, from the end of its log; None if it did not."""
+    return next((why for pat, why in KILLED if re.search(pat, text)), None)
 
 
 _PROGRESS = re.compile(

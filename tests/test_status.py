@@ -90,6 +90,38 @@ def test_a_multi_run_part_way(tmp_path, capsys, monkeypatch):
     assert json.loads(capsys.readouterr().out)["work_dir"] == str(work)
 
 
+def test_tiles_count_within_running_batches(tmp_path):
+    """Tiles segmented so far: every tile of a finished batch, and those a
+    running batch checkpointed (any method: segment_tile.py writes it)."""
+    run = tmp_path / "cells"
+    (run / "seg").mkdir(parents=True)
+    stage = tmp_path / "stage.zarr"
+    stage.mkdir()
+    batches = [[0, 1, 2], [3, 4, 5], [6, 7]]
+    (run / "tiles.json").write_text(
+        json.dumps({"batches": batches, "target_path": str(stage)})
+    )
+    (run / "seg" / "0.done").touch()
+    (stage / ".patchworks_segment_1.json").write_text(
+        json.dumps({"indices": [3, 4, 5], "counts": {"3": 12, "4": 7}})
+    )
+    # A stale checkpoint (other tiles) does not count.
+    (stage / ".patchworks_segment_2.json").write_text(
+        json.dumps({"indices": [9], "counts": {"9": 1}})
+    )
+    got = status.segmentation_status(
+        {"work_dir": str(tmp_path), "label_name": "cells"}
+    )
+    assert (got["tiles_done"], got["tiles"]) == (5, 8)
+    assert got["stage"] == "segmenting"
+    for i in (1, 2):
+        (run / "seg" / f"{i}.done").touch()
+    got = status.segmentation_status(
+        {"work_dir": str(tmp_path), "label_name": "cells"}
+    )
+    assert got["stage"] == "merging" and got["tiles_done"] == 8
+
+
 def test_one_config_not_started(tmp_path):
     cfg = tmp_path / "c.yaml"
     cfg.write_text(yaml.safe_dump({"work_dir": str(tmp_path / "w")}))

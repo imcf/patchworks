@@ -1941,6 +1941,12 @@ def fetch_job(job: dict, setup: str) -> dict:
             if step["state"] != "done"
             for path in (step.get("log"), step.get("slurm_log"))
         ]
+        # Why the earlier attempts failed: what SLURM wrote at their end.
+        + [
+            e["slurm_log"]
+            for step in data["steps"][-40:]
+            for e in step["earlier"]
+        ]
     )
     return data
 
@@ -1950,7 +1956,10 @@ def step_progress(step: dict | None) -> tuple[float, str]:
     if not step or not step.get("log"):
         return 0.0, "waiting to start"
     progress = core.last_progress(_tail(step["log"], TAIL_LINES))
-    attempt = f" (attempt {step['attempt']})" if step["attempt"] > 1 else ""
+    earlier = earlier_attempts(step)
+    attempt = (
+        f" (attempt {step['attempt']}; {'; '.join(earlier)})" if earlier else ""
+    )
     if step["state"] == "failed":
         return 0.0, f"failed{attempt}"
     if not progress:
@@ -1959,6 +1968,58 @@ def step_progress(step: dict | None) -> tuple[float, str]:
         f"{progress['label']}: {progress['fraction']:.0%}, "
         f"~{progress['left']} left{attempt}"
     )
+
+
+def segmentation_progress(seg: dict, steps: list[dict]) -> tuple[float, str]:
+    """One segmentation's bar: tiles segmented (any method: segment_tile.py
+    checkpoints each), then the merge's own progress lines."""
+    total, done = seg["batches"], seg["batches_done"]
+    if seg["stage"] == "done":
+        return 1.0, "merged"
+    if seg["stage"] == "merging":
+        merge = next(
+            (
+                s
+                for s in reversed(steps)
+                if s["rule"] == "merge"
+                and (s.get("log") or "").endswith(
+                    f"/{seg['label_name']}/logs/merge.log"
+                )
+            ),
+            None,
+        )
+        frac, text = step_progress(merge)
+        return frac, f"merging · {text}"
+    if total:
+        tiles = seg.get("tiles")
+        if tiles:
+            return seg.get("tiles_done", 0) / tiles, (
+                f"{seg.get('tiles_done', 0)}/{tiles} tiles segmented "
+                f"({done}/{total} GPU jobs done)"
+            )
+        return done / total, f"{done}/{total} GPU jobs done"
+    return 0.0, seg["stage"]
+
+
+def _gb(mem_mb) -> str:
+    return f"{mem_mb / 1000:g} GB" if mem_mb else "?"
+
+
+def earlier_attempts(step: dict) -> list[str]:
+    """Each earlier attempt of *step*: how it ended, with its memory."""
+    return [
+        f"{e['attempt']}: "
+        + (
+            (
+                core.why_killed(_tail(e["slurm_log"]))
+                if e.get("slurm_log")
+                else None
+            )
+            or "failed"
+        )
+        + f" at {_gb(e['mem_mb'])}"
+        for e in step.get("earlier", [])
+    ]
 
 
 def steps_view(steps: list[dict], queue: list[dict]) -> None:
@@ -1973,16 +2034,33 @@ def steps_view(steps: list[dict], queue: list[dict]) -> None:
             + (f" ({s['wildcards']})" if s["wildcards"] else ""),
             "state": states.get(s["slurm_job"] or "", s["state"]),
             "attempt": s["attempt"],
+            "memory": _gb(s.get("mem_mb")) if s.get("mem_mb") else "",
             "SLURM job": s["slurm_job"] or "",
+            "earlier attempts": "; ".join(earlier_attempts(s)),
         }
         for s in steps[-40:]
     ]
+    short = sorted(
+        {
+            s["rule"]
+            for s in steps[-40:]
+            if any("out of memory" in a for a in earlier_attempts(s))
+        }
+    )
     with section(
         ":material/account_tree: Steps",
         f"{sum(s['state'] == 'done' for s in steps)} of {len(steps)} done; "
         "the latest attempt of each",
     ):
         st.dataframe(rows, hide_index=True)
+        if short:
+            st.warning(
+                f"{', '.join(short)} ran out of memory and was retried with "
+                "more: each retry costs the time the failed attempt ran. For "
+                "the next run, start higher: that step's memory in Plan & "
+                "launch → Cluster resources, or its mem_mb in the profile.",
+                icon=":material/memory:",
+            )
         open_steps = [s for s in steps if s["state"] != "done"][-5:]
         for s in open_steps:
             state = states.get(s["slurm_job"] or "", s["state"])
@@ -2049,14 +2127,29 @@ def job_progress(job: dict, steps: list[dict], result) -> None:
         if convert_only:
             return
         for seg in status["segmentations"]:
-            total, done = seg["batches"], seg["batches_done"]
-            if seg["stage"] == "done":
-                frac, what = 1.0, "merged"
-            elif total:
-                frac, what = done / total, f"{done}/{total} GPU jobs done"
-            else:
-                frac, what = 0.0, seg["stage"]
+            frac, what = segmentation_progress(seg, steps)
             st.progress(frac, text=f"**{seg['label_name']}** · {what}")
+        # The relations (a multi run), once every segmentation is merged:
+        # relate.py says what it is at in the controller's log.
+        pending = [r for r in status.get("relations") or [] if not r["files"]]
+        if pending and all(
+            s["stage"] == "done" for s in status["segmentations"]
+        ):
+            said = [
+                line
+                for line in _tail(job["log"], TAIL_LINES).splitlines()
+                if line.startswith("[relate]")
+            ]
+            for rel in pending:
+                st.progress(
+                    0.0,
+                    text=f"**{rel['a']} → {rel['b']}** · relating"
+                    + (
+                        f": {said[-1].removeprefix('[relate] ')}"
+                        if said
+                        else ""
+                    ),
+                )
     done = [s for s in status["segmentations"] if s["stage"] == "done"]
     if not done and not status.get("relations"):
         return
