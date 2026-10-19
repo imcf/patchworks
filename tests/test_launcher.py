@@ -1964,3 +1964,43 @@ def test_ssh_key_login_connects_by_itself(monkeypatch):
     # Disconnect: not straight back in.
     next(b for b in at.button if b.label == "Disconnect").click().run()
     assert len(calls) == 1
+
+
+def test_cancel_all_of_a_runs_jobs_after_a_force_stop():
+    """The controller is gone (force-stopped); a step it submitted still
+    runs. "Cancel all its jobs" cancels it -- found by its id in the run's
+    log -- and nothing else of the user's."""
+    pytest.importorskip("paramiko")
+    status = {
+        "work_dir": "/scratch/run",
+        "segmentations": [],
+        "failures": [],
+        "converted": False,
+        "occupancy": False,
+    }
+    ssh = _FakeSSH(
+        {
+            # 203: this run's convert step; 999: some other job of the user.
+            "squeue --me": "203|pw-convert_95|RUNNING|None|12:00|6:00:00|"
+            "scicore\n999|pw-other_1|RUNNING|None|1:00|1:00:00|scicore\n",
+            "squeue": "\n",  # the controller: no longer in the queue
+            "scripts/status.py": json.dumps(status),
+            "grep -E": CONTROLLER_LOG,
+            "scancel": "",
+        },
+        files={
+            f"{WF}/{core.REGISTRY}": core.registry_line(
+                _job(kind="convert", slurm_job="42")
+            ).encode()
+        },
+    )
+    at = _app(ssh, input="/x.czi", work_dir="/scratch/run")
+    at.run()
+    assert not at.exception, at.exception
+    next(b for b in at.button if b.label == "Cancel them").click().run()
+    assert not at.exception
+    (cancel,) = [c for c in ssh.commands if "scancel" in c]
+    assert (
+        "scancel 203" in cancel and "999" not in cancel and " 42" not in cancel
+    )
+    assert core.cancel_command(["1", "x; rm -rf /"]) == "scancel 1"
