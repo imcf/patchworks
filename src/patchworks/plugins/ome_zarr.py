@@ -1229,6 +1229,167 @@ def _level_translation(
     ]
 
 
+def _level_shapes(
+    shape: tuple[int, ...], strides: tuple[int, ...], n_levels: int
+) -> list[tuple[int, ...]]:
+    """Each level's shape, stopping where :func:`_write_pyramid` does."""
+    shapes = [tuple(shape)]
+    for i in range(1, n_levels):
+        nxt = tuple(-(-s // st) for s, st in zip(shapes[-1], strides))
+        if min(nxt) < 1:
+            logger.info("stopping pyramid at level %d (next too small)", i)
+            break
+        shapes.append(nxt)
+    return shapes
+
+
+def _downsample_bands(
+    region: np.ndarray, strides: tuple[int, ...], method: str, workers: int
+) -> np.ndarray:
+    """:func:`_downsample` of *region*, in bands along y run in parallel.
+
+    Only y and x are strided, and a band starts on a stride boundary, so
+    each output voxel comes from the same input block as in one call: the
+    result is identical, computed on every core.
+    """
+    ax = region.ndim - 2
+    st = strides[ax]
+    rows = region.shape[ax]
+    band = max(st, (-(-rows // (4 * max(1, workers)))) // st * st)
+    starts = list(range(0, rows, band))
+    if len(starts) == 1:
+        return _downsample(region, strides, method)
+
+    def one(start: int) -> np.ndarray:
+        sl = [slice(None)] * region.ndim
+        sl[ax] = slice(start, start + band)
+        return _downsample(region[tuple(sl)], strides, method)
+
+    with ThreadPoolExecutor(workers) as pool:
+        return np.concatenate(list(pool.map(one, starts)), axis=ax)
+
+
+def _write_pyramid_one_pass(
+    arr: da.Array,
+    axes: str,
+    group_path: str,
+    *,
+    base_chunks: tuple[int, ...],
+    n_levels: int,
+    strides: tuple[int, ...],
+    chunks: Union[tuple[int, ...], None],
+    base_scale: list[float],
+    base_name: str,
+    shard: ShardSpec,
+    progress: bool,
+    downsample: str,
+    base_translation: "list[float] | None",
+) -> Union[list[dict], None]:
+    """Every level from one read of the source, slab by slab; or ``None``
+    where that does not apply (the levels are then written one by one).
+
+    For a source of huge chunks (a stitched plane per TIFF): each level is
+    otherwise made by reading the one below back from disk -- level 1
+    rereads all of level 0, terabytes for a large image, and took longer
+    than level 0 itself. Only y and x are downsampled, so every level of a
+    plane comes from that plane alone: a slab of planes is read once and
+    each level computed from the previous one in memory, by the same
+    :func:`_downsample` -- the values are those of the level-by-level path.
+
+    Every level is chunked (or sharded) one block deep along the leading
+    axes, as level 0 is, so that each slab writes whole chunks.
+    """
+    source_nbytes = int(np.prod(arr.chunksize)) * arr.dtype.itemsize
+    lead = arr.ndim - 2
+    if (
+        source_nbytes < _SLAB_SOURCE_BYTES
+        or lead < 1
+        or any(st != 1 for st in strides[:lead])
+        or downsample not in _DOWNSAMPLE_METHODS
+    ):
+        return None
+    grp = _open_group(group_path)
+    fmt = _group_zarr_format(group_path)
+    shapes = _level_shapes(arr.shape, strides, n_levels)
+    inners, blocks = [], []
+    for k, shape in enumerate(shapes):
+        if k == 0:
+            inner = tuple(base_chunks)
+        elif shard or chunks:
+            inner = tuple(chunks or _default_chunks(shape, axes))
+        else:
+            inner = _level_chunks(inners[-1], strides, axes, shape)
+        # One block deep along the leading axes, as level 0.
+        if k:
+            inner = tuple(blocks[0][:lead]) + tuple(inner[lead:])
+        inner = tuple(max(1, min(c, s)) for c, s in zip(inner, shape))
+        sh = _shard_for(shard, inner, shape, arr.dtype, fmt)
+        block = sh or inner
+        if tuple(block[:lead]) != tuple((blocks or [block])[0][:lead]):
+            return None  # an explicit shard deeper than level 0's blocks
+        inners.append(inner)
+        blocks.append(block)
+    names = [base_name] + [str(k) for k in range(1, len(shapes))]
+    targets = []
+    for name, shape, inner, block in zip(names, shapes, inners, blocks):
+        if name in grp:
+            del grp[name]
+        sharded = {} if block == inner else {"shards": block}
+        targets.append(
+            grp.create_array(
+                name=name,
+                shape=shape,
+                chunks=inner,
+                dtype=arr.dtype,
+                **sharded,
+                **zarr_compressor_kwargs(fmt),
+            )
+        )
+    # A plane's whole pyramid: the plane, a quarter of it, ... (4/3).
+    starts, step = _slab_starts(arr, blocks[0], source_nbytes * 4 // 3)
+    label = f"{Path(group_path).name}/{base_name}-{names[-1]}"
+    logger.info(
+        "writing %s in one pass, %d slab(s) of %s along the leading axes: "
+        "source chunks are %.2f GB",
+        label,
+        len(starts),
+        tuple(step),
+        source_nbytes / 1024**3,
+    )
+    workers = max(1, cpu_allocation())
+    started = _time.monotonic()
+    for n, start in enumerate(starts, 1):
+        lead_region = tuple(
+            slice(s, min(s + st, arr.shape[i]))
+            for i, (s, st) in enumerate(zip(start, step[:lead]))
+        )
+        region = lead_region + (slice(None),) * 2
+        data = np.asarray(arr[region].compute())
+        for k, (target, block) in enumerate(zip(targets, blocks)):
+            if k:
+                data = _downsample_bands(data, strides, downsample, workers)
+            da.from_array(
+                data, chunks=tuple(data.shape[:lead]) + tuple(block[lead:])
+            ).store(target, regions=region, lock=False, compute=True)
+        del data
+        if progress:
+            log_progress(label, n, len(starts), started)
+    datasets = []
+    for i, (name, shape) in enumerate(zip(names, shapes)):
+        scale = [base_scale[k] * (strides[k] ** i) for k in range(len(axes))]
+        translation = (
+            base_translation
+            if i == 0
+            else _level_translation(
+                base_scale, base_translation, strides, i, downsample
+            )
+        )
+        datasets.append(_dataset(name, scale, translation))
+        if i:
+            logger.info("pyramid level %d: shape=%s", i, shape)
+    return datasets
+
+
 def _write_pyramid(
     arr: da.Array,
     axes: str,
@@ -1298,6 +1459,23 @@ def _write_pyramid(
             arr.shape, axes, source_chunks=arr.chunksize
         )
         _warn_if_many_chunks(arr.shape, base_chunks, shard)
+        one_pass = _write_pyramid_one_pass(
+            arr,
+            axes,
+            group_path,
+            base_chunks=base_chunks,
+            n_levels=n_levels,
+            strides=strides,
+            chunks=chunks,
+            base_scale=base_scale,
+            base_name=base_name,
+            shard=shard,
+            progress=progress,
+            downsample=downsample,
+            base_translation=base_translation,
+        )
+        if one_pass is not None:
+            return one_pass
         _to_zarr_level(
             arr.rechunk(base_chunks),
             group_path,
