@@ -57,6 +57,104 @@ target_path = manifest["target_path"]
 target_component = manifest.get("target_component", "staged")
 in_place = bool(manifest.get("in_place", False))
 
+
+def _finished(group: str) -> bool:
+    """Whether the label group is a finished label image (its pyramid
+    registered: the merge got that far)."""
+    try:
+        attrs = zarr.open_group(group, mode="r").attrs.asdict()
+    except Exception:  # noqa: BLE001 - absent or unreadable: not finished
+        return False
+    return bool(
+        attrs.get("multiscales") or (attrs.get("ome") or {}).get("multiscales")
+    )
+
+
+def write_seam_report(group, record=None) -> None:
+    # Did the tiling leave marks? Objects ending on seams vs inside tiles.
+    if cfg.get("seam_report", True):
+        from patchworks import seam_report
+
+        report = seam_report(
+            group,
+            manifest["tile_shape"],
+            max_faces=int(cfg.get("seam_report_faces", 64)),
+        )
+        Path(work_dir, label_name, "seams.json").write_text(
+            json.dumps(report, indent=2)
+        )
+        seams = {
+            ax: {k: row[k] for k in ("seam_rate", "interior_rate", "ratio")}
+            for ax, row in report["axes"].items()
+        }
+        if record is not None:
+            record["seams"] = seams
+            write_provenance(zarr.open_group(str(group), mode="r+"), record)
+        for ax, row in report["axes"].items():
+            interior = row["interior_rate"]
+            print(
+                f"[patchworks] seams axis {ax}: {100 * row['seam_rate']:.1f}% of "
+                f"labels end on a seam vs "
+                f"{'n/a' if interior is None else f'{100 * interior:.1f}%'} "
+                "inside tiles"
+            )
+
+
+def write_object_table(group, objects: dict) -> None:
+    # The object table, written after the labels are registered so relate
+    # finds it current. Intensities need the image, so they are measured.
+    if cfg.get("object_table", True):
+        from patchworks._tables import compute_table, write_table_from_sums
+
+        if objects and not cfg.get("table_channels"):
+            cols = write_table_from_sums(image_store, label_name, objects)
+            how = "from the tiles' sums"
+        else:
+            cols = compute_table(
+                image_store,
+                label_name,
+                channels=cfg.get("table_channels") or None,
+            )
+            how = "measured from the labels"
+        print(
+            f"[patchworks] object table: {len(cols['label']):,} objects in "
+            f"{group}/table ({how})"
+        )
+
+
+def finish(group, record=None, objects=None) -> None:
+    """Everything after the labels are registered; the scratch store is
+    removed last, so a merge stopped before the end can simply be rerun."""
+    write_seam_report(group, record)
+    write_object_table(group, objects or {})
+    shutil.rmtree(parts_path(work_dir, label_name), ignore_errors=True)
+    if not in_place:
+        # The scratch store and its marker go together, or a rerun would
+        # segment into a store that no longer exists.
+        shutil.rmtree(stage_path(work_dir, label_name), ignore_errors=True)
+        Path(f"{stage_path(work_dir, label_name)}.done").unlink(missing_ok=True)
+    print(f"[patchworks] labels written to {group}")
+    open(snakemake.output[0], "w").close()  # noqa: F821
+
+
+# A merge stopped after removing the scratch store (before this order was
+# fixed): its labels are written if their pyramid is; finish the rest. If not,
+# the segmented tiles are gone and only redoing the segmentation helps.
+if not in_place and not Path(target_path).exists():
+    if _finished(label_group):
+        print(
+            "[patchworks] merge: an earlier attempt wrote the labels and "
+            "removed its stage store, then stopped before the end; "
+            "finishing (seam report, object table)"
+        )
+        finish(label_group)
+        raise SystemExit(0)
+    raise RuntimeError(
+        f"{target_path} (the segmented tiles) is gone and {label_group} is "
+        "not finished: segment again -- delete "
+        f"{Path(work_dir) / label_name} and {label_group}, then launch again"
+    )
+
 staged = zarr.open_group(target_path, mode="r")[target_component]
 
 # Workers bounded by this job's CPUs and memory (each holds a few chunks).
@@ -258,55 +356,4 @@ group = register_labels(
     level=int(cfg.get("level", 0)),
 )
 
-if not in_place:
-    # The scratch store and its marker go together, or a rerun would segment
-    # into a store that no longer exists.
-    shutil.rmtree(stage_path(work_dir, label_name), ignore_errors=True)
-    Path(f"{stage_path(work_dir, label_name)}.done").unlink(missing_ok=True)
-# Did the tiling leave marks? Objects ending on seams vs inside tiles.
-if cfg.get("seam_report", True):
-    from patchworks import seam_report
-
-    report = seam_report(
-        group,
-        manifest["tile_shape"],
-        max_faces=int(cfg.get("seam_report_faces", 64)),
-    )
-    Path(work_dir, label_name, "seams.json").write_text(
-        json.dumps(report, indent=2)
-    )
-    record["seams"] = {
-        ax: {k: row[k] for k in ("seam_rate", "interior_rate", "ratio")}
-        for ax, row in report["axes"].items()
-    }
-    write_provenance(zarr.open_group(str(group), mode="r+"), record)
-    for ax, row in report["axes"].items():
-        interior = row["interior_rate"]
-        print(
-            f"[patchworks] seams axis {ax}: {100 * row['seam_rate']:.1f}% of "
-            f"labels end on a seam vs "
-            f"{'n/a' if interior is None else f'{100 * interior:.1f}%'} "
-            "inside tiles"
-        )
-# The object table, written after the labels are registered so relate
-# finds it current. Intensities need the image, so they are measured.
-if cfg.get("object_table", True):
-    from patchworks._tables import compute_table, write_table_from_sums
-
-    if objects and not cfg.get("table_channels"):
-        cols = write_table_from_sums(image_store, label_name, objects)
-        how = "from the tiles' sums"
-    else:
-        cols = compute_table(
-            image_store,
-            label_name,
-            channels=cfg.get("table_channels") or None,
-        )
-        how = "measured from the labels"
-    print(
-        f"[patchworks] object table: {len(cols['label']):,} objects in "
-        f"{group}/table ({how})"
-    )
-shutil.rmtree(parts_dir, ignore_errors=True)
-print(f"[patchworks] labels written to {group}")
-open(snakemake.output[0], "w").close()  # noqa: F821
+finish(group, record, objects)

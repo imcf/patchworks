@@ -2290,3 +2290,87 @@ def test_the_snakefile_validates_in_the_main_process_only():
     ).read_text()
     assert 'if getattr(workflow, "is_main_process", True):' in snakefile
     assert "    validate_config(config)" in snakefile
+
+
+def _run_merge(tmp_path, *, finished: bool):
+    """merge.py run as Snakemake would, after an earlier attempt removed its
+    stage store: with the labels registered (finished) or not."""
+    import json
+    import runpy
+    import sys
+    from types import SimpleNamespace
+
+    import numpy as np
+    import zarr
+
+    from patchworks.plugins.ome_zarr import register_labels, to_ome_zarr
+
+    work = tmp_path / "work"
+    run = work / "cells"
+    (run / "seg").mkdir(parents=True)
+    store = work / "image.zarr"
+    to_ome_zarr(
+        np.zeros((1, 4, 32, 32), "uint16"),
+        store,
+        axes="czyx",
+        n_levels=1,
+        progress=False,
+    )
+    labels = np.zeros((4, 32, 32), "uint32")
+    labels[1:3, 2:10, 2:10] = 1
+    labels[1:3, 20:30, 20:30] = 2
+    group = zarr.open_group(str(store), mode="a").require_group("labels")
+    group.require_group("cells").create_array(
+        "0", data=labels, chunks=(4, 16, 16)
+    )
+    if finished:
+        register_labels(str(store), "cells", n_levels=2, progress=False)
+    tiles = run / "tiles.json"
+    tiles.write_text(
+        json.dumps(
+            {
+                "batches": [[0]],
+                "target_path": str(run / "stage.zarr"),  # removed
+                "target_component": "staged",
+                "tile_shape": [4, 16, 16],
+                "overlap": [0, 0, 0],
+            }
+        )
+    )
+    (run / "seg" / "0.done").write_text(json.dumps({"counts": {"0": 2}}))
+    out = run / "labels.done"
+    snake = SimpleNamespace(
+        config={"work_dir": str(work), "label_name": "cells", "level": 0},
+        input=SimpleNamespace(tiles=str(tiles)),
+        output=[str(out)],
+        log=[str(run / "logs" / "merge.log")],
+    )
+    import logging
+
+    scripts = str(_workflow_dir() / "scripts")
+    sys.path.insert(0, scripts)
+    # merge.py's start_log tees stdout/stderr and logging into its log: put
+    # them back for the tests that follow.
+    saved = sys.stdout, sys.stderr, list(logging.getLogger().handlers)
+    try:
+        runpy.run_path(f"{scripts}/merge.py", init_globals={"snakemake": snake})
+    except SystemExit as exc:
+        assert exc.code in (0, None)
+    finally:
+        sys.path.remove(scripts)
+        sys.stdout, sys.stderr = saved[0], saved[1]
+        logging.getLogger().handlers[:] = saved[2]
+    return out, run
+
+
+def test_merge_finishes_what_an_earlier_attempt_left(tmp_path):
+    """Stage store removed, labels registered: the merge finishes (seam
+    report, object table) instead of failing on the missing store."""
+    out, run = _run_merge(tmp_path, finished=True)
+    assert out.exists()
+    assert (run / "seams.json").exists()
+
+
+def test_merge_without_its_tiles_or_labels_says_what_to_delete(tmp_path):
+    with pytest.raises(RuntimeError, match="segment again"):
+        _run_merge(tmp_path, finished=False)
