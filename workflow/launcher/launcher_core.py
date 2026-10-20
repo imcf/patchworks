@@ -1649,6 +1649,12 @@ CONTROLLER_PROBLEMS = (
         "the controller's own time ran out: Relaunch, it resumes",
     ),
     (r"oom[_-]kill|Out Of Memory", "the controller ran out of memory"),
+    (
+        r"run_multi on \S+ \(pid \d+.*is driving",
+        "an earlier run that was killed left its marker: if none of your "
+        "jobs runs (Cancel jobs shows none), delete the .run_multi.pid file "
+        "named here, then Relaunch",
+    ),
 )
 
 

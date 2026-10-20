@@ -964,8 +964,27 @@ def relation_dependencies(
     return deps
 
 
-#: Marks the run_multi driving a work_dir: {"host", "pid", "started", "config"}.
+#: Marks the run_multi driving a work_dir: {"host", "pid", "started",
+#: "config"}, and "slurm_job" when it runs in one (the launcher's controller).
 DRIVER_FILE = ".run_multi.pid"
+
+
+def _slurm_job_running(job_id: str) -> bool | None:
+    """Whether SLURM job *job_id* (yours) is still queued or running; None
+    when SLURM cannot be asked. All your jobs, not ``squeue -j``: that
+    errors out for an id SLURM has already forgotten -- a finished job."""
+    try:
+        out = subprocess.run(
+            ["squeue", "--me", "-h", "-o", "%i"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode != 0:
+        return None
+    return str(job_id) in {line.strip() for line in out.stdout.splitlines()}
 
 
 def _process_args(pid: int) -> list[str] | None:
@@ -1037,6 +1056,25 @@ def claim_driver(work_dir: str | Path, config: Path) -> Path:
                 f"is already driving {work_dir}. Wait for it, or stop it "
                 f"first: kill {pid}"
             )
+        job = other.get("slurm_job")
+        if pid and where and where != host and job:
+            # Another node, but a SLURM job: SLURM says whether it still is.
+            running = _slurm_job_running(job)
+            if running:
+                sys.exit(
+                    f"[run_multi] ERROR: another run_multi (SLURM job {job} on "
+                    f"{where}, started {other.get('started', '?')}) is "
+                    f"already driving {work_dir}. Wait for it, or cancel it "
+                    f"first: scancel {job}"
+                )
+            if running is False:
+                print(
+                    f"[run_multi] the run_multi of SLURM job {job} (on {where}) "
+                    "has ended without removing its marker (it was killed): "
+                    "taking over",
+                    flush=True,
+                )
+                where = host  # taken over below
         if pid and where and where != host:
             sys.exit(
                 f"[run_multi] ERROR: a run_multi on {where} (pid {pid}, "
@@ -1052,6 +1090,11 @@ def claim_driver(work_dir: str | Path, config: Path) -> Path:
                 "pid": me,
                 "started": time.strftime("%Y-%m-%d %H:%M:%S"),
                 "config": str(config),
+                **(
+                    {"slurm_job": os.environ["SLURM_JOB_ID"]}
+                    if os.environ.get("SLURM_JOB_ID")
+                    else {}
+                ),
             }
         )
     )
