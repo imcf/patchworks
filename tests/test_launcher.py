@@ -1528,7 +1528,7 @@ def test_jobs_tab_shows_failures_and_the_queue():
     }
     ssh = _FakeSSH(
         {
-            "squeue --me": QUEUE,
+            "%i|%j": QUEUE,
             "squeue": "RUNNING\n",
             "scripts/status.py": json.dumps(status),
             "tail -n 80": "CUDA out of memory\n",
@@ -1627,7 +1627,7 @@ def test_jobs_tab_convert_only_shows_the_convert_step():
     }
     ssh = _FakeSSH(
         {
-            "squeue --me": "203|patchworks_95|RUNNING|None|12:00|6:00:00|scicore\n",
+            "%i|%j": "203|patchworks_95|RUNNING|None|12:00|6:00:00|scicore\n",
             "squeue": "RUNNING\n",
             "scripts/status.py": json.dumps(status),
             "grep -E": CONTROLLER_LOG,
@@ -1890,7 +1890,7 @@ def test_a_connection_dropped_during_a_refresh():
         {"squeue": "RUNNING\n"},
         files={f"{WF}/{core.REGISTRY}": core.registry_line(_job()).encode()},
     )
-    ssh.drop_on = ("status_command", "squeue -h -j")
+    ssh.drop_on = ("status_command", "%i %T")
     at = _app(ssh, input="/x.czi", work_dir="/scratch/run")
     at.run()
     assert not at.exception, at.exception
@@ -1983,7 +1983,7 @@ def test_cancel_all_of_a_runs_jobs_after_a_force_stop():
     ssh = _FakeSSH(
         {
             # 203: this run's convert step; 999: some other job of the user.
-            "squeue --me": "203|pw-convert_95|RUNNING|None|12:00|6:00:00|"
+            "%i|%j": "203|pw-convert_95|RUNNING|None|12:00|6:00:00|"
             "scicore\n999|pw-other_1|RUNNING|None|1:00|1:00:00|scicore\n",
             "squeue": "\n",  # the controller: no longer in the queue
             "scripts/status.py": json.dumps(status),
@@ -2082,3 +2082,41 @@ def test_failures_can_be_dismissed_and_shown_again():
     show = next(b for b in at.button if b.label.startswith("Show 1 dismissed"))
     show.click().run()
     assert any(e.label.startswith("Failed: 1 step") for e in at.expander)
+
+
+def test_a_run_that_stopped_at_once_says_why():
+    """The controller ended before any step (a killed run's lock): the
+    page says so and what to do, instead of an empty DONE."""
+    pytest.importorskip("paramiko")
+    log = (
+        "Building DAG of jobs...\n"
+        "LockException:\nError: Directory cannot be locked. Please make sure "
+        "that no other Snakemake process is trying to create the same files\n"
+    )
+    assert "Unlock" in core.controller_problem(log)[1]
+    assert core.controller_problem("all fine\n") is None
+    ssh = _FakeSSH(
+        {"%i %T": "DONE\n", "tail -n": log},
+        files={f"{WF}/{core.REGISTRY}": core.registry_line(_job()).encode()},
+    )
+    at = _app(ssh, input="/x.czi", work_dir="/scratch/run")
+    at.run()
+    assert not at.exception
+    (stopped,) = [e.value for e in at.error if "stopped before" in e.value]
+    assert "cannot be locked" in stopped and "press Unlock" in stopped
+
+
+def test_slurm_not_answering_is_not_done():
+    pytest.importorskip("paramiko")
+    ssh = _FakeSSH(
+        {"%i %T": "UNKNOWN slurm_load_jobs error: Socket timed out\n"},
+        files={f"{WF}/{core.REGISTRY}": core.registry_line(_job()).encode()},
+    )
+    at = _app(ssh, input="/x.czi", work_dir="/scratch/run")
+    at.run()
+    assert not at.exception
+    assert any("SLURM did not answer" in w.value for w in at.warning)
+    assert "Unlock" not in [b.label for b in at.button]  # maybe still running
+    status = core.run_status_command("/w/m.yaml", since=1700000000)
+    assert status.startswith("PATCHWORKS_STATUS_SINCE=1700000000 python")
+    assert core.started_epoch({"started": "nonsense"}) is None

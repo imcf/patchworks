@@ -1020,12 +1020,30 @@ def parse_models(output: str) -> list[str]:
     return [str(n) for n in names] if isinstance(names, list) else []
 
 
-def run_status_command(config: str) -> str:
-    """``scripts/status.py`` on a run's config (or multi config), as JSON."""
-    return " ".join(
+def run_status_command(config: str, since: float | None = None) -> str:
+    """``scripts/status.py`` on a run's config (or multi config), as JSON.
+
+    *since* (seconds since the epoch): only failures logged after it --
+    the run's own, not an earlier run's (an environment variable, which
+    an older status.py simply ignores).
+    """
+    cmd = " ".join(
         shlex.quote(a)
         for a in ("python", "scripts/status.py", config, "--json")
     )
+    return f"PATCHWORKS_STATUS_SINCE={int(since)} {cmd}" if since else cmd
+
+
+def started_epoch(job: dict[str, Any]) -> float | None:
+    """When the job was launched (its ``started`` stamp, this computer's
+    local time), as seconds since the epoch; None if unknown."""
+    import datetime as _dt
+
+    try:
+        stamp = _dt.datetime.strptime(str(job.get("started")), "%Y%m%d-%H%M%S")
+    except ValueError:
+        return None
+    return stamp.timestamp()
 
 
 def parse_json_output(output: str) -> dict[str, Any] | None:
@@ -1614,6 +1632,43 @@ def steps_command(log: str) -> str:
     )
 
 
+# Why a controller ended without running anything, from its log.
+CONTROLLER_PROBLEMS = (
+    (
+        r"LockException|cannot be locked|Directory cannot be locked",
+        "Snakemake's lock from a run that was killed: press Unlock, then "
+        "Relaunch",
+    ),
+    (
+        r"IncompleteFilesException",
+        "files of a killed step are incomplete: Relaunch (the profile reruns "
+        "them)",
+    ),
+    (
+        r"DUE TO TIME LIMIT",
+        "the controller's own time ran out: Relaunch, it resumes",
+    ),
+    (r"oom[_-]kill|Out Of Memory", "the controller ran out of memory"),
+)
+
+
+def controller_problem(text: str) -> tuple[str, str | None] | None:
+    """The error that ended a controller, and what to do; None if its log
+    shows none."""
+    for pattern, hint in CONTROLLER_PROBLEMS:
+        # The last line that matches: after an exception's bare name comes
+        # its message.
+        found = re.findall(f".*(?:{pattern}).*", text)
+        if found:
+            return found[-1].strip()[:300], hint
+    errors = [
+        line.strip()
+        for line in text.splitlines()
+        if re.search(r"Error|Exception|error:", line)
+    ]
+    return (errors[-1][:300], None) if errors else None
+
+
 _SUBMITTED = re.compile(
     r"Job (\d+) has been submitted with SLURM jobid (\d+) \(log: ([^)]+)\)"
 )
@@ -1806,10 +1861,22 @@ def last_progress(text: str) -> dict[str, Any] | None:
 
 
 def status_command(job: dict[str, Any]) -> str:
-    """Shell line printing RUNNING/PENDING/DONE for a registered job."""
+    """Shell line printing RUNNING/PENDING/DONE for a registered job, or
+    ``UNKNOWN <why>`` when SLURM did not answer -- never DONE for that.
+
+    All your jobs, not ``-j <id>``: squeue errors out for an id it has
+    already forgotten, which is a finished job, not a failure.
+    """
     if job.get("slurm_job"):
-        jid = shlex.quote(str(job["slurm_job"]))
-        return f's=$(squeue -h -j {jid} -o %T 2>/dev/null); echo "${{s:-DONE}}"'
+        jid = str(job["slurm_job"])
+        if not jid.isdigit():
+            return "echo DONE"
+        return (
+            'out=$(squeue --me -h -o "%i %T" 2>&1) || '
+            '{ echo "UNKNOWN $out" | head -c 300; exit 0; }; '
+            f"s=$(printf '%s\\n' \"$out\" | awk '$1 == {jid} {{print $2}}'); "
+            'echo "${s:-DONE}"'
+        )
     pid = shlex.quote(str(job["pid"]))
     return f"kill -0 {pid} 2>/dev/null && echo RUNNING || echo DONE"
 

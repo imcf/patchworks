@@ -191,3 +191,23 @@ def test_failures_say_what_went_wrong_and_what_to_do(tmp_path):
 def test_explain_without_a_known_cause():
     line, hint = status.explain("step 1\nValueError: overlap too wide\n\n")
     assert line == "ValueError: overlap too wide" and hint is None
+
+
+def test_failures_of_an_earlier_run_are_not_this_runs(tmp_path, monkeypatch):
+    """A step log older than the run shown is an earlier run's failure,
+    whose step has not run again yet: left out."""
+    import os
+
+    work = tmp_path / "results"
+    _markers(work, "cells", batches=2, done=0)
+    logs = work / "cells" / "logs" / "segment"
+    logs.mkdir(parents=True)
+    old, new = logs / "0.log", logs / "1.log"
+    for log in (old, new):
+        log.write_text("Traceback (most recent call last):\nRuntimeError: x\n")
+    os.utime(old, (1_000_000, 1_000_000))
+    cfg = {"work_dir": str(work), "label_name": "cells"}
+    assert len(status.failures(cfg)) == 2
+    monkeypatch.setenv("PATCHWORKS_STATUS_SINCE", "2000000")
+    (only,) = status.failures(cfg)
+    assert only["step"] == "segment job 1"
