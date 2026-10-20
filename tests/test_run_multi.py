@@ -1830,6 +1830,44 @@ def test_one_run_multi_per_work_dir(tmp_path, monkeypatch):
     assert "login99" in str(err.value) and str(marker) in str(err.value)
 
 
+def test_a_killed_controller_jobs_marker_is_taken_over(tmp_path, monkeypatch):
+    """The launcher's controller is a SLURM job on some node: a later run on
+    another node asks SLURM whether that job still runs, instead of
+    refusing until the marker is deleted by hand."""
+    import json
+
+    import run_multi
+
+    work = tmp_path / "results"
+    work.mkdir()
+    marker = work / run_multi.DRIVER_FILE
+    old = {
+        "host": "sca29",
+        "pid": 3134735,
+        "started": "x",
+        "slurm_job": "27922159",
+    }
+    monkeypatch.setenv("SLURM_JOB_ID", "28044776")
+
+    # Still running: refused, saying how to cancel it.
+    marker.write_text(json.dumps(old))
+    monkeypatch.setattr(run_multi, "_slurm_job_running", lambda job: True)
+    with pytest.raises(SystemExit) as err:
+        run_multi.claim_driver(work, Path("multi.yaml"))
+    assert "scancel 27922159" in str(err.value)
+
+    # SLURM cannot be asked: refused as before (not taken over blindly).
+    monkeypatch.setattr(run_multi, "_slurm_job_running", lambda job: None)
+    with pytest.raises(SystemExit):
+        run_multi.claim_driver(work, Path("multi.yaml"))
+
+    # Ended (killed, its marker left): taken over, with this job's id.
+    monkeypatch.setattr(run_multi, "_slurm_job_running", lambda job: False)
+    run_multi.claim_driver(work, Path("multi.yaml"))
+    mine = json.loads(marker.read_text())
+    assert mine["pid"] == os.getpid() and mine["slurm_job"] == "28044776"
+
+
 def test_driver_alive_rejects_a_recycled_pid():
     import run_multi
 
