@@ -112,9 +112,23 @@ def explain(text: str) -> tuple[str, str | None]:
     return (errors or lines or [""])[-1][:300], None
 
 
+def _since() -> float:
+    """Logs last written before this (seconds since the epoch) are not
+    this run's: an earlier run's failures, whose steps have not run again
+    yet. Set by the launcher for the run it shows; 0 counts every log."""
+    import os
+
+    try:
+        return float(os.environ.get("PATCHWORKS_STATUS_SINCE") or 0)
+    except ValueError:
+        return 0.0
+
+
 def _failure(step: str, log: Path) -> dict | None:
     """A failure record for *log*, if it says something went wrong."""
     try:
+        if log.stat().st_mtime < _since():
+            return None
         text = log.read_text(errors="replace")[-200_000:]
     except OSError:
         return None

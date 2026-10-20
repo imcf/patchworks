@@ -1825,7 +1825,12 @@ def resources_editor(resources: dict, info: dict | None = None) -> dict:
     return overrides
 
 
-STATE_COLORS = {"RUNNING": "green", "PENDING": "orange", "DONE": "gray"}
+STATE_COLORS = {
+    "RUNNING": "green",
+    "PENDING": "orange",
+    "DONE": "gray",
+    "UNKNOWN": "orange",
+}
 
 
 def job_actions(
@@ -2095,7 +2100,14 @@ def fetch_job(job: dict, setup: str) -> dict:
             "status": lambda: run(
                 client,
                 core.inner_command(
-                    wf_dir, setup, core.run_status_command(job["config"])
+                    wf_dir,
+                    setup,
+                    core.run_status_command(
+                        job["config"],
+                        # This run's failures, not an earlier run's (with
+                        # a margin for clocks that differ a little).
+                        since=(core.started_epoch(job) or 300) - 300,
+                    ),
                 ),
                 timeout=60,
             ),
@@ -2109,6 +2121,12 @@ def fetch_job(job: dict, setup: str) -> dict:
     data = {
         "state": got["state"][1].strip() or "unknown",
         "queue": core.parse_queue(got["queue"][1]) if "queue" in got else [],
+        # squeue refused (SLURM busy, not found): said, not an empty queue.
+        "queue_error": (
+            core.explain_remote_error(got["queue"][2] or got["queue"][1])
+            if "queue" in got and got["queue"][0]
+            else None
+        ),
         "steps": core.parse_steps(got["steps"][1]) if "steps" in got else [],
         "status": got.get("status"),
     }
@@ -3196,7 +3214,27 @@ with tab_jobs:
                 _forget_connection()
                 st.rerun()
             state = data["state"]
-            alive = state in ("RUNNING", "PENDING", "CONFIGURING", "COMPLETING")
+            unknown = state.startswith("UNKNOWN")
+            if unknown:
+                # SLURM did not answer: not DONE. Kept as alive, so it is
+                # asked again at the next refresh and nothing is unlocked.
+                st.warning(
+                    "SLURM did not answer, so whether the run is still going "
+                    f"is not known: {state.removeprefix('UNKNOWN').strip()}",
+                    icon=":material/help:",
+                )
+                state = "UNKNOWN"
+            if data.get("queue_error"):
+                st.warning(
+                    f"Could not list the queue: {data['queue_error']}",
+                    icon=":material/help:",
+                )
+            alive = unknown or state in (
+                "RUNNING",
+                "PENDING",
+                "CONFIGURING",
+                "COMPLETING",
+            )
             was_alive = st.session_state.get(alive_key, True)
             st.session_state[alive_key] = alive
             if was_alive != alive:  # started or ended: (un)set auto-refresh
@@ -3212,6 +3250,22 @@ with tab_jobs:
                 ),
                 queue=data["queue"],
             )
+            if (
+                not alive
+                and job.get("kind") != "check"
+                and job.get("config")
+                and not data["steps"]
+            ):
+                # Ended without starting a single step: say why.
+                problem = core.controller_problem(_tail(job["log"], TAIL_LINES))
+                if problem:
+                    line, hint = problem
+                    st.error(
+                        "The run stopped before starting any step: "
+                        f"`{line}`"
+                        + (f"\n\n:material/lightbulb: {hint}" if hint else ""),
+                        icon=":material/error:",
+                    )
             if job.get("kind") == "check":
                 if not alive:
                     report = core.parse_json_output(
