@@ -2120,3 +2120,44 @@ def test_slurm_not_answering_is_not_done():
     status = core.run_status_command("/w/m.yaml", since=1700000000)
     assert status.startswith("PATCHWORKS_STATUS_SINCE=1700000000 python")
     assert core.started_epoch({"started": "nonsense"}) is None
+
+
+def test_cancelling_a_running_job_keeps_the_connection():
+    pytest.importorskip("paramiko")
+    status = {
+        "work_dir": "/scratch/run",
+        "segmentations": [],
+        "failures": [],
+        "converted": False,
+        "occupancy": False,
+    }
+    ssh = _FakeSSH(
+        {
+            "%i|%j": "203|pw-convert_95|RUNNING|None|12:00|6:00:00|scicore\n"
+            "42|pw-convert|RUNNING|None|12:00|6:00:00|scicore\n",
+            "%i %T": "RUNNING\n",
+            "scripts/status.py": json.dumps(status),
+            "grep -E": CONTROLLER_LOG,
+            "scancel": "",
+        },
+        files={
+            f"{WF}/{core.REGISTRY}": core.registry_line(
+                _job(kind="convert", slurm_job="42")
+            ).encode()
+        },
+    )
+    at = _app(ssh, input="/x.czi", work_dir="/scratch/run")
+    at.run()
+    next(b for b in at.button if b.label == "Cancel them").click().run()
+    assert any("scancel 203 42" in c for c in ssh.commands)
+    # The next refresh: the run has ended.
+    ssh.answers["%i %T"] = "DONE\n"
+    ssh.answers["%i|%j"] = ""
+    at.run()
+    assert not at.exception
+    assert "ssh_client" in at.session_state
+    assert (
+        not at.session_state["connection_lost"]
+        if ("connection_lost" in at.session_state)
+        else True
+    )

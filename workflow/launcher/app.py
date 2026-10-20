@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import io
 import json
+import logging
 import re
 import shlex
 import stat
@@ -55,11 +56,38 @@ CLUSTERS = core.load_clusters(Path(__file__).with_name("clusters.yaml"))
 # ---------------------------------------------------------------------------
 
 
+# Why a connection dropped, in the terminal the launcher runs in: what it
+# was doing and what SSH said. The page only says "log in again".
+_log = logging.getLogger("patchworks.launcher")
+if not _log.handlers:
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(
+        logging.Formatter("%(asctime)s %(name)s: %(message)s")
+    )
+    _log.addHandler(_handler)
+    _log.setLevel(logging.INFO)
+
+
+def _log_lost(transport, doing: str, why: str = "") -> None:
+    # Never let the diagnostic itself fail.
+    try:
+        reason = transport.get_exception() if transport is not None else None
+    except Exception:  # noqa: BLE001
+        reason = None
+    _log.warning(
+        "SSH connection lost while %s: %s%s",
+        doing,
+        why or "(no error from the command)",
+        f"; the connection's own error: {reason!r}" if reason else "",
+    )
+
+
 def get_client() -> paramiko.SSHClient | None:
     """The session's SSH connection; None (log in again) once it dropped."""
     client = st.session_state.get("ssh_client")
     transport = client.get_transport() if client is not None else None
     if client is not None and (transport is None or not transport.is_active()):
+        _log_lost(transport, "the page was redrawn")
         for key in ("ssh_client", "sftp"):
             st.session_state.pop(key, None)
         st.session_state["connection_lost"] = True
@@ -175,7 +203,9 @@ def run(
     """
     wrapped = f"bash -lc {shlex.quote(command)}" if login else command
     transport = client.get_transport() if client is not None else None
+    doing = f"about to run {command[:120]!r}"
     if transport is None or not transport.is_active():
+        _log_lost(transport, doing)
         _connection_lost("the SSH connection to the cluster dropped")
     # The server caps the channels one connection may have open at once
     # (OpenSSH's MaxSessions): one refused while others close is retried.
@@ -193,9 +223,11 @@ def run(
                 raise
             time.sleep(0.5 * 2**attempt)
         except EOFError as exc:  # the server closed the connection
+            _log_lost(transport, doing, repr(exc))
             _connection_lost(str(exc) or "the server closed the connection")
         except (paramiko.SSHException, OSError) as exc:
             if not transport.is_active():
+                _log_lost(transport, doing, repr(exc))
                 _connection_lost(str(exc))
             raise
     out = stdout.read().decode(errors="replace")
