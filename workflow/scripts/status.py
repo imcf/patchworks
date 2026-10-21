@@ -313,6 +313,16 @@ def segmentation_status(cfg: dict) -> dict:
             }
         except (OSError, ValueError, KeyError):
             pass
+    # Grown from another segmentation's labels: run_multi starts it only
+    # once those are merged -- say so, rather than only "converted".
+    seed = cfg.get("seed_labels")
+    if seed and not out["merged"] and out["batches"] is None:
+        attrs = _attrs(store / "labels" / str(seed))
+        if not (
+            attrs.get("multiscales")
+            or (attrs.get("ome") or {}).get("multiscales")
+        ):
+            out["waits_for"] = str(seed)
     if out["merged"]:
         out["stage"] = "done"
     elif out["batches"] is not None and out["batches_done"] >= out["batches"]:

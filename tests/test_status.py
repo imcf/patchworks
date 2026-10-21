@@ -211,3 +211,17 @@ def test_failures_of_an_earlier_run_are_not_this_runs(tmp_path, monkeypatch):
     monkeypatch.setenv("PATCHWORKS_STATUS_SINCE", "2000000")
     (only,) = status.failures(cfg)
     assert only["step"] == "segment job 1"
+
+
+def test_a_seeded_segmentation_says_what_it_waits_for(tmp_path):
+    """Grown from another's labels: it waits for their merge, and says so."""
+    work = tmp_path / "w"
+    (work / "image.zarr").mkdir(parents=True)
+    cfg = {"work_dir": str(work), "label_name": "cyto", "seed_labels": "nuclei"}
+    assert status.segmentation_status(cfg)["waits_for"] == "nuclei"
+    nuclei = work / "image.zarr" / "labels" / "nuclei"
+    nuclei.mkdir(parents=True)
+    (nuclei / "zarr.json").write_text(
+        json.dumps({"attributes": {"ome": {"multiscales": [{}]}}})
+    )
+    assert "waits_for" not in status.segmentation_status(cfg)
