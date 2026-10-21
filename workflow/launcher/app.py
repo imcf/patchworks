@@ -2179,9 +2179,11 @@ def fetch_job(job: dict, setup: str) -> dict:
         ),
         "log": lambda: _fetch_tails([job["log"]]),
     }
+    if job.get("slurm_job"):
+        # Where the job is in the queue (a try waiting for a GPU, too).
+        calls["queue"] = lambda: run(client, core.QUEUE_COMMAND, timeout=30)
     if job.get("config") and job.get("kind") != "check":
         calls |= {
-            "queue": lambda: run(client, core.QUEUE_COMMAND, timeout=30),
             "steps": lambda: run(
                 client, core.steps_command(job["log"]), login=False, timeout=30
             ),
@@ -3385,6 +3387,29 @@ with tab_jobs:
                         icon=":material/error:",
                     )
             if job.get("kind") == "check":
+                if alive:
+                    # Nothing in its log until it runs: say where it is.
+                    row = next(
+                        (
+                            r
+                            for r in data["queue"]
+                            if r["job"] == str(job.get("slurm_job"))
+                        ),
+                        None,
+                    )
+                    if row and row["state"] == "PENDING":
+                        st.info(
+                            "Waiting for a GPU: "
+                            f"{row['why it waits'] or 'in the queue'}. The "
+                            "tiles are tried once it starts.",
+                            icon=":material/hourglass_top:",
+                        )
+                    elif row:
+                        st.info(
+                            f"Trying the tiles on a GPU, for {row['running for']} "
+                            "so far: the result shows here when it ends.",
+                            icon=":material/science:",
+                        )
                 if not alive:
                     report = core.parse_json_output(
                         _tail(job["log"], TAIL_LINES)
@@ -3404,7 +3429,9 @@ with tab_jobs:
                     job_failures(status)
                     job_results(status)
             with st.expander(
-                "Snakemake log (the controller)",
+                "The try's log"
+                if job.get("kind") == "check"
+                else "Snakemake log (the controller)",
                 icon=":material/terminal:",
                 # Open while running if nothing above shows the run's steps.
                 expanded=alive

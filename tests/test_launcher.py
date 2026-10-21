@@ -2178,3 +2178,22 @@ def test_cancelling_a_running_job_keeps_the_connection():
         if ("connection_lost" in at.session_state)
         else True
     )
+
+
+def test_a_try_waiting_for_a_gpu_says_so():
+    """A try's log stays empty until it runs: the Jobs tab says it waits
+    for a GPU, and why."""
+    pytest.importorskip("paramiko")
+    job = _job(name="timing_20261021-111644", kind="check", slurm_job="77")
+    ssh = _FakeSSH(
+        {
+            "%i|%j": "77|pw-timing|PENDING|Priority|0:00|30:00|rtx4090\n",
+            "%i %T": "PENDING\n",
+        },
+        files={f"{WF}/{core.REGISTRY}": core.registry_line(job).encode()},
+    )
+    at = _app(ssh, input="/x.czi", work_dir="/scratch/run")
+    at.run()
+    assert not at.exception
+    (waiting,) = [i.value for i in at.info if "Waiting for a GPU" in i.value]
+    assert "waiting its turn" in waiting
