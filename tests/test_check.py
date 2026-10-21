@@ -269,3 +269,14 @@ def test_overlap_auto_prefers_an_earlier_runs_object_table(tmp_path):
     assert "earlier run's table" in source
     # 90th percentile of each axis, plus 10%.
     assert spec == [7, 31, 22]  # p90 [5.7, 28, 19.5] * 1.1, rounded up
+
+
+def test_a_try_says_what_it_does_as_it_goes(tmp_path, capsys):
+    """Its log shows each tile as it is tried (stderr), while stdout stays
+    the report alone."""
+    _converted(tmp_path / "w")
+    check.check(_config(tmp_path), sample=2)
+    out = capsys.readouterr()
+    assert "[check] cells: trying" in out.err
+    assert "[check] cells: tile 1/" in out.err and "object(s) in" in out.err
+    assert "[check]" not in out.out

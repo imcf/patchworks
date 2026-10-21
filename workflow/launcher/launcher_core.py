@@ -978,7 +978,8 @@ def check_command(
 ) -> str:
     """``scripts/check.py`` on a run's config (or multi config), as JSON;
     with *preview*, a picture of one segmented tile per segmentation."""
-    args = ["python", "scripts/check.py", config, "--json"]
+    # -u: its progress reaches the log as it goes, not at the end.
+    args = ["python", "-u", "scripts/check.py", config, "--json"]
     if sample:
         args += ["--sample", str(sample)]
     if preview:
