@@ -1457,6 +1457,8 @@ def main() -> None:
             cwd=workflow_dir,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
+            # Into a pipe, Python's stdout is block-buffered: lines in order.
+            env={**os.environ, "PYTHONUNBUFFERED": "1"},
         )
         write_run_state(run, state="running", pid=proc.pid, started=time.time())
         copiers.append(tee_output(proc, run / SNAKEMAKE_OUT))
