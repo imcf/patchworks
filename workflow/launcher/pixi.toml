@@ -18,6 +18,11 @@ streamlit = ">=1.45"
 paramiko = ">=3.4"
 pyyaml = ">=6.0"
 
+# Streamlit's command line (click) needs colorama on Windows, and the
+# environment does not bring it there: "No module named 'colorama'".
+[target.win-64.dependencies]
+colorama = ">=0.4"
+
 [tasks]
 start = "streamlit run app.py"
 # Reachable from other machines (a team server inside the institute
