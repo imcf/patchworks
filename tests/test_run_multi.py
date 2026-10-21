@@ -2443,7 +2443,7 @@ def test_tee_output_keeps_a_copy(tmp_path, capfdbinary):
         [
             sys.executable,
             "-c",
-            "import sys; print('out'); print('err', file=sys.stderr)",
+            "import sys; print('out', flush=True); print('err', file=sys.stderr)",
         ],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
