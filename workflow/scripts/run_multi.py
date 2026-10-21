@@ -39,6 +39,12 @@ from pathlib import Path
 
 import yaml
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _src import use_clone_src  # noqa: E402
+
+# Its Snakemakes inherit this: see scripts/_src.py.
+use_clone_src()
+
 
 def _load_yaml(path: Path) -> dict:
     return yaml.safe_load(path.read_text())

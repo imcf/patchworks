@@ -2451,3 +2451,28 @@ def test_tee_output_keeps_a_copy(tmp_path, capfdbinary):
     tee_output(proc, tmp_path / "snakemake.out").join(timeout=30)
     proc.wait()
     assert (tmp_path / "snakemake.out").read_text().split() == ["out", "err"]
+
+
+def test_jobs_import_patchworks_from_the_clone(monkeypatch):
+    """A job starting while pixi reinstalls patchworks still finds it."""
+    import _src
+
+    monkeypatch.setenv("PYTHONPATH", "/elsewhere")
+    monkeypatch.setattr(
+        sys, "path", [p for p in sys.path if p != str(_src.SRC)]
+    )
+    _src.use_clone_src()
+    _src.use_clone_src()
+    assert sys.path[0] == str(_src.SRC)
+    assert os.environ["PYTHONPATH"] == os.pathsep.join(
+        [str(_src.SRC), "/elsewhere"]
+    )
+    # A child (a job, a rule's script) looks there before site-packages.
+    path = subprocess.run(
+        [sys.executable, "-c", "import sys, json; print(json.dumps(sys.path))"],
+        capture_output=True,
+        text=True,
+    ).stdout
+    child = json.loads(path)
+    site = next(i for i, p in enumerate(child) if "site-packages" in p)
+    assert child.index(str(_src.SRC)) < site

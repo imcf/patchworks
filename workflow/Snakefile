@@ -6,6 +6,10 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(workflow.basedir) / "scripts"))
+# patchworks from this clone, even while pixi reinstalls it (scripts/_src.py).
+from _src import use_clone_src
+
+use_clone_src()
 from _pw import validate_config, with_defaults
 
 # Settings a config leaves out take their defaults (scripts/_pw.py DEFAULTS).
