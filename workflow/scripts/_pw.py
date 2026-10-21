@@ -549,11 +549,22 @@ def plan_run(cfg, sample: int = 0, preview: str | None = None) -> dict:
         cfg.get("seed_labels"),
     )
     lead = (slice(None),) if stacked.ndim > image.ndim else ()
+    import sys
+
+    label = cfg.get("label_name", "labels")
+
+    def say(text):  # the try's progress, to its log (stdout is the report)
+        print(f"[check] {label}: {text}", file=sys.stderr, flush=True)
+
+    say(
+        f"trying {len(pick)} tile(s); loading the method (the first tile "
+        "also loads the model)"
+    )
     fn = build_fn(cfg)
     times = []
     labels = None
     extents = []
-    for index in pick:
+    for n, index in enumerate(pick, 1):
         sl = tuple(
             slice(max(0, s.start - h), min(n, s.stop + h))
             for s, n, h in zip(tiles[index], image.shape, overlap)
@@ -567,6 +578,11 @@ def plan_run(cfg, sample: int = 0, preview: str | None = None) -> dict:
         found = object_extents(labels)
         if found.shape[1] == len(tile_shape):
             extents.append(found)
+        say(
+            f"tile {n}/{len(pick)} (#{index}): "
+            f"{len(np.unique(np.asarray(labels))) - 1} object(s) in "
+            f"{times[-1]:.1f} s"
+        )
     if preview and labels is not None:
         # The tile without its halo, as the run keeps it.
         inner = tuple(
