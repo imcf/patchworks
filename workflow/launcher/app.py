@@ -1450,32 +1450,50 @@ def check_on_cluster(client, wf_dir, setup, files) -> dict:
     return report
 
 
+def _wide_image(picture, **kwargs) -> None:
+    """An image as wide as the page (Streamlit renamed the option)."""
+    try:
+        st.image(picture, width="stretch", **kwargs)
+    except Exception:  # noqa: BLE001 - an older Streamlit
+        st.image(picture, use_container_width=True, **kwargs)
+
+
 def show_previews(report: dict) -> None:
-    """The tile each segmentation was tried on, its objects outlined."""
+    """Each segmentation's tried tile, full width, with what it found."""
     for seg in report.get("segmentations", []):
         plan = seg.get("plan") or {}
         if not plan.get("preview"):
             continue
-        try:
-            with get_sftp().open(plan["preview"]) as fh:
-                picture = fh.read()
-        except OSError:
-            st.caption(f"{seg['label_name']}: no picture at {plan['preview']}")
-            continue
-        plane = plan.get("preview_plane")
-        st.image(
-            picture,
-            caption=f"{seg['label_name']}: tile {plan['preview_tile']}"
-            + ("" if plane is None else f", plane {plane} of the tile")
-            + f" · {plan['preview_objects']} objects · "
-            f"{plan['seconds_per_tile']:.1f} s per tile",
-        )
-        if plan.get("suggested_overlap"):
-            st.caption(
-                f":material/straighten: {seg['label_name']}: objects up to "
-                f"{plan['object_extent_p90']} pixels (90%, [z, y, x]) on the "
-                f"tried tiles -> overlap `auto` uses "
-                f"{plan['suggested_overlap']}"
+        with st.container(border=True):
+            st.markdown(f"##### {seg['label_name']}")
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("objects in this tile", plan.get("preview_objects", "?"))
+            c2.metric("seconds per tile", f"{plan['seconds_per_tile']:.0f}")
+            if plan.get("gpu_hours") is not None:
+                c3.metric("GPU hours, whole run", f"{plan['gpu_hours']:.1f}")
+            if plan.get("suggested_overlap"):
+                c4.metric("overlap auto uses", str(plan["suggested_overlap"]))
+            try:
+                with get_sftp().open(plan["preview"]) as fh:
+                    picture = fh.read()
+            except OSError:
+                st.caption(f"no picture at {plan['preview']}")
+                continue
+            plane = plan.get("preview_plane")
+            _wide_image(
+                picture,
+                caption=f"The fullest tile tried (#{plan['preview_tile']}"
+                + (
+                    ""
+                    if plane is None
+                    else f", plane {plane}, the one with the most objects"
+                )
+                + "): the image, and the objects outlined. Objects up to "
+                + (
+                    f"{plan['object_extent_p90']} pixels ([z, y, x], 90%)."
+                    if plan.get("object_extent_p90")
+                    else "? pixels."
+                ),
             )
 
 
@@ -1501,7 +1519,11 @@ def show_check(report: dict) -> None:
     if report["valid"]:
         st.success("Every config is valid.", icon=":material/check_circle:")
     if rows:
-        st.dataframe(rows, hide_index=True)
+        # One column per segmentation: a dozen fields stay readable.
+        import pandas as pd
+
+        table = pd.DataFrame(rows).set_index("segmentation").T.astype(str)
+        st.dataframe(table)
     elif report["valid"] and not report["converted"]:
         st.info(
             "Not converted yet, so no plan: launch **Convert only** below, "

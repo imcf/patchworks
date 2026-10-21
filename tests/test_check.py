@@ -166,7 +166,7 @@ def test_preview_draws_a_segmented_tile(tmp_path):
     plan = report["segmentations"][0]["plan"]
     assert plan["preview"] == str(tmp_path / "previews" / "cells.png")
     assert plan["preview_objects"] == 1  # the one bright square
-    assert plan["preview_plane"] == 4  # the middle of 8 planes
+    assert plan["preview_plane"] == 4  # the middle of the square's planes
     picture = Image.open(plan["preview"])
     # The tile (32 x 32), a gap, the tile again with the outlines.
     assert picture.size == (32 + 8 + 32, 32)
@@ -300,3 +300,26 @@ def test_a_try_stops_in_time_to_report(tmp_path, monkeypatch, capsys):
     plan = report["segmentations"][0]["plan"]
     assert plan["sampled_tiles"] == 1 and plan["seconds_per_tile"] is not None
     assert "stopping after 1 tile(s)" in capsys.readouterr().err
+
+
+def test_a_try_draws_its_fullest_tile(tmp_path):
+    """Not a tile at the tissue's edge: the one with the most signal."""
+    import zarr
+
+    from patchworks import build_occupancy_map
+
+    (tmp_path / "w").mkdir()
+    store = _converted(tmp_path / "w", with_occupancy=False)
+    img = zarr.open_array(f"{store}/0", mode="r+")
+    # Tile 3 (y 32:64, x 32:64) full of bright blobs; tile 0 has one.
+    for y in range(34, 62, 8):
+        for x in range(34, 62, 8):
+            img[0, 2:6, y : y + 5, x : x + 5] = 1000
+    # Bricks of 8: tile 0's one blob fills 9 of its 16, tile 3 all of them.
+    build_occupancy_map(store, level=0, block=(8, 8, 8))
+    report = check.check(
+        _config(tmp_path), sample=1, preview=tmp_path / "previews"
+    )
+    plan = report["segmentations"][0]["plan"]
+    assert plan["preview_tile"] == 3
+    assert plan["preview_objects"] > 1
