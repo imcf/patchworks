@@ -952,7 +952,7 @@ def segmentation_form(
     v["nuclei_channel"] = int(nuc) if nuc.strip() else None
     v["overlap"] = c4.text_input(
         "overlap",
-        **_init(f"{k}ov", value="30"),
+        **_init(f"{k}ov", value="auto"),
     )
 
     st.divider()
@@ -1470,6 +1470,13 @@ def show_previews(report: dict) -> None:
             + f" · {plan['preview_objects']} objects · "
             f"{plan['seconds_per_tile']:.1f} s per tile",
         )
+        if plan.get("suggested_overlap"):
+            st.caption(
+                f":material/straighten: {seg['label_name']}: objects up to "
+                f"{plan['object_extent_p90']} pixels (90%, [z, y, x]) on the "
+                f"tried tiles -> overlap `auto` uses "
+                f"{plan['suggested_overlap']}"
+            )
 
 
 def show_check(report: dict) -> None:

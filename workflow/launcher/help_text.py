@@ -102,8 +102,11 @@ HELP = {
     "Example: 1",
     "overlap": "How far each tile reads into its neighbours (the halo), in "
     "pixels: about one object, so objects cut by a tile edge are seen "
-    "whole. One number, or one per axis `[z, y, x]`.\n\n"
-    "Example: `[4, 30, 30]` for cells about 30 pixels across",
+    "whole and stitched. One number, or one per axis `[z, y, x]`.\n\n"
+    "`auto` (or blank) sizes it from the objects themselves: this "
+    "segmentation's object table from an earlier run, else the tiles tried "
+    "with *Try it on a GPU*, else 30. The plan says which.\n\n"
+    "Example: `[20, 80, 80]` for nuclei about 70 pixels across",
     "method": "**cellpose**: cells or nuclei from a deep-learning model, "
     "the usual. **PlantSeg**: cells from a membrane stain. **watershed**: "
     "cells grown from nuclei on a membrane stain. **DoG**: small bright "
