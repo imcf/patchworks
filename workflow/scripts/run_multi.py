@@ -899,8 +899,14 @@ def run_after(
     poll_seconds: float = 5.0,
     *,
     skip_after_failure: bool = True,
+    ready=None,
 ) -> list[tuple[str, str]]:
     """Run every job, each as soon as the one it depends on has succeeded.
+
+    *ready(j)*, when given, says job *j* has already made what the jobs
+    depending on it need, before it ends: they start then. (A seeded
+    segmentation needs its seeds' labels, not their object table, which can
+    take hours more.)
 
     *launch(i)* starts job *i* and returns its ``Popen``. Jobs without a
     dependency start at once, side by side. One whose dependency failed is
@@ -926,6 +932,7 @@ def run_after(
                 dep is None
                 or status.get(dep) == "ok"
                 or (dep in status and not skip_after_failure)
+                or (dep not in status and ready is not None and ready(dep))
             ):
                 running[i] = launch(i)
                 pending.remove(i)
@@ -1418,6 +1425,9 @@ def main() -> None:
         [p.name for p in seg_config_paths],
         deps,
         lambda i: _launch(seg_config_paths[i], seg_cfgs[i]),
+        # Seeds are usable once their labels are registered, before the
+        # seam report and the object table that end their merge.
+        ready=lambda j: label_ready(image_store, seg_cfgs[j]["label_name"]),
     )
     failed = [name for name, st in status if st != "ok"]
     for name, st in status:

@@ -2374,3 +2374,38 @@ def test_merge_finishes_what_an_earlier_attempt_left(tmp_path):
 def test_merge_without_its_tiles_or_labels_says_what_to_delete(tmp_path):
     with pytest.raises(RuntimeError, match="segment again"):
         _run_merge(tmp_path, finished=False)
+
+
+def test_a_seeded_config_starts_once_its_seeds_are_ready():
+    """cells grows from nuclei: it starts as soon as the nuclei labels are
+    ready (registered), not when nuclei's run ends -- its object table can
+    take hours more."""
+    from run_multi import run_after
+
+    nuclei_done = {"labels": False}
+    started = []
+
+    class Proc:
+        def __init__(self, i):
+            self.i = i
+            self.returncode = 0
+
+        def poll(self):
+            # nuclei (0) keeps running (measuring its table); cells (1) ends.
+            return None if self.i == 0 and 1 not in started else 0
+
+    def launch(i):
+        started.append(i)
+        if i == 0:
+            nuclei_done["labels"] = True  # its merge has registered them
+        return Proc(i)
+
+    status = run_after(
+        ["nuclei", "cells"],
+        {1: 0},
+        launch,
+        poll_seconds=0,
+        ready=lambda j: nuclei_done["labels"],
+    )
+    assert started == [0, 1]  # cells started while nuclei still ran
+    assert status == [("nuclei", "ok"), ("cells", "ok")]
