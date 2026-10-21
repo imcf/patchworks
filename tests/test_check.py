@@ -323,3 +323,29 @@ def test_a_try_draws_its_fullest_tile(tmp_path):
     plan = report["segmentations"][0]["plan"]
     assert plan["preview_tile"] == 3
     assert plan["preview_objects"] > 1
+
+
+def test_channel_pictures_of_a_region(tmp_path, monkeypatch, capsys):
+    """A zoom: only that region, drawn from the full-resolution level."""
+    import channels
+    from PIL import Image
+
+    (tmp_path / "w").mkdir()
+    _converted(tmp_path / "w")  # the bright square at y, x 4:20
+    path = _config(tmp_path)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["channels.py", str(path), "--json", "--region", "0,0.5,0,0.5"],
+    )
+    channels.main()
+    info = json.loads(capsys.readouterr().out)
+    assert info["region"] == [0.0, 0.5, 0.0, 0.5]
+    first = Image.open(info["pictures"][0])
+    assert first.size == (32, 32)  # half of the 64 x 64 image
+    assert info["pictures"][0].endswith("channel_0_zoom.png")
+    monkeypatch.setattr(
+        sys, "argv", ["channels.py", str(path), "--region", "0.5,0.2,0,1"]
+    )
+    with pytest.raises(SystemExit, match="fractions"):
+        channels.main()

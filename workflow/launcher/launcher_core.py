@@ -994,12 +994,26 @@ def fetch_command(config: str) -> str:
     )
 
 
-def channels_command(config: str) -> str:
-    """``scripts/channels.py``: a picture per channel of the converted image."""
-    return " ".join(
-        shlex.quote(a)
-        for a in ("python", "scripts/channels.py", config, "--json")
-    )
+def channels_command(config: str, region=None) -> str:
+    """``scripts/channels.py``: a picture per channel of the converted image;
+    with *region* ``(y0, y1, x0, x1)`` (fractions), of that region only."""
+    args = ["python", "scripts/channels.py", config, "--json"]
+    if region is not None:
+        args += ["--region", ",".join(f"{f:.4f}" for f in region)]
+    return " ".join(shlex.quote(a) for a in args)
+
+
+def zoom_region(zoom: int, x_pct: float, y_pct: float) -> tuple:
+    """The region ``(y0, y1, x0, x1)``, in fractions, that a *zoom* centred
+    at (*x_pct*, *y_pct*) percent shows -- kept inside the image."""
+    side = 1.0 / max(1, zoom)
+
+    def span(centre: float) -> tuple:
+        start = min(max(centre / 100 - side / 2, 0.0), 1.0 - side)
+        return start, start + side
+
+    (y0, y1), (x0, x1) = span(y_pct), span(x_pct)
+    return (y0, y1, x0, x1)
 
 
 # The pretrained models the cluster's Cellpose accepts (v3: cyto3, nuclei
