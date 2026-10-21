@@ -449,6 +449,19 @@ def _auto_overlap(cfg, ndim: int) -> tuple:
     )
 
 
+def _device() -> str:
+    """What the method will run on: the GPU (its name) or the CPU -- a try
+    on the CPU is many times slower, worth knowing at once."""
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            return f"the GPU ({torch.cuda.get_device_name(0)})"
+    except Exception:  # noqa: BLE001 - no torch, or no CUDA: the CPU
+        pass
+    return "the CPU (no GPU visible to this job)"
+
+
 def check_overlap(overlap, tile_shape) -> None:
     """Refuse a halo as wide as the tile: it re-segments the neighbours."""
     for axis, (ov, extent) in enumerate(zip(overlap, tile_shape)):
@@ -557,8 +570,8 @@ def plan_run(cfg, sample: int = 0, preview: str | None = None) -> dict:
         print(f"[check] {label}: {text}", file=sys.stderr, flush=True)
 
     say(
-        f"trying {len(pick)} tile(s); loading the method (the first tile "
-        "also loads the model)"
+        f"trying {len(pick)} tile(s) of {list(tile_shape)} (+ overlap "
+        f"{list(overlap)}) on {_device()}; the first also loads the model"
     )
     fn = build_fn(cfg)
     times = []
