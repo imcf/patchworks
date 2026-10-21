@@ -1458,9 +1458,20 @@ def test_configure_shows_the_channels():
             f"/scratch/run/previews/channels/channel_{c}.png" for c in range(3)
         ],
     }
+    zoomed = {
+        **info,
+        "level": 0,
+        "region": [0.4375, 0.5625, 0.4375, 0.5625],
+        "pictures": [p.replace(".png", "_zoom.png") for p in info["pictures"]],
+    }
     ssh = _FakeSSH(
-        {"scripts/channels.py": json.dumps(info)},
-        files={p: png.getvalue() for p in info["pictures"]},
+        {
+            "--region": json.dumps(zoomed),
+            "scripts/channels.py": json.dumps(info),
+        },
+        files={
+            p: png.getvalue() for p in info["pictures"] + zoomed["pictures"]
+        },
     )
     at = _app(ssh, input="/x.czi", work_dir="/scratch/run")
     at.run()
@@ -1471,6 +1482,14 @@ def test_configure_shows_the_channels():
     assert any(
         "3 × 40 × 2048 × 2048 · voxel z 0.5 µm" in c.value for c in at.caption
     )
+    # Zoom 8x on the middle: that region, read from a finer level.
+    at.button(key="zoom_channels").click().run()
+    assert not at.exception
+    (cmd,) = [c for c in ssh.commands if "--region" in c]
+    assert "0.4375,0.5625,0.4375,0.5625" in cmd
+    images = [e for e in at.main if type(e).__name__ == "Image"]
+    assert len(images) == 6  # the overviews, and the region of each channel
+    assert core.zoom_region(4, 100, 0) == (0.0, 0.25, 0.75, 1.0)  # kept inside
 
 
 QUEUE = """101|pw-cells|RUNNING|None|1:02:03|3-00:00:00|scicore

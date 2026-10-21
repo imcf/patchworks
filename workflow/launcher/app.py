@@ -630,8 +630,59 @@ def image_form() -> dict:
     return v
 
 
+def _channel_pictures(work_dir: str, region=None) -> dict:
+    """Run scripts/channels.py on the cluster (the whole image, or a
+    *region*), as JSON; ``{"error": ...}`` if it could not."""
+    # Any config of this work_dir will do: the script reads only its
+    # work_dir. Written here, so this works before Configure is complete.
+    probe = f"{wf_dir}/config/launcher_channels_probe.yaml"
+    run(get_client(), f"mkdir -p {shlex.quote(wf_dir)}/config", login=False)
+    write_remote(
+        get_client(), probe, yaml.safe_dump({"work_dir": work_dir, "input": ""})
+    )
+    rc, out, err = run(
+        get_client(),
+        core.inner_command(
+            wf_dir, setup_cmd, core.channels_command(probe, region=region)
+        ),
+        timeout=600,
+    )
+    return core.parse_json_output(out) or {
+        "error": core.explain_remote_error(err or out) or f"exit {rc}"
+    }
+
+
+def _read_picture(path: str) -> bytes | None:
+    try:
+        with get_sftp().open(path) as fh:
+            return fh.read()
+    except OSError:
+        return None
+
+
+def _outlined(picture: bytes, region) -> bytes:
+    """*picture* with the zoom's *region* (fractions) drawn on it."""
+    import io as _io
+
+    from PIL import Image, ImageDraw
+
+    image = Image.open(_io.BytesIO(picture)).convert("RGB")
+    w, h = image.size
+    y0, y1, x0, x1 = region
+    left, top = int(x0 * w), int(y0 * h)
+    ImageDraw.Draw(image).rectangle(
+        [left, top, max(left, int(x1 * w) - 1), max(top, int(y1 * h) - 1)],
+        outline=(255, 64, 64),
+        width=max(2, w // 300),
+    )
+    buffer = _io.BytesIO()
+    image.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
 def channels_view(work_dir: str) -> None:
-    """Each channel of the converted image, to pick the channels by."""
+    """Each channel of the converted image, to pick the channels by; and a
+    zoom into any region, with the detail of the finer levels."""
     with st.expander("See the channels", icon=":material/palette:"):
         key = f"channels_{work_dir}"
         st.caption(
@@ -639,30 +690,8 @@ def channels_view(work_dir: str) -> None:
             "(Plan & launch → Convert only); and its voxel size."
         )
         if st.button("Show", icon=":material/visibility:", key="show_channels"):
-            # Any config of this work_dir will do: the script reads only
-            # its work_dir. Written here, so this works before Configure
-            # is complete.
-            probe = f"{wf_dir}/config/launcher_channels_probe.yaml"
-            run(
-                get_client(),
-                f"mkdir -p {shlex.quote(wf_dir)}/config",
-                login=False,
-            )
-            write_remote(
-                get_client(),
-                probe,
-                yaml.safe_dump({"work_dir": work_dir, "input": ""}),
-            )
-            rc, out, err = run(
-                get_client(),
-                core.inner_command(
-                    wf_dir, setup_cmd, core.channels_command(probe)
-                ),
-                timeout=600,
-            )
-            st.session_state[key] = core.parse_json_output(out) or {
-                "error": core.explain_remote_error(err or out) or f"exit {rc}"
-            }
+            st.session_state[key] = _channel_pictures(work_dir)
+            st.session_state.pop(f"{key}_zoom", None)
         info = st.session_state.get(key)
         if not info:
             return
@@ -676,13 +705,50 @@ def channels_view(work_dir: str) -> None:
             f"{info['axes']} {' × '.join(map(str, info['shape']))}"
             + (f" · voxel {voxel}" if voxel else " · voxel size unknown")
         )
+        # Where to zoom: the region is outlined on the pictures below.
+        z1, z2, z3, z4 = st.columns([1, 2, 2, 1], vertical_alignment="bottom")
+        zoom = z1.select_slider(
+            "zoom", [2, 4, 8, 16, 32], value=8, key=f"{key}_factor"
+        )
+        x_pct = z2.slider("left ↔ right (%)", 0, 100, 50, key=f"{key}_x")
+        y_pct = z3.slider("top ↕ bottom (%)", 0, 100, 50, key=f"{key}_y")
+        region = core.zoom_region(zoom, x_pct, y_pct)
+        if z4.button(
+            "Show this region",
+            icon=":material/zoom_in:",
+            key="zoom_channels",
+            help="reads only this region, from the pyramid level that "
+            "draws it with full detail",
+        ):
+            with st.spinner("reading the region…"):
+                st.session_state[f"{key}_zoom"] = _channel_pictures(
+                    work_dir, region
+                )
         cols = st.columns(min(4, max(1, len(info["pictures"]))))
         for c, path in enumerate(info["pictures"]):
-            try:
-                with get_sftp().open(path) as fh:
-                    cols[c % len(cols)].image(fh.read(), caption=f"channel {c}")
-            except OSError:
+            picture = _read_picture(path)
+            if picture is None:
                 cols[c % len(cols)].caption(f"channel {c}: no picture")
+                continue
+            cols[c % len(cols)].image(
+                _outlined(picture, region), caption=f"channel {c}"
+            )
+        zoomed = st.session_state.get(f"{key}_zoom")
+        if not zoomed:
+            return
+        if "error" in zoomed:
+            st.warning(zoomed["error"], icon=":material/zoom_out:")
+            return
+        y0, y1, x0, x1 = zoomed["region"]
+        st.markdown(
+            f"**The region** (y {y0:.0%}-{y1:.0%}, x {x0:.0%}-{x1:.0%}; "
+            f"pyramid level {zoomed['level']})"
+        )
+        cols = st.columns(min(2, max(1, len(zoomed["pictures"]))))
+        for c, path in enumerate(zoomed["pictures"]):
+            picture = _read_picture(path)
+            if picture is not None:
+                cols[c % len(cols)].image(picture, caption=f"channel {c}")
 
 
 def tiling_form() -> dict:

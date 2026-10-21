@@ -26,7 +26,15 @@ from status import converted  # noqa: E402
 MAX_SIDE = 1024
 
 
-def channel_pictures(store: str, out: Path) -> dict:
+def channel_pictures(store: str, out: Path, region=None) -> dict:
+    """A picture per channel: each one's maximum over z.
+
+    The whole image, from the finest pyramid level about MAX_SIDE wide; or
+    with *region* ``(y0, y1, x0, x1)``, fractions of the image's height and
+    width, that region alone, from the finest level that draws it about
+    MAX_SIDE wide -- a zoom with the detail of the finer levels, reading
+    only that region.
+    """
     import numpy as np
     import zarr
     from patchworks import load_ome_zarr
@@ -40,15 +48,29 @@ def channel_pictures(store: str, out: Path) -> dict:
     axes = [a["name"] if isinstance(a, dict) else a for a in ms["axes"]]
     n_levels = len(ms["datasets"])
     full = load_ome_zarr(store, channel=None, level=0)
+    span = (
+        (1.0, 1.0)
+        if region is None
+        else (region[1] - region[0], region[3] - region[2])
+    )
     level = n_levels - 1
     for lvl in range(n_levels):
         arr = load_ome_zarr(store, channel=None, level=lvl)
-        if max(arr.shape[-2:]) <= MAX_SIDE:
+        drawn = [n * f for n, f in zip(arr.shape[-2:], span)]
+        if max(drawn) <= MAX_SIDE:
             level = lvl
             break
     arr = load_ome_zarr(store, channel=None, level=level)
     if "c" not in axes:
         arr = arr[None]
+    if region is not None:
+        h, w = arr.shape[-2:]
+        y0, y1, x0, x1 = region
+        arr = arr[
+            ...,
+            int(y0 * h) : max(int(y0 * h) + 1, int(y1 * h)),
+            int(x0 * w) : max(int(x0 * w) + 1, int(x1 * w)),
+        ]
     out.mkdir(parents=True, exist_ok=True)
     pictures = []
     for c in range(arr.shape[0]):
@@ -56,7 +78,7 @@ def channel_pictures(store: str, out: Path) -> dict:
         plane = plane.astype(np.float32)
         lo, hi = np.percentile(plane, (1, 99.5))
         gray = np.clip((plane - lo) / max(hi - lo, 1e-6), 0, 1)
-        path = out / f"channel_{c}.png"
+        path = out / f"channel_{c}{'' if region is None else '_zoom'}.png"
         Image.fromarray((gray * 255).astype(np.uint8)).save(path)
         pictures.append(str(path))
     return {
@@ -66,6 +88,7 @@ def channel_pictures(store: str, out: Path) -> dict:
         "channels": int(arr.shape[0]),
         "voxel_um": read_pixel_size(store, level=0),
         "level": level,
+        "region": None if region is None else [float(f) for f in region],
         "pictures": pictures,
     }
 
@@ -74,6 +97,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("config", help="a run config, or a multi config")
     parser.add_argument("--json", action="store_true", help="print JSON")
+    parser.add_argument(
+        "--region",
+        metavar="Y0,Y1,X0,X1",
+        help="only this region, as fractions of the height and width "
+        "(e.g. 0.4,0.5,0.6,0.7): a zoom, from a finer level",
+    )
     args = parser.parse_args()
     workflow_dir = Path(__file__).resolve().parent.parent
     path = _resolve(args.config, *_config_bases(workflow_dir))
@@ -87,7 +116,19 @@ def main() -> None:
             f"[channels] ERROR: {store} is not converted yet: convert first "
             "(the run's first step), or wait for it to finish"
         )
-    info = channel_pictures(str(store), work / "previews" / "channels")
+    region = (
+        tuple(float(f) for f in args.region.split(",")) if args.region else None
+    )
+    if region is not None and (
+        len(region) != 4
+        or not (
+            0 <= region[0] < region[1] <= 1 and 0 <= region[2] < region[3] <= 1
+        )
+    ):
+        sys.exit(
+            "[channels] ERROR: --region is Y0,Y1,X0,X1, fractions in [0, 1]"
+        )
+    info = channel_pictures(str(store), work / "previews" / "channels", region)
     if args.json:
         print(json.dumps(info, default=str))
         return
