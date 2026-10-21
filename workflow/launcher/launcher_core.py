@@ -217,7 +217,9 @@ def build_config(v: dict[str, Any]) -> dict[str, Any]:
         "level": v.get("level", 0),
         "tile_shape": _yaml_or(v.get("tile_shape", "auto"), "auto"),
         "gpu_memory_gb": v.get("gpu_memory_gb") or None,
-        "overlap": _yaml_or(v.get("overlap", "30"), 30),
+        # Blank or "auto": sized from the objects when the tiles are planned
+        # (an earlier run's table, or tiles tried with check --sample).
+        "overlap": _yaml_or(v.get("overlap", "auto"), "auto"),
         "skip_empty": v.get("skip_empty", True),
         "empty_threshold": v.get("empty_threshold"),
         "tiles_per_job": v.get("tiles_per_job", 4),
@@ -1913,7 +1915,10 @@ def plan_row(label: str, plan: dict[str, Any]) -> dict[str, Any]:
         "labels (GiB, raw)": round(
             (plan.get("labels_bytes_uncompressed") or 0) / gib, 1
         ),
+        "overlap": axes(plan.get("overlap")),
     }
+    if plan.get("overlap_source"):
+        row["overlap from"] = plan["overlap_source"]
     if plan.get("seconds_per_tile") is not None:
         row["s / tile"] = round(plan["seconds_per_tile"], 1)
     if plan.get("hours_per_job") is not None:

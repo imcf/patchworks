@@ -23,6 +23,7 @@ from patchworks import (
 
 from _pw import (
     check_overlap,
+    resolve_overlap,
     halo_path,
     resolve_tile_shape,
     check_seed_labels,
@@ -62,9 +63,9 @@ if len(tile_shape) >= 3:
         )
 
 # A halo as wide as the tile re-segments the neighbours: refuse it.
-overlap = normalize_overlap(
-    cfg.get("overlap", 0), len(tile_shape), tile_shape=tile_shape
-)
+spec, source = resolve_overlap(cfg, len(tile_shape), tile_shape)
+overlap = normalize_overlap(spec, len(tile_shape), tile_shape=tile_shape)
+print(f"[patchworks] overlap {list(overlap)} (from {source})")
 check_overlap(overlap, tile_shape)
 # How much more each tile reads than it keeps (the halo, clipped to the image).
 read = np.prod(

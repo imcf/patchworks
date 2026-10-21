@@ -333,6 +333,122 @@ def resolve_tile_shape(cfg, image, work_dir) -> tuple[int, ...]:
     return tuple(int(t) for t in sizer(image.shape, image.dtype))
 
 
+# overlap: "auto" -- from the size of the objects themselves.
+OVERLAP_FALLBACK = 30
+EXTENTS_FILE = "object_extents.json"  # in <work_dir>/<label_name>/
+
+
+def object_extents(labels):
+    """Each object's extent per axis (its bounding box), ``(n, ndim)``.
+
+    Objects touching the array's edge are left out: cut by it, their size
+    is not known.
+    """
+    import numpy as np
+    from scipy import ndimage
+
+    labels = np.asarray(labels)
+    out = [
+        [s.stop - s.start for s in sl]
+        for sl in ndimage.find_objects(labels)
+        if sl is not None
+        and not any(
+            s.start == 0 or s.stop == n for s, n in zip(sl, labels.shape)
+        )
+    ]
+    return np.asarray(out, dtype=np.int64).reshape(-1, labels.ndim)
+
+
+def overlap_from_extents(extents) -> list[int]:
+    """The overlap for objects of these extents: per axis, the larger ones
+    (90th percentile) and a 10% margin -- so an object across a seam is
+    seen whole by one of the two tiles."""
+    import numpy as np
+
+    extents = np.asarray(extents)
+    return [
+        max(1, int(np.ceil(1.1 * np.percentile(extents[:, ax], 90))))
+        for ax in range(extents.shape[1])
+    ]
+
+
+def resolve_overlap(cfg, ndim: int, tile_shape=None) -> tuple:
+    """``overlap`` as given, or for ``"auto"`` (or none) from the objects:
+
+    1. this segmentation's object table, from an earlier run (its objects);
+    2. the objects of the tiles tried with ``check --sample`` (saved in
+       ``<work_dir>/<label_name>/object_extents.json``);
+    3. else :data:`OVERLAP_FALLBACK` on every axis.
+
+    With *tile_shape*, an automatic overlap is capped at half the tile per
+    axis (a halo as wide as the tile is refused): the tiles are then
+    smaller than the objects, which the source says.
+
+    Returns ``(overlap, where it came from)``.
+    """
+    import numpy as np
+
+    spec = cfg.get("overlap", 0)
+    if spec not in ("auto", None, ""):
+        return spec, "the config"
+    overlap, source = _auto_overlap(cfg, ndim)
+    if tile_shape is not None:
+        per_axis = [overlap] * ndim if np.isscalar(overlap) else list(overlap)
+        capped = [
+            min(int(o), max(0, int(t) // 2))
+            for o, t in zip(per_axis, tile_shape)
+        ]
+        if capped != [int(o) for o in per_axis]:
+            source += (
+                f", capped at half the tile ({capped}): tiles smaller than the "
+                "objects -- larger tiles stitch them better"
+            )
+        overlap = capped
+    return overlap, source
+
+
+def _auto_overlap(cfg, ndim: int) -> tuple:
+    import numpy as np
+
+    work = Path(cfg["work_dir"])
+    label = cfg.get("label_name", "labels")
+    axes = "zyx"[-ndim:] if ndim <= 3 else None
+    try:
+        from patchworks._tables import read_columns
+
+        cols = read_columns(work / "image.zarr" / "labels" / label, check=False)
+        if axes and len(cols.get("label", [])):
+            # bbox_max is inclusive: an object's size is max - min + 1.
+            extents = np.stack(
+                [
+                    cols[f"bbox_max_{a}"] - cols[f"bbox_min_{a}"] + 1
+                    for a in axes
+                ],
+                1,
+            )
+            return (
+                overlap_from_extents(extents),
+                f"the {len(extents):,} objects of an earlier run's table",
+            )
+    except Exception:  # noqa: BLE001 - no table (yet): the next source
+        pass
+    try:
+        saved = json.loads((work / label / EXTENTS_FILE).read_text())
+        extents = np.asarray(saved["extents"])
+        if extents.size and extents.shape[1] == ndim:
+            return (
+                overlap_from_extents(extents),
+                f"the {len(extents):,} objects of {saved.get('tiles', '?')} "
+                "tried tile(s)",
+            )
+    except (OSError, ValueError, KeyError):
+        pass
+    return OVERLAP_FALLBACK, (
+        f"no measurement yet ({OVERLAP_FALLBACK}): try a few tiles (check "
+        "--sample, the launcher's Try it on a GPU) to size it from the objects"
+    )
+
+
 def check_overlap(overlap, tile_shape) -> None:
     """Refuse a halo as wide as the tile: it re-segments the neighbours."""
     for axis, (ov, extent) in enumerate(zip(overlap, tile_shape)):
@@ -369,9 +485,8 @@ def plan_run(cfg, sample: int = 0, preview: str | None = None) -> dict:
     store = str(Path(work_dir) / "image.zarr")
     image = open_image(work_dir, cfg["channel"], cfg["level"])
     tile_shape = resolve_tile_shape(cfg, image, work_dir)
-    overlap = normalize_overlap(
-        cfg.get("overlap", 0), len(tile_shape), tile_shape=tile_shape
-    )
+    spec, overlap_source = resolve_overlap(cfg, len(tile_shape), tile_shape)
+    overlap = normalize_overlap(spec, len(tile_shape), tile_shape=tile_shape)
     check_overlap(overlap, tile_shape)
     tiles = spatial_tiles(image.shape, tile_shape)
     occupied = None
@@ -404,6 +519,7 @@ def plan_run(cfg, sample: int = 0, preview: str | None = None) -> dict:
         "shape": [int(n) for n in image.shape],
         "tile_shape": list(tile_shape),
         "overlap": list(overlap),
+        "overlap_source": overlap_source,
         "grid": [-(-n // t) for n, t in zip(image.shape, tile_shape)],
         "tiles": len(tiles),
         "tiles_with_signal": None if occupied is None else len(occupied),
@@ -436,6 +552,7 @@ def plan_run(cfg, sample: int = 0, preview: str | None = None) -> dict:
     fn = build_fn(cfg)
     times = []
     labels = None
+    extents = []
     for index in pick:
         sl = tuple(
             slice(max(0, s.start - h), min(n, s.stop + h))
@@ -445,6 +562,11 @@ def plan_run(cfg, sample: int = 0, preview: str | None = None) -> dict:
         started = time.perf_counter()
         labels = fn(block)
         times.append(time.perf_counter() - started)
+        # The objects' sizes, for overlap "auto" (the whole block read: an
+        # object cut by the tile's own edge is whole in its halo).
+        found = object_extents(labels)
+        if found.shape[1] == len(tile_shape):
+            extents.append(found)
     if preview and labels is not None:
         # The tile without its halo, as the run keeps it.
         inner = tuple(
@@ -458,6 +580,25 @@ def plan_run(cfg, sample: int = 0, preview: str | None = None) -> dict:
         plan["preview_plane"] = write_preview(
             np.asarray(image[tiles[index]]), tile_labels, preview
         )
+    if extents:
+        measured = np.concatenate(extents)
+        if len(measured):
+            plan["object_extent_p90"] = [
+                int(np.percentile(measured[:, a], 90))
+                for a in range(measured.shape[1])
+            ]
+            plan["suggested_overlap"] = overlap_from_extents(measured)
+            # Kept for overlap "auto" in the run itself.
+            try:
+                where = Path(work_dir) / cfg.get("label_name", "labels")
+                where.mkdir(parents=True, exist_ok=True)
+                (where / EXTENTS_FILE).write_text(
+                    json.dumps(
+                        {"tiles": len(pick), "extents": measured.tolist()}
+                    )
+                )
+            except OSError:
+                pass
     steady = times[1:] if len(times) > 1 else times
     per_tile = float(np.mean(steady))
     plan["seconds_per_tile"] = per_tile
