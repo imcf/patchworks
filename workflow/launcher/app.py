@@ -1585,6 +1585,7 @@ def launch(
     """
     if convert_only:
         name = f"convert_{name.rsplit('_', 1)[-1]}"
+    st.write(f":material/upload: uploading {len(files)} config file(s)…")
     upload(client, files)
     multi = next((p for p in files if p.endswith("/multi.yaml")), None)
     first = next(p for p in files if not p.endswith("/multi.yaml"))
@@ -1610,6 +1611,9 @@ def launch(
     if mode != core.DRY_RUN and not convert_only:
         # Here, on the login node: the controller job and the GPU nodes may
         # have no internet access, and the first segment job would fail.
+        st.write(
+            ":material/cloud_download: fetching the models on the login node…"
+        )
         with st.spinner("fetching the models on the login node…"):
             rc, out, err = run(
                 client,
@@ -1641,8 +1645,13 @@ def launch(
         st.code(
             (out + err)[-20000:] or "(no output)", language="text", height=400
         )
-        return
-    start_job(
+        return rc == 0
+    st.write(
+        ":material/send: submitting the controller job…"
+        if mode == core.SLURM_JOB
+        else ":material/play_arrow: starting the controller…"
+    )
+    return start_job(
         client,
         wf_dir=wf_dir,
         setup=setup_cmd,
@@ -1659,6 +1668,46 @@ def launch(
             if multi
             else "single",
         },
+    )
+
+
+def _launch_now(
+    mode,
+    overrides,
+    profile,
+    profile_text,
+    run_setup,
+    files,
+    slurm,
+    convert_only,
+) -> bool:
+    """The Launch button: this run's profile (with the resource changes),
+    then :func:`launch`. Whether the run started."""
+    run_profile = profile
+    if overrides and mode != core.DRY_RUN:
+        st.write(":material/tune: writing this run's profile…")
+        # This run's own copy of the profile, with the changes.
+        run_profile = (
+            f"{wf_dir}/config/launcher_{st.session_state['run_name']}_profile"
+        )
+        run(client, f"mkdir -p {shlex.quote(run_profile)}", login=False)
+        write_remote(
+            client,
+            f"{run_profile}/config.yaml",
+            core.profile_with_overrides(profile_text, overrides),
+        )
+    return bool(
+        launch(
+            client,
+            wf_dir=wf_dir,
+            setup_cmd=run_setup,
+            files=files,
+            name=st.session_state["run_name"],
+            mode=mode,
+            profile=run_profile,
+            slurm=slurm,
+            convert_only=convert_only,
+        )
     )
 
 
@@ -2237,6 +2286,11 @@ def segmentation_progress(seg: dict, steps: list[dict]) -> tuple[float, str]:
         )
         frac, text = step_progress(merge)
         return frac, f"merging · {text}"
+    if seg.get("waits_for") and not total:
+        return 0.0, (
+            f"waiting for {seg['waits_for']} (its seeds) to be merged; "
+            "it starts then"
+        )
     if not total and seg["stage"] == "converted":
         prepare = next(
             (
@@ -3176,35 +3230,60 @@ with tab_launch:
                 "Dry run" if mode == core.DRY_RUN else "Launch",
                 type="primary",
                 icon=":material/rocket_launch:",
+                # At once, before the page is redrawn (which takes a while).
+                on_click=lambda: st.toast(
+                    "Launching… the page first catches up, then each step "
+                    "shows below the button.",
+                    icon=":material/rocket_launch:",
+                ),
             ):
-                run_profile = profile
-                if overrides and mode != core.DRY_RUN:
-                    # This run's own copy of the profile, with the changes.
-                    run_profile = (
-                        f"{wf_dir}/config/launcher_"
-                        f"{st.session_state['run_name']}_profile"
-                    )
-                    run(
-                        client,
-                        f"mkdir -p {shlex.quote(run_profile)}",
-                        login=False,
-                    )
-                    write_remote(
-                        client,
-                        f"{run_profile}/config.yaml",
-                        core.profile_with_overrides(profile_text, overrides),
-                    )
-                launch(
-                    client,
-                    wf_dir=wf_dir,
-                    setup_cmd=run_setup,
-                    files=files,
-                    name=st.session_state["run_name"],
-                    mode=mode,
-                    profile=run_profile,
-                    slurm=slurm,
-                    convert_only=convert_only,
+                status = st.status(
+                    "Dry run…" if mode == core.DRY_RUN else "Launching…",
+                    expanded=True,
                 )
+                with status:
+                    ok = _launch_now(
+                        mode,
+                        overrides,
+                        profile,
+                        profile_text,
+                        run_setup,
+                        files,
+                        slurm,
+                        convert_only,
+                    )
+                status.update(
+                    label=(
+                        ("Dry run done" if mode == core.DRY_RUN else "Launched")
+                        if ok
+                        else "Did not start: see below"
+                    ),
+                    state="complete" if ok else "error",
+                    expanded=True,
+                )
+                # Kept for the next redraws (the Jobs tab may redraw the
+                # page as soon as it sees the new job).
+                st.session_state["last_launch"] = {
+                    "ok": ok,
+                    "dry": mode == core.DRY_RUN,
+                    "name": st.session_state.get("run_name", ""),
+                }
+            elif st.session_state.get("last_launch"):
+                last = st.session_state["last_launch"]
+                if last["dry"]:
+                    pass  # its output was shown once; nothing to follow
+                elif last["ok"]:
+                    st.success(
+                        f"Launched {last['name']}: follow it in the Jobs tab.",
+                        icon=":material/rocket_launch:",
+                    )
+                else:
+                    st.error(
+                        f"{last['name']} did not start: launch again to see "
+                        "why.",
+                        icon=":material/error:",
+                    )
+
 
 with tab_jobs:
     text = read_remote(client, f"{wf_dir}/{core.REGISTRY}") or ""

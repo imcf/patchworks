@@ -875,6 +875,13 @@ def test_app_resources_change_for_one_run():
     ).run()
     next(b for b in at.button if b.label == "Launch").click().run()
     assert not at.exception
+    # What happened, step by step, in a status box that ends "Launched".
+    # Said where the button is, whether or not the page was redrawn since.
+    assert [x.label for x in at.get("status")] == ["Launched"] or any(
+        "Launched" in m.value for m in at.success
+    )
+    at.run()
+    assert any("Launched" in m.value for m in at.success)
     fetched = next(
         i for i, c in enumerate(ssh.commands) if "fetch_models.py" in c
     )
@@ -931,6 +938,15 @@ def test_jobs_tab_progress_results_and_actions():
                 "seams": None,
             },
             {
+                "label_name": "cyto",
+                "stage": "converted",
+                "batches": None,
+                "batches_done": 0,
+                "objects": None,
+                "seams": None,
+                "waits_for": "nuclei",
+            },
+            {
                 "label_name": "cilia",
                 "stage": "merging",
                 "batches": 2,
@@ -971,6 +987,7 @@ def test_jobs_tab_progress_results_and_actions():
     assert any(
         "cilia** · merging · labels/cilia/0: 25%, ~6m left" in t for t in texts
     ), texts
+    assert any("cyto** · waiting for nuclei (its seeds)" in t for t in texts)
     assert any("nuclei** · merged" in t for t in texts)
     rows = next(d.value for d in at.dataframe if "objects" in d.value.columns)
     assert rows["objects"].tolist() == [1234]
