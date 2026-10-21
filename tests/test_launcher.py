@@ -953,6 +953,32 @@ def test_jobs_tab_progress_results_and_actions():
                 "objects": None,
                 "seams": None,
             },
+            {
+                "label_name": "dapi",
+                "stage": "converted",
+                "batches": None,
+                "batches_done": 0,
+                "objects": None,
+                "seams": None,
+                "snakemake": {
+                    "state": "failed",
+                    "exit": 1,
+                    "error": "LockException: Directory cannot be locked.",
+                    "hint": "unlock first",
+                },
+            },
+            {
+                "label_name": "ki67",
+                "stage": "converted",
+                "batches": None,
+                "batches_done": 0,
+                "objects": None,
+                "seams": None,
+                "snakemake": {
+                    "state": "running",
+                    "last": ["Building DAG of jobs..."],
+                },
+            },
         ],
         "relations": [
             {"a": "nuclei", "b": "cells", "files": ["/scratch/run/n_c.xlsx"]}
@@ -988,6 +1014,16 @@ def test_jobs_tab_progress_results_and_actions():
     ), texts
     assert any("cyto** · waiting for nuclei (its seeds)" in t for t in texts)
     assert any("nuclei** · merged" in t for t in texts)
+    assert any(
+        "dapi** · stopped: its Snakemake exited with code 1 · LockException"
+        in t
+        and "→ unlock first" in t
+        for t in texts
+    ), texts
+    assert any(
+        "ki67** · converted; its Snakemake says: Building DAG of jobs" in t
+        for t in texts
+    ), texts
     rows = next(d.value for d in at.dataframe if "objects" in d.value.columns)
     assert rows["objects"].tolist() == [1234]
     labels = [b.label for b in at.button]

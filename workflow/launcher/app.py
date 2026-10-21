@@ -2372,6 +2372,24 @@ def segmentation_progress(seg: dict, steps: list[dict]) -> tuple[float, str]:
     total, done = seg["batches"], seg["batches_done"]
     if seg["stage"] == "done":
         return 1.0, "merged"
+    # A multi run records each segmentation's Snakemake (scripts/run_multi.py).
+    snakemake = seg.get("snakemake") or {}
+    if snakemake.get("state") == "failed":
+        tiles = seg.get("tiles")
+        frac = (
+            seg.get("tiles_done", 0) / tiles
+            if tiles
+            else done / total
+            if total
+            else 0.0
+        )
+        text = (
+            f"stopped: its Snakemake exited with code {snakemake.get('exit')}"
+            f" · {snakemake.get('error') or 'no error message'}"
+        )
+        if snakemake.get("hint"):
+            text += f" → {snakemake['hint']}"
+        return frac, text
     if seg["stage"] == "merging":
         merge = next(
             (
@@ -2408,6 +2426,13 @@ def segmentation_progress(seg: dict, steps: list[dict]) -> tuple[float, str]:
                 "preparing the tiles"
                 if prepare["state"] != "failed"
                 else "preparing the tiles failed"
+            )
+        if snakemake.get("state") == "running":
+            last = snakemake.get("last") or []
+            return 0.0, (
+                f"converted; its Snakemake says: {last[-1][:200]}"
+                if last
+                else "converted; its Snakemake has printed nothing yet"
             )
         return 0.0, "converted, waiting to prepare the tiles"
     if total:

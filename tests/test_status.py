@@ -225,3 +225,39 @@ def test_a_seeded_segmentation_says_what_it_waits_for(tmp_path):
         json.dumps({"attributes": {"ome": {"multiscales": [{}]}}})
     )
     assert "waits_for" not in status.segmentation_status(cfg)
+
+
+def test_a_multi_runs_snakemake_that_stopped(tmp_path, monkeypatch):
+    """run_multi's record says a segmentation's Snakemake ended, and why."""
+    from run_multi import RUN_STATE, SNAKEMAKE_OUT, write_run_state
+
+    work = tmp_path / "w"
+    run = work / "nuclei"
+    run.mkdir(parents=True)
+    write_run_state(run, state="running", pid=1, started=100.0)
+    (run / SNAKEMAKE_OUT).write_text(
+        "Building DAG of jobs...\n\nLockException:\n"
+        "Error: Directory cannot be locked.\n"
+    )
+    cfg = {"work_dir": str(work), "label_name": "nuclei"}
+    got = status.segmentation_status(cfg)["snakemake"]
+    assert got["state"] == "running" and got["pid"] == 1
+    assert got["last"][-1] == "Error: Directory cannot be locked."
+
+    write_run_state(run, state="failed", exit=1, ended=200.0)
+    got = status.segmentation_status(cfg)["snakemake"]
+    assert got["state"] == "failed" and got["pid"] == 1 and got["exit"] == 1
+    assert "cannot be locked" in got["error"] and "unlock" in got["hint"]
+    assert "its Snakemake stopped (exit 1)" in status.format_status(
+        {
+            "work_dir": str(work),
+            "segmentations": [status.segmentation_status(cfg)],
+        }
+    )
+
+    # An earlier run's record is not this run's.
+    monkeypatch.setenv(
+        "PATCHWORKS_STATUS_SINCE",
+        str(json.loads((run / RUN_STATE).read_text())["updated"] + 10),
+    )
+    assert status.segmentation_status(cfg)["snakemake"] is None
