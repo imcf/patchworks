@@ -900,6 +900,7 @@ def run_after(
     *,
     skip_after_failure: bool = True,
     ready=None,
+    on_exit=None,
 ) -> list[tuple[str, str]]:
     """Run every job, each as soon as the one it depends on has succeeded.
 
@@ -913,6 +914,8 @@ def run_after(
     not started (``"skipped"``) unless *skip_after_failure* is False; a
     failure does not stop the others, which are independent and may hold
     hours of finished GPU work.
+
+    *on_exit(i, returncode)*, when given, is called as each job ends.
 
     Returns
     -------
@@ -941,10 +944,62 @@ def run_after(
                 pending.remove(i)
         finished = [i for i, p in running.items() if p.poll() is not None]
         for i in finished:
-            status[i] = "ok" if running.pop(i).returncode == 0 else "FAILED"
+            code = running.pop(i).returncode
+            status[i] = "ok" if code == 0 else "FAILED"
+            if on_exit is not None:
+                on_exit(i, code)
         if running and not finished:
             time.sleep(poll_seconds)
     return [(names[i], status[i]) for i in range(len(names))]
+
+
+# In <work_dir>/<label_name>/: the segmentation's Snakemake output, and how
+# that Snakemake is doing, for status.py (and so the launcher) to show.
+SNAKEMAKE_OUT = "snakemake.out"
+RUN_STATE = "run_multi_state.json"
+
+
+def write_run_state(run: Path, **fields) -> None:
+    """Record how *run*'s Snakemake is doing (``state``, ``exit``, times)."""
+    import time
+
+    path = run / RUN_STATE
+    try:
+        state = json.loads(path.read_text()) if "started" not in fields else {}
+    except (OSError, ValueError):
+        state = {}
+    state.update(fields, updated=time.time())
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(state))
+    tmp.replace(path)
+
+
+def tee_output(proc: subprocess.Popen, path: Path):
+    """Copy *proc*'s output to this process's stdout and to *path*.
+
+    The segmentations' Snakemakes all write into the one controller log,
+    where nothing says which line is whose: a Snakemake that stopped or hung
+    before its first job left no trace anyone could attribute. Its own copy
+    keeps that. Returns the copying thread.
+    """
+    import threading
+
+    def _copy():
+        sink = getattr(sys.stdout, "buffer", None)
+        with open(path, "wb") as out:
+            for line in iter(proc.stdout.readline, b""):
+                out.write(line)
+                out.flush()
+                if sink is not None:
+                    sink.write(line)
+                    sink.flush()
+                else:
+                    sys.stdout.write(line.decode(errors="replace"))
+                    sys.stdout.flush()
+
+    thread = threading.Thread(target=_copy, daemon=True)
+    thread.start()
+    return thread
 
 
 def relation_dependencies(
@@ -1392,7 +1447,35 @@ def main() -> None:
             extra_configfiles=[tile_override] if tile_override else None,
         )
         print(f"[run_multi] $ {' '.join(cmd)}", flush=True)
-        return subprocess.Popen(cmd, cwd=workflow_dir)
+        if args.dry_run:
+            return subprocess.Popen(cmd, cwd=workflow_dir)
+        import time
+
+        run = Path(cfg["work_dir"]) / cfg["label_name"]
+        proc = subprocess.Popen(
+            cmd,
+            cwd=workflow_dir,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+        write_run_state(run, state="running", pid=proc.pid, started=time.time())
+        copiers.append(tee_output(proc, run / SNAKEMAKE_OUT))
+        return proc
+
+    def _ended(i, code):
+        if args.dry_run:
+            return
+        import time
+
+        cfg = seg_cfgs[i]
+        write_run_state(
+            Path(cfg["work_dir"]) / cfg["label_name"],
+            state="ok" if code == 0 else "failed",
+            exit=code,
+            ended=time.time(),
+        )
+
+    copiers: list = []
 
     # Labels deleted from image.zarr: clear their run directory and segment them again.
     for run in stale_runs(seg_cfgs, image_store):
@@ -1428,7 +1511,10 @@ def main() -> None:
         # Seeds are usable once their labels are registered, before the
         # seam report and the object table that end their merge.
         ready=lambda j: label_ready(image_store, seg_cfgs[j]["label_name"]),
+        on_exit=_ended,
     )
+    for thread in copiers:
+        thread.join(timeout=30)
     failed = [name for name, st in status if st != "ok"]
     for name, st in status:
         print(f"[run_multi] {name}: {st}", flush=True)

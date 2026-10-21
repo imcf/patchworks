@@ -17,7 +17,13 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from run_multi import _config_bases, _load_yaml, _resolve  # noqa: E402
+from run_multi import (  # noqa: E402
+    RUN_STATE,
+    SNAKEMAKE_OUT,
+    _config_bases,
+    _load_yaml,
+    _resolve,
+)
 
 
 def _configs(path: Path) -> tuple[list[dict], dict | None]:
@@ -271,6 +277,35 @@ def _tiles_done(manifest: dict, seg: Path) -> tuple[int, int]:
     return total, done
 
 
+def _last_lines(path: Path, n: int = 5) -> list[str]:
+    """The last *n* non-blank lines of *path*, read from its end only."""
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, 2)
+            f.seek(max(0, f.tell() - 16_384))
+            text = f.read().decode(errors="replace")
+    except OSError:
+        return []
+    return [line for line in text.splitlines() if line.strip()][-n:]
+
+
+def snakemake_state(run: Path) -> dict | None:
+    """How a multi run's Snakemake for *run* is doing, as run_multi recorded
+    it: ``state`` (running, ok, failed), ``exit``, and its last output lines.
+    None when there is no record, or it is from before this run."""
+    try:
+        state = json.loads((run / RUN_STATE).read_text())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(state, dict) or state.get("updated", 0) < _since():
+        return None
+    state["last"] = _last_lines(run / SNAKEMAKE_OUT)
+    if state.get("state") == "failed":
+        tail = "\n".join(_last_lines(run / SNAKEMAKE_OUT, 40))
+        state["error"], state["hint"] = explain(tail)
+    return state
+
+
 def segmentation_status(cfg: dict) -> dict:
     """Where one segmentation stands, from its markers in work_dir."""
     work = Path(cfg["work_dir"])
@@ -287,6 +322,7 @@ def segmentation_status(cfg: dict) -> dict:
         "merged": (run / "labels.done").exists(),
         "objects": None,
         "seams": None,
+        "snakemake": snakemake_state(run),
     }
     manifest = None
     try:
@@ -390,6 +426,12 @@ def format_status(status: dict) -> str:
         if s["objects"] is not None:
             line += f", {s['objects']:,} objects"
         lines.append(line)
+        sm = s.get("snakemake") or {}
+        if sm.get("state") == "failed" and not s["merged"]:
+            lines.append(
+                f"    its Snakemake stopped (exit {sm.get('exit')}): "
+                f"{sm.get('error') or ''}"
+            )
         for ax, row in (s["seams"] or {}).items():
             inner = row["interior_rate"]
             lines.append(

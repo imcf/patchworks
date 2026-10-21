@@ -146,7 +146,10 @@ What it does:
   that exist, each environment has what its method needs.
 - **Converts once**, then runs the segmentations **concurrently**. A config
   with `seed_labels:` (cells grown from nuclei) waits for the one it grows
-  from.
+  from. Each segmentation's Snakemake output also goes to
+  `<work_dir>/<label_name>/snakemake.out`, and how it ended to
+  `run_multi_state.json` beside it, which `pixi run status` and the
+  launcher show.
 - **Relates** each pair: one job per parent label image, reading it once
   for all its children. Each relation gives a workbook with one row per
   child (its parent, the overlap) and one per parent (how many children); a

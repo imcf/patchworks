@@ -1,5 +1,6 @@
 """Tests for the multi-config driver's SLURM-facing behaviour."""
 
+import io
 import json
 import os
 import re
@@ -1440,6 +1441,7 @@ class _FakeProc:
     def __init__(self, log, name, rc, steps=2):
         self.log, self.name, self.rc, self.steps = log, name, rc, steps
         self.returncode = None
+        self.pid, self.stdout = 0, io.BytesIO(f"{name} says hi\n".encode())
         log.append(("start", name))
 
     def poll(self):
@@ -1558,7 +1560,7 @@ def test_main_runs_with_an_explicit_tile_shape_seeds_first(
     monkeypatch.setattr(run_multi, "_run", lambda cmd, wd: 0)  # convert
     monkeypatch.setattr(run_multi, "_run_bundle", lambda *a: 0)
 
-    def popen(cmd, cwd=None):
+    def popen(cmd, cwd=None, **kwargs):
         name = Path(cmd[cmd.index("--configfile") + 2]).stem
         return _FakeProc(log, name, 0)
 
@@ -1571,6 +1573,12 @@ def test_main_runs_with_an_explicit_tile_shape_seeds_first(
         run_multi.main()
     assert done.value.code == 0
     assert log.index(("start", "cells")) > log.index(("end", "nuclei"))
+    # Each segmentation's Snakemake: its own output, and how it ended.
+    run = next(tmp_path.rglob("nuclei/run_multi_state.json")).parent
+    assert (
+        json.loads((run / "run_multi_state.json").read_text())["state"] == "ok"
+    )
+    assert (run / "snakemake.out").read_text() == "nuclei says hi\n"
 
 
 def test_config_option_resolves_from_where_pixi_runs(tmp_path, monkeypatch):
@@ -1606,7 +1614,9 @@ def test_config_option_resolves_from_where_pixi_runs(tmp_path, monkeypatch):
     monkeypatch.setattr(
         run_multi.subprocess,
         "Popen",
-        lambda cmd, cwd=None: started.append(cmd) or _FakeProc([], "a", 0, 1),
+        lambda cmd, cwd=None, **kw: (
+            started.append(cmd) or _FakeProc([], "a", 0, 1)
+        ),
     )
     monkeypatch.setenv("INIT_CWD", str(project))
     monkeypatch.chdir(_workflow_dir())  # where pixi runs every task
@@ -1784,7 +1794,7 @@ def test_a_config_failing_on_a_stale_lock_says_how_to_unlock(
     monkeypatch.setattr(
         run_multi.subprocess,
         "Popen",
-        lambda cmd, cwd=None: _FakeProc([], "cells", 1, 1),
+        lambda cmd, cwd=None, **kw: _FakeProc([], "cells", 1, 1),
     )
     monkeypatch.setattr("time.sleep", lambda s: None)
     monkeypatch.setattr(sys, "argv", ["run_multi.py", "--config", str(multi)])
@@ -2010,7 +2020,7 @@ def test_relations_on_labels_a_run_left_missing_are_skipped(
     log = []
     monkeypatch.setattr(run_multi, "_run", lambda cmd, wd: 0)  # convert
 
-    def popen(cmd, cwd=None):
+    def popen(cmd, cwd=None, **kwargs):
         name = Path(cmd[cmd.index("--configfile") + 2]).stem
         if name != "cilia":  # cilia "succeeds" without its labels
             _label_store(tmp_path, ["nuclei", "cyto"])
@@ -2409,3 +2419,35 @@ def test_a_seeded_config_starts_once_its_seeds_are_ready():
     )
     assert started == [0, 1]  # cells started while nuclei still ran
     assert status == [("nuclei", "ok"), ("cells", "ok")]
+
+
+def test_run_after_reports_each_end():
+    from run_multi import run_after
+
+    ended = []
+    names = ["a", "b"]
+    run_after(
+        names,
+        {},
+        lambda i: _FakeProc([], names[i], i),
+        poll_seconds=0,
+        on_exit=lambda i, code: ended.append((names[i], code)),
+    )
+    assert sorted(ended) == [("a", 0), ("b", 1)]
+
+
+def test_tee_output_keeps_a_copy(tmp_path, capfdbinary):
+    from run_multi import tee_output
+
+    proc = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import sys; print('out'); print('err', file=sys.stderr)",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    tee_output(proc, tmp_path / "snakemake.out").join(timeout=30)
+    proc.wait()
+    assert (tmp_path / "snakemake.out").read_text().split() == ["out", "err"]
