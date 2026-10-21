@@ -816,10 +816,9 @@ def test_app_plans_every_segmentation_of_a_multi_run():
     assert not at.exception
     next(b for b in at.button if b.label == "Check and plan").click().run()
     assert not at.exception
-    rows = next(
-        d.value for d in at.dataframe if "segmentation" in d.value.columns
-    )
-    assert list(rows["segmentation"]) == ["nuclei_labels", "cyto_labels"]
+    # One column per segmentation.
+    table = next(d.value for d in at.dataframe if "tile shape" in d.value.index)
+    assert list(table.columns) == ["nuclei_labels", "cyto_labels"]
     # check.py ran once, on the multi config.
     checks = [c for c in ssh.commands if "scripts/check.py" in c]
     assert len(checks) == 1 and "multi.yaml" in checks[0]
@@ -1434,9 +1433,10 @@ def test_jobs_tab_shows_a_tried_tile():
     at.run()
     assert not at.exception
     (image,) = [e for e in at.main if type(e).__name__ == "Image"]
-    assert "tile 3, plane 8 of the tile · 57 objects · 4.2 s per tile" in str(
-        image.proto
-    )
+    assert "(#3, plane 8, the one with the most objects)" in str(image.proto)
+    metrics = {m.label: m.value for m in at.metric}
+    assert metrics["objects in this tile"] == "57"
+    assert metrics["seconds per tile"] == "4"
 
 
 def test_configure_shows_the_channels():

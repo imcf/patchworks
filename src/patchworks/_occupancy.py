@@ -349,9 +349,10 @@ def tile_occupancy(
     Returns
     -------
     dict
-        ``threshold``, ``n_tiles``, ``n_occupied``, ``empty_fraction`` and
+        ``threshold``, ``n_tiles``, ``n_occupied``, ``empty_fraction``,
         ``occupancy`` (bool array over the tile grid), matching
-        :func:`patchworks.estimate_empty_tiles`.
+        :func:`patchworks.estimate_empty_tiles`, and ``filled`` (the share
+        of each tile's bricks over the threshold: how full it is).
     """
     arr = zarr.open_array(occupancy_path(image_store, level), mode="r")
     block = tuple(arr.attrs["block"])
@@ -374,6 +375,8 @@ def tile_occupancy(
 
     tile_grid = tuple(-(-s // t) for s, t in zip(sp_shape, tile_shape))
     occupancy = np.zeros(tile_grid, dtype=bool)
+    # How full each tile is: the share of its bricks over the threshold.
+    filled = np.zeros(tile_grid, dtype=np.float32)
     pooled = np.asarray(arr[channel])
     for idx in np.ndindex(*tile_grid):
         sl = tuple(
@@ -387,6 +390,10 @@ def tile_occupancy(
         )
         window = pooled[sl]
         occupancy[idx] = bool(window.size) and bool(window.max() > threshold)
+        if window.size:
+            filled[idx] = (
+                float(np.count_nonzero(window > threshold)) / window.size
+            )
 
     n_tiles = int(occupancy.size)
     n_occ = int(np.count_nonzero(occupancy))
@@ -402,4 +409,5 @@ def tile_occupancy(
         "n_occupied": n_occ,
         "empty_fraction": 1.0 - n_occ / n_tiles if n_tiles else 0.0,
         "occupancy": occupancy,
+        "filled": filled,
     }

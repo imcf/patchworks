@@ -538,6 +538,7 @@ def plan_run(cfg, sample: int = 0, preview: str | None = None) -> dict:
     check_overlap(overlap, tile_shape)
     tiles = spatial_tiles(image.shape, tile_shape)
     occupied = None
+    filled = None  # how full each tile is (the occupancy map), for the try
     if not cfg.get("skip_empty", True):
         occupied = list(range(len(tiles)))
     else:
@@ -555,6 +556,8 @@ def plan_run(cfg, sample: int = 0, preview: str | None = None) -> dict:
                 level=cfg["level"],
             )
             occupied = [int(i) for i in np.flatnonzero(info["occupancy"])]
+            if "filled" in info:
+                filled = np.asarray(info["filled"]).ravel()
         except (FileNotFoundError, KeyError, ValueError) as exc:
             # No occupancy map yet: the run builds it.
             logging.getLogger(__name__).info("occupancy unknown: %s", exc)
@@ -583,10 +586,15 @@ def plan_run(cfg, sample: int = 0, preview: str | None = None) -> dict:
     if sample <= 0:
         return plan
     pool = occupied if occupied else list(range(len(tiles)))
-    pick = [
-        pool[int(i)]
-        for i in np.linspace(0, len(pool) - 1, min(sample, len(pool)))
-    ]
+    if filled is not None and len(filled) == len(tiles):
+        # The fullest tiles in this channel: a try on a tile at the edge of
+        # the tissue shows mostly background, which tells nothing.
+        pick = sorted(pool, key=lambda i: -float(filled[i]))[:sample]
+    else:
+        pick = [
+            pool[int(i)]
+            for i in np.linspace(0, len(pool) - 1, min(sample, len(pool)))
+        ]
     # The tile exactly as segment hands it to the method: the halo, and the
     # nuclei channel or seeds stacked on a leading axis.
     stacked = open_image(
@@ -634,6 +642,8 @@ def plan_run(cfg, sample: int = 0, preview: str | None = None) -> dict:
         times.append(time.perf_counter() - started)
         # The objects' sizes, for overlap "auto" (the whole block read: an
         # object cut by the tile's own edge is whole in its halo).
+        if n == 1:  # the fullest: the one drawn
+            shown = (index, sl, labels)
         found = object_extents(labels)
         if found.shape[1] == len(tile_shape):
             extents.append(found)
@@ -643,6 +653,7 @@ def plan_run(cfg, sample: int = 0, preview: str | None = None) -> dict:
             f"{times[-1]:.1f} s"
         )
     if preview and labels is not None:
+        index, sl, labels = shown
         # The tile without its halo, as the run keeps it.
         inner = tuple(
             slice(t.start - r.start, t.stop - r.start)
@@ -687,7 +698,8 @@ def plan_run(cfg, sample: int = 0, preview: str | None = None) -> dict:
 def write_preview(image, labels, path) -> int | None:
     """A PNG of one tile: the image, and beside it the objects outlined.
 
-    A 3-D tile shows its middle plane (returned; None for 2-D). The image
+    A 3-D tile shows the plane with the most objects (returned; None for
+    2-D). The image
     is stretched between its 1st and 99th percentiles; each object gets a
     colour of its own.
     """
@@ -698,7 +710,15 @@ def write_preview(image, labels, path) -> int | None:
 
     plane = None
     if image.ndim == 3:
-        plane = image.shape[0] // 2
+        # The plane with the most objects (else the brightest): the middle
+        # one may miss the signal.
+        counts = [len(np.unique(labels[z])) for z in range(labels.shape[0])]
+        if max(counts) > 1:
+            # Among the planes that tie, the middle one: not an object's edge.
+            best = [z for z, c in enumerate(counts) if c == max(counts)]
+            plane = best[len(best) // 2]
+        else:
+            plane = int(np.argmax(image.reshape(image.shape[0], -1).mean(1)))
         image, labels = image[plane], labels[plane]
     image = image.astype(np.float32)
     lo, hi = np.percentile(image, (1, 99))
