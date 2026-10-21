@@ -280,3 +280,23 @@ def test_a_try_says_what_it_does_as_it_goes(tmp_path, capsys):
     assert "[check] cells: trying" in out.err
     assert "[check] cells: tile 1/" in out.err and "object(s) in" in out.err
     assert "[check]" not in out.out
+
+
+def test_a_try_stops_in_time_to_report(tmp_path, monkeypatch, capsys):
+    """When another tile would not finish in the job's time, the try
+    stops and reports the tiles it has -- not killed with nothing."""
+    import time
+
+    import _pw
+
+    (tmp_path / "w").mkdir()
+    store = _converted(tmp_path / "w")
+    # Signal in every tile, so several are tried.
+    import zarr
+
+    zarr.open_array(f"{store}/0", mode="r+")[0] = 1000
+    monkeypatch.setattr(_pw, "_job_end_time", lambda: time.time() + 30)
+    report = check.check(_config(tmp_path, skip_empty=False), sample=3)
+    plan = report["segmentations"][0]["plan"]
+    assert plan["sampled_tiles"] == 1 and plan["seconds_per_tile"] is not None
+    assert "stopping after 1 tile(s)" in capsys.readouterr().err

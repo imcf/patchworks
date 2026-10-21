@@ -449,6 +449,41 @@ def _auto_overlap(cfg, ndim: int) -> tuple:
     )
 
 
+def _job_end_time() -> float | None:
+    """When this SLURM job's time runs out (seconds since the epoch), or
+    None outside SLURM. ``SLURM_JOB_END_TIME`` where SLURM sets it, else
+    from ``squeue``."""
+    import os
+    import subprocess
+
+    end = os.environ.get("SLURM_JOB_END_TIME")
+    if end and end.isdigit():
+        return float(end)
+    job = os.environ.get("SLURM_JOB_ID")
+    if not job:
+        return None
+    try:
+        out = subprocess.run(
+            ["squeue", "-h", "-j", job, "-o", "%L"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return None
+    # %L: time left, [days-]hours:minutes:seconds (or minutes:seconds).
+    import time as _time
+
+    days, _, clock = out.rpartition("-")
+    parts = [int(p) for p in clock.split(":") if p.isdigit()]
+    if not parts:
+        return None
+    seconds = 0
+    for p in parts:
+        seconds = seconds * 60 + p
+    return _time.time() + seconds + int(days or 0) * 86400
+
+
 def _device() -> str:
     """What the method will run on: the GPU (its name) or the CPU -- a try
     on the CPU is many times slower, worth knowing at once."""
@@ -577,7 +612,18 @@ def plan_run(cfg, sample: int = 0, preview: str | None = None) -> dict:
     times = []
     labels = None
     extents = []
+    deadline = _job_end_time()
     for n, index in enumerate(pick, 1):
+        # Another tile would not finish before the job's time runs out:
+        # report the tiles done rather than be killed with nothing.
+        if deadline and times:
+            slowest = max(times)
+            if time.time() + 1.5 * slowest + 60 > deadline:
+                say(
+                    f"stopping after {len(times)} tile(s): another would not "
+                    "finish in the job's time"
+                )
+                break
         sl = tuple(
             slice(max(0, s.start - h), min(n, s.stop + h))
             for s, n, h in zip(tiles[index], image.shape, overlap)
