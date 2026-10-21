@@ -1735,6 +1735,9 @@ def submit_timing(client, *, wf_dir, setup, files, name, segment, account):
         core.check_command(run_config_path(files), sample=3, preview=previews),
     )
     mem = core.first_attempt(segment.get("mem_mb")) or 16000
+    # The segment jobs' time (tiles can take many minutes each), capped: a
+    # try stops itself in time to report what it has (plan_run).
+    minutes = min(int(core.first_attempt(segment.get("runtime")) or 60), 240)
     return start_job(
         client,
         wf_dir=wf_dir,
@@ -1743,7 +1746,7 @@ def submit_timing(client, *, wf_dir, setup, files, name, segment, account):
         name=f"timing_{name.rsplit('_', 1)[-1]}",
         mode=core.SLURM_JOB,
         slurm={
-            "time": "01:00:00",
+            "time": f"{minutes // 60:02d}:{minutes % 60:02d}:00",
             "mem": f"{mem}M",
             "partition": segment.get("slurm_partition") or "",
             "qos": segment.get("qos") or "",
