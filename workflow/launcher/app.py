@@ -1947,6 +1947,7 @@ def resources_editor(resources: dict, info: dict | None = None) -> dict:
             "partition": resources[rule].get("slurm_partition") or "",
             "qos": resources[rule].get("qos") or "",
             "gres": resources[rule].get("gres") or "",
+            "CPUs": core.first_attempt(resources[rule].get("cpus_per_task")),
             "runtime (min)": core.first_attempt(resources[rule].get("runtime")),
             "memory (MB, 1st try)": core.first_attempt(
                 resources[rule].get("mem_mb")
@@ -1983,6 +1984,14 @@ def resources_editor(resources: dict, info: dict | None = None) -> dict:
         key=f"resources_{hash(str(rows))}",
         column_config={
             **pick,
+            "CPUs": st.column_config.NumberColumn(
+                min_value=1,
+                step=1,
+                help="cpus_per_task: the job's CPU cores. Segment: Cellpose "
+                "builds 3-D masks on the CPU while the GPU waits, and the "
+                "next tile is read meanwhile (8-12 helps); merge and "
+                "convert use every core they get.",
+            ),
             "runtime (min)": st.column_config.NumberColumn(min_value=1),
             "memory (MB, 1st try)": st.column_config.NumberColumn(
                 min_value=1000, help="each retry asks for this much more"
@@ -1994,13 +2003,17 @@ def resources_editor(resources: dict, info: dict | None = None) -> dict:
         "partition": "slurm_partition",
         "qos": "qos",
         "gres": "gres",
+        "CPUs": "cpus_per_task",
         "runtime (min)": "runtime",
         "memory (MB, 1st try)": "mem_mb",
     }
     for before, after in zip(rows, edited):
         for column, key in names.items():
             if after[column] != before[column]:
-                overrides.setdefault(after["rule"], {})[key] = after[column]
+                value = after[column]
+                if key == "cpus_per_task" and value not in (None, ""):
+                    value = int(value)
+                overrides.setdefault(after["rule"], {})[key] = value
     return overrides
 
 
