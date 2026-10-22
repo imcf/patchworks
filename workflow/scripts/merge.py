@@ -226,12 +226,27 @@ print(
 )
 objects: dict = {}
 
+# `shard_labels: true` shards level 0 one tile per shard as the merge writes
+# it, instead of rewriting the whole level afterwards (8 min and up). Not
+# when the volume filter rewrites level 0 after the merge (a stage without
+# the tiles' sums): its workers write single chunks, which in a shared
+# shard would be lost. A list asks for a shard shape of its own, which
+# takes that second pass too.
+shard_labels = cfg.get("shard_labels", False)
+shard_in_merge = (
+    shard_labels is True
+    and not in_place
+    and (fused or not (min_voxels or max_voxels))
+)
+
 _, n_objects = merge_tile_labels(
     target_path,
     write_to=label_group if not in_place else target_path,
     input_component=target_component,
     output_component="0" if not in_place else target_component,
     output_chunks=out_chunks,
+    # One shard per tile, written whole by the worker that relabels it.
+    shard_output=shard_in_merge,
     sequential_labels=cfg.get("sequential_labels", True),
     n_workers=cfg.get("merge_workers") or default_workers,
     progress=True,
@@ -284,7 +299,6 @@ print(
     f"chunks={level0.chunks} -> {n_chunks:,} chunks"
 )
 
-shard_labels = cfg.get("shard_labels", False)
 print(
     f"[patchworks] sharding: shard={cfg.get('shard', False)!r} "
     f"shard_labels={shard_labels!r}"
@@ -305,9 +319,9 @@ if (not shard_labels or not cfg.get("shard")) and n_chunks > 2000:
         "to pack them into shards: `shard` covers levels 1..N, "
         "`shard_labels` covers level 0, which is the one that counts."
     )
-if shard_labels:
-    # Level 0 is written by many processes, so it is sharded only now, in one
-    # pass: `true` takes `shard`'s shape, a list sets one.
+if shard_labels and not shard_in_merge:
+    # A shard shape of its own (a list), or relabeled in place: level 0 is
+    # written by many processes, so it is sharded only now, in one pass.
     spec = (cfg.get("shard") or True) if shard_labels is True else shard_labels
     reshard_level(label_group, "0", shard=spec, progress=True)
 
@@ -332,7 +346,8 @@ settings.update(
 )
 if cfg.get("method", "cellpose") == "cellpose":
     try:
-        from patchworks.plugins.cellpose import applied_defaults
+        # Not plugins.cellpose: that imports Cellpose, and torch with it.
+        from patchworks.plugins._cellpose_defaults import applied_defaults
 
         cp = cfg.get("cellpose") or {}
         settings["resolved"]["cellpose"] = {

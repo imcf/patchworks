@@ -606,6 +606,11 @@ def test_merge_reshards_level_zero_when_asked():
     assert src.index("merge_tile_labels(") < reshard
     assert src.index("filter_labels_by_size(") < reshard
     assert reshard < src.index("register_labels(\n")
+    # Sharded by the merge itself only when nothing rewrites level 0 after.
+    decided = src.index("shard_in_merge = (")
+    assert "fused or not (min_voxels or max_voxels)" in src[decided:]
+    assert src.index("shard_output=shard_in_merge") > decided
+    assert "if shard_labels and not shard_in_merge:" in src
 
 
 def test_merge_shards_the_label_pyramid():

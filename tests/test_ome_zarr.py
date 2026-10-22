@@ -1184,3 +1184,38 @@ def test_one_pass_pyramid_is_the_level_by_level_one(
         ref = zarr.open_array(f"{tmp_path}/levels.zarr/{level}", mode="r")
         np.testing.assert_array_equal(one[...], ref[...], err_msg=level)
         assert one.chunks[:2] == (1, 1)  # one plane deep: whole-chunk slabs
+
+
+def test_sharded_label_pyramid_is_streamed_shard_by_shard(tmp_path):
+    """Sharded label levels are written one whole shard per task, skipping
+    empty regions, and hold exactly the block mode of the level above --
+    with odd chunk widths (839 in the field), which used to make a dask
+    graph of ~260k tasks for one level."""
+    from patchworks.plugins.ome_zarr import _downsample, register_labels
+
+    rng = np.random.default_rng(5)
+    store = tmp_path / "img.zarr"
+    to_ome_zarr(
+        np.zeros((1, 6, 90, 120), "uint16"), store, axes="czyx", n_levels=3
+    )
+    lab = np.zeros((6, 90, 120), "int32")
+    for i, (y, x) in enumerate(rng.integers(0, 60, (25, 2)), 1):
+        lab[1:5, y : y + 9, x : x + 11] = (
+            i  # x < 71: the right part stays empty
+        )
+    root = zarr.open_group(str(store), mode="a")
+    base = (
+        root.require_group("labels")
+        .require_group("cells")
+        .create_array("0", shape=lab.shape, chunks=(3, 29, 29), dtype="int32")
+    )
+    base[:] = lab
+    register_labels(store, "cells", shard=True, progress=False)
+
+    grp = zarr.open_group(str(store / "labels" / "cells"), mode="r")
+    want = lab
+    for level in (1, 2):
+        arr = grp[str(level)]
+        assert arr.shards is not None
+        want = _downsample(want, (1, 2, 2), "mode")
+        np.testing.assert_array_equal(arr[:], want, err_msg=f"level {level}")
