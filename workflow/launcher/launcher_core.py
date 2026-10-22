@@ -1082,7 +1082,14 @@ def parse_json_output(output: str) -> dict[str, Any] | None:
 # ---------------------------------------------------------------------------
 
 # The resources the launcher lets you change, per rule.
-RESOURCE_KEYS = ("slurm_partition", "qos", "gres", "runtime", "mem_mb")
+RESOURCE_KEYS = (
+    "slurm_partition",
+    "qos",
+    "gres",
+    "cpus_per_task",
+    "runtime",
+    "mem_mb",
+)
 
 
 def profile_resources(text: str | None) -> dict[str, dict[str, Any]]:

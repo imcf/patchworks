@@ -266,12 +266,21 @@ def test_profile_overrides_and_account_limits():
     )
     new = yaml.safe_load(
         core.profile_with_overrides(
-            text, {"segment": {"mem_mb": 96000, "qos": "", "runtime": 300}}
+            text,
+            {
+                "segment": {
+                    "mem_mb": 96000,
+                    "qos": "",
+                    "runtime": 300,
+                    "cpus_per_task": 8,
+                }
+            },
         )
     )
     seg = new["set-resources"]["segment"]
     assert seg["mem_mb"] == "attempt * 96000" and "qos" not in seg
-    assert seg["runtime"] == 300
+    assert seg["runtime"] == 300 and seg["cpus_per_task"] == 8
+    assert "cpus_per_task" in core.RESOURCE_KEYS
     # prepare sizes "auto" tiles from its own memory: it follows segment.
     assert new["set-resources"]["prepare"]["mem_mb"] == "attempt * 96000"
     assert new["executor"] == "slurm"  # the rest of the profile is kept
@@ -843,6 +852,9 @@ def test_app_resources_change_for_one_run():
         d.value for d in at.dataframe if "partition" in d.value.columns
     )
     assert "rtx4090" in partitions["partition"].tolist()
+    # Each step's CPUs, from the profile, editable like the rest.
+    cpus = dict(zip(partitions["rule"], partitions["CPUs"]))
+    assert cpus["segment"] == 4 and cpus["merge"] == 32
     next(r for r in at.radio if r.label == "run mode").set_value(
         core.SLURM_JOB
     ).run()
