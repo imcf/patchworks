@@ -2487,3 +2487,112 @@ def test_jobs_import_patchworks_from_the_clone(monkeypatch):
     child = json.loads(path)
     site = next(i for i, p in enumerate(child) if "site-packages" in p)
     assert child.index(str(_src.SRC)) < site
+
+
+def _run_segment(tmp_path, monkeypatch, fail_on=None):
+    """segment_tile.py run as Snakemake would, on a small image whose
+    "segmentation" thresholds it; *fail_on* makes that tile's call fail."""
+    import runpy
+    import types
+
+    import _pw
+
+    from patchworks import create_stage
+
+    img = np.zeros((4, 32, 48), "uint16")
+    img[:, 2:9, 3:12] = 500
+    img[:, 20:30, 14:40] = 500
+    tile = (4, 16, 16)
+    stage = tmp_path / "stage.zarr"
+    create_stage(str(stage), img.shape, tile)
+    calls = []
+
+    def fn(block):
+        calls.append(block.shape)
+        if fail_on is not None and len(calls) == fail_on:
+            raise RuntimeError("segmentation failed")
+        from scipy.ndimage import label
+
+        return label(block > 0)[0]
+
+    manifest = {
+        "batches": [[0, 1, 2, 3, 4, 5]],
+        "target_path": str(stage),
+        "tile_shape": list(tile),
+        "overlap": 2,
+    }
+    fake = types.ModuleType("_pw")
+    for name in (
+        "halo_path",
+        "parts_path",
+        "load_segment_progress",
+        "save_segment_progress",
+        "segment_progress_path",
+    ):
+        setattr(fake, name, getattr(_pw, name))
+    fake.build_fn = lambda cfg, **kw: fn
+    fake.load_tiles_json = lambda path: manifest
+    fake.open_image = lambda *a: img
+    fake.pin_slurm_gpus = lambda: None
+    fake.start_log = lambda path: None
+    monkeypatch.setitem(sys.modules, "_pw", fake)
+    out = tmp_path / "seg" / "0.done"
+    out.parent.mkdir()
+    snake = types.SimpleNamespace(
+        log=[str(tmp_path / "log")],
+        config={
+            "work_dir": str(tmp_path),
+            "label_name": "cells",
+            "channel": 0,
+            "level": 0,
+        },
+        wildcards=types.SimpleNamespace(batch="0"),
+        input=types.SimpleNamespace(tiles="tiles.json"),
+        output=[str(out)],
+    )
+    script = _workflow_dir() / "scripts" / "segment_tile.py"
+    runpy.run_path(str(script), init_globals={"snakemake": snake})
+    return img, stage, out, calls
+
+
+def test_segment_job_reads_ahead_and_stages_every_tile(tmp_path, monkeypatch):
+    """Reading the next tile and writing the last one alongside the GPU
+    stages exactly what one tile at a time did."""
+    import zarr
+
+    from patchworks import merge_tile_labels
+
+    img, stage, out, calls = _run_segment(tmp_path, monkeypatch)
+    assert len(calls) == 6
+    counts = json.loads(out.read_text())["counts"]
+    assert sorted(int(i) for i in counts) == [0, 1, 2, 3, 4, 5]
+    staged = zarr.open_group(str(stage), mode="r")["staged"][:]
+    assert all(
+        int(staged[:, y : y + 16, x : x + 16].max()) == counts[str(i)]
+        for i, (y, x) in enumerate((y, x) for y in (0, 16) for x in (0, 16, 32))
+    )
+    merged = merge_tile_labels(
+        str(stage),
+        write_to=str(tmp_path / "out.zarr"),
+        input_component="staged",
+        output_component="labels",
+        sequential_labels=True,
+        label_counts={int(k): v for k, v in counts.items()},
+    ).compute()
+    assert set(np.unique(merged).tolist()) == {0, 1, 2}
+    assert ((merged > 0) == (img > 0)).all()
+
+
+def test_segment_job_keeps_tiles_staged_before_a_failure(tmp_path, monkeypatch):
+    """A tile that fails still leaves the ones before it recorded, the one
+    still being written included, so a retry resumes after them."""
+    from _pw import load_segment_progress, segment_progress_path
+
+    with pytest.raises(RuntimeError, match="segmentation failed"):
+        _run_segment(tmp_path, monkeypatch, fail_on=4)
+    done = load_segment_progress(
+        segment_progress_path(tmp_path / "stage.zarr", 0),
+        [0, 1, 2, 3, 4, 5],
+        (4, 16, 16),
+    )
+    assert sorted(done) == [0, 1, 2]

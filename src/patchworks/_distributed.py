@@ -15,7 +15,7 @@ import itertools
 import logging
 import os
 from pathlib import Path
-from typing import Callable, Sequence, Union
+from typing import Callable, NamedTuple, Sequence, Union
 
 import numpy as np
 import zarr
@@ -236,6 +236,45 @@ def stage_tile(
         by a cumulative sum, instead of rewriting the whole store to make the
         ids unique.
     """
+    tile = read_tile(
+        image,
+        index,
+        tile_shape=tile_shape,
+        overlap=overlap,
+        channel_axis=channel_axis,
+    )
+    return finish_tile(
+        tile,
+        fn(tile.block),
+        stage_path,
+        component=component,
+        halo_dir=halo_dir,
+        parts_dir=parts_dir,
+        fn_name=getattr(fn, "__name__", type(fn).__name__),
+    )
+
+
+class TileRead(NamedTuple):
+    """One tile as read by :func:`read_tile`, for :func:`finish_tile`."""
+
+    index: int
+    block: np.ndarray  # the tile plus its halo (and any channel axis)
+    sl: tuple  # the tile's own region in the image
+    expanded: tuple  # the region read: the tile plus its halo
+    trims: list  # halo width (before, after) per axis
+
+
+def read_tile(
+    image,
+    index: int,
+    *,
+    tile_shape: tuple[int, ...],
+    overlap: Overlap = 0,
+    channel_axis: int | None = None,
+) -> TileRead:
+    """Read tile *index* of *image* with its halo: the first part of
+    :func:`stage_tile`, separate so a job can read the next tile while the
+    GPU works on this one. Arguments as for :func:`stage_tile`."""
     shape = tuple(image.shape)
     # The channel axis is carried, not tiled: geometry (tiles, halo, the stage
     # store) stays spatial, so nothing downstream of fn learns about channels.
@@ -256,14 +295,31 @@ def stage_tile(
     if channel_axis is not None:
         read.insert(channel_axis, slice(None))
     block = np.asarray(image[tuple(read)])
+    return TileRead(index, block, tuple(sl), tuple(expanded), trims)
+
+
+def finish_tile(
+    tile: TileRead,
+    out,
+    stage_path: Union[str, Path],
+    *,
+    component: str = "staged",
+    halo_dir: Union[str, Path, None] = None,
+    parts_dir: Union[str, Path, None] = None,
+    fn_name: str = "fn",
+) -> int:
+    """Trim, renumber and stage what the segmentation returned for *tile*:
+    the last part of :func:`stage_tile` (which see), separate so a job can
+    write one tile while the GPU works on the next. Returns the tile's
+    label count."""
+    index, sl, trims = tile.index, tile.sl, tile.trims
     # What fn owes us back: one label per voxel, channel axis consumed.
-    block_spatial = tuple(e.stop - e.start for e in expanded)
-    out = np.asarray(fn(block))
+    block_spatial = tuple(e.stop - e.start for e in tile.expanded)
+    out = np.asarray(out)
     if out.shape != block_spatial:
         # Named here, not as a broadcast error deep in zarr.
-        name = getattr(fn, "__name__", type(fn).__name__)
         raise ValueError(
-            f"segmentation function {name!r} returned shape {out.shape} for "
+            f"segmentation function {fn_name!r} returned shape {out.shape} for "
             f"a tile of shape {block_spatial} (tile {index}). It must return "
             "one label per input voxel. Some deconvolution backends crop "
             "their output -- pad or centre it back to the input shape before "

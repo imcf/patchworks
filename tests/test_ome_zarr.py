@@ -1172,6 +1172,8 @@ def test_one_pass_pyramid_is_the_level_by_level_one(
 
     log = convert(tmp_path / "one.zarr", True)
     assert "in one pass" in log, log
+    # Room for one more slab: each is read while the one before is written.
+    assert "reading each slab while the one before is written" in log, log
     assert "in one pass" not in convert(tmp_path / "levels.zarr", False)
 
     def meta(path):
