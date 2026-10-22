@@ -289,6 +289,9 @@ def _last_lines(path: Path, n: int = 5) -> list[str]:
     return [line for line in text.splitlines() if line.strip()][-n:]
 
 
+_SIGNALS = {9: "SIGKILL", 15: "SIGTERM", 2: "SIGINT", 1: "SIGHUP", 6: "SIGABRT"}
+
+
 def snakemake_state(run: Path) -> dict | None:
     """How a multi run's Snakemake for *run* is doing, as run_multi recorded
     it: ``state`` (running, ok, failed), ``exit``, and its last output lines.
@@ -303,12 +306,8 @@ def snakemake_state(run: Path) -> dict | None:
     code = state.get("exit")
     if state.get("state") == "failed" and isinstance(code, int) and code < 0:
         # Killed: its own output ends wherever it was, with no error.
-        import signal
-
-        try:
-            name = signal.Signals(-code).name
-        except ValueError:
-            name = f"signal {-code}"
+        # Named here, not by the signal module: Windows lacks most of them.
+        name = _SIGNALS.get(-code, f"signal {-code}")
         state["error"] = f"killed by {name}"
         state["hint"] = (
             "most likely the controller job ran out of memory (a multi run's "

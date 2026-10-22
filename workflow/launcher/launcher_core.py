@@ -1635,7 +1635,8 @@ def parse_queue(output: str) -> list[dict[str, str]]:
 # The lines of Snakemake's log that say which step ran where: each job's
 # rule, wildcards, log and SLURM job, and whether it failed or finished.
 STEPS_FILTER = (
-    r"^(local)?(rule|checkpoint) |^\s+(log|jobid|wildcards|resources):|"
+    r"^(local)?(rule|checkpoint) |"
+    r"^\s+(log|jobid|wildcards|resources|message|external_jobid):|"
     r"has been submitted|"
     r"^Error in rule|Finished job"
 )
@@ -1721,6 +1722,30 @@ def parse_steps(text: str) -> list[dict[str, Any]]:
             None,
         )
 
+    def mark_failed(block: dict[str, Any]) -> None:
+        """Mark the step an "Error in rule" block is about as failed.
+
+        Its job id alone is ambiguous (run_multi's Snakemakes have the same
+        DAG shape, so the same ids): its SLURM job, then its log, say which
+        segmentation's step it is.
+        """
+        if not block["error"] or block["jid"] is None:
+            return
+        candidates = [
+            v
+            for k, v in steps.items()
+            if k[0] == block["jid"] and k[1] == block["rule"]
+        ]
+        for field in ("slurm_job", "log"):
+            if block.get(field):
+                match = [v for v in candidates if v[field] == block[field]]
+                if match:
+                    candidates = match
+                    break
+        if candidates:
+            candidates[-1]["state"] = "failed"
+        block["error"] = False  # once
+
     block: dict[str, Any] | None = None  # a "rule" or "Error in rule" block
     for line in text.splitlines():
         stripped = line.strip()
@@ -1728,6 +1753,8 @@ def parse_steps(text: str) -> list[dict[str, Any]]:
         start = re.match(
             r"(?:(?:local)?(?:rule|checkpoint)|Error in rule) (\w+):$", stripped
         )
+        if block is not None and (start or not line[:1].isspace()):
+            mark_failed(block)
         if start:
             block = {
                 "rule": start.group(1),
@@ -1743,10 +1770,7 @@ def parse_steps(text: str) -> list[dict[str, Any]]:
             if key == "jobid":
                 block["jid"] = jid = value.split()[0]
                 if block["error"]:
-                    failed = latest(jid, block["rule"])
-                    if failed:
-                        failed["state"] = "failed"
-                    continue
+                    continue  # marked failed once the block's log is read
                 key = (jid, block["rule"], block["log"])
                 previous = steps.pop(key, None)  # re-inserted: latest last
                 steps[key] = block["step"] = {
@@ -1775,6 +1799,12 @@ def parse_steps(text: str) -> list[dict[str, Any]]:
                         else []
                     ),
                 }
+            elif block["error"] and key in ("message", "external_jobid"):
+                slurm = re.search(r"SLURM-job '(\d+)'|^(\d+)$", value)
+                if slurm:
+                    block["slurm_job"] = slurm.group(1) or slurm.group(2)
+            elif key == "log" and block["error"]:
+                block["log"] = value.split(",")[0].split(" (")[0].strip()
             elif key == "resources" and step and not block["error"]:
                 mem = re.search(r"\bmem_mb=(\d+)", value)
                 step["mem_mb"] = int(mem.group(1)) if mem else None
@@ -1811,6 +1841,8 @@ def parse_steps(text: str) -> list[dict[str, Any]]:
             step = latest(finished.group(1), rule.group(1) if rule else None)
             if step:
                 step["state"] = "done"
+    if block is not None:
+        mark_failed(block)
     return list(steps.values())
 
 
