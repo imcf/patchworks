@@ -1006,17 +1006,21 @@ _SLAB_SOURCE_BYTES = 256 * 1024**2
 _SOURCE_COPIES = 3
 
 
-def _slab_starts(arr: da.Array, block: tuple, source_nbytes: int) -> list:
+def _slab_starts(
+    arr: da.Array, block: tuple, source_nbytes: int, copies: int = 0
+) -> list:
     """Where each slab starts along the leading (non-y/x) axes.
 
     A slab is whole write blocks deep (no two slabs touch one chunk or
-    shard), and holds as many source chunks as fit in the job's memory.
+    shard), and holds as many source chunks as fit in the job's memory,
+    counting *copies* of each (default :data:`_SOURCE_COPIES`).
     """
     from .._chunks import _get_available_memory
 
     lead = arr.ndim - 2
     budget = 0.6 * _get_available_memory()
-    planes = max(1, int(budget // max(1, source_nbytes * _SOURCE_COPIES)))
+    copies = copies or _SOURCE_COPIES
+    planes = max(1, int(budget // max(1, source_nbytes * copies)))
     # Along the last leading axis (z), as many whole blocks as fit.
     step = list(block[:lead])
     if lead:
@@ -1387,6 +1391,25 @@ def _downsample_bands(
         return np.concatenate(list(pool.map(one, starts)), axis=ax)
 
 
+def _write_slab(
+    data: np.ndarray,
+    region: tuple,
+    targets: list,
+    blocks: list,
+    strides: tuple[int, ...],
+    downsample: str,
+    workers: int,
+    lead: int,
+) -> None:
+    """Write one slab into every level, each downsampled from the last."""
+    for k, (target, block) in enumerate(zip(targets, blocks)):
+        if k:
+            data = _downsample_bands(data, strides, downsample, workers)
+        da.from_array(
+            data, chunks=tuple(data.shape[:lead]) + tuple(block[lead:])
+        ).store(target, regions=region, lock=False, compute=True)
+
+
 def _write_pyramid_one_pass(
     arr: da.Array,
     axes: str,
@@ -1464,8 +1487,20 @@ def _write_pyramid_one_pass(
                 **zarr_compressor_kwargs(fmt),
             )
         )
-    # A plane's whole pyramid: the plane, a quarter of it, ... (4/3).
-    starts, step = _slab_starts(arr, blocks[0], source_nbytes * 4 // 3)
+    # A plane's whole pyramid: the plane, a quarter of it, ... (4/3). One
+    # more copy when the next slab is read while this one is written -- if
+    # slabs that small still fit; else one slab at a time.
+    from .._chunks import _get_available_memory
+
+    per_plane = source_nbytes * 4 // 3
+    starts, step = _slab_starts(arr, blocks[0], per_plane, _SOURCE_COPIES + 1)
+    slab_planes = int(np.prod(step[:lead]))
+    read_ahead = len(starts) > 1 and (
+        slab_planes * per_plane * (_SOURCE_COPIES + 1)
+        <= 0.6 * _get_available_memory()
+    )
+    if not read_ahead:
+        starts, step = _slab_starts(arr, blocks[0], per_plane)
     label = f"{Path(group_path).name}/{base_name}-{names[-1]}"
     logger.info(
         "writing %s in one pass, %d slab(s) of %s along the leading axes: "
@@ -1477,22 +1512,53 @@ def _write_pyramid_one_pass(
     )
     workers = max(1, cpu_allocation())
     started = _time.monotonic()
-    for n, start in enumerate(starts, 1):
-        lead_region = tuple(
-            slice(s, min(s + st, arr.shape[i]))
-            for i, (s, st) in enumerate(zip(start, step[:lead]))
+
+    def _region(start) -> tuple:
+        return (
+            tuple(
+                slice(s, min(s + st, arr.shape[i]))
+                for i, (s, st) in enumerate(zip(start, step[:lead]))
+            )
+            + (slice(None),) * 2
         )
-        region = lead_region + (slice(None),) * 2
-        data = np.asarray(arr[region].compute())
-        for k, (target, block) in enumerate(zip(targets, blocks)):
-            if k:
-                data = _downsample_bands(data, strides, downsample, workers)
-            da.from_array(
-                data, chunks=tuple(data.shape[:lead]) + tuple(block[lead:])
-            ).store(target, regions=region, lock=False, compute=True)
-        del data
-        if progress:
-            log_progress(label, n, len(starts), started)
+
+    def _read(start) -> np.ndarray:
+        return np.asarray(arr[_region(start)].compute())
+
+    if read_ahead:
+        logger.info(
+            "%s: reading each slab while the one before is written", label
+        )
+    reader = ThreadPoolExecutor(max_workers=1) if read_ahead else None
+    try:
+        nxt = reader.submit(_read, starts[0]) if reader else None
+        for n, start in enumerate(starts, 1):
+            region = _region(start)
+            if nxt is not None:
+                data = nxt.result()
+                nxt = (
+                    reader.submit(_read, starts[n])
+                    if reader and n < len(starts)
+                    else None
+                )
+            else:
+                data = _read(start)
+            _write_slab(
+                data,
+                region,
+                targets,
+                blocks,
+                strides,
+                downsample,
+                workers,
+                lead,
+            )
+            del data
+            if progress:
+                log_progress(label, n, len(starts), started)
+    finally:
+        if reader is not None:
+            reader.shutdown(wait=True, cancel_futures=True)
     datasets = []
     for i, (name, shape) in enumerate(zip(names, shapes)):
         scale = [base_scale[k] * (strides[k] ** i) for k in range(len(axes))]
@@ -2137,7 +2203,12 @@ def _open_tiff_sequence(
     # report extra singleton dims — leading, trailing, or both (e.g. a stray
     # page or samples-per-pixel axis) — even for a plain single-page TIFF.
     # Drop whichever ones are singleton so one file maps to exactly (y, x).
-    chunkshape = tifffile.imread(ts[0]).shape
+    # From the header, not by decoding the file: a stitched plane can be
+    # gigabytes, and tifffile's store would decode it once more for the same
+    # two facts unless it is told them.
+    with tifffile.TiffFile(ts[0]) as tif:
+        chunkshape = tuple(tif.series[0].shape)
+        chunkdtype = tif.series[0].dtype
     keep_chunk = [i for i, s in enumerate(chunkshape) if s != 1]
     if len(keep_chunk) != 2:
         raise ValueError(
@@ -2145,7 +2216,11 @@ def _open_tiff_sequence(
             f"{chunkshape} for {ts[0]!r}"
         )
 
-    arr = da.from_zarr(zarr.open(store=ts.aszarr()))
+    try:
+        store = ts.aszarr(chunkshape=chunkshape, chunkdtype=chunkdtype)
+    except TypeError:  # a tifffile without these arguments
+        store = ts.aszarr()
+    arr = da.from_zarr(zarr.open(store=store))
     n_seq = len(ts.axes)
     index = tuple(
         slice(None) if i in keep_chunk else 0 for i in range(len(chunkshape))

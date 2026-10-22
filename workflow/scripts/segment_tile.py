@@ -1,14 +1,17 @@
 """Snakemake script: segment one batch of tiles (one GPU job).
 
 The tiles run one after the other, sharing one model load; each writes its
-own chunk, so batches never collide.
+own chunk, so batches never collide. While the GPU segments one tile, the
+next is read and the previous one renumbered, measured and written, each in
+a thread of its own: the GPU no longer waits on the filesystem.
 """
 
 import json
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from patchworks import stage_tile
+from patchworks._distributed import finish_tile, read_tile
 
 from _pw import (
     build_fn,
@@ -63,33 +66,76 @@ if counts:
         flush=True,
     )
 batch_started = time.monotonic()
-for n, index in enumerate(indices, 1):
-    if index in counts:
-        continue
-    started = time.monotonic()
-    counts[index] = stage_tile(
+todo = [(n, index) for n, index in enumerate(indices, 1) if index not in counts]
+halo_dir = (
+    halo_path(work_dir, label_name)
+    if cfg.get("stitch", "touch") == "iou"
+    else None
+)
+fn_name = getattr(fn, "__name__", type(fn).__name__)
+
+
+def _read(index):
+    return read_tile(
         image,
-        fn,
-        stage,
         index,
         tile_shape=tile_shape,
         overlap=manifest["overlap"],
-        component=component,
         channel_axis=0 if stacked else None,
-        halo_dir=(
-            halo_path(work_dir, label_name)
-            if cfg.get("stitch", "touch") == "iou"
-            else None
-        ),
-        parts_dir=parts_path(work_dir, label_name),
     )
+
+
+def _finish(tile, out):
+    return finish_tile(
+        tile,
+        out,
+        stage,
+        component=component,
+        halo_dir=halo_dir,
+        parts_dir=parts_path(work_dir, label_name),
+        fn_name=fn_name,
+    )
+
+
+def _done(n, index, started, future):
+    """Record a staged tile, in order: the progress file resumes from it."""
+    counts[index] = future.result()
     save_segment_progress(progress_file, indices, tile_shape, counts)
-    took = time.monotonic() - started
     print(
         f"[patchworks] tile {index} ({n}/{len(indices)}): "
-        f"{counts[index]} label(s) in {took:.0f}s",
+        f"{counts[index]} label(s) in {time.monotonic() - started:.0f}s",
         flush=True,
     )
+
+
+# At most one tile read ahead and one being written: about three tiles in
+# memory, against one before.
+with (
+    ThreadPoolExecutor(max_workers=1) as reader,
+    ThreadPoolExecutor(max_workers=1) as writer,
+):
+    reading = reader.submit(_read, todo[0][1]) if todo else None
+    writing = None
+    try:
+        for k, (n, index) in enumerate(todo):
+            started = time.monotonic()
+            tile = reading.result()
+            reading = (
+                reader.submit(_read, todo[k + 1][1])
+                if k + 1 < len(todo)
+                else None
+            )
+            out = fn(tile.block)
+            if writing is not None:
+                pending, writing = writing, None
+                _done(*pending)
+            writing = (n, index, started, writer.submit(_finish, tile, out))
+            del tile, out
+    finally:
+        # Also when a tile fails: the one before it is staged, and a retry
+        # need not segment it again.
+        if writing is not None:
+            _done(*writing)
 
 # Each tile's label count, for the merge's global ids.
 with open(snakemake.output[0], "w") as fh:  # noqa: F821
