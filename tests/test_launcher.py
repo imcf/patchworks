@@ -1,6 +1,7 @@
 """Tests for the Streamlit launcher's logic (workflow/launcher)."""
 
 import json
+import re
 import sys
 from pathlib import Path
 from typing import ClassVar
@@ -2258,3 +2259,39 @@ def test_a_try_waiting_for_a_gpu_says_so():
     assert not at.exception
     (waiting,) = [i.value for i in at.info if "Waiting for a GPU" in i.value]
     assert "waiting its turn" in waiting
+
+
+def test_a_failed_step_is_matched_to_its_own_segmentation():
+    """run_multi's Snakemakes share one log and the same job ids: an error
+    in one's merge must not mark the other's merge failed."""
+    merge = (
+        "rule merge:\n"
+        "    log: /w/{label}/logs/merge.log\n"
+        "    jobid: 5\n"
+        "    resources: mem_mb=64000\n"
+        "Job 5 has been submitted with SLURM jobid {slurm} "
+        "(log: /s/{slurm}.log).\n"
+    )
+    log = merge.format(label="cilia", slurm=301) + merge.format(
+        label="cyto", slurm=302
+    )
+    error = (
+        "Error in rule merge:\n"
+        "    message: SLURM-job '301' failed, SLURM status is: 'OUT_OF_MEMORY'\n"
+        "    jobid: 5\n"
+        "    log: /w/cilia/logs/merge.log (check log file(s) for error details)\n"
+    )
+    for text in (
+        log + error,
+        # Without the SLURM job, the step's log tells them apart.
+        log + error.replace("SLURM-job '301' failed", "None"),
+        # The filter the launcher greps the log with keeps those lines.
+        "\n".join(
+            line
+            for line in (log + error).splitlines()
+            if re.search(core.STEPS_FILTER, line)
+        ),
+    ):
+        steps = {s["log"]: s for s in core.parse_steps(text)}
+        assert steps["/w/cilia/logs/merge.log"]["state"] == "failed"
+        assert steps["/w/cyto/logs/merge.log"]["state"] == "submitted"
