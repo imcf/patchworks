@@ -261,3 +261,19 @@ def test_a_multi_runs_snakemake_that_stopped(tmp_path, monkeypatch):
         str(json.loads((run / RUN_STATE).read_text())["updated"] + 10),
     )
     assert status.segmentation_status(cfg)["snakemake"] is None
+
+
+def test_a_killed_snakemake_says_so(tmp_path):
+    """Killed (exit -9), its output ends mid-startup with no error line."""
+    from run_multi import SNAKEMAKE_OUT, write_run_state
+
+    run = tmp_path / "w" / "nuclei"
+    run.mkdir(parents=True)
+    write_run_state(run, state="running", pid=1, started=100.0)
+    (run / SNAKEMAKE_OUT).write_text("Using workflow specific profile x\n")
+    write_run_state(run, state="failed", exit=-9, ended=200.0)
+    got = status.segmentation_status(
+        {"work_dir": str(tmp_path / "w"), "label_name": "nuclei"}
+    )["snakemake"]
+    assert got["error"] == "killed by SIGKILL"
+    assert "controller job ran out of memory" in got["hint"]

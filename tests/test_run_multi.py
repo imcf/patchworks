@@ -1560,7 +1560,10 @@ def test_main_runs_with_an_explicit_tile_shape_seeds_first(
     monkeypatch.setattr(run_multi, "_run", lambda cmd, wd: 0)  # convert
     monkeypatch.setattr(run_multi, "_run_bundle", lambda *a: 0)
 
+    envs = []
+
     def popen(cmd, cwd=None, **kwargs):
+        envs.append(kwargs["env"])
         name = Path(cmd[cmd.index("--configfile") + 2]).stem
         return _FakeProc(log, name, 0)
 
@@ -1579,6 +1582,8 @@ def test_main_runs_with_an_explicit_tile_shape_seeds_first(
         json.loads((run / "run_multi_state.json").read_text())["state"] == "ok"
     )
     assert (run / "snakemake.out").read_text() == "nuclei says hi\n"
+    # Checked once here, so not again in each side-by-side Snakemake.
+    assert all(e["PATCHWORKS_CONFIG_CHECKED"] == "1" for e in envs)
 
 
 def test_config_option_resolves_from_where_pixi_runs(tmp_path, monkeypatch):
@@ -2298,7 +2303,8 @@ def test_the_snakefile_validates_in_the_main_process_only():
     snakefile = (
         Path(__file__).parents[1] / "workflow" / "Snakefile"
     ).read_text()
-    assert 'if getattr(workflow, "is_main_process", True):' in snakefile
+    assert 'if getattr(workflow, "is_main_process", True) and not' in snakefile
+    assert '"PATCHWORKS_CONFIG_CHECKED"' in snakefile
     assert "    validate_config(config)" in snakefile
 
 

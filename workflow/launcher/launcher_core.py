@@ -811,7 +811,7 @@ def controller_job_script(
     inner: str,
     *,
     time: str = "3-00:00:00",
-    mem: str = "4G",
+    mem: str = "16G",
     partition: str = "",
     qos: str = "",
     account: str = "",
