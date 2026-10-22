@@ -2467,6 +2467,47 @@ def earlier_attempts(step: dict) -> list[str]:
     ]
 
 
+def memory_advice(steps: list[dict]) -> list[str]:
+    """Per step that ran out of memory: how much ran out, what its retry
+    got, and the first-try memory to give it next time."""
+    out = []
+    for rule in sorted({s["rule"] for s in steps}):
+        hit = [
+            s
+            for s in steps
+            if s["rule"] == rule
+            and any("out of memory" in a for a in earlier_attempts(s))
+        ]
+        if not hit:
+            continue
+        short = max(
+            (e["mem_mb"] or 0 for s in hit for e in s.get("earlier", [])),
+            default=0,
+        )
+        worked = [
+            s["mem_mb"] for s in hit if s["state"] == "done" and s.get("mem_mb")
+        ]
+        trying = max((s.get("mem_mb") or 0 for s in hit), default=0)
+        enough = max(worked) if worked else trying
+        text = f"**{rule}** ran out of memory at {_gb(short)}"
+        if worked:
+            text += f" and worked when retried with {_gb(enough)}."
+        elif trying:
+            text += f"; its retry is trying {_gb(trying)}."
+        else:
+            text += " and was retried with more."
+        text += " Each retry costs the time the failed attempt ran."
+        if enough:
+            text += (
+                f" For the next run, {'' if worked else 'if that works, '}"
+                f"enter **{enough}** as {rule}'s *memory (MB, 1st try)* in "
+                "Plan & launch → Cluster resources (or set its mem_mb to "
+                f'`"attempt * {enough}"` in the profile).'
+            )
+        out.append(text)
+    return out
+
+
 def steps_view(steps: list[dict], queue: list[dict]) -> None:
     """The workflow's steps (from the controller's log): where each runs,
     and the log of each one not done."""
@@ -2485,27 +2526,15 @@ def steps_view(steps: list[dict], queue: list[dict]) -> None:
         }
         for s in steps[-40:]
     ]
-    short = sorted(
-        {
-            s["rule"]
-            for s in steps[-40:]
-            if any("out of memory" in a for a in earlier_attempts(s))
-        }
-    )
+    advice = memory_advice(steps[-40:])
     with section(
         ":material/account_tree: Steps",
         f"{sum(s['state'] == 'done' for s in steps)} of {len(steps)} done; "
         "the latest attempt of each",
     ):
         st.dataframe(rows, hide_index=True)
-        if short:
-            st.warning(
-                f"{', '.join(short)} ran out of memory and was retried with "
-                "more: each retry costs the time the failed attempt ran. For "
-                "the next run, start higher: that step's memory in Plan & "
-                "launch → Cluster resources, or its mem_mb in the profile.",
-                icon=":material/memory:",
-            )
+        for text in advice:
+            st.warning(text, icon=":material/memory:")
         open_steps = [s for s in steps if s["state"] != "done"][-5:]
         for s in open_steps:
             state = states.get(s["slurm_job"] or "", s["state"])

@@ -1729,7 +1729,13 @@ def test_jobs_tab_convert_only_shows_the_convert_step():
     assert steps["state"].tolist() == ["running"]
     assert any("convert · running" in e.label for e in at.expander)
     assert steps["earlier attempts"].tolist() == ["1: out of memory at 64 GB"]
-    assert any("ran out of memory" in w.value for w in at.warning)
+    # What ran out, what the retry got, and what to enter next time.
+    assert any(
+        "**convert** ran out of memory at 64 GB; its retry is trying 128 GB"
+        in w.value
+        and "if that works, enter **128000** as convert's" in w.value
+        for w in at.warning
+    ), [w.value for w in at.warning]
     assert any(
         "updated" in c.value and "every 15 s" in c.value for c in at.caption
     )
