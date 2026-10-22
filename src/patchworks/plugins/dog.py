@@ -458,6 +458,64 @@ def _run(block: np.ndarray, dog_dict: dict[str, Any]) -> np.ndarray:
     )
 
 
+# Mirrored margin around each side of a tile in y and x before deconvolution.
+DECON_MARGIN = 8
+
+
+def _fft_size(n: int) -> int:
+    """The smallest even length >= *n* with no prime factor above 5.
+
+    cudaDecon trims every axis down to such a length (783 -> 768), so a
+    tile already that long goes through whole.
+
+    Examples
+    --------
+    >>> [_fft_size(n) for n in (783, 799, 1080, 1084, 126, 2)]
+    [800, 800, 1080, 1152, 128, 2]
+    """
+    size = max(int(n), 2)
+    while True:
+        if size % 2 == 0:
+            rest = size
+            for p in (2, 3, 5):
+                while rest % p == 0:
+                    rest //= p
+            if rest == 1:
+                return size
+        size += 1
+
+
+def _pad_for_decon(img: np.ndarray) -> tuple[np.ndarray, tuple[slice, ...]]:
+    """*img* mirrored out in y and x for deconvolution, and the slices of
+    the original inside it.
+
+    Two things went wrong at a tile's edges without it. cudaDecon trimmed
+    each axis to an FFT-friendly length and the lost strip (13-15 px of a
+    783 x 781 tile) had to be filled with copies of the last row and column,
+    where DoG found streaks; and its FFTs wrap around, so light near one
+    edge bled onto the opposite one. Both put the damage exactly where
+    neighbouring tiles overlap and are stitched: seams orphaned labels at
+    several times the rate inside tiles. Mirroring by at least
+    :data:`DECON_MARGIN` on each side, up to a length cudaDecon keeps whole,
+    moves both effects out of the tile. z is left alone: ``dup_rev_z``
+    covers its wrap, and its depth decides that.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> padded, inner = _pad_for_decon(np.zeros((126, 783, 781), "float32"))
+    >>> padded.shape, padded[inner].shape
+    ((126, 800, 800), (126, 783, 781))
+    """
+    pad = [(0, 0)] * img.ndim
+    for ax in range(max(img.ndim - 2, 0), img.ndim):
+        n = img.shape[ax]
+        extra = _fft_size(n + 2 * DECON_MARGIN) - n
+        pad[ax] = (extra // 2, extra - extra // 2)
+    inner = tuple(slice(lo, lo + n) for (lo, _), n in zip(pad, img.shape))
+    return np.pad(img, pad, mode="reflect"), inner
+
+
 def _restore_shape(arr: np.ndarray, shape: tuple[int, ...]) -> np.ndarray:
     """Restore *arr* to *shape*, anchored at the origin, cropping or padding.
 
@@ -527,11 +585,15 @@ def _segment_once(
     decon_kwargs = dog_dict["decon_kwargs"]
     if decon_kwargs is not None:
         before = img.shape
-        img = _cached_decon(img, _resolve_dup_rev_z(decon_kwargs, img.shape))
-        if img.shape != before:
-            # cudaDecon can return a slightly smaller volume: one label per input
-            # voxel is required.
-            img = _restore_shape(img, before)
+        img, inner = _pad_for_decon(img)
+        padded = img.shape
+        # dup_rev_z is decided on the tile's own depth: z is not padded.
+        img = _cached_decon(img, _resolve_dup_rev_z(decon_kwargs, before))
+        if img.shape != padded:
+            # Still trimmed (a cudaDecon rule not modelled here): one label
+            # per input voxel is required.
+            img = _restore_shape(img, padded)
+        img = img[inner]
 
     from scipy.ndimage import generate_binary_structure
 
