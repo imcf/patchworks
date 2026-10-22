@@ -308,8 +308,9 @@ HELP = {
     "conversion to merge (with the queue's waits); if it runs out, launch "
     "again and the run resumes. It must fit its partition's and QOS's "
     "limits.\n\nExample: `3-00:00:00` (3 days) for a whole run",
-    "ctrl_mem": "Memory of the controller job: it only follows the other "
-    "jobs.\n\nExample: `4G`",
+    "ctrl_mem": "Memory of the controller job: it follows the other jobs, "
+    "but a multi run starts one Snakemake per segmentation in it, side by "
+    "side. Too little and one is killed (exit code -9).\n\nExample: `16G`",
     "ctrl_partition": "The partition for the controller job: one whose time "
     "limit covers the whole run. Blank: the cluster's default.",
     "ctrl_qos": "The QOS for the controller job: its MaxWall must cover the "

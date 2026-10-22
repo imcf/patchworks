@@ -300,7 +300,24 @@ def snakemake_state(run: Path) -> dict | None:
     if not isinstance(state, dict) or state.get("updated", 0) < _since():
         return None
     state["last"] = _last_lines(run / SNAKEMAKE_OUT)
-    if state.get("state") == "failed":
+    code = state.get("exit")
+    if state.get("state") == "failed" and isinstance(code, int) and code < 0:
+        # Killed: its own output ends wherever it was, with no error.
+        import signal
+
+        try:
+            name = signal.Signals(-code).name
+        except ValueError:
+            name = f"signal {-code}"
+        state["error"] = f"killed by {name}"
+        state["hint"] = (
+            "most likely the controller job ran out of memory (a multi run's "
+            "Snakemakes all share it): give the controller more memory, then "
+            "Relaunch"
+            if name == "SIGKILL"
+            else None
+        )
+    elif state.get("state") == "failed":
         tail = "\n".join(_last_lines(run / SNAKEMAKE_OUT, 40))
         state["error"], state["hint"] = explain(tail)
     return state

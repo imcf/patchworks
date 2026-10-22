@@ -2,6 +2,7 @@
 #   pixi run dry | go | slurm
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -17,7 +18,12 @@ config.update(with_defaults(config))
 # Refuse a bad config now, dry runs included, not in prepare after hours of
 # converting. Only here, in the main process: every cluster job reads this
 # file again, and some checks import Cellpose.
-if getattr(workflow, "is_main_process", True):
+# run_multi checked every config before starting (and says so): checking
+# again here would load Cellpose in each of its Snakemakes at once, which
+# all share the controller job's memory.
+if getattr(workflow, "is_main_process", True) and not os.environ.get(
+    "PATCHWORKS_CONFIG_CHECKED"
+):
     validate_config(config)
 
 include: "rules/common.smk"

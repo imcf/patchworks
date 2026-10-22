@@ -3291,7 +3291,7 @@ with tab_launch:
                     "time": ctrl_time,
                     "mem": c2.text_input(
                         "mem",
-                        preset.get("controller_mem", "4G"),
+                        preset.get("controller_mem", "16G"),
                         help=HELP["ctrl_mem"],
                     ),
                     "partition": slurm_choice(
