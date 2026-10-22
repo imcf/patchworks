@@ -1676,9 +1676,11 @@ CONTROLLER_PROBLEMS = (
     (r"oom[_-]kill|Out Of Memory", "the controller ran out of memory"),
     (
         r"run_multi on \S+ \(pid \d+.*is driving",
-        "an earlier run that was killed left its marker: if none of your "
-        "jobs runs (Cancel jobs shows none), delete the .run_multi.pid file "
-        "named here, then Relaunch",
+        "another run is driving this work_dir: either one still running "
+        "(its controller is in Cancel jobs: wait for it, or cancel it and "
+        "Relaunch) or one that was killed and left its marker (then none "
+        "of your jobs runs: delete the .run_multi.pid file named here and "
+        "Relaunch)",
     ),
 )
 

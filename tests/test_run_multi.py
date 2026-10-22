@@ -1878,8 +1878,11 @@ def test_a_killed_controller_jobs_marker_is_taken_over(tmp_path, monkeypatch):
 
     # SLURM cannot be asked: refused as before (not taken over blindly).
     monkeypatch.setattr(run_multi, "_slurm_job_running", lambda job: None)
-    with pytest.raises(SystemExit):
+    with pytest.raises(SystemExit) as err:
         run_multi.claim_driver(work, Path("multi.yaml"))
+    # ... naming the job and how to check it.
+    assert "SLURM job 27922159" in str(err.value)
+    assert "squeue -j 27922159" in str(err.value)
 
     # Ended (killed, its marker left): taken over, with this job's id.
     monkeypatch.setattr(run_multi, "_slurm_job_running", lambda job: False)
@@ -2596,3 +2599,30 @@ def test_segment_job_keeps_tiles_staged_before_a_failure(tmp_path, monkeypatch):
         (4, 16, 16),
     )
     assert sorted(done) == [0, 1, 2]
+
+
+def test_slurm_job_state_falls_back_to_scontrol(monkeypatch):
+    """When squeue refuses, scontrol says whether the driver's job lives."""
+    import types
+
+    import run_multi
+
+    replies = {}
+
+    def fake_run(cmd, **kw):
+        out, err, rc = replies[cmd[0]]
+        return types.SimpleNamespace(stdout=out, stderr=err, returncode=rc)
+
+    monkeypatch.setattr(run_multi.subprocess, "run", fake_run)
+    replies["squeue"] = ("", "squeue: unrecognized option '--me'", 1)
+    for answer, want in (
+        (("JobId=5 JobState=RUNNING Reason=None", "", 0), True),
+        (("JobId=5 JobState=CANCELLED Reason=None", "", 0), False),
+        (("", "slurm_load_jobs error: Invalid job id specified", 1), False),
+        (("", "cannot contact the controller", 1), None),
+    ):
+        replies["scontrol"] = answer
+        assert run_multi._slurm_job_running("5") is want, answer
+    replies["squeue"] = ("4\n5\n", "", 0)
+    assert run_multi._slurm_job_running("5") is True
+    assert run_multi._slurm_job_running("6") is False

@@ -1048,11 +1048,25 @@ def _slurm_job_running(job_id: str) -> bool | None:
             text=True,
             timeout=30,
         )
+        if out.returncode == 0:
+            return str(job_id) in {
+                line.strip() for line in out.stdout.splitlines()
+            }
+        # squeue refused (e.g. an old one without --me): ask for the job.
+        out = subprocess.run(
+            ["scontrol", "show", "job", str(job_id)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
     except (OSError, subprocess.SubprocessError):
         return None
-    if out.returncode != 0:
+    if "Invalid job id" in out.stderr + out.stdout:
+        return False  # forgotten by SLURM: long finished
+    state = re.search(r"JobState=(\w+)", out.stdout)
+    if out.returncode != 0 or not state:
         return None
-    return str(job_id) in {line.strip() for line in out.stdout.splitlines()}
+    return state.group(1) in ("PENDING", "RUNNING", "CONFIGURING", "SUSPENDED")
 
 
 def _process_args(pid: int) -> list[str] | None:
@@ -1144,11 +1158,20 @@ def claim_driver(work_dir: str | Path, config: Path) -> Path:
                 )
                 where = host  # taken over below
         if pid and where and where != host:
+            check = (
+                f"squeue -j {job}"
+                if job
+                else f"ssh {where} ps -p {pid}, or squeue --me for a "
+                "controller job on that node"
+            )
             sys.exit(
-                f"[run_multi] ERROR: a run_multi on {where} (pid {pid}, "
-                f"started {other.get('started', '?')}) is driving {work_dir}. "
-                f"If it is not running any more (ssh {where} ps -p {pid}), "
-                f"delete {marker} and start again."
+                f"[run_multi] ERROR: a run_multi on {where} (pid {pid}"
+                + (f", SLURM job {job}" if job else "")
+                + f", started {other.get('started', '?')}) is driving "
+                f"{work_dir}, and SLURM could not be asked whether it still "
+                f"is. If it is still running ({check}), wait for it or "
+                "cancel it; if not, delete "
+                f"{marker} and start again."
             )
     marker.parent.mkdir(parents=True, exist_ok=True)
     marker.write_text(
