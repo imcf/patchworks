@@ -147,13 +147,14 @@ def test_decon_setup_is_built_once_per_worker(fake_decon):
     fn = dog.dog_label_fn(
         1.0, 3.0, 0.5, decon_kwargs={"psf": "psf.tif", "n_iters": 5}
     )
-    for shape in [(4, 8, 8)] * 3 + [(4, 8, 6)] + [(4, 8, 8)]:
+    for shape in [(4, 8, 8)] * 3 + [(4, 8, 30)] + [(4, 8, 8)]:
         fn(np.zeros(shape, "uint16"))
     assert len(fake_decon.named("make_otf")) == 1
+    # Each tile mirrored out to a length cudaDecon keeps (see _pad_for_decon).
     assert [c[1] for c in fake_decon.named("rl_init")] == [
-        (4, 8, 8),
-        (4, 8, 6),
-        (4, 8, 8),
+        (4, 24, 24),
+        (4, 24, 48),
+        (4, 24, 24),
     ]
     assert len(fake_decon.named("rl_decon")) == 5
     assert all(c[2]["n_iters"] == 5 for c in fake_decon.named("rl_decon"))
@@ -322,3 +323,31 @@ def test_connectivity_keeps_a_thin_oblique_object_whole():
     assert len(np.unique(faces[faces > 0])) == 8
     with pytest.raises(ValueError, match="connectivity"):
         dog_label_fn(**kw, connectivity=4)
+
+
+def test_decon_sees_a_mirrored_tile_and_returns_it_whole(fake_decon, caplog):
+    """The tile goes to cudaDecon padded to a length it does not trim, so
+    nothing at the tile's edge is filled with copies; the labels come back
+    at the tile's own shape, from its own voxels."""
+    from patchworks.plugins import dog
+
+    seen = []
+    real = fake_decon.rl_decon
+
+    def rl_decon(img, **kw):
+        seen.append(img.copy())
+        return real(img, **kw)
+
+    fake_decon.rl_decon = rl_decon
+    fn = dog.dog_label_fn(0.5, 2.0, 0.5, decon_kwargs={"psf": "psf.tif"})
+    tile = np.zeros((4, 783, 781), "uint16")
+    tile[:, 400:405, 778:781] = 1000  # an object at the high x edge
+    labels = fn(tile)
+    (img,) = seen
+    assert img.shape == (4, 800, 800)
+    padded, inner = dog._pad_for_decon(tile.astype("float32"))
+    np.testing.assert_array_equal(img[inner], tile)
+    # Mirrored: the object continues past the edge instead of a smear.
+    assert img[0, 410, inner[2].stop] == 1000
+    assert labels.shape == tile.shape and labels[:, 400:405, 778:].all()
+    assert "deconvolution returned" not in caplog.text
