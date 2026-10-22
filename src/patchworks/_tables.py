@@ -24,7 +24,14 @@ from __future__ import annotations
 
 import logging
 import time as _time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import multiprocessing as mp
+import sys
+import warnings
+from concurrent.futures import (
+    ProcessPoolExecutor,
+    ThreadPoolExecutor,
+    as_completed,
+)
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Mapping, Sequence, Union
 
@@ -32,7 +39,7 @@ import numpy as np
 import scipy.ndimage as ndi
 import zarr
 
-from ._chunks import chunk_slices, cpu_allocation
+from ._chunks import chunk_slices, cpu_allocation, safe_worker_count
 from ._progress import PROGRESS_INTERVAL_S as _PROGRESS_INTERVAL_S
 from ._progress import log_progress
 from ._provenance import PROVENANCE_KEY
@@ -114,6 +121,29 @@ def _pairs(ndim: int) -> list[tuple[int, int]]:
     ]
 
 
+def _ids_inverse(values: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """``np.unique(values, return_inverse=True)``, by counting rather than
+    sorting when the ids span a range not much larger than *values*.
+
+    A block's ids are a few hundred of a narrow range, and sorting millions
+    of voxels to find them was half of measuring it.
+
+    Examples
+    --------
+    >>> ids, inv = _ids_inverse(np.array([7, 3, 7, 9]))
+    >>> ids.tolist(), inv.tolist()
+    ([3, 7, 9], [1, 0, 1, 2])
+    """
+    lo, hi = int(values.min()), int(values.max())
+    span = hi - lo + 1
+    if span > max(1 << 22, 4 * values.size):
+        return np.unique(values, return_inverse=True)
+    shifted = values.astype(np.intp) - lo
+    present = np.bincount(shifted, minlength=span) > 0
+    lut = np.cumsum(present) - 1
+    return np.flatnonzero(present) + lo, lut[shifted]
+
+
 def _block_partial(
     lab: np.ndarray,
     offset: tuple[int, ...],
@@ -129,7 +159,7 @@ def _block_partial(
     nz = np.nonzero(lab)
     if not nz[0].size:
         return None
-    ids, inv = np.unique(lab[nz], return_inverse=True)
+    ids, inv = _ids_inverse(lab[nz])
     n = ids.size
     count = np.bincount(inv, minlength=n)
     ndim = lab.ndim
@@ -225,7 +255,17 @@ def tile_partial(
     the tile's position in the full image: centroids and bounding boxes come
     out in its coordinates. ``None`` for a tile without labels.
     """
-    labels = np.asarray(labels)
+    return _slab_partial(np.asarray(labels), offset, [], block_voxels)
+
+
+def _slab_partial(
+    labels: np.ndarray,
+    offset: Sequence[int],
+    images: Sequence[np.ndarray],
+    block_voxels: int = TILE_PARTIAL_BLOCK,
+) -> "dict[str, np.ndarray] | None":
+    """:func:`_block_partial` of *labels*, in slabs of at most
+    *block_voxels* along the first axis, combined."""
     if not labels.any():
         return None
     plane = int(np.prod(labels.shape[1:])) or 1
@@ -233,12 +273,16 @@ def tile_partial(
     off = [int(o) for o in offset]
     parts = []
     for z in range(0, labels.shape[0], step):
-        part = _block_partial(labels[z : z + step], (off[0] + z, *off[1:]), [])
+        part = _block_partial(
+            labels[z : z + step],
+            (off[0] + z, *off[1:]),
+            [img[z : z + step] for img in images],
+        )
         if part is not None:
             parts.append(part)
-    if len(parts) == 1:
-        return parts[0]
-    return _as_partial(_merge(parts, 0))
+    if len(parts) <= 1:
+        return parts[0] if parts else None
+    return _as_partial(_merge(parts, len(images)))
 
 
 def _as_partial(m: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
@@ -303,6 +347,82 @@ def table_columns(
         for ax, sz in zip(axes, size):
             cols[f"centroid_{ax}_um"] = cols[f"centroid_{ax}"] * sz
     return cols
+
+
+# The arrays being measured, for the worker processes (inherited by fork)
+# and threads alike.
+_MEASURING: dict[int, tuple[Any, list[Any]]] = {}
+
+#: Most voxels one measuring block may span when grown to the image's chunks.
+MEASURE_BLOCK_VOXELS = 1 << 27
+
+
+def _chunks_of(arr: Any) -> "tuple[int, ...] | None":
+    """The chunk shape *arr* is stored in (zarr) or computed in (dask)."""
+    size = getattr(arr, "chunksize", None)  # dask
+    if size is None:
+        size = getattr(arr, "chunks", None)
+    if size and all(isinstance(c, (int, np.integer)) for c in size):
+        return tuple(int(c) for c in size)
+    return None
+
+
+def _measure_block_shape(
+    labels: Any, label_chunks: Sequence[int], images: Sequence[Any]
+) -> tuple[int, ...]:
+    """The block to measure at once: the labels' chunk, grown along each
+    axis to cover the images' chunks, so an image chunk is read once
+    rather than once per label chunk it spans (a 126-plane image chunk
+    under 14-plane label chunks was decompressed 9 times). Stays the
+    labels' chunk if that would exceed :data:`MEASURE_BLOCK_VOXELS`.
+
+    Examples
+    --------
+    >>> class A:
+    ...     def __init__(self, shape, chunks):
+    ...         self.shape, self.chunks = shape, chunks
+    >>> _measure_block_shape(
+    ...     A((126, 900, 900), (14, 300, 300)), (14, 300, 300),
+    ...     [A((126, 900, 900), (126, 256, 256))])
+    (126, 300, 300)
+    """
+    shape = tuple(int(c) for c in label_chunks)
+    grown = list(shape)
+    for img in images:
+        chunks = _chunks_of(img)
+        if not chunks or len(chunks) != len(shape):
+            continue
+        for ax, (lc, ic) in enumerate(zip(shape, chunks)):
+            if ic > grown[ax]:
+                grown[ax] = min(-(-ic // lc) * lc, int(labels.shape[ax]))
+    if int(np.prod(grown)) > MEASURE_BLOCK_VOXELS:
+        return shape
+    return tuple(grown)
+
+
+def _measure_worker_init() -> None:
+    """In a forked measuring process: compute dask reads in this process."""
+    try:
+        import dask
+
+        dask.config.set(scheduler="synchronous")
+    except ImportError:
+        pass
+
+
+def _measure_block(
+    key: int, sl: tuple[slice, ...]
+) -> "dict[str, np.ndarray] | None":
+    """The partial sums of one block of the arrays ``_MEASURING[key]``."""
+    labels, images = _MEASURING[key]
+    lab = np.asarray(labels[sl])
+    if not lab.any():
+        return None
+    return _slab_partial(
+        lab,
+        tuple(s.start for s in sl),
+        [np.asarray(img[sl]) for img in images],
+    )
 
 
 def measure_objects(
@@ -370,32 +490,76 @@ def measure_objects(
                 f"{tuple(labels.shape)}: measure at the level the labels "
                 "were segmented at"
             )
+    img_list = list(images.values())
+    chunk_shape = _measure_block_shape(labels, chunk_shape, img_list)
     blocks = list(chunk_slices(labels.shape, chunk_shape))
     nw = n_workers or cpu_allocation()
-    img_list = list(images.values())
-
-    def _one(sl):
-        lab = np.asarray(labels[sl])
-        if not lab.any():
-            return None
-        return _block_partial(
-            lab,
-            tuple(s.start for s in sl),
-            [np.asarray(img[sl]) for img in img_list],
-        )
+    block_nbytes = int(np.prod(chunk_shape)) * (
+        np.dtype(labels.dtype).itemsize
+        + sum(np.dtype(img.dtype).itemsize for img in img_list)
+    )
+    # Each block's slabs add about TILE_PARTIAL_BLOCK * 100 bytes.
+    nw = max(
+        1,
+        min(
+            nw,
+            safe_worker_count(
+                block_nbytes + TILE_PARTIAL_BLOCK * 100, fn_overhead=1
+            ),
+        ),
+    )
+    # The work holds the GIL, so threads barely help: processes where they
+    # can share the arrays by forking (zarr resets its IO thread in a fork).
+    use_processes = (
+        nw > 1
+        and len(blocks) > 1
+        and not isinstance(labels, np.ndarray)
+        and "fork" in mp.get_all_start_methods()
+        and sys.platform.startswith("linux")
+    )
+    logger.info(
+        "measuring %d block(s) of %s with %d %s",
+        len(blocks),
+        "x".join(map(str, chunk_shape)),
+        nw,
+        "process(es)" if use_processes else "thread(s)",
+    )
 
     started = last = _time.monotonic()
     parts = []
-    with ThreadPoolExecutor(max_workers=nw) as ex:
-        futures = [ex.submit(_one, sl) for sl in blocks]
-        for done, fut in enumerate(as_completed(futures), start=1):
-            part = fut.result()
-            if part is not None:
-                parts.append(part)
-            now = _time.monotonic()
-            if now - last >= _PROGRESS_INTERVAL_S or done == len(blocks):
-                log_progress("measure_objects", done, len(blocks), started)
-                last = now
+    key = id(labels) ^ int(_time.monotonic_ns())
+    _MEASURING[key] = (labels, img_list)
+    try:
+        with warnings.catch_warnings():
+            # "multi-threaded, use of fork() may lead to deadlocks", once per
+            # worker as it starts: the children only read arrays, through
+            # zarr's IO thread, which zarr resets in a fork.
+            warnings.simplefilter("ignore", DeprecationWarning)
+            ex = (
+                ProcessPoolExecutor(
+                    max_workers=nw,
+                    mp_context=mp.get_context("fork"),
+                    initializer=_measure_worker_init,
+                )
+                if use_processes
+                else ThreadPoolExecutor(max_workers=nw)
+            )
+            with ex:
+                futures = [ex.submit(_measure_block, key, sl) for sl in blocks]
+                for done, fut in enumerate(as_completed(futures), start=1):
+                    part = fut.result()
+                    if part is not None:
+                        parts.append(part)
+                    now = _time.monotonic()
+                    if now - last >= _PROGRESS_INTERVAL_S or done == len(
+                        blocks
+                    ):
+                        log_progress(
+                            "measure_objects", done, len(blocks), started
+                        )
+                        last = now
+    finally:
+        _MEASURING.pop(key, None)
 
     return table_columns(
         _merge(parts, len(img_list)) if parts else None,

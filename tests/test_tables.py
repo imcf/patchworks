@@ -128,3 +128,39 @@ def test_table_lives_with_its_labels(scene):
     grp.attrs["n_objects"] = 99
     with pytest.raises(StaleTableError):
         read_table(group)
+
+
+def test_measuring_in_processes_matches_one_thread(tmp_path):
+    """Blocks grown to the image's chunks and measured in worker processes
+    (on Linux) give the same table, to the last digit, as one thread."""
+    import dask.array as da
+
+    from patchworks._tables import _measure_block_shape, measure_objects
+
+    rng = np.random.default_rng(1)
+    shape = (12, 96, 96)
+    lab = np.zeros(shape, "int32")
+    for i, (y, x) in enumerate(rng.integers(0, 96, (40, 2)), 1):
+        lab[2:10, max(0, y - 5) : y + 5, max(0, x - 5) : x + 5] = i * 1000
+    labels = zarr.create_array(
+        tmp_path / "l.zarr", shape=shape, chunks=(4, 32, 32), dtype="int32"
+    )
+    labels[:] = lab
+    image = zarr.create_array(
+        tmp_path / "i.zarr", shape=shape, chunks=(12, 32, 32), dtype="uint16"
+    )
+    image[:] = rng.integers(0, 4000, shape).astype("uint16")
+    images = {"ch0": da.from_zarr(image)}
+    assert _measure_block_shape(
+        labels, labels.chunks, list(images.values())
+    ) == (
+        12,
+        32,
+        32,
+    )
+    one = measure_objects(labels, images=images, n_workers=1)
+    many = measure_objects(labels, images=images, n_workers=3)
+    assert one.keys() == many.keys()
+    for name in one:
+        np.testing.assert_array_equal(one[name], many[name], err_msg=name)
+    assert len(one["label"]) == len(np.unique(lab)) - 1
