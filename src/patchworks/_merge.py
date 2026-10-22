@@ -395,9 +395,17 @@ def _pair_stats(a_ids: np.ndarray, b_ids: np.ndarray):
     b = np.asarray(b_ids, dtype=np.int64).ravel()
     both = (a > 0) & (b > 0)
     if both.any():
-        pairs, inter = np.unique(
-            np.stack([a[both], b[both]], axis=1), axis=0, return_counts=True
-        )
+        # One int64 key per pair: a 1-D unique is ~12x faster than unique
+        # over rows, and the scan's threads otherwise wait on each other.
+        a_both, b_both = a[both], b[both]
+        base = int(b_both.max()) + 1
+        if int(a_both.max()) < np.iinfo(np.int64).max // base:
+            keys, inter = np.unique(a_both * base + b_both, return_counts=True)
+            pairs = np.stack([keys // base, keys % base], axis=1)
+        else:
+            pairs, inter = np.unique(
+                np.stack([a_both, b_both], axis=1), axis=0, return_counts=True
+            )
     else:
         pairs = np.empty((0, 2), dtype=np.int64)
         inter = np.empty(0, dtype=np.int64)
@@ -457,12 +465,14 @@ def _iou_face_pairs(
     return np.asarray(keep, dtype=np.int64).reshape(-1, 2)
 
 
-def _load_halo(halo_dir: str, index: int) -> dict[str, np.ndarray]:
+def _load_halo(halo_dir: str, index: int, key: str) -> "np.ndarray | None":
+    """Strip *key* (``"<axis>+"`` / ``"<axis>-"``) of tile *index*'s halo
+    file, or None. Only that member is decompressed, not every side's."""
     path = os.path.join(halo_dir, f"{int(index)}.npz")
     if not os.path.exists(path):
-        return {}
+        return None
     with np.load(path) as npz:
-        return {k: npz[k] for k in npz.files if k != "n"}
+        return npz[key] if key in npz.files else None
 
 
 def _scan_iou_pairs(
@@ -474,6 +484,7 @@ def _scan_iou_pairs(
     threshold: float,
     n_workers: int = 1,
     progress: bool = False,
+    has_labels: "np.ndarray | None" = None,
 ) -> np.ndarray:
     """IoU-matched label pairs across every chunk (= tile) boundary.
 
@@ -506,6 +517,10 @@ def _scan_iou_pairs(
         Threads to scan with.
     progress : bool
         Log progress.
+    has_labels : np.ndarray of bool, optional
+        Per tile, whether it holds any label. A face with an empty tile on
+        either side is skipped: its halo strips are empty too (they keep
+        only the core's ids), so nothing there can match.
 
     Returns
     -------
@@ -524,7 +539,12 @@ def _scan_iou_pairs(
             if ga[ax] + 1 < grid[ax]:
                 gb = list(ga)
                 gb[ax] += 1
-                tasks.append((ia, int(np.ravel_multi_index(gb, grid)), ax))
+                ib = int(np.ravel_multi_index(gb, grid))
+                if has_labels is not None and not (
+                    has_labels[ia] and has_labels[ib]
+                ):
+                    continue
+                tasks.append((ia, ib, ax))
 
     def _one(task) -> np.ndarray:
         ia, ib, ax = task
@@ -536,8 +556,8 @@ def _scan_iou_pairs(
             ids = np.asarray(ids, dtype=np.int64)
             return np.where(ids > 0, ids + off, 0)
 
-        hi = _load_halo(halo_dir, ia).get(f"{ax}+")  # A's view beyond pos
-        lo = _load_halo(halo_dir, ib).get(f"{ax}-")  # B's view before pos
+        hi = _load_halo(halo_dir, ia, f"{ax}+")  # A's view beyond pos
+        lo = _load_halo(halo_dir, ib, f"{ax}-")  # B's view before pos
         windows = []
         if hi is not None:
             region = list(sa)
@@ -657,7 +677,12 @@ def _build_relabel_lut(pairs: np.ndarray, max_label: int) -> np.ndarray:
 
 
 def _create_zarr_label_array(
-    group: zarr.Group, name: str, shape: tuple, chunks: tuple, dtype=np.int32
+    group: zarr.Group,
+    name: str,
+    shape: tuple,
+    chunks: tuple,
+    dtype=np.int32,
+    shards: "tuple | None" = None,
 ) -> zarr.Array:
     """Create (replacing any existing) a label array in *group*.
 
@@ -674,6 +699,9 @@ def _create_zarr_label_array(
     dtype : data-type, optional
         Label dtype (default ``int32``). Matched to the staged store so the
         merge keeps wide (block-encoded) ids intact before they are compacted.
+    shards : tuple, optional
+        Shard shape (a multiple of *chunks*). Zarr v3 only: a v2 group gets
+        plain chunks.
 
     Returns
     -------
@@ -684,6 +712,8 @@ def _create_zarr_label_array(
     if name in group:
         del group[name]
     kwargs = zarr_compressor_kwargs(group.metadata.zarr_format)
+    if shards is not None and group.metadata.zarr_format >= 3:
+        kwargs["shards"] = tuple(int(x) for x in shards)
     return group.create_array(
         name, shape=shape, chunks=chunks, dtype=dtype, **kwargs
     )
@@ -1027,6 +1057,7 @@ def zarr_native_merge(
     label_counts: "Mapping[int, int] | Sequence[int] | None" = None,
     sequential: bool = False,
     output_chunks: "Sequence[int] | None" = None,
+    shard_output: bool = False,
     halo_dir: "str | Path | None" = None,
     iou_threshold: float = 0.5,
     connectivity: int = 1,
@@ -1075,6 +1106,8 @@ def zarr_native_merge(
         Chunking for the merged store. Must divide the staged chunk shape, so
         each worker's write still covers whole chunks. ``None`` mirrors the
         staged chunking. Use :func:`capped_output_chunks` to derive it.
+    shard_output : bool
+        Shards of one staged tile each; see :func:`merge_tile_labels`.
     halo_dir : str or Path, optional
         Halo strips saved by :func:`patchworks.stage_tile` (``halo_dir=``).
         Given, labels are joined across a boundary only when the two tiles'
@@ -1167,6 +1200,7 @@ def zarr_native_merge(
             iou_threshold,
             n_workers=n_workers,
             progress=show_progress,
+            has_labels=has_labels,
         )
     else:
         logger.info("zarr_native_merge: scanning %d boundary faces…", n_faces)
@@ -1275,6 +1309,7 @@ def zarr_native_merge(
             shape,
             out_chunks,
             dtype=_label_dtype(arr.dtype, max_label),
+            shards=tuple(chunk_shape) if shard_output else None,
         )
 
     # Row-major, matching spatial_tiles' order -- so chunk i is tile i and the
@@ -1386,6 +1421,7 @@ def merge_tile_labels(
     return_count: bool = False,
     label_counts: "Mapping[int, int] | Sequence[int] | None" = None,
     output_chunks: "Sequence[int] | None" = None,
+    shard_output: bool = False,
     halo_dir: "str | Path | None" = None,
     iou_threshold: float = 0.5,
     connectivity: int = 1,
@@ -1444,6 +1480,11 @@ def merge_tile_labels(
         Lets the merge write straight into a store you will keep (e.g. an
         OME-ZARR label group's level 0) instead of a scratch store that then
         has to be copied. See :func:`capped_output_chunks`.
+    shard_output:
+        Store the output in shards of one staged tile each (zarr v3; the
+        chunks above are inside them). Each relabel worker writes one tile,
+        so it writes whole shards, and the result is sharded with no second
+        pass over it. Ignored when relabeling in place.
     halo_dir:
         IoU stitching: the halo strips :func:`patchworks.stage_tile` saved
         (its ``halo_dir=``). Labels are then joined across a tile boundary
@@ -1581,6 +1622,7 @@ def merge_tile_labels(
             label_counts=label_counts,
             sequential=sequential_labels,
             output_chunks=output_chunks,
+            shard_output=shard_output,
             halo_dir=halo_dir,
             iou_threshold=iou_threshold,
             connectivity=connectivity,

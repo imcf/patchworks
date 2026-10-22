@@ -811,6 +811,124 @@ def _stream_strided_level(
         log_progress(label, total, total, started)
 
 
+def _stream_sharded_level(
+    src: "zarr.Array",
+    dst: "zarr.Array",
+    strides: tuple[int, ...],
+    label: str = "level",
+    progress: bool = True,
+    method: str = "nearest",
+) -> None:
+    """Write the sharded *dst* as the downsampled *src*, shard by shard.
+
+    A shard must be written whole by one writer. Each shard's output chunks
+    are computed in parallel -- each from the source region it maps onto --
+    gathered, and the shard written in one go while the next one is being
+    computed. That replaces a dask graph which, for an odd source chunk
+    (839 -> rechunked to 838 to start blocks on a stride, then to the output
+    chunks, then to the shards), grew to ~260k tasks for one level.
+
+    A chunk whose source region holds no non-zero voxel is not computed, and
+    a shard of only such chunks not written: it reads back as the fill value
+    0, which is also what downsampling zeros gives. Neither decimation nor
+    a block mean or mode needs a halo, and every region starts on a stride
+    boundary, so the result is that of downsampling the whole level at once.
+    """
+    from concurrent.futures import Future
+
+    from .._chunks import cpu_allocation, safe_worker_count
+
+    shards = tuple(dst.shards or dst.chunks)
+    chunks = tuple(dst.chunks)
+    grid = [-(-s // c) for s, c in zip(dst.shape, shards)]
+    itemsize = np.dtype(src.dtype).itemsize
+    region_nbytes = (
+        int(np.prod([c * st for c, st in zip(chunks, strides)])) * itemsize
+    )
+    shard_nbytes = int(np.prod(shards)) * np.dtype(dst.dtype).itemsize
+    # Two shards held at most (one being written, one being filled).
+    n_workers = max(
+        1,
+        min(
+            cpu_allocation(),
+            safe_worker_count(region_nbytes, fn_overhead=3),
+        ),
+    )
+
+    def _chunk(out_sl: tuple[slice, ...]) -> "np.ndarray | None":
+        src_sl = tuple(
+            slice(o.start * st, min(o.stop * st, s))
+            for o, st, s in zip(out_sl, strides, src.shape)
+        )
+        region = np.asarray(src[src_sl])
+        if not region.any():
+            return None
+        return _downsample(region, strides, method)
+
+    indices = list(_iproduct(*[range(g) for g in grid]))
+    total = len(indices)
+    if progress:
+        logger.info(
+            "writing %s: %d shard(s) of %s (%.0f MB) with %d worker(s), "
+            "empty regions skipped",
+            label,
+            total,
+            "x".join(map(str, shards)),
+            shard_nbytes / 1e6,
+            n_workers,
+        )
+    started = last = _time.monotonic()
+    written = 0
+    pending: "Future | None" = None
+    with (
+        ThreadPoolExecutor(max_workers=n_workers) as pool,
+        ThreadPoolExecutor(max_workers=1) as writer,
+    ):
+        for done, idx in enumerate(indices, 1):
+            shard_sl = tuple(
+                slice(i * c, min((i + 1) * c, s))
+                for i, c, s in zip(idx, shards, dst.shape)
+            )
+            inner = [
+                tuple(
+                    slice(o.start + j * c, min(o.start + (j + 1) * c, o.stop))
+                    for o, j, c in zip(shard_sl, jdx, chunks)
+                )
+                for jdx in _iproduct(
+                    *[
+                        range(-(-(o.stop - o.start) // c))
+                        for o, c in zip(shard_sl, chunks)
+                    ]
+                )
+            ]
+            parts = list(pool.map(_chunk, inner))
+            if any(p is not None for p in parts):
+                buf = np.zeros(
+                    tuple(o.stop - o.start for o in shard_sl), dtype=dst.dtype
+                )
+                for sl, part in zip(inner, parts):
+                    if part is not None:
+                        buf[
+                            tuple(
+                                slice(c.start - o.start, c.stop - o.start)
+                                for c, o in zip(sl, shard_sl)
+                            )
+                        ] = part
+                if pending is not None:
+                    pending.result()
+                pending = writer.submit(dst.__setitem__, shard_sl, buf)
+                written += 1
+            now = _time.monotonic()
+            if progress and now - last >= _PROGRESS_INTERVAL_S:
+                last = now
+                log_progress(label, done, total, started)
+        if pending is not None:
+            pending.result()
+    if progress:
+        log_progress(label, total, total, started)
+        logger.info("%s: %d of %d shard(s) hold labels", label, written, total)
+
+
 # One chunk is one file without sharding. A shared cluster filesystem starts
 # to hurt well before a million of them, and the cost lands on every later
 # read too, not just the write.
@@ -1494,10 +1612,47 @@ def _write_pyramid(
         if min(next_shape) < 1:
             logger.info("stopping pyramid at level %d (next too small)", i)
             break
-        if shard or chunks:
-            # Sharding needs whole shards written atomically, and an explicit
-            # chunking may not line up with the source chunks -- both want the
-            # dask path.
+        grp = _open_group(group_path)
+        sh = (
+            _shard_for(
+                shard,
+                _level_chunks(
+                    tuple(grp[prev_name].chunks), strides, axes, next_shape
+                ),
+                next_shape,
+                grp[prev_name].dtype,
+                _group_zarr_format(grp),
+            )
+            if shard and not chunks
+            else None
+        )
+        if sh is not None:
+            # Sharded: one task per output shard, written whole.
+            src_arr = grp[prev_name]
+            out_chunks = _level_chunks(
+                tuple(src_arr.chunks), strides, axes, next_shape
+            )
+            if str(i) in grp:
+                del grp[str(i)]
+            dst_arr = grp.create_array(
+                str(i),
+                shape=next_shape,
+                chunks=out_chunks,
+                shards=sh,
+                dtype=src_arr.dtype,
+                **zarr_compressor_kwargs(_group_zarr_format(grp)),
+            )
+            _stream_sharded_level(
+                src_arr,
+                dst_arr,
+                strides,
+                label=f"{Path(group_path).name}/{i}",
+                progress=progress,
+                method=downsample,
+            )
+        elif shard or chunks:
+            # An explicit chunking may not line up with the source chunks:
+            # the dask path.
             src = da.from_zarr(group_path, component=prev_name)
             if downsample == "nearest":
                 nxt = src[tuple(slice(None, None, st) for st in strides)]

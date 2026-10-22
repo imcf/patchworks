@@ -23,6 +23,7 @@ from typing import Any, Callable
 import numpy as np
 
 from .._gpu import retry_on_oom
+from ._cellpose_defaults import applied_defaults as _applied_defaults
 
 logger = logging.getLogger(__name__)
 
@@ -240,22 +241,12 @@ def cellpose_fn(
 
 
 def applied_defaults(do_3D: bool, settings: dict[str, Any]) -> dict[str, Any]:
-    """What :func:`cellpose_fn` fills in that *settings* left open.
-
-    ``fragments`` (``"auto"`` or absent: 0.1 in 3-D with a ``diameter``,
-    else off: without one, a cell's size is a guess) and, in 3-D where the
-    installed Cellpose takes it, ``flow3D_smooth=1``. Used by
-    ``cellpose_fn`` itself and by the workflow to record in the labels'
-    provenance what actually ran.
-    """
-    out: dict[str, Any] = {}
-    fragments = settings.get("fragments", "auto")
-    if fragments == "auto":
-        fragments = 0.1 if do_3D and settings.get("diameter") else None
-    out["fragments"] = fragments
-    if do_3D and "flow3D_smooth" not in settings and _accepts("flow3D_smooth"):
-        out["flow3D_smooth"] = 1
-    return out
+    """What :func:`cellpose_fn` fills in that *settings* left open; see
+    :func:`patchworks.plugins._cellpose_defaults.applied_defaults`, which
+    the workflow uses to record it without importing Cellpose."""
+    return _applied_defaults(
+        do_3D, settings, takes_smooth=_accepts("flow3D_smooth")
+    )
 
 
 def _accepts(name: str) -> bool:

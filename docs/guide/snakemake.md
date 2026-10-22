@@ -235,7 +235,9 @@ out empty (`seams.json` lists cells ending against nothing), lower
 
 **Fewer files** — `shard: true` packs chunks into shards: far fewer files
 on a filesystem that dislikes many small ones. `shard_labels: true` also
-packs label level 0 after the merge (one extra pass). Choose before
+packs label level 0, one tile per shard, as the merge writes it (no extra
+pass); a list (`shard_labels: [126, 2048, 2048]`) sets another shard shape,
+at the cost of a second pass over level 0. Choose before
 converting, or repack a finished store with `pixi run reshard --store
 image.zarr`.
 

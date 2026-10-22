@@ -797,3 +797,41 @@ def test_iou_does_not_glue_two_cells_through_one_blob():
     b[..., :12] = 2
     b[..., 12:] = 3
     assert _iou_face_pairs([(a, b)], 0.5).tolist() == [[1, 2]]
+
+
+def test_merge_can_write_one_shard_per_tile(tmp_path):
+    """shard_output: the same labels, stored in shards of one tile each,
+    written whole by the worker that relabels that tile (no reshard pass)."""
+    img = np.zeros((8, 48), "uint16")
+    img[1:4, 4:12] = 500
+    img[2:6, 14:26] = 500
+    img[1:7, 30:47] = 500
+    tile = (8, 16)
+    results = {}
+    for shard in (False, True):
+        stage = str(tmp_path / f"stage_{shard}.zarr")
+        create_stage(stage, img.shape, tile)
+        counts = {
+            i: stage_tile(img, _fn, stage, i, tile_shape=tile, overlap=2)
+            for i in range(len(spatial_tiles(img.shape, tile)))
+        }
+        out = str(tmp_path / f"out_{shard}.zarr")
+        merge_tile_labels(
+            stage,
+            write_to=out,
+            input_component="staged",
+            output_component="labels",
+            sequential_labels=True,
+            label_counts=counts,
+            output_chunks=(4, 8),
+            shard_output=shard,
+            n_workers=2,
+        )
+        arr = zarr.open_group(out, mode="r")["labels"]
+        results[shard] = arr[:]
+        if shard:
+            assert arr.shards == tile and arr.chunks == (4, 8)
+        else:
+            assert arr.shards is None
+    np.testing.assert_array_equal(results[True], results[False])
+    assert set(np.unique(results[True]).tolist()) == {0, 1, 2, 3}
