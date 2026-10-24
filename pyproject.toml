@@ -147,7 +147,7 @@ dev = [
     "ruff==0.15.18",
     "mypy>=1.10",
 ]
-docs = ["mkdocs-material>=9.0", "mkdocstrings[python]>=0.24"]
+docs = ["zensical>=0.0.72", "mkdocstrings[python]>=0.24"]
 all = [
     "patchworks[io,gpu,distributed,bioio,imaris,napari]",
     "psutil",

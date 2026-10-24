@@ -19,3 +19,4 @@ workflow/config/local/
 workflow/config/templates/
 workflow/config/launcher_*
 workflow/.streamlit_launcher_logs/
+.cache/

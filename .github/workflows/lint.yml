@@ -47,10 +47,10 @@ jobs:
           cache: pip
 
       - name: Install docs dependencies
-        run: pip install "mkdocs-material>=9.0" "mkdocstrings[python]>=0.24" .
+        run: pip install "zensical>=0.0.72" "mkdocstrings[python]>=0.24" .
 
-      - name: mkdocs build --strict
-        run: mkdocs build --strict
+      - name: zensical build --strict
+        run: zensical build --strict
 
   mypy:
     runs-on: ubuntu-latest

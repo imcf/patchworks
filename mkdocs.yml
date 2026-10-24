@@ -1,3 +1,5 @@
+# Built with Zensical (`zensical build`), which reads this file as it is.
+# Material for MkDocs / MkDocs are no longer needed.
 site_name: patchworks
 repo_name: imcf/patchworks
 repo_url: https://github.com/imcf/patchworks
