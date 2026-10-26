@@ -179,10 +179,12 @@ HELP = {
     "dog_high_sigma": "The wide blur, larger than low_sigma: the background "
     "removed. About 2-5 times low_sigma.\n\n"
     "Example: 3",
-    "dog_threshold": "What counts as signal in the DoG image, in the image's "
-    "own intensity units (not 0-1). Too low: noise becomes objects; too "
+    "dog_threshold": "What counts as signal in the DoG image, as a fraction "
+    "of the channel's intensity range (its 1st to 99.9th percentile, "
+    "measured once for the image), so it means the same for 8- and 16-bit "
+    "images. Too low: background texture joins into huge objects; too "
     "high: dim ones are lost. Check with *Try it on a GPU*.\n\n"
-    "Example: 50 for a 16-bit image with spots ~300 above background",
+    "Example: 0.05",
     "dog_sigma_units": "**px**: sigmas in pixels on every axis, so z (often "
     "a coarser step) is blurred further. **um**: in µm, the same physical "
     "blur along z as across, from the image's calibration.",

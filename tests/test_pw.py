@@ -736,6 +736,11 @@ def test_image_wide_kwargs_resolve_per_tile_otsu_once(tmp_path):
         "foreground",
         "intensity_stats",
     }
+    # DoG: its threshold is a fraction of the channel's range.
+    dog = {**cfg, "nuclei_channel": None}
+    dog["custom"] = {"module": "patchworks.plugins.dog", "kwargs": {}}
+    low, high = image_wide_kwargs(dog, str(store))["intensity_range"]
+    assert 0 <= low < high
 
 
 def test_build_fn_applies_the_image_wide_kwargs(monkeypatch):
