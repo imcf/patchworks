@@ -443,10 +443,34 @@ def _auto_overlap(cfg, ndim: int) -> tuple:
             )
     except (OSError, ValueError, KeyError):
         pass
+    cp = cfg.get("cellpose") or {}
+    if cfg.get("method", "cellpose") == "cellpose" and cp.get("diameter"):
+        # One object across, in y and x; z shortened by the anisotropy.
+        d = float(cp["diameter"])
+        z = d / float(cp.get("anisotropy") or _anisotropy(cfg) or 1.0)
+        per_axis = [d] * ndim if ndim < 3 else [z] + [d] * (ndim - 1)
+        overlap = [max(1, int(np.ceil(1.1 * v))) for v in per_axis]
+        return overlap, f"cellpose.diameter {d:g}"
     return OVERLAP_FALLBACK, (
         f"no measurement yet ({OVERLAP_FALLBACK}): try a few tiles (check "
         "--sample, the launcher's Try it on a GPU) to size it from the objects"
     )
+
+
+def _anisotropy(cfg) -> float | None:
+    """z step over pixel size, from the converted image's calibration."""
+    try:
+        from patchworks.plugins.cellpose import cellpose_anisotropy
+        from patchworks.plugins.ome_zarr import read_pixel_size
+
+        return cellpose_anisotropy(
+            read_pixel_size(
+                str(Path(cfg["work_dir"]) / "image.zarr"),
+                level=int(cfg.get("level", 0)),
+            )
+        )
+    except Exception:  # noqa: BLE001 - no image yet: no anisotropy
+        return None
 
 
 def _job_end_time() -> float | None:

@@ -349,3 +349,23 @@ def test_channel_pictures_of_a_region(tmp_path, monkeypatch, capsys):
     )
     with pytest.raises(SystemExit, match="fractions"):
         channels.main()
+
+
+def test_overlap_auto_from_the_cellpose_diameter(tmp_path):
+    """Nothing measured yet (a first run, or labels deleted to redo them):
+    the configured diameter sizes the halo, not a flat 30 that is half of
+    a 60-pixel cell."""
+    import _pw
+
+    _converted(tmp_path / "w")
+    cfg = {
+        "work_dir": str(tmp_path / "w"),
+        "label_name": "cells",
+        "overlap": "auto",
+        "cellpose": {"model": "cpsam", "diameter": 60, "anisotropy": 2},
+    }
+    spec, source = _pw.resolve_overlap(cfg, 3)
+    assert spec == [33, 66, 66] and "diameter" in source
+    # The halo still fits the tile.
+    spec, _ = _pw.resolve_overlap(cfg, 3, (126, 100, 100))
+    assert spec == [33, 50, 50]
