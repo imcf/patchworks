@@ -1843,11 +1843,22 @@ def test_one_run_multi_per_work_dir(tmp_path, monkeypatch):
     run_multi.claim_driver(work, Path("multi.yaml"))
     assert json.loads(marker.read_text())["pid"] == os.getpid()
 
-    # A driver on another login node cannot be checked from here: refused
-    marker.write_text(json.dumps({**mine, "pid": 4242, "host": "login99"}))
+    # A driver on another login node is asked over ssh: still running,
+    # refused; unreachable, refused, naming the marker; gone, taken over.
+    other = {**mine, "pid": 4242, "host": "login99"}
+    marker.write_text(json.dumps(other))
+    monkeypatch.setattr(run_multi, "_remote_driver_alive", lambda h, p: True)
+    with pytest.raises(SystemExit) as err:
+        run_multi.claim_driver(work, Path("multi.yaml"))
+    assert "ssh login99 kill 4242" in str(err.value)
+    monkeypatch.setattr(run_multi, "_remote_driver_alive", lambda h, p: None)
     with pytest.raises(SystemExit) as err:
         run_multi.claim_driver(work, Path("multi.yaml"))
     assert "login99" in str(err.value) and str(marker) in str(err.value)
+    assert "ssh to login99 could not tell" in str(err.value)
+    monkeypatch.setattr(run_multi, "_remote_driver_alive", lambda h, p: False)
+    run_multi.claim_driver(work, Path("multi.yaml"))
+    assert json.loads(marker.read_text())["host"] == socket.gethostname()
 
 
 def test_a_killed_controller_jobs_marker_is_taken_over(tmp_path, monkeypatch):
