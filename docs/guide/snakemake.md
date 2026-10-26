@@ -205,7 +205,8 @@ full-resolution samples of the tiles to segment, and scales every tile with
 it. `normalize: "tile"` restores Cellpose's per-tile behaviour. The same
 goes for PlantSeg, which standardizes with the image's mean and standard
 deviation, and for the membrane plugins' `foreground: "otsu"` and nuclei
-threshold: one Otsu threshold for the whole image, not one per tile. The values used
+threshold: one Otsu threshold for the whole image, not one per tile; and for
+the DoG threshold, a fraction of the image's intensity range. The values used
 are in the labels' provenance.
 
 **Fragments in 3-D** — 3-D Cellpose often splits a cell into a body and

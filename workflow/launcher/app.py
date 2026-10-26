@@ -1084,7 +1084,7 @@ def segmentation_form(
             "high_sigma", min_value=0.0, **_init(f"{k}dh", value=3.0)
         )
         v["dog_threshold"] = c3.number_input(
-            "threshold", format="%.4f", **_init(f"{k}dt", value=0.02)
+            "threshold", format="%.4f", **_init(f"{k}dt", value=0.05)
         )
         v["dog_sigma_units"] = c4.selectbox(
             "sigma_units",

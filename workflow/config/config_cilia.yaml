@@ -9,15 +9,17 @@ custom:
   kwargs:
     low_sigma: 1.0 # pixels
     high_sigma: 3.0
-    threshold: 0.02
+    threshold: 0.05 # fraction of the channel's intensity range
     connectivity: 3 # keep oblique cilia whole
     # sigma_units: "px" # or "um": sigmas in micrometres
     # use_gpu: false    # blur and label on the GPU (needs cupy)
+    # intensity_range: null # [low, high] the threshold is a fraction of; null: measured
     decon_kwargs: # remove to skip deconvolution; voxel sizes come from the image
       psf: "/path/to/psf.tif"
       wavelength: 525
       na: 1.4
       nimm: 1.515
+max_volume: 10 # µm³: a cilium is ~1; larger is texture joined up
 
 # ---- every other setting of this segmentation, with its default ----------
 # stitch: "touch"         # join pieces touching across a seam; "iou": only where both tiles agree
@@ -34,7 +36,6 @@ custom:
 # dilate: 0               # grow labels by N pixels
 # dilate_gpu: false
 # min_volume: null        # µm³: drop smaller objects
-# max_volume: null        # µm³: drop larger objects
 # sequential_labels: true # number objects 1..N
 # object_table: true      # one row per object, stored with the labels
 # table_channels: []      # add mean/std intensity of these channels

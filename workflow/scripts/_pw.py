@@ -640,7 +640,28 @@ def plan_run(cfg, sample: int = 0, preview: str | None = None) -> dict:
         f"trying {len(pick)} tile(s) of {list(tile_shape)} (+ overlap "
         f"{list(overlap)}) on {_device()}; the first also loads the model"
     )
-    fn = build_fn(cfg)
+    # The same image-wide range and thresholds the run measures in prepare:
+    # without them the try shows per-tile contrast, or a DoG threshold in
+    # raw counts, and judges settings the run would not use.
+    regions = None if occupied is None else [tiles[i] for i in occupied]
+    image_range = None
+    if uses_image_range(cfg):
+        from patchworks import intensity_range
+
+        chans = [cfg["channel"]]
+        if cfg.get("nuclei_channel") is not None:
+            chans.append(cfg["nuclei_channel"])
+        image_range = [
+            list(r)
+            for r in intensity_range(
+                store, chans, level=cfg["level"], regions=regions
+            )
+        ]
+    fn = build_fn(
+        cfg,
+        intensity_range=image_range,
+        kwargs_overrides=image_wide_kwargs(cfg, store, regions),
+    )
     times = []
     labels = None
     extents = []
@@ -1490,6 +1511,7 @@ def uses_image_range(cfg) -> bool:
 IMAGE_WIDE_PLUGINS = (
     "patchworks.plugins.watershed",
     "patchworks.plugins.plantseg",
+    "patchworks.plugins.dog",
 )
 
 
@@ -1498,7 +1520,8 @@ def image_wide_kwargs(cfg, store, regions=None) -> dict:
 
     Decided per tile, they change at every seam with the tile's content:
     ``foreground: "otsu"`` and an unset ``nuclei_threshold`` (Otsu of the
-    tile), and PlantSeg's standardization (the tile's mean and std). Each is
+    tile), PlantSeg's standardization (the tile's mean and std), and the
+    scale of the DoG threshold (the channel's intensity range). Each is
     measured on full-resolution crops of the tiles being segmented instead.
 
     Returns
@@ -1512,7 +1535,11 @@ def image_wide_kwargs(cfg, store, regions=None) -> dict:
 
     import numpy as np
 
-    from patchworks._intensity import intensity_stats, otsu_threshold
+    from patchworks._intensity import (
+        intensity_range,
+        intensity_stats,
+        otsu_threshold,
+    )
 
     spec = cfg.get("custom") or {}
     if (
@@ -1570,6 +1597,12 @@ def image_wide_kwargs(cfg, store, regions=None) -> dict:
     if "intensity_stats" in params and value("intensity_stats") is None:
         out["intensity_stats"] = list(
             intensity_stats(store, cfg["channel"], **sampling)
+        )
+    if "intensity_range" in params and value("intensity_range") is None:
+        out["intensity_range"] = list(
+            intensity_range(
+                store, cfg["channel"], percentiles=(1.0, 99.9), **sampling
+            )[0]
         )
     return out
 

@@ -351,3 +351,29 @@ def test_decon_sees_a_mirrored_tile_and_returns_it_whole(fake_decon, caplog):
     assert img[0, 410, inner[2].stop] == 1000
     assert labels.shape == tile.shape and labels[:, 400:405, 778:].all()
     assert "deconvolution returned" not in caplog.text
+
+
+def test_threshold_is_a_fraction_of_the_intensity_range(caplog):
+    """Under a raw threshold of 0.02, a 16-bit image's faint membrane
+    sheets become objects; as a fraction of the image's range they are
+    background, and the cilium alone is found."""
+    from patchworks.plugins import dog
+    from patchworks.plugins.dog import dog_label_fn
+
+    dog._dense_warned.clear()
+    rng = np.random.default_rng(0)
+    img = 400 + rng.normal(0, 20, (12, 64, 64))
+    img[:, ::8, :] += 150  # faint membrane sheets
+    img[4:8, 30, 20:44] += 3000  # one cilium
+    img = img.astype("uint16")
+    kw = dict(low_sigma=1.0, high_sigma=3.0, threshold=0.02, connectivity=3)
+
+    with caplog.at_level("WARNING", logger="patchworks.plugins.dog"):
+        raw = dog_label_fn(**kw)(img)
+    assert np.bincount(raw.ravel())[1:].max() > 2000  # a whole sheet
+    assert "above the threshold" in caplog.text
+
+    kw["threshold"] = 0.05
+    scaled = dog_label_fn(**kw, intensity_range=(380.0, 3400.0))(img)
+    assert scaled.max() == 1
+    assert scaled[6, 30, 32] == 1

@@ -267,7 +267,7 @@ def build_config(v: dict[str, Any]) -> dict[str, Any]:
         kwargs: dict[str, Any] = {
             "low_sigma": v.get("dog_low_sigma", 1.0),
             "high_sigma": v.get("dog_high_sigma", 3.0),
-            "threshold": v.get("dog_threshold", 0.02),
+            "threshold": v.get("dog_threshold", 0.05),
             "sigma_units": v.get("dog_sigma_units", "px"),
             "use_gpu": v.get("dog_use_gpu", False),
         }
@@ -2219,7 +2219,7 @@ def segmentation_state(cfg: dict[str, Any], k: str = "") -> dict[str, Any]:
         kw = dict(custom.get("kwargs") or {})
         v["dl"] = float(kw.get("low_sigma", 1.0))
         v["dh"] = float(kw.get("high_sigma", 3.0))
-        v["dt"] = float(kw.get("threshold", 0.02))
+        v["dt"] = float(kw.get("threshold", 0.05))
         v["du"] = kw.get("sigma_units", "px")
         v["dg"] = bool(kw.get("use_gpu", False))
         decon = kw.get("decon_kwargs") or {}

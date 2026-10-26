@@ -148,6 +148,7 @@ def dog_label_fn(
     voxel_size: dict[str, float] | None = None,
     sigma_units: str = "px",
     connectivity: int = 1,
+    intensity_range: "tuple[float, float] | None" = None,
 ) -> Callable[[np.ndarray], np.ndarray]:
     """Return a ready-to-use DoG labeler for ``tile_process``.
 
@@ -159,7 +160,9 @@ def dog_label_fn(
         which on an anisotropic stack blurs z far further (physically) than
         x/y; see *sigma_units*.
     threshold:
-        Binary threshold applied to the DoG image (``dog > threshold``).
+        Binary threshold applied to the DoG image (``dog > threshold``):
+        in the image's intensity units, or, with *intensity_range*, as a
+        fraction of that range.
     use_gpu:
         Run gaussian_filter + label on GPU via cupy/cupyx instead of scipy.
         Independent of ``decon_kwargs`` — pycudadecon always needs a CUDA
@@ -194,6 +197,15 @@ def dog_label_fn(
         touch along edges or corners, and breaks into fragments at 1. The
         merge must join tiles with the same value: the workflow passes it on
         by itself; from the API, give ``merge_tile_labels(connectivity=)``.
+
+    intensity_range:
+        ``(low, high)`` of the whole image's channel, from
+        :func:`patchworks.intensity_range`; the workflow measures it (1st
+        and 99.9th percentiles). The DoG is divided by ``high - low``, so
+        *threshold* means the same on an 8-bit or a 16-bit image, and on
+        every tile. Without it a threshold such as 0.02 is in raw counts,
+        which on a 16-bit image keeps nearly every voxel brighter than its
+        surroundings and joins them into a few huge objects.
 
     Returns
     -------
@@ -242,7 +254,18 @@ def dog_label_fn(
         "use_gpu": use_gpu,
         "decon_kwargs": decon_kwargs,
         "connectivity": connectivity,
+        "scale": 1.0,
     }
+    if intensity_range is not None:
+        low, high = (float(v) for v in intensity_range)
+        cfg["scale"] = high - low if high > low else 1.0
+        logger.info(
+            "DoG threshold %g of the intensity range %g..%g: %g in counts",
+            threshold,
+            low,
+            high,
+            threshold * cfg["scale"],
+        )
     return partial(_run, dog_dict=cfg)
 
 
@@ -615,8 +638,9 @@ def _segment_once(
         )
         dog_image = low_blur - high_blur
         low_blur = high_blur = None  # peak is here; drop what's already used
-        mask = dog_image > dog_dict["threshold"]
+        mask = dog_image > dog_dict["threshold"] * dog_dict.get("scale", 1.0)
         dog_image = None
+        _warn_if_dense(mask)
         # Up to the tile's own dimensions (a 2-D tile caps at 2).
         conn = min(int(dog_dict.get("connectivity", 1)), mask.ndim)
         structure = generate_binary_structure(mask.ndim, conn)
@@ -632,6 +656,27 @@ def _segment_once(
             del low_blur, high_blur, dog_image, mask, labels, img
             free_gpu_caches()
     return out
+
+
+# Spots, cilia and fibres fill a small part of a tile; far more above the
+# threshold means it is picking up background texture.
+DENSE_FRACTION = 0.05
+_dense_warned: list[bool] = []
+
+
+def _warn_if_dense(mask) -> None:
+    """Warn once per process when the mask covers much of a tile."""
+    if _dense_warned:
+        return
+    fraction = float(mask.mean())
+    if fraction > DENSE_FRACTION:
+        _dense_warned.append(True)
+        logger.warning(
+            "DoG: %.0f%% of a tile is above the threshold; spots and cilia "
+            "fill far less. The threshold is too low for this image: "
+            "background texture joins into huge objects.",
+            100 * fraction,
+        )
 
 
 def segment(tile: np.ndarray, **kwargs: Any) -> np.ndarray:
@@ -650,7 +695,7 @@ def segment(tile: np.ndarray, **kwargs: Any) -> np.ndarray:
         One image tile.
     **kwargs : Any
         Forwarded to :func:`dog_label_fn` (``low_sigma``, ``high_sigma``,
-        ``threshold``, ``use_gpu``, ``decon_kwargs``).
+        ``threshold``, ``use_gpu``, ``decon_kwargs``, ...).
 
     Returns
     -------
