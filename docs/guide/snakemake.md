@@ -215,6 +215,11 @@ touch most (or dropped when they touch nothing), and the flows are smoothed
 (`flow3D_smooth: 1`). Change the share with `cellpose: {fragments: 0.05}`,
 or turn it off with `fragments: null`.
 
+**Halo** — `overlap: "auto"` sizes it from the objects: an earlier run's
+table, or the tiles tried in the launcher, else the Cellpose `diameter`
+(z shortened by the anisotropy). A halo of about one object is what lets
+both tiles see a cell crossing their seam whole.
+
 **Size filter** — `min_volume` / `max_volume` (µm³) drop objects outside
 that range after the merge, judged on whole objects, not tile fragments.
 

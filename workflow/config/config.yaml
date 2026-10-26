@@ -7,7 +7,7 @@ work_dir: "/path/to/results" # everything is written here
 
 label_name: "nuclei_labels" # the label image in image.zarr/labels/
 channel: 0
-overlap: [4, 30, 30] # halo per axis (z, y, x): about one object
+overlap: [4, 30, 30] # halo per axis (z, y, x): about one object; "auto" sizes it
 # method: "cellpose"      # or "threshold" (CPU, testing), "custom" (see config_cilia.yaml)
 cellpose:
   model: "nuclei" # Cellpose 3: cyto3, nuclei; Cellpose 4: cpsam

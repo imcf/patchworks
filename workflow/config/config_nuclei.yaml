@@ -2,7 +2,7 @@
 
 label_name: "nuclei_labels"
 channel: 1 # nuclear stain
-overlap: [4, 30, 30] # halo per axis (z, y, x): about one nucleus
+overlap: [4, 30, 30] # halo per axis (z, y, x): about one nucleus; "auto" sizes it
 cellpose:
   model: "nuclei" # Cellpose 3: cyto3, nuclei; Cellpose 4: cpsam
   diameter: 15 # pixels

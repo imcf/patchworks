@@ -5,7 +5,7 @@
 label_name: "cyto_labels"
 channel: 0 # cytoplasm or membrane
 nuclei_channel: 1 # null: one channel only
-overlap: [4, 30, 30] # halo per axis (z, y, x): about one cell
+overlap: [4, 30, 30] # halo per axis (z, y, x): about one cell; "auto" sizes it
 cellpose:
   model: "cyto3" # Cellpose 4: "cpsam"
   diameter: 30 # pixels
