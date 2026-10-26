@@ -1,7 +1,7 @@
 # patchworks
 
 <p align="center">
-  <img src="assets/logo.png" alt="patchworks logo" width="200">
+  <img src="assets/logo.svg" alt="patchworks logo" width="200">
 </p>
 
 **Tiled processing of arbitrarily large images — any image, any function.**
