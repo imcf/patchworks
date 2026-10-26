@@ -1,0 +1,64 @@
+/* A coloured header on Zensical's modern theme, which ignores
+   `palette.primary`. Orange, as the Material look had (deep orange / orange).
+   The same classes exist in both themes, so this also holds if the theme's
+   variant is changed. */
+
+:root,
+[data-md-color-scheme="default"] {
+  --pw-header-from: #ff7043;
+  --pw-header-to: #ff9800;
+  --pw-header-fg: #fff;
+}
+
+[data-md-color-scheme="slate"] {
+  --pw-header-from: #bf360c;
+  --pw-header-to: #e65100;
+  --pw-header-fg: #fff;
+}
+
+.md-header {
+  color: var(--pw-header-fg);
+  background: linear-gradient(95deg, var(--pw-header-from), var(--pw-header-to));
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+.md-header--shadow {
+  box-shadow: 0 0.1rem 0.6rem rgb(0 0 0 / 0.18);
+}
+
+.md-header .md-header__button,
+.md-header .md-header__title,
+.md-header .md-header__topic,
+.md-header .md-header__source,
+.md-header .md-source,
+.md-header .md-source__repository,
+.md-header .md-source__facts,
+.md-header .md-source__fact {
+  color: var(--pw-header-fg);
+}
+
+/* The search box: a translucent pane on the colour, not a white slab. */
+.md-header .md-search__input,
+.md-header .md-search__form {
+  color: var(--pw-header-fg);
+  background-color: rgb(255 255 255 / 0.18);
+}
+
+.md-header .md-search__input:hover,
+.md-header .md-search__form:hover {
+  background-color: rgb(255 255 255 / 0.28);
+}
+
+.md-header .md-search__input::placeholder,
+.md-header .md-search__icon,
+.md-header .md-search__input + .md-search__icon {
+  color: rgb(255 255 255 / 0.85);
+}
+
+.md-header kbd,
+.md-header .md-search__shortcut {
+  color: var(--pw-header-fg);
+  background-color: rgb(255 255 255 / 0.2);
+  box-shadow: none;
+}
