@@ -2637,3 +2637,47 @@ def test_slurm_job_state_falls_back_to_scontrol(monkeypatch):
     replies["squeue"] = ("4\n5\n", "", 0)
     assert run_multi._slurm_job_running("5") is True
     assert run_multi._slurm_job_running("6") is False
+
+
+def test_the_controllers_job_id_survives_into_the_marker(tmp_path, monkeypatch):
+    """The launcher's controller clears SLURM_* before run_multi starts, so
+    the marker never named its job and a killed controller blocked every
+    later run; the id is kept as PATCHWORKS_CONTROLLER_JOB."""
+    import json
+
+    import run_multi
+
+    monkeypatch.delenv("SLURM_JOB_ID", raising=False)
+    monkeypatch.setenv("PATCHWORKS_CONTROLLER_JOB", "31337")
+    marker = run_multi.claim_driver(tmp_path / "w", Path("multi.yaml"))
+    assert json.loads(marker.read_text())["slurm_job"] == "31337"
+
+
+def test_a_node_without_your_jobs_runs_no_driver(monkeypatch):
+    """pam_slurm_adopt refuses ssh to a compute node where you have no job:
+    nothing of yours runs there."""
+    import subprocess
+    import types
+
+    import run_multi
+
+    def fake(stderr, returncode=255, stdout=""):
+        return lambda *a, **k: types.SimpleNamespace(
+            returncode=returncode, stdout=stdout, stderr=stderr
+        )
+
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        fake(
+            "Access denied by pam_slurm_adopt: you have no active jobs on "
+            "this node"
+        ),
+    )
+    assert run_multi._remote_driver_alive("sca30", 22031) is False
+    monkeypatch.setattr(subprocess, "run", fake("Permission denied"))
+    assert run_multi._remote_driver_alive("sca30", 22031) is None
+    monkeypatch.setattr(
+        subprocess, "run", fake("", 0, "python workflow/scripts/run_multi.py")
+    )
+    assert run_multi._remote_driver_alive("sca30", 22031) is True

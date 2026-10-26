@@ -1093,6 +1093,16 @@ def _process_args(pid: int) -> list[str] | None:
     return out.stdout.split()
 
 
+def _own_job() -> str | None:
+    """The SLURM job this run_multi runs in: the launcher's controller
+    clears SLURM_* for what it starts, and keeps the id under its own name."""
+    return (
+        os.environ.get("PATCHWORKS_CONTROLLER_JOB")
+        or os.environ.get("SLURM_JOB_ID")
+        or None
+    )
+
+
 def _remote_driver_alive(host: str, pid: int) -> bool | None:
     """Whether *pid* on login node *host* is a live run_multi, asked over
     ssh; None when ssh cannot get there without a password."""
@@ -1104,6 +1114,9 @@ def _remote_driver_alive(host: str, pid: int) -> bool | None:
                 "BatchMode=yes",
                 "-o",
                 "ConnectTimeout=10",
+                # A node of the same cluster seen for the first time
+                "-o",
+                "StrictHostKeyChecking=accept-new",
                 host,
                 "ps",
                 "-o",
@@ -1117,6 +1130,10 @@ def _remote_driver_alive(host: str, pid: int) -> bool | None:
         )
     except (OSError, subprocess.SubprocessError):
         return None
+    if "no active jobs on this node" in out.stderr:
+        # pam_slurm_adopt: a compute node lets you in only while you have a
+        # job on it, so nothing of yours runs there.
+        return False
     if out.returncode == 255:  # ssh itself failed
         return None
     if not out.stdout.strip():
@@ -1232,11 +1249,7 @@ def claim_driver(work_dir: str | Path, config: Path) -> Path:
                 "pid": me,
                 "started": time.strftime("%Y-%m-%d %H:%M:%S"),
                 "config": str(config),
-                **(
-                    {"slurm_job": os.environ["SLURM_JOB_ID"]}
-                    if os.environ.get("SLURM_JOB_ID")
-                    else {}
-                ),
+                **({"slurm_job": job} if (job := _own_job()) else {}),
             }
         )
     )
