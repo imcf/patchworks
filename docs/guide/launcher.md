@@ -80,7 +80,7 @@ configs you can also run from a terminal.
 | Login fails with the right password | The cluster needs 2FA or keys; only password login is supported. |
 | `snakemake` or `sbatch` not found | Fix the environment setup line; test it with `cd <dir> && <setup> && which snakemake sbatch`. |
 | Check and plan: not converted yet, no plan | Planning reads the converted image: launch *Convert only*, wait for it to finish, and check again. |
-| `Directory cannot be locked` | A run was killed: **Unlock** it in **Jobs**, then **Relaunch**. |
+| `Directory cannot be locked` | Released by itself at the next launch once the killed run's jobs have left the queue; otherwise **Unlock** it in **Jobs**, then **Relaunch**. |
 | A job never starts, empty log | Its runtime is over the QOS's limit: *Check against my account*. |
 | `needs 'plantseg'` / `needs 'cupy'` | The run starts in the wrong pixi environment: pick the one *Environment* suggests. |
 | Job `DONE` at once | The controller failed at startup; its log in **Jobs** says why. |

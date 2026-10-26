@@ -1271,6 +1271,72 @@ def held_locks(state_dir: Path) -> list[Path]:
     return sorted(locks.glob("*")) if locks.is_dir() else []
 
 
+def _still_working(state_dir: Path, label: str) -> str | None:
+    """Why the Snakemake of *state_dir* may still be at work, or None.
+
+    Its SLURM jobs (named ``pw-<label>_<uuid>``) still queued or running, or
+    a snakemake process on this machine working in *state_dir* -- one left
+    running when its run_multi was killed. Also a reason when neither can
+    be checked.
+    """
+    prefix = slurm_jobname_prefix(label) + "_"
+    try:
+        out = subprocess.run(
+            ["squeue", "--me", "-h", "-o", "%j"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if out.returncode != 0:
+            return "SLURM could not be asked for its jobs"
+        if any(n.strip().startswith(prefix) for n in out.stdout.splitlines()):
+            return f"SLURM still lists {prefix}* jobs"
+    except FileNotFoundError:
+        pass  # no SLURM here: only local processes
+    except (OSError, subprocess.SubprocessError):
+        return "SLURM could not be asked for its jobs"
+    try:
+        out = subprocess.run(
+            ["pgrep", "-af", "snakemake"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return "its processes could not be listed"
+    if str(state_dir) in out.stdout:
+        return "a snakemake is still working there"
+    return None
+
+
+def release_stale_locks(state_dirs: list[tuple[Path, str]]) -> None:
+    """Release the Snakemake locks a killed run left, before starting.
+
+    Called once this run_multi is the only driver of the work_dir
+    (:func:`claim_driver`), so a lock in one of its state directories is
+    left over from a run that was killed -- unless that run's Snakemake or
+    its jobs outlived it, which :func:`_still_working` checks. Snakemake's
+    ``--unlock`` does the same: it deletes these files.
+    """
+    for state_dir, label in state_dirs:
+        locks = held_locks(state_dir)
+        if not locks:
+            continue
+        busy = _still_working(state_dir, label)
+        if busy:
+            print(
+                f"[run_multi] {label}: Snakemake's lock kept ({busy})",
+                flush=True,
+            )
+            continue
+        for lock in locks:
+            lock.unlink(missing_ok=True)
+        print(
+            f"[run_multi] {label}: released the lock left by a killed run",
+            flush=True,
+        )
+
+
 def _resolve(path_str: str, *bases: Path) -> Path:
     """*path_str* as given if absolute, else under the first of *bases*
     holding it (the first base when none does, so the error names it)."""
@@ -1463,6 +1529,15 @@ def main() -> None:
     # One driver per work_dir, --unlock included.
     if not args.dry_run:
         claim_driver(work_dir, multi_cfg_path)
+        if not args.unlock:
+            release_stale_locks(
+                list(
+                    zip(
+                        state_dirs,
+                        ["convert"] + [cfg["label_name"] for cfg in seg_cfgs],
+                    )
+                )
+            )
 
     if args.unlock:
         for state_dir in state_dirs:
