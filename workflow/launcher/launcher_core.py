@@ -854,7 +854,10 @@ def controller_job_script(
         # and bundle steps) would otherwise become a step inside this
         # 1-CPU allocation and fail to get its memory, and a submitted job
         # would inherit variables such as SLURM_MEM_PER_NODE that
-        # patchworks reads to size itself.
+        # patchworks reads to size itself. Its id is kept under another
+        # name: run_multi records it, so a later run can ask SLURM whether
+        # this controller still runs.
+        'export PATCHWORKS_CONTROLLER_JOB="${SLURM_JOB_ID:-}"',
         "for v in $(compgen -e | grep -E '^(SLURM|SBATCH)_'); do "
         'unset "$v"; done',
         inner,
