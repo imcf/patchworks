@@ -230,8 +230,15 @@ def run(
                 _log_lost(transport, doing, repr(exc))
                 _connection_lost(str(exc))
             raise
-    out = stdout.read().decode(errors="replace")
-    err = stderr.read().decode(errors="replace")
+    try:
+        out = stdout.read().decode(errors="replace")
+        err = stderr.read().decode(errors="replace")
+    except TimeoutError:
+        # Free the channel: the command may still be running on the cluster.
+        stdout.channel.close()
+        raise TimeoutError(
+            f"the cluster gave no answer within {timeout} s to {command[:80]!r}"
+        ) from None
     return stdout.channel.recv_exit_status(), out, err
 
 
@@ -1176,14 +1183,23 @@ def segmentation_form(
 def cellpose_models() -> list[str]:
     """The models the cluster's Cellpose accepts, asked once per session."""
     if "cellpose_models" not in st.session_state:
+        out = ""
         with st.spinner("asking the cluster's Cellpose for its models…"):
-            _, out, _ = run(
-                get_client(),
-                core.inner_command(
-                    wf_dir, setup_cmd, core.CELLPOSE_MODELS_COMMAND
-                ),
-                timeout=120,
-            )
+            try:
+                _, out, _ = run(
+                    get_client(),
+                    core.inner_command(
+                        wf_dir, setup_cmd, core.CELLPOSE_MODELS_COMMAND
+                    ),
+                    timeout=120,
+                )
+            except TimeoutError:
+                # A busy login node, or pixi installing after an update:
+                # the list is a convenience, not worth blocking the form.
+                st.info(
+                    "The cluster took too long to list its Cellpose models; "
+                    "showing the usual ones (any name can still be typed)."
+                )
         st.session_state["cellpose_models"] = core.parse_models(out)
     return st.session_state["cellpose_models"] or list(
         core.CELLPOSE_FALLBACK_MODELS
