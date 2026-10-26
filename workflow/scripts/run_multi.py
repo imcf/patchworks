@@ -1093,6 +1093,37 @@ def _process_args(pid: int) -> list[str] | None:
     return out.stdout.split()
 
 
+def _remote_driver_alive(host: str, pid: int) -> bool | None:
+    """Whether *pid* on login node *host* is a live run_multi, asked over
+    ssh; None when ssh cannot get there without a password."""
+    try:
+        out = subprocess.run(
+            [
+                "ssh",
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "ConnectTimeout=10",
+                host,
+                "ps",
+                "-o",
+                "args=",
+                "-p",
+                str(pid),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode == 255:  # ssh itself failed
+        return None
+    if not out.stdout.strip():
+        return False  # no such process
+    return any(Path(a).name == "run_multi.py" for a in out.stdout.split())
+
+
 def _driver_alive(pid: int) -> bool:
     """Whether *pid* is a live run_multi on this machine."""
     if os.name == "nt":
@@ -1157,6 +1188,24 @@ def claim_driver(work_dir: str | Path, config: Path) -> Path:
                     flush=True,
                 )
                 where = host  # taken over below
+        if pid and where and where != host and not job:
+            # Another login node, no SLURM job: ask that node over ssh.
+            alive = _remote_driver_alive(where, int(pid))
+            if alive:
+                sys.exit(
+                    f"[run_multi] ERROR: another run_multi (pid {pid} on "
+                    f"{where}, started {other.get('started', '?')}) is "
+                    f"already driving {work_dir}. Wait for it, or stop it "
+                    f"first: ssh {where} kill {pid}"
+                )
+            if alive is False:
+                print(
+                    f"[run_multi] the run_multi of {where} (pid {pid}) has "
+                    "ended without removing its marker (it was killed): "
+                    "taking over",
+                    flush=True,
+                )
+                where = host
         if pid and where and where != host:
             check = (
                 f"squeue -j {job}"
@@ -1168,8 +1217,10 @@ def claim_driver(work_dir: str | Path, config: Path) -> Path:
                 f"[run_multi] ERROR: a run_multi on {where} (pid {pid}"
                 + (f", SLURM job {job}" if job else "")
                 + f", started {other.get('started', '?')}) is driving "
-                f"{work_dir}, and SLURM could not be asked whether it still "
-                f"is. If it is still running ({check}), wait for it or "
+                f"{work_dir}, and "
+                + ("SLURM" if job else f"ssh to {where}")
+                + " could not tell whether it still is. If it is still running"
+                f" ({check}), wait for it or "
                 "cancel it; if not, delete "
                 f"{marker} and start again."
             )
