@@ -352,8 +352,16 @@ def segmentation_status(cfg: dict) -> dict:
     if manifest is not None:
         out["tiles"], out["tiles_done"] = _tiles_done(manifest, seg)
     if out["merged"]:
-        level0 = _attrs(store / "labels" / label / "0")
-        out["objects"] = level0.get("patchworks_n_objects")
+        # The group's count is the final one (after the size filter); the
+        # merge's own record on level 0 only when that is all there is.
+        group = _attrs(store / "labels" / label)
+        out["objects"] = group.get(
+            "n_objects", group.get("ome", {}).get("n_objects")
+        )
+        if out["objects"] is None:
+            out["objects"] = _attrs(store / "labels" / label / "0").get(
+                "patchworks_n_objects"
+            )
         try:
             report = json.loads((run / "seams.json").read_text())
             # The report keys axes by index into the (z, y, x) labels.

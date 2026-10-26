@@ -277,3 +277,16 @@ def test_a_killed_snakemake_says_so(tmp_path):
     )["snakemake"]
     assert got["error"] == "killed by SIGKILL"
     assert "controller job ran out of memory" in got["hint"]
+
+
+def test_objects_come_from_the_label_group(tmp_path):
+    """The label group's n_objects is the final count (after the size
+    filter); the launcher showed None where only that one was written."""
+    work = tmp_path
+    _markers(work, "cells", merged=True, objects=None)
+    group = work / "image.zarr" / "labels" / "cells"
+    (group / "zarr.json").write_text(
+        json.dumps({"attributes": {"n_objects": 384076}})
+    )
+    cfg = {"work_dir": str(work), "label_name": "cells"}
+    assert status.segmentation_status(cfg)["objects"] == 384076
