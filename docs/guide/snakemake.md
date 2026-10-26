@@ -279,7 +279,7 @@ often offline: download model weights once on the login node. See
 
 | Symptom | Fix |
 | --- | --- |
-| `Directory cannot be locked` | a run was killed: add `--unlock` to the same command, then run again |
+| `Directory cannot be locked` | released by itself at the next start when a run was killed; kept while its jobs are still in `squeue`. To force it: add `--unlock` to the same command, then run again |
 | `another run_multi ... is already driving` | an earlier run is still going: wait, or stop it (the message names its pid) |
 | A job failed, its SLURM log is empty | read the step's own log under `work_dir/<label_name>/logs/` |
 | A step looks hung | every step logs progress about once a minute: `tail -f` its log |

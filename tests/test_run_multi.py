@@ -1800,6 +1800,10 @@ def test_a_config_failing_on_a_stale_lock_says_how_to_unlock(
     multi.write_text(
         yaml.safe_dump({"common": str(common), "segmentations": [str(cells)]})
     )
+    # Kept at the start: its jobs might still be running.
+    monkeypatch.setattr(
+        run_multi, "_still_working", lambda d, label: "SLURM still lists jobs"
+    )
     monkeypatch.setattr(run_multi, "_run", lambda cmd, wd: 0)
     monkeypatch.setattr(
         run_multi.subprocess,
@@ -2681,3 +2685,52 @@ def test_a_node_without_your_jobs_runs_no_driver(monkeypatch):
         subprocess, "run", fake("", 0, "python workflow/scripts/run_multi.py")
     )
     assert run_multi._remote_driver_alive("sca30", 22031) is True
+
+
+def test_a_killed_runs_lock_is_released_at_start(tmp_path, monkeypatch):
+    """A lock a killed run left is released when the next run starts,
+    unless that run's Snakemake or its jobs are still at work."""
+    import run_multi
+
+    state = tmp_path / "cilia_labels" / ".snakemake"
+    locks = state / ".snakemake" / "locks"
+    locks.mkdir(parents=True)
+    (locks / "0.input.lock").write_text("x")
+
+    monkeypatch.setattr(
+        run_multi, "_still_working", lambda d, label: "SLURM still lists jobs"
+    )
+    run_multi.release_stale_locks([(state, "cilia_labels")])
+    assert run_multi.held_locks(state)
+
+    monkeypatch.setattr(run_multi, "_still_working", lambda d, label: None)
+    run_multi.release_stale_locks([(state, "cilia_labels")])
+    assert not run_multi.held_locks(state)
+
+
+def test_still_working_reads_squeue_and_pgrep(tmp_path, monkeypatch):
+    import subprocess
+    import types
+
+    import run_multi
+
+    state = tmp_path / "cilia_labels" / ".snakemake"
+    answers = {}
+
+    def fake(cmd, **kw):
+        out = answers[cmd[0]]
+        if isinstance(out, Exception):
+            raise out
+        return types.SimpleNamespace(returncode=0, stdout=out, stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake)
+    answers.update(squeue="pw-nuclei_labels_ab12\n", pgrep="")
+    assert run_multi._still_working(state, "cilia_labels") is None
+    answers["squeue"] = "pw-cilia_labels_ab12\n"
+    assert "SLURM" in run_multi._still_working(state, "cilia_labels")
+    # No SLURM here: a snakemake working in the directory still counts
+    answers.update(
+        squeue=FileNotFoundError(),
+        pgrep=f"123 snakemake --directory {state}\n",
+    )
+    assert "snakemake" in run_multi._still_working(state, "cilia_labels")
