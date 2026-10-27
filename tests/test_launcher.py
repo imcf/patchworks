@@ -2307,3 +2307,59 @@ def test_a_failed_step_is_matched_to_its_own_segmentation():
         steps = {s["log"]: s for s in core.parse_steps(text)}
         assert steps["/w/cilia/logs/merge.log"]["state"] == "failed"
         assert steps["/w/cyto/logs/merge.log"]["state"] == "submitted"
+
+
+def test_a_reload_keeps_the_connection(monkeypatch):
+    """F5 starts a new Streamlit session: it finds its connection again by
+    the token in the page's address, instead of asking for the password."""
+    paramiko = pytest.importorskip("paramiko")
+    testing = pytest.importorskip("streamlit.testing.v1")
+
+    class Fake(_FakeSSH):
+        def load_system_host_keys(self):
+            pass
+
+        def set_missing_host_key_policy(self, policy):
+            pass
+
+        def connect(self, *a, **k):
+            pass
+
+        def get_transport(self):
+            from types import SimpleNamespace
+
+            return SimpleNamespace(
+                is_active=lambda: self.active, set_keepalive=lambda s: None
+            )
+
+    ssh = Fake()
+    monkeypatch.setattr(paramiko, "SSHClient", lambda: ssh)
+    monkeypatch.setattr(core, "save_settings", lambda s: None)
+
+    def page():
+        return testing.AppTest.from_file(
+            str(ROOT / "workflow/launcher/app.py"), default_timeout=30
+        )
+
+    at = page()
+    at.run()
+    at.sidebar.text_input[0].set_value("login.example.org")
+    next(t for t in at.text_input if t.label == "username").set_value("u")
+    next(t for t in at.text_input if t.label == "password").set_value("pw")
+    next(b for b in at.button if b.label == "Connect").click().run()
+    assert at.session_state["ssh_client"] is ssh
+    token = at.query_params["pw"]
+    token = token[0] if isinstance(token, list) else token
+
+    reload = page()
+    reload.query_params["pw"] = token
+    reload.run()
+    assert not reload.exception
+    assert reload.session_state["ssh_client"] is ssh
+    assert "Connect" not in [b.label for b in reload.button]
+
+    # Another address (no token, or a wrong one): log in again.
+    other = page()
+    other.query_params["pw"] = "guess"
+    other.run()
+    assert "ssh_client" not in other.session_state
