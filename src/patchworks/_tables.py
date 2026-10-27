@@ -367,6 +367,19 @@ def _chunks_of(arr: Any) -> "tuple[int, ...] | None":
     return None
 
 
+def _read_nbytes(arr: Any, block: Sequence[int]) -> int:
+    """Bytes decompressed to read one *block* of *arr*: every chunk it
+    touches, whole. A 14-plane block of an image stored in 126-plane chunks
+    decompresses all 126 planes -- for each channel at once, as zarr reads
+    a block's chunks concurrently."""
+    chunks = _chunks_of(arr) or tuple(block)
+    covered = [
+        min(-(-int(b) // int(c)) * int(c), int(n)) if c else int(b)
+        for b, c, n in zip(block, chunks, arr.shape)
+    ]
+    return int(np.prod(covered)) * np.dtype(arr.dtype).itemsize
+
+
 def _measure_block_shape(
     labels: Any, label_chunks: Sequence[int], images: Sequence[Any]
 ) -> tuple[int, ...]:
@@ -494,17 +507,20 @@ def measure_objects(
     chunk_shape = _measure_block_shape(labels, chunk_shape, img_list)
     blocks = list(chunk_slices(labels.shape, chunk_shape))
     nw = n_workers or cpu_allocation()
+    # Per worker: the chunks decompressed to read its block (whole image
+    # chunks, however deep), the block itself, and the slabs' sums.
     block_nbytes = int(np.prod(chunk_shape)) * (
         np.dtype(labels.dtype).itemsize
         + sum(np.dtype(img.dtype).itemsize for img in img_list)
     )
-    # Each block's slabs add about TILE_PARTIAL_BLOCK * 100 bytes.
+    read_nbytes = sum(_read_nbytes(a, chunk_shape) for a in (labels, *img_list))
     nw = max(
         1,
         min(
             nw,
             safe_worker_count(
-                block_nbytes + TILE_PARTIAL_BLOCK * 100, fn_overhead=1
+                read_nbytes + block_nbytes + TILE_PARTIAL_BLOCK * 100,
+                fn_overhead=1,
             ),
         ),
     )
@@ -518,11 +534,12 @@ def measure_objects(
         and sys.platform.startswith("linux")
     )
     logger.info(
-        "measuring %d block(s) of %s with %d %s",
+        "measuring %d block(s) of %s with %d %s (~%s each)",
         len(blocks),
         "x".join(map(str, chunk_shape)),
         nw,
         "process(es)" if use_processes else "thread(s)",
+        f"{(read_nbytes + block_nbytes) / 1024**3:.1f} GB",
     )
 
     started = last = _time.monotonic()
