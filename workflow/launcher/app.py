@@ -2174,6 +2174,19 @@ def resources_editor(resources: dict, info: dict | None = None) -> dict:
                 if key == "cpus_per_task" and value not in (None, ""):
                     value = int(value)
                 overrides.setdefault(after["rule"], {})[key] = value
+        # A partition changed, its QOS not: the old one is usually refused
+        # there (a100 takes a100-*, not rtx4090-1day). Pick one it takes.
+        if info and after["partition"] != before["partition"]:
+            part = after["partition"]
+            if core.qos_refused(info, part, after["qos"]):
+                minutes = core.first_attempt(after["runtime (min)"])
+                qos = core.fitting_qos(info, part, minutes)
+                overrides.setdefault(after["rule"], {})["qos"] = qos
+                st.caption(
+                    f":material/build: {after['rule']}: QOS "
+                    f"**{qos or 'your default'}**, as partition {part} does "
+                    f"not take {after['qos']}"
+                )
     return overrides
 
 

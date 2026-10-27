@@ -1178,7 +1178,9 @@ CLUSTER_INFO_COMMAND = (
     'echo "#partitions"; sinfo -h -o "%P|%a|%l|%G|%C" 2>/dev/null; '
     'echo "#assoc"; sacctmgr -nP show assoc user="$USER" '
     "format=account,partition,qos,defaultqos 2>/dev/null; "
-    'echo "#qos"; sacctmgr -nP show qos format=name,maxwall 2>/dev/null'
+    'echo "#qos"; sacctmgr -nP show qos format=name,maxwall 2>/dev/null; '
+    # Which QOS each partition accepts (AllowQos): sbatch refuses the rest.
+    'echo "#partqos"; scontrol -o show partition 2>/dev/null'
 )
 
 
@@ -1203,12 +1205,19 @@ def parse_cluster_info(output: str) -> dict[str, Any]:
     accounts: list[str] = []
     maxwall: dict[str, int | None] = {}
     default_qos: dict[str, str] = {}
+    allow_qos: dict[str, set[str]] = {}
     default = None
     part = None
     for line in output.splitlines():
         line = line.strip()
-        if line in ("#partitions", "#assoc", "#qos"):
+        if line in ("#partitions", "#assoc", "#qos", "#partqos"):
             part = line
+            continue
+        if part == "#partqos":
+            fields = dict(f.split("=", 1) for f in line.split() if "=" in f)
+            name, allow = fields.get("PartitionName"), fields.get("AllowQos")
+            if name and allow and allow != "ALL":
+                allow_qos[name] = set(allow.split(","))
             continue
         if not line or "|" not in line:
             continue
@@ -1259,6 +1268,8 @@ def parse_cluster_info(output: str) -> dict[str, Any]:
         "accounts": accounts,
         "maxwall": maxwall,
         "default_qos": default_qos,
+        # Only the partitions that restrict their QOS.
+        "allow_qos": allow_qos,
     }
 
 
@@ -1329,7 +1340,15 @@ def usable_qos(info: dict[str, Any], partition: str | None = None) -> list[str]:
     if partition is None:
         return sorted(set().union(*assoc.values()))
     # An association without a partition holds on every partition.
-    return sorted(assoc.get(partition, set()) | assoc.get("", set()))
+    mine = assoc.get(partition, set()) | assoc.get("", set())
+    allowed = (info.get("allow_qos") or {}).get(partition)
+    return sorted(mine & allowed if allowed is not None else mine)
+
+
+def qos_refused(info: dict[str, Any], partition: str | None, qos: str) -> bool:
+    """Whether *partition* refuses *qos* (its AllowQos); False if unknown."""
+    allowed = (info.get("allow_qos") or {}).get(partition or "")
+    return bool(qos) and allowed is not None and qos not in allowed
 
 
 def partition_rows(info: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1499,6 +1518,11 @@ def resource_problems(
                 f"{rule}: QOS {qos!r} is not one your account may use "
                 f"{'on ' + repr(part) + ' ' if part in assoc else ''}"
                 f"({', '.join(sorted(usable))})"
+            )
+        if part and qos_refused(info, part, qos):
+            problems.append(
+                f"{rule}: partition {part!r} does not accept QOS {qos!r} "
+                f"(it accepts {', '.join(sorted(info['allow_qos'][part]))})"
             )
         # No QOS asked for: the account's default QOS applies.
         effective = qos or default_qos(info, part)
