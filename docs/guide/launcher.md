@@ -39,6 +39,11 @@ not live in a terminal, and it never starts a run with a typo in a key.
 !!! warning
     The form takes real cluster passwords. Never host it publicly.
 
+Reloading the page (F5) keeps you connected: the connection stays open in
+the launcher, found again by a token in the page's address (`?pw=…`), from
+the same computer and for up to 8 hours unused. Do not share that address
+while connected; **Disconnect** closes it.
+
 ## Use it
 
 1. **Connect**: pick the cluster, log in, and choose the workflow folder

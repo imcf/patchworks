@@ -20,6 +20,7 @@ import io
 import json
 import logging
 import re
+import secrets
 import shlex
 import stat
 import time
@@ -82,8 +83,95 @@ def _log_lost(transport, doing: str, why: str = "") -> None:
     )
 
 
+# A reload (F5) starts a new Streamlit session, which knew nothing of the
+# connection and asked for the password again. Open connections are kept in
+# this process instead, each under a random token put in the page's address
+# (?pw=...): a reload of that address, from the same computer, finds its
+# connection again. Dropped after this long unused.
+_RESUME_PARAM = "pw"
+_RESUME_IDLE = 8 * 3600
+
+
+@st.cache_resource
+def _connections() -> dict[str, dict]:
+    """token -> {"client", "target", "preset", "ip", "used"}: every open
+    connection of this launcher process."""
+    return {}
+
+
+def _viewer_ip() -> str | None:
+    """The browser's address, as Streamlit has it (None when it does not)."""
+    ip = getattr(st.context, "ip_address", None)
+    return ip if isinstance(ip, str) else None
+
+
+def _remember_connection(client, target: str) -> None:
+    """Keep *client* for reloads of this page, and drop stale ones."""
+    now = time.time()
+    kept = _connections()
+    for token, entry in list(kept.items()):
+        transport = entry["client"].get_transport()
+        if now - entry["used"] > _RESUME_IDLE or not (
+            transport and transport.is_active()
+        ):
+            entry["client"].close()
+            kept.pop(token, None)
+    token = secrets.token_urlsafe(24)
+    kept[token] = {
+        "client": client,
+        "target": target,
+        "preset": {},
+        "ip": _viewer_ip(),
+        "used": now,
+    }
+    st.session_state["resume_token"] = token
+    st.query_params[_RESUME_PARAM] = token
+
+
+def _forget_resume(close: bool = False) -> None:
+    """This page's connection is no longer to be found by a reload."""
+    entry = _connections().pop(st.session_state.pop("resume_token", ""), None)
+    if close and entry is not None:
+        entry["client"].close()
+    try:
+        st.query_params.pop(_RESUME_PARAM, None)
+    except Exception:  # noqa: BLE001 - outside the page's thread
+        pass
+
+
+def _resume_connection() -> None:
+    """After a reload: take back this page's connection, if it is open."""
+    from streamlit.runtime.scriptrunner import get_script_run_ctx
+
+    if get_script_run_ctx(suppress_warning=True) is None:
+        return  # a worker thread: nothing of the page to read
+    if st.session_state.get("disconnected"):
+        return
+    token = st.query_params.get(_RESUME_PARAM)
+    entry = _connections().get(token) if token else None
+    if entry is None:
+        return
+    transport = entry["client"].get_transport()
+    if (
+        entry["ip"] != _viewer_ip()
+        or time.time() - entry["used"] > _RESUME_IDLE
+        or not (transport and transport.is_active())
+    ):
+        return
+    entry["used"] = time.time()
+    st.session_state.update(
+        ssh_client=entry["client"],
+        ssh_target=entry["target"],
+        preset=entry["preset"],
+        resume_token=token,
+    )
+    _guess_workflow_dir()
+
+
 def get_client() -> paramiko.SSHClient | None:
     """The session's SSH connection; None (log in again) once it dropped."""
+    if st.session_state.get("ssh_client") is None:
+        _resume_connection()
     client = st.session_state.get("ssh_client")
     transport = client.get_transport() if client is not None else None
     if client is not None and (transport is None or not transport.is_active()):
@@ -91,7 +179,12 @@ def get_client() -> paramiko.SSHClient | None:
         for key in ("ssh_client", "sftp"):
             st.session_state.pop(key, None)
         st.session_state["connection_lost"] = True
+        _forget_resume()
         return None
+    if client is not None and st.session_state.get("resume_token"):
+        entry = _connections().get(st.session_state["resume_token"])
+        if entry is not None:
+            entry["used"] = time.time()
     return client
 
 
@@ -139,8 +232,21 @@ def connect(
     st.session_state["ssh_client"] = client
     st.session_state["ssh_target"] = f"{username}@{host}:{port}"
     st.session_state.pop("connection_lost", None)
-    # The workflow folder used last time, else a clone in the home folder
-    # (the usual place): fill it in if found.
+    _remember_connection(client, st.session_state["ssh_target"])
+    _guess_workflow_dir()
+
+
+def _remember_preset(preset: dict) -> None:
+    """The cluster preset of this connection, for a reload to restore."""
+    st.session_state["preset"] = preset
+    entry = _connections().get(st.session_state.get("resume_token", ""))
+    if entry is not None:
+        entry["preset"] = preset
+
+
+def _guess_workflow_dir() -> None:
+    """The workflow folder used last time, else a clone in the home folder
+    (the usual place): fill it in if found."""
     sftp = get_sftp()
     for guess in (
         core.load_settings().get("wf_dir"),
@@ -174,6 +280,7 @@ def _forget_connection() -> None:
     for key in ("ssh_client", "sftp", "auto_tried"):
         st.session_state.pop(key, None)
     st.session_state["connection_lost"] = True
+    _forget_resume()
 
 
 def _connection_lost(why: str):
@@ -2874,7 +2981,7 @@ with st.sidebar:
                         False,
                         use_keys=True,
                     )
-                st.session_state["preset"] = preset
+                _remember_preset(preset)
                 st.rerun()
             except Exception as exc:  # shown, then the form below
                 st.info(
@@ -2905,7 +3012,7 @@ with st.sidebar:
                     allow_unverified,
                     use_keys=use_keys,
                 )
-                st.session_state["preset"] = preset
+                _remember_preset(preset)
                 st.session_state.pop("disconnected", None)
                 core.save_settings(
                     {
@@ -2926,6 +3033,7 @@ with st.sidebar:
         )
         if st.button("Disconnect", icon=":material/link_off:"):
             get_client().close()
+            _forget_resume(close=True)
             # Not straight back in with the SSH key: you asked to leave.
             st.session_state["disconnected"] = True
             for key in ("ssh_client", "sftp", "preset", "pixi_envs", "plans"):
