@@ -1030,3 +1030,33 @@ def test_cli_plan(tmp_path, capsys):
     plan = json.loads(capsys.readouterr().out)
     assert plan["tiles"] == 4
     assert not (tmp_path / "a.zarr" / "labels").exists()
+
+
+def test_a_sliver_under_the_size_filter_rejoins_its_cell():
+    """Two tiles disagreeing on a cell at their seam (a mutual best match
+    below the IoU threshold) each kept their part, and the size filter
+    erased the sliver: the cell ended flat at the seam. The sliver joins its
+    match instead -- one match only, so it cannot glue two cells."""
+    import numpy as np
+
+    from patchworks._merge import _iou_face_pairs, _rescue_small_pieces
+
+    # A's 1 and B's 2 are each other's best match, on 1 of 3 voxels: weak
+    a = np.array([[1, 1, 1, 0, 0]])
+    b = np.array([[0, 0, 2, 2, 2]])
+    weak = []
+    assert len(_iou_face_pairs([(a, b)], 0.5, None, weak)) == 0
+    assert [(x, y) for x, y, _ in weak] == [(1, 2)]
+
+    lut = np.arange(10)
+    objects = {
+        "label": np.array([1, 2, 3, 4]),
+        "count": np.array([5000, 300, 6000, 7000]),
+    }
+    # 2 (a sliver) matches 1 best and 3 less well; 3 and 4 are both large
+    weak = [(1, 2, 0.4), (3, 2, 0.2), (3, 4, 0.3)]
+    pairs = _rescue_small_pieces(weak, lut, objects, min_voxels=1000)
+    assert pairs.tolist() == [[1, 2]]
+    # Nothing under the filter, or no filter: nothing joined
+    assert not len(_rescue_small_pieces(weak, lut, objects, min_voxels=100))
+    assert not len(_rescue_small_pieces(weak, lut, objects, None))
