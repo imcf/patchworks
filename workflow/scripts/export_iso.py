@@ -284,6 +284,24 @@ def main() -> int:
     free = shutil.disk_usage(output.parent).free
     needed = int(size * 1.02) + 16 * 1024**2
     print(f"needs  : ~{human(needed)}, {human(free)} free on the target")
+    # A killed earlier attempt's partial archive is of no use.
+    partial = output.with_name(f".{output.name}.partial")
+    if partial.exists() and not args.dry_run:
+        free += partial.stat().st_size
+        partial.unlink()
+        print(f"removed {partial.name}, left by an interrupted run")
+    # The old archive is kept until the new one is complete -- unless both
+    # do not fit: it is out of date anyway, and keeping it doubled the
+    # space a re-run needs (twice the store, next to the store itself).
+    if not args.dry_run and free < needed and output.exists():
+        old = output.stat().st_size
+        if free + old >= needed:
+            print(
+                f"not enough space to keep the old {output.name} while "
+                f"writing the new one: removing it first ({human(old)})"
+            )
+            output.unlink()
+            free += old
     if not args.dry_run and free < needed:
         raise SystemExit(
             f"not enough space: need ~{human(needed)}, have {human(free)}"
