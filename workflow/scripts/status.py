@@ -102,7 +102,31 @@ HINTS = (
         "launcher), then start again",
     ),
 )
-_ERROR = re.compile(r"Traceback|Error|error:|Killed|CANCELLED|oom", re.I)
+# What only a step that failed writes: a traceback, an exception line
+# ("ValueError: ..."), a tool's "error:", or SLURM ending the job. Not any
+# "error" -- PyTorch warns on every Cellpose run that "Memory errors (e.g.
+# SEGFAULT) will occur ...", which marked every running job failed.
+_ERROR = re.compile(
+    r"Traceback \(most recent call last\)|^\S*(Error|Exception)\b:?"
+    r"|\b\w+(Error|Exception): |^error:|\bKilled\b|CANCELLED"
+    r"|oom[_-]kill|OUT_OF_MEMORY|DUE TO TIME LIMIT",
+    re.M,
+)
+
+
+def _without_warnings(text: str) -> str:
+    """*text* without Python warnings: the warning line and the source
+    line Python prints under it."""
+    out, skip = [], False
+    for line in text.splitlines():
+        if re.search(r"\b\w*Warning: ", line):
+            skip = True
+            continue
+        if skip and line.startswith((" ", "\t")):
+            continue
+        skip = False
+        out.append(line)
+    return "\n".join(out)
 
 
 def explain(text: str) -> tuple[str, str | None]:
@@ -138,6 +162,7 @@ def _failure(step: str, log: Path) -> dict | None:
         text = log.read_text(errors="replace")[-200_000:]
     except OSError:
         return None
+    text = _without_warnings(text)
     if not _ERROR.search(text):
         return None
     error, hint = explain(text)

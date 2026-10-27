@@ -290,3 +290,32 @@ def test_objects_come_from_the_label_group(tmp_path):
     )
     cfg = {"work_dir": str(work), "label_name": "cells"}
     assert status.segmentation_status(cfg)["objects"] == 384076
+
+
+def test_a_running_cellpose_job_is_not_failed(tmp_path):
+    """Every Cellpose job logs PyTorch's "Memory errors (e.g. SEGFAULT)
+    will occur ..." warning: any "error" counted, so every running job
+    showed as failed."""
+    work = tmp_path / "results"
+    _markers(work, "cells", batches=2, done=0)
+    logs = work / "cells" / "logs" / "segment"
+    logs.mkdir(parents=True)
+    running = (
+        "2026-10-27 12:56:03,311 WARNING cellpose.vit: Could not import "
+        "CPDINO, run `pip install ...` to use CPDINO model\n"
+        "/x/cellpose/dynamics.py:541: UserWarning: Sparse invariant checks "
+        "are implicitly disabled. Memory errors (e.g. SEGFAULT) will occur "
+        "when operating on a sparse tensor ...\n"
+        "  coo = torch.sparse_coo_tensor(pt, torch.ones(pt.shape[1]))\n"
+        "2026-10-27 12:57:33,354 INFO cellpose.models: masks created\n"
+        "[patchworks] tile 1948 (1/4): 547 label(s) in 255s\n"
+    )
+    (logs / "0.log").write_text(running)
+    (logs / "1.log").write_text(
+        running + "Traceback (most recent call last):\n"
+        '  File "x.py", line 1\nValueError: overlap too wide\n'
+    )
+    cfg = {"work_dir": str(work), "label_name": "cells"}
+    (failed,) = status.failures(cfg)
+    assert failed["step"] == "segment job 1"
+    assert failed["error"] == "ValueError: overlap too wide"
