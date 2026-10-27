@@ -2376,3 +2376,48 @@ def test_a_reload_keeps_the_connection(monkeypatch):
     other.query_params["pw"] = "guess"
     other.run()
     assert "ssh_client" not in other.session_state
+
+
+def test_a_partition_takes_only_its_own_qos():
+    """sbatch: "Job's QOS not permitted to use this partition (a100 allows
+    a100-30min,...,projects not rtx4090-1day)". The partitions' AllowQos
+    are read, a mismatch is flagged before launching, and a QOS the new
+    partition takes is picked for the job's runtime."""
+    info = core.parse_cluster_info(
+        "#partitions\n"
+        "rtx4090|up|7-00:00:00|gpu:rtx4090:8|0/0/0/160\n"
+        "a100|up|7-00:00:00|gpu:a100:4|0/64/0/64\n"
+        "#assoc\n"
+        "biehlmai||a100-6hours,a100-1day,a100-1week,rtx4090-1day,1day|1day\n"
+        "#qos\n"
+        "a100-6hours|06:00:00\n"
+        "a100-1day|1-00:00:00\n"
+        "a100-1week|7-00:00:00\n"
+        "rtx4090-1day|1-00:00:00\n"
+        "1day|1-00:00:00\n"
+        "#partqos\n"
+        "PartitionName=a100 AllowGroups=ALL "
+        "AllowQos=a100-30min,a100-6hours,a100-1day,a100-1week,projects "
+        "Default=NO\n"
+        "PartitionName=scicore AllowQos=ALL Default=YES\n"
+    )
+    assert core.usable_qos(info, "a100") == [
+        "a100-1day",
+        "a100-1week",
+        "a100-6hours",
+    ]
+    assert core.qos_refused(info, "a100", "rtx4090-1day")
+    assert not core.qos_refused(info, "scicore", "rtx4090-1day")  # ALL
+    assert not core.qos_refused(info, "rtx4090", "rtx4090-1day")  # unknown
+    assert core.fitting_qos(info, "a100", 1400) == "a100-1day"
+    problems = core.resource_problems(
+        {
+            "segment": {
+                "slurm_partition": "a100",
+                "qos": "rtx4090-1day",
+                "runtime": 1400,
+            }
+        },
+        info,
+    )
+    assert any("does not accept QOS 'rtx4090-1day'" in p for p in problems)
