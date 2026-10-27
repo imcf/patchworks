@@ -2774,27 +2774,38 @@ def job_progress(job: dict, steps: list[dict], result) -> dict | None:
         for seg in status["segmentations"]:
             frac, what = segmentation_progress(seg, steps)
             st.progress(frac, text=f"**{seg['label_name']}** · {what}")
-        # The relations (a multi run), once every segmentation is merged:
-        # relate.py says what it is at in the controller's log.
-        pending = [r for r in status.get("relations") or [] if not r["files"]]
-        if pending and all(
-            s["stage"] == "done" for s in status["segmentations"]
-        ):
-            said = [
-                line
+        # Then the relations (a multi run), once every segmentation is
+        # merged, and the bundle: each done, at work, or waiting.
+        relations = status.get("relations") or []
+        merged = all(s["stage"] == "done" for s in status["segmentations"])
+        said = (
+            [
+                line.removeprefix("[relate] ")
                 for line in _tail(job["log"], TAIL_LINES).splitlines()
                 if line.startswith("[relate]")
             ]
-            for rel in pending:
-                st.progress(
-                    0.0,
-                    text=f"**{rel['a']} → {rel['b']}** · relating"
-                    + (
-                        f": {said[-1].removeprefix('[relate] ')}"
-                        if said
-                        else ""
-                    ),
-                )
+            if merged
+            else []
+        )
+        for rel in relations:
+            # "current" is missing from an older status script: files then.
+            if rel.get("current", bool(rel["files"])):
+                frac, what = 1.0, "related"
+            elif merged:
+                frac, what = 0.0, "relating" + (f": {said[-1]}" if said else "")
+            else:
+                frac, what = 0.0, "after the segmentations"
+            st.progress(frac, text=f"**{rel['a']} → {rel['b']}** · {what}")
+        if "bundle_current" in status:
+            related = all(r.get("current") for r in relations)
+            if status["bundle_current"]:
+                frac, what = 1.0, "packed"
+            elif merged and related:
+                frac, what = 0.0, "packing"
+            else:
+                frac, what = 0.0, "last, after the relations"
+            name = Path(status.get("bundle_path") or "image.zarr.zip").name
+            st.progress(frac, text=f"**bundle** {name} · {what}")
     return status
 
 

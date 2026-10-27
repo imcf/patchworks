@@ -319,3 +319,43 @@ def test_a_running_cellpose_job_is_not_failed(tmp_path):
     (failed,) = status.failures(cfg)
     assert failed["step"] == "segment job 1"
     assert failed["error"] == "ValueError: overlap too wide"
+
+
+def test_a_relation_from_before_the_labels_changed_is_to_redo(tmp_path):
+    """A re-segmented label image leaves its relations' workbooks from the
+    earlier run in place: shown as done, they hid the relations being
+    recomputed. Current only once written after both labels were merged."""
+    import os
+
+    work = tmp_path / "results"
+    (work / "image.zarr").mkdir(parents=True)
+    _markers(work, "nuclei", batches=1, done=1, merged=True, objects=5)
+    _markers(work, "cells", batches=1, done=1, merged=True, objects=5)
+    book = work / "n_c.xlsx"
+    book.touch()
+    os.utime(book, (1, 1))  # written long before the merges
+    common = tmp_path / "common.yaml"
+    common.write_text(yaml.safe_dump({"work_dir": str(work)}))
+    paths = []
+    for name in ("nuclei", "cells"):
+        paths.append(tmp_path / f"{name}.yaml")
+        paths[-1].write_text(yaml.safe_dump({"label_name": name}))
+    multi = tmp_path / "multi.yaml"
+    multi.write_text(
+        yaml.safe_dump(
+            {
+                "common": str(common),
+                "segmentations": [str(p) for p in paths],
+                "relations": [
+                    {"a": "nuclei", "b": "cells", "output": "n_c.xlsx"}
+                ],
+            }
+        )
+    )
+    got = status.run_status(*status._configs(multi))
+    assert got["relations"][0]["current"] is False
+    assert "to redo" in status.format_status(got)
+    book.touch()  # rewritten now
+    got = status.run_status(*status._configs(multi))
+    assert got["relations"][0]["current"] is True
+    assert got["bundle_current"] is False  # no bundle yet

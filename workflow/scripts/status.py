@@ -442,6 +442,11 @@ def run_status(cfgs: list[dict], multi: dict | None) -> dict:
     if multi is None:
         return status
     work = Path(cfgs[0]["work_dir"])
+
+    def merged_at(name):
+        marker = work / name / "labels.done"
+        return marker.stat().st_mtime if marker.exists() else None
+
     relations = []
     for rel in multi.get("relations") or []:
         out = work / rel.get("output", f"{rel['a']}_to_{rel['b']}.xlsx")
@@ -450,8 +455,21 @@ def run_status(cfgs: list[dict], multi: dict | None) -> dict:
             out.with_name(f"{out.stem}_{n}.csv") for n in (rel["a"], rel["b"])
         ]
         files = [out] if out.exists() else [p for p in csvs if p.exists()]
+        # Current: written after both label images were last merged (the
+        # rule relate.py itself skips by). Files of an earlier run are not.
+        merged = [merged_at(rel["a"]), merged_at(rel["b"])]
+        current = (
+            bool(files)
+            and None not in merged
+            and min(p.stat().st_mtime for p in files) >= max(merged)
+        )
         relations.append(
-            {"a": rel["a"], "b": rel["b"], "files": [str(p) for p in files]}
+            {
+                "a": rel["a"],
+                "b": rel["b"],
+                "files": [str(p) for p in files],
+                "current": current,
+            }
         )
     status["relations"] = relations
     bundle = multi.get("bundle", {})
@@ -459,6 +477,16 @@ def run_status(cfgs: list[dict], multi: dict | None) -> dict:
         fmt = (bundle or {}).get("format") or "zip"
         path = Path((bundle or {}).get("output") or f"{work}/image.zarr.{fmt}")
         status["bundle"] = str(path) if path.exists() else None
+        status["bundle_path"] = str(path)
+        # Current: packed after every label image and relation was written.
+        newest = [merged_at(c.get("label_name", "labels")) for c in cfgs] + [
+            Path(f).stat().st_mtime for r in relations for f in r["files"]
+        ]
+        status["bundle_current"] = (
+            path.exists()
+            and None not in newest
+            and path.stat().st_mtime >= max(newest, default=0)
+        )
     return status
 
 
@@ -499,9 +527,14 @@ def format_status(status: dict) -> str:
         lines.append(f"    log: {f['log']}")
     for rel in status.get("relations", []):
         files = ", ".join(rel["files"]) or "not yet"
+        if rel["files"] and not rel.get("current", True):
+            files += " (from before the labels changed: to redo)"
         lines.append(f"  relation {rel['a']} -> {rel['b']}: {files}")
     if "bundle" in status:
-        lines.append(f"  bundle: {status['bundle'] or 'not yet'}")
+        bundle = status["bundle"] or "not yet"
+        if status["bundle"] and not status.get("bundle_current", True):
+            bundle += " (older than the results: to redo)"
+        lines.append(f"  bundle: {bundle}")
     return "\n".join(lines)
 
 
