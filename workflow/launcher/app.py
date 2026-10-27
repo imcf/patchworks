@@ -99,6 +99,17 @@ def _connections() -> dict[str, dict]:
     return {}
 
 
+# What the cluster was asked once per connection (slow: sacctmgr, a Python
+# import), kept with the connection so a reload does not ask again.
+_CONNECTION_CACHE = ("cluster_info", "cellpose_models")
+
+
+def _cache_with_connection(key: str) -> None:
+    entry = _connections().get(st.session_state.get("resume_token", ""))
+    if entry is not None and key in st.session_state:
+        entry.setdefault("cache", {})[key] = st.session_state[key]
+
+
 def _viewer_ip() -> str | None:
     """The browser's address, as Streamlit has it (None when it does not)."""
     ip = getattr(st.context, "ip_address", None)
@@ -164,6 +175,7 @@ def _resume_connection() -> None:
         ssh_target=entry["target"],
         preset=entry["preset"],
         resume_token=token,
+        **entry.get("cache", {}),
     )
     _guess_workflow_dir()
 
@@ -1308,6 +1320,7 @@ def cellpose_models() -> list[str]:
                     "showing the usual ones (any name can still be typed)."
                 )
         st.session_state["cellpose_models"] = core.parse_models(out)
+        _cache_with_connection("cellpose_models")
     return st.session_state["cellpose_models"] or list(
         core.CELLPOSE_FALLBACK_MODELS
     )
@@ -1889,6 +1902,29 @@ def launch(
     )
 
 
+# A click on Launch is kept until the page reaches the button again: one
+# made while the page was still drawing (it waits on the cluster) was lost
+# to the next redraw -- a refresh of the Jobs tab, or the page catching up
+# -- and had to be made twice. Only a recent one counts.
+_LAUNCH_REQUEST_TTL = 300
+
+
+def _request_launch() -> None:
+    st.session_state["launch_requested"] = time.time()
+    # At once, before the page is redrawn (which takes a while).
+    st.toast(
+        "Launching… the page first catches up, then each step shows below "
+        "the button.",
+        icon=":material/rocket_launch:",
+    )
+
+
+def _launch_requested() -> bool:
+    """Whether Launch was clicked (once: the request is used up)."""
+    asked = st.session_state.pop("launch_requested", None)
+    return asked is not None and time.time() - asked < _LAUNCH_REQUEST_TTL
+
+
 def _launch_now(
     mode,
     overrides,
@@ -1985,6 +2021,7 @@ def cluster_info(refresh: bool = False) -> dict | None:
         st.session_state["cluster_info"] = (
             info if info["partitions"] or info["assoc"] else None
         )
+        _cache_with_connection("cluster_info")
     return st.session_state["cluster_info"]
 
 
@@ -3517,17 +3554,14 @@ with tab_launch:
                 )
             with st.expander("Files to upload", icon=":material/upload:"):
                 st.code("\n".join(files), language=None)
-            if st.button(
+            st.button(
                 "Dry run" if mode == core.DRY_RUN else "Launch",
                 type="primary",
                 icon=":material/rocket_launch:",
-                # At once, before the page is redrawn (which takes a while).
-                on_click=lambda: st.toast(
-                    "Launching… the page first catches up, then each step "
-                    "shows below the button.",
-                    icon=":material/rocket_launch:",
-                ),
-            ):
+                key="launch_button",
+                on_click=_request_launch,
+            )
+            if _launch_requested():
                 status = st.status(
                     "Dry run…" if mode == core.DRY_RUN else "Launching…",
                     expanded=True,
@@ -3728,3 +3762,7 @@ with tab_jobs:
                 )
 
         monitor()
+
+# The page was drawn to the end without reaching Launch (a config problem
+# hid it): a click from before must not launch later, when it shows again.
+st.session_state.pop("launch_requested", None)
