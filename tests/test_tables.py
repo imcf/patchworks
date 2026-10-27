@@ -164,3 +164,35 @@ def test_measuring_in_processes_matches_one_thread(tmp_path):
     for name in one:
         np.testing.assert_array_equal(one[name], many[name], err_msg=name)
     assert len(one["label"]) == len(np.unique(lab)) - 1
+
+
+def test_workers_are_sized_for_the_image_chunks_they_decompress(
+    tmp_path, monkeypatch
+):
+    """Reading a 14-plane label block of an image stored in 126-plane chunks
+    decompresses all 126 planes, for every channel: counted as one block,
+    31 workers were started and the merge job was OOM-killed."""
+    from patchworks import _tables
+
+    shape = (24, 64, 64)
+    labels = zarr.create_array(
+        tmp_path / "l.zarr", shape=shape, chunks=(2, 64, 64), dtype="int32"
+    )
+    labels[:] = 1
+    image = zarr.create_array(
+        tmp_path / "i.zarr", shape=shape, chunks=(24, 64, 64), dtype="uint16"
+    )
+    image[:] = 7
+    assert _tables._read_nbytes(image, (2, 64, 64)) == 24 * 64 * 64 * 2
+    asked = []
+
+    def fake(nbytes, **kw):
+        asked.append(nbytes)
+        return 1
+
+    monkeypatch.setattr(_tables, "safe_worker_count", fake, raising=False)
+    monkeypatch.setattr(_tables, "MEASURE_BLOCK_VOXELS", 2 * 64 * 64)
+    images = {f"c{i}": image for i in range(4)}
+    _tables.measure_objects(labels, images=images)
+    # Four whole image chunks, not four 2-plane slices.
+    assert asked and asked[0] >= 4 * 24 * 64 * 64 * 2
