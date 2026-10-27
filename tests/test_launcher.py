@@ -2421,3 +2421,54 @@ def test_a_partition_takes_only_its_own_qos():
         info,
     )
     assert any("does not accept QOS 'rtx4090-1day'" in p for p in problems)
+
+
+def test_relations_and_the_bundle_are_steps():
+    """run_multi starts the relations and the bundle itself, not Snakemake:
+    they are in the Steps table too, with their logs."""
+    log = (
+        "[run_multi] $ srun --partition scicore --job-name "
+        "pw-relate-to-cyto_labels_cpsam python /w/scripts/relate.py "
+        "--work-dir /r --relations [] --log /r/logs/relate/to_cyto.log\n"
+        "[run_multi] $ srun --partition scicore --job-name "
+        "pw-relate-cilia_labels-to-nuclei_labels_cpsam python "
+        "/w/scripts/relate.py --log /r/logs/relate/cilia_to_nuclei.log\n"
+        "[run_multi] relate nuclei_labels_cpsam, cilia_labels -> "
+        "cyto_labels_cpsam: ok\n"
+        "[run_multi] relate cilia_labels -> nuclei_labels_cpsam: failed\n"
+        "[run_multi] $ srun --job-name pw-bundle-zip python "
+        "/w/scripts/export_iso.py --store /r/image.zarr\n"
+    )
+    import re
+
+    kept = "\n".join(
+        line for line in log.splitlines() if re.search(core.STEPS_FILTER, line)
+    )
+    steps = {(s["rule"], s["wildcards"]): s for s in core.parse_steps(kept)}
+    to_cyto = steps[("relate", "to-cyto_labels_cpsam")]
+    assert to_cyto["state"] == "done"
+    assert to_cyto["log"] == "/r/logs/relate/to_cyto.log"
+    assert (
+        steps[("relate", "cilia_labels-to-nuclei_labels_cpsam")]["state"]
+        == "failed"
+    )
+    assert steps[("bundle", "")]["state"] == "running"
+    done = core.parse_steps(kept + "\n[run_multi] bundle: ok")
+    assert [s["state"] for s in done if s["rule"] == "bundle"] == ["done"]
+
+
+def test_a_finished_step_of_one_segmentation_is_not_lost_to_another():
+    """run_multi's Snakemakes share one log and number their jobs alike:
+    "Finished job 5" marked the latest step 5 done again, and the other
+    segmentation's step 5 stayed "submitted" for ever."""
+    block = (
+        "rule segment:\n    log: /r/{label}/logs/segment/{b}.log\n"
+        "    jobid: 5\n    wildcards: batch={b}\n"
+    )
+    log = (
+        block.format(label="cyto", b=1)
+        + block.format(label="cilia", b=2)
+        + "Finished jobid: 5 (Rule: segment)\n"
+        + "Finished jobid: 5 (Rule: segment)\n"
+    )
+    assert [s["state"] for s in core.parse_steps(log)] == ["done", "done"]

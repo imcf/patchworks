@@ -1672,7 +1672,9 @@ STEPS_FILTER = (
     r"^(local)?(rule|checkpoint) |"
     r"^\s+(log|jobid|wildcards|resources|message|external_jobid):|"
     r"has been submitted|"
-    r"^Error in rule|Finished job"
+    r"^Error in rule|Finished job|"
+    # The steps run_multi starts itself: relations, then the bundle.
+    r"^\[run_multi\] (\$ |relate .*: |bundle: ok|ERROR: bundling failed)"
 )
 
 
@@ -1852,6 +1854,8 @@ def parse_steps(text: str) -> list[dict[str, Any]]:
                     step["wildcards"] = value
             continue
         block = None
+        if _run_multi_step(steps, stripped):
+            continue
         submitted = _SUBMITTED.search(line)
         if submitted:
             # run_multi's processes share this log and all number from 0:
@@ -1874,12 +1878,80 @@ def parse_steps(text: str) -> list[dict[str, Any]]:
         finished = _FINISHED.search(line)
         if finished:
             rule = re.search(r"\(Rule: (\w+)\)", line)
-            step = latest(finished.group(1), rule.group(1) if rule else None)
+            jid, name = finished.group(1), rule.group(1) if rule else None
+            # run_multi's Snakemakes number their jobs alike: the step this
+            # line finishes is one not done yet, not one already marked.
+            step = next(
+                (
+                    v
+                    for k, v in reversed(steps.items())
+                    if k[0] == jid
+                    and name in (None, k[1])
+                    and v["state"] != "done"
+                ),
+                None,
+            ) or latest(jid, name)
             if step:
                 step["state"] = "done"
     if block is not None:
         mark_failed(block)
     return list(steps.values())
+
+
+def _run_multi_step(steps: dict, line: str) -> bool:
+    """A relation or bundle step from a line of run_multi's own (they are
+    not Snakemake's, so its rule blocks do not show them); True if it was
+    one."""
+    started = re.match(r"\[run_multi\] \$ (.*)", line)
+    if started:
+        cmd = started.group(1)
+        name = re.search(r"--job-name (\S+)", cmd)
+        if "relate.py" in cmd:
+            rule = "relate"
+            what = (name.group(1) if name else "").removeprefix("pw-relate-")
+            log = re.search(r"--log (\S+)", cmd)
+            log = log.group(1) if log else None
+        elif "export_iso.py" in cmd:
+            rule, what, log = "bundle", "", None
+        else:
+            return False
+        key = ("run_multi", rule, what)
+        previous = steps.pop(key, None)
+        steps[key] = {
+            "rule": rule,
+            "wildcards": what,
+            "log": log,
+            "slurm_job": None,
+            "slurm_log": None,
+            "mem_mb": None,
+            "attempt": previous["attempt"] + 1 if previous else 1,
+            "state": "running",
+            "earlier": [],
+        }
+        return True
+    ended = re.match(r"\[run_multi\] relate (.+) -> (\S+): (\S+)", line)
+    if ended:
+        children, parent, outcome = ended.groups()
+        children = [c.strip() for c in children.split(",")]
+        what = (
+            f"{children[0]}-to-{parent}"
+            if len(children) == 1
+            else f"to-{parent}"
+        )
+        # Named as run_multi names its job: sanitized, at most 50 characters.
+        job = re.sub(r"[^A-Za-z0-9_-]", "-", f"pw-relate-{what}")[:50]
+        step = steps.get(
+            ("run_multi", "relate", job.removeprefix("pw-relate-"))
+        )
+        if step:
+            step["state"] = "done" if outcome == "ok" else "failed"
+        return True
+    if line.startswith(("[run_multi] bundle: ok", "[run_multi] ERROR: bundl")):
+        step = steps.get(("run_multi", "bundle", ""))
+        if step:
+            step["state"] = "done" if "ok" in line else "failed"
+        return True
+    return line.startswith("[run_multi] $ ")
 
 
 # How SLURM itself ended a job, in its log (the executor's slurm_logs).
