@@ -2734,3 +2734,53 @@ def test_still_working_reads_squeue_and_pgrep(tmp_path, monkeypatch):
         pgrep=f"123 snakemake --directory {state}\n",
     )
     assert "snakemake" in run_multi._still_working(state, "cilia_labels")
+
+
+def test_a_full_disk_drops_the_old_bundle_first(tmp_path, monkeypatch, capsys):
+    """Keeping the old archive while writing the new one needs twice the
+    store; when that does not fit but the new one alone does, the old one
+    (out of date anyway) goes first. A killed run's partial goes too."""
+    import importlib.util
+    import shutil
+    import zipfile
+
+    spec = importlib.util.spec_from_file_location(
+        "export_iso", _workflow_dir() / "scripts" / "export_iso.py"
+    )
+    export_iso = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(export_iso)
+
+    store = tmp_path / "image.zarr"
+    store.mkdir()
+    (store / "zarr.json").write_bytes(b"x" * 1_000_000)
+    out = tmp_path / "image.zarr.zip"
+    out.write_bytes(b"old" * 400_000)
+    os.utime(out, (1, 1))  # older than the store: re-packed
+    partial = tmp_path / ".image.zarr.zip.partial"
+    partial.write_bytes(b"p" * 1000)
+
+    needed = int(1_000_000 * 1.02) + 16 * 1024**2
+    usage = shutil.disk_usage(tmp_path)
+    monkeypatch.setattr(
+        export_iso.shutil,
+        "disk_usage",
+        lambda p: usage._replace(free=needed - 1_100_000),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "export_iso.py",
+            "--store",
+            str(store),
+            "--format",
+            "zip",
+            "--overwrite",
+            "--skip-unchanged",
+        ],
+    )
+    export_iso.main()
+    printed = capsys.readouterr().out
+    assert "removing it first" in printed and "interrupted run" in printed
+    assert zipfile.ZipFile(out).namelist() == ["image.zarr/zarr.json"]
+    assert not partial.exists()
