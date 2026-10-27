@@ -1,6 +1,7 @@
 """Tests for the Streamlit launcher's logic (workflow/launcher)."""
 
 import json
+import time
 import re
 import sys
 from pathlib import Path
@@ -908,6 +909,18 @@ def test_app_resources_change_for_one_run():
     uploaded = yaml.safe_load(ssh.files[record["config"]])
     assert uploaded["gpu_memory_gb"] == 24
     assert record["inner"] and record["setup"] is not None
+
+    # A click made while the page was still drawing, then lost to a redraw:
+    # kept, and honoured when the page reaches the button again.
+    sbatches = sum("sbatch" in c for c in ssh.commands)
+    at.session_state["launch_requested"] = time.time()
+    at.run()
+    assert sum("sbatch" in c for c in ssh.commands) == sbatches + 1
+    assert "launch_requested" not in at.session_state
+    # ... but not an old one.
+    at.session_state["launch_requested"] = time.time() - 3600
+    at.run()
+    assert sum("sbatch" in c for c in ssh.commands) == sbatches + 1
 
 
 def _job(**extra):
