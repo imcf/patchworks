@@ -483,3 +483,29 @@ def test_label_colours_need_no_glasbey_package():
     assert len(GLASBEY_256) == len(set(GLASBEY_256)) == 256
     assert GLASBEY_256[0] == "db202d"
     assert all(len(h) == 6 and int(h, 16) >= 0 for h in GLASBEY_256)
+
+
+def test_object_tables_are_read_after_the_window_opens(monkeypatch):
+    """A whole slide's tables took minutes and the window waited for them:
+    they are read in a background thread and reach the layers afterwards."""
+    import time
+    import types
+
+    pytest.importorskip("napari")
+    qt = pytest.importorskip("qtpy.QtWidgets")
+    app = qt.QApplication.instance() or qt.QApplication([])
+
+    def slow(store):
+        time.sleep(0.3)
+        return {"cells": "features"}
+
+    monkeypatch.setattr(nplugin, "_hover_tables", slow)
+    layers = {"cells": types.SimpleNamespace(features=None)}
+    viewer = types.SimpleNamespace(layers=layers)
+    nplugin._show_relations_later(viewer, "store")
+    assert layers["cells"].features is None  # not waited for
+    end = time.time() + 10
+    while layers["cells"].features is None and time.time() < end:
+        app.processEvents()
+        time.sleep(0.02)
+    assert layers["cells"].features == "features"

@@ -50,6 +50,16 @@ def _warn_if_slow_to_read(path: str) -> None:
 
     from patchworks._io import split_zip_path
 
+    if "network" in _drive(sys.prefix):
+        print(
+            "[view] this viewer's Python environment is on a network drive "
+            f"({sys.prefix}): napari loads thousands of files from it, each "
+            "over the network, and opens in minutes instead of seconds. Keep "
+            "pixi's environments on this computer -- once, then reinstall:\n"
+            "    pixi config set --global detached-environments true\n"
+            "    pixi install",
+            flush=True,
+        )
     split = split_zip_path(path)
     if split and "network" in _drive(split[0]):
         print(

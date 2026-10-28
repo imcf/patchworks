@@ -570,10 +570,12 @@ def view_in_napari(
 
     with _timed("napari window"):
         viewer = napari.Viewer()
-    with _timed("image"):
-        for data, name, kwargs in image_layers(
+    with _timed("image: opening its arrays"):
+        layers = image_layers(
             image, channel, image_name, add_image_kwargs, split_channels
-        ):
+        )
+    with _timed("image: napari adding the layer"):
+        for data, name, kwargs in layers:
             viewer.add_image(data, name=name, **kwargs)
 
     label_kwargs: dict[str, Any] = {}
@@ -657,7 +659,11 @@ def view_in_napari(
                 continue
             loaded += 1
             logger.info("auto-loaded labels/%s from %s", name, image)
-        if loaded:
+        if loaded and show:
+            # Minutes for a whole slide's tables: read after the window
+            # is up, not before.
+            _show_relations_later(viewer, image)
+        elif loaded:
             with _timed("object tables, for hovering"):
                 _show_relations(viewer, image)
         if names and not loaded:
@@ -673,21 +679,56 @@ def view_in_napari(
     return viewer
 
 
-def _show_relations(viewer: Any, store: Any) -> None:
-    """Hovering an object shows its parent and children in the status bar,
-    from the store's object tables (when it has them)."""
+def _hover_tables(store: Any) -> dict:
+    """Each label image's hover features (its parents and children), from
+    the store's object tables; {} without tables."""
     try:
         from .._review import Review
 
         rv = Review(str(store))
     except Exception:
         logger.info("no object tables in %s: no relations on hover", store)
-        return
+        return {}
+    out = {}
     for name in rv.names:
+        try:
+            out[name] = rv.hover_features(name)
+        except Exception:  # pragma: no cover - a table it cannot read
+            logger.debug("no hover features for %s", name, exc_info=True)
+    return out
+
+
+def _apply_hover_tables(viewer: Any, tables: dict) -> None:
+    for name, features in tables.items():
         if name in viewer.layers:
             try:
-                viewer.layers[name].features = rv.hover_features(name)
+                viewer.layers[name].features = features
             except Exception:  # pragma: no cover - depends on napari
                 logger.debug(
                     "could not set features on %s", name, exc_info=True
                 )
+
+
+def _show_relations(viewer: Any, store: Any) -> None:
+    """Hovering an object shows its parent and children in the status bar,
+    from the store's object tables (when it has them)."""
+    _apply_hover_tables(viewer, _hover_tables(store))
+
+
+def _show_relations_later(viewer: Any, store: Any) -> None:
+    """:func:`_show_relations`, the tables read in a background thread and
+    handed to the layers once read (on napari's own thread)."""
+    from napari.qt.threading import thread_worker
+
+    start = time.perf_counter()
+    logger.info("reading the object tables for hovering, in the background")
+
+    def done(tables):
+        _apply_hover_tables(viewer, tables)
+        logger.info(
+            "object tables, for hovering: %.1f s", time.perf_counter() - start
+        )
+
+    worker = thread_worker(_hover_tables)(store)
+    worker.returned.connect(done)
+    worker.start()
