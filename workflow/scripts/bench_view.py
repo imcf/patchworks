@@ -24,7 +24,15 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import tempfile
 import time
+
+# As view.py: napari compiles with numba, whose cache next to a package on a
+# network share can pass Windows' 260-character limit.
+os.environ.setdefault(
+    "NUMBA_CACHE_DIR",
+    os.path.join(tempfile.gettempdir(), "patchworks-numba-cache"),
+)
 
 import numpy as np
 
@@ -117,20 +125,30 @@ def _timed(fn) -> tuple[float, object]:
     return time.perf_counter() - t, out
 
 
-def _bench(name: str, arrays: list, axes: list[str], dask_level) -> None:
+def _bench(name: str, arrays: list, axes: list[str], open_dask) -> None:
+    opened, dask_levels = _timed(open_dask)
+    print(f"  {name}: opened as the viewer does (dask) in {opened:.2f} s")
     for level in sorted({0, min(2, len(arrays) - 1)}):
         arr = arrays[level]
         sl = _view(arr, axes, level)
+        # Another plane for the viewer's read: not one the OS has cached.
+        other = tuple(
+            (i + 1) % n if isinstance(i, int) and ax == "z" else i
+            for i, ax, n in zip(sl, axes, arr.shape)
+        )
         touched = _chunks_touched(arr, sl)
         chunk_mb = np.prod(arr.chunks) * arr.dtype.itemsize / 1e6
         cold, data = _timed(lambda: np.asarray(arr[sl]))
         warm, _ = _timed(lambda: np.asarray(arr[sl]))
-        via_dask, _ = _timed(lambda: np.asarray(dask_level(level)[sl]))
+        lazy = dask_levels[level]
+        via_dask, _ = _timed(lambda: np.asarray(lazy[other]))
+        dask_warm, _ = _timed(lambda: np.asarray(lazy[other]))
         print(
             f"  {name} level {level}: view {data.shape}, {touched} chunk(s) "
             f"= {touched * chunk_mb:,.0f} MB decompressed for "
             f"{data.nbytes / 1e6:,.0f} MB shown | zarr {cold:.2f} s, again "
-            f"{warm:.2f} s | as the viewer reads it (dask) {via_dask:.2f} s"
+            f"{warm:.2f} s | dask (next plane) {via_dask:.2f} s, again "
+            f"{dask_warm:.2f} s"
         )
 
 
@@ -216,11 +234,12 @@ def main() -> None:
         "image",
         image,
         axes,
-        lambda lvl: (
-            load_ome_zarr(store, channel=c, level=lvl)[None]
+        lambda: [
+            load_ome_zarr(store, channel=c, level=i)[None]
             if c is not None
-            else load_ome_zarr(store, channel=None, level=lvl)
-        ),
+            else load_ome_zarr(store, channel=None, level=i)
+            for i in range(len(image))
+        ],
     )
     for name, arrays, lab_axes in labels:
         group = f"{store}/labels/{name}"
@@ -228,13 +247,20 @@ def main() -> None:
             f"labels/{name}",
             arrays,
             lab_axes,
-            lambda lvl, g=group: _multiscale_levels(g, None)[lvl].astype(
-                "int32"
-            ),
+            lambda g=group: [
+                lvl.astype("int32") for lvl in _multiscale_levels(g, None)
+            ],
         )
 
     if args.render and labels:
-        _render(labels[0][1], labels[0][2])
+        # The label image with the most objects in view: drawing an empty
+        # plane measures nothing.
+        def filled(entry):
+            arr = entry[1][0]
+            return int(np.count_nonzero(arr[_view(arr, entry[2], 0)]))
+
+        busiest = max(labels, key=filled)
+        _render(busiest[1], busiest[2])
     print(
         "\nTimes over ~0.5 s per view are felt. 'again' much faster than the "
         "first read: the store's latency or the network is the cost; both "
