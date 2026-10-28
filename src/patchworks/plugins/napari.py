@@ -411,10 +411,28 @@ def view_in_napari(
         if _is_zarr(image)
         else (None, None)
     )
+    # Every channel its own layer: shown together, each switched on and off
+    # at once. On one layer with a channel slider, every change of channel
+    # read a new plane and cached none.
+    name: Any = image_name
+    if (
+        channel is None
+        and _is_zarr(image)
+        and "channel_axis" not in add_image_kwargs
+    ):
+        axes = _store_axes(image, img_ndim)
+        shape = img[0].shape if isinstance(img, list) else img.shape
+        if "c" in axes and shape[axes.index("c")] > 1:
+            c = axes.index("c")
+            add_image_kwargs["channel_axis"] = c
+            name = [f"{image_name} [{i}]" for i in range(shape[c])]
+            if img_scale is not None:
+                img_scale = [v for i, v in enumerate(img_scale) if i != c]
+                img_units = [v for i, v in enumerate(img_units) if i != c]
     viewer = napari.Viewer()
     viewer.add_image(
         img,
-        name=image_name,
+        name=name,
         multiscale=isinstance(img, list),
         scale=img_scale,
         units=img_units,

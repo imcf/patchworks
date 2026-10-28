@@ -318,7 +318,7 @@ def test_view_in_napari_loads_a_bundle_exactly_like_a_directory(
 
     # The image plus all three label groups, auto-loaded.
     assert [(kind, name) for kind, name, *_ in from_directory] == [
-        ("image", "image"),
+        ("image", ["image [0]", "image [1]"]),
         ("labels", "nuclei_labels"),
         ("labels", "cyto_labels"),
         ("labels", "cilia_labels"),
@@ -354,7 +354,7 @@ def test_bundle_name_need_not_match_the_store(tmp_path, stub_napari):
     stub_napari.clear()
     nplugin.view_in_napari(str(bundle), show=False, glasbey=False)
     assert [name for _, name, _, _ in stub_napari] == [
-        "image",
+        ["image [0]", "image [1]"],
         "nuclei_labels",
         "cyto_labels",
         "cilia_labels",
@@ -404,6 +404,10 @@ def test_view_script_sets_the_numba_cache_before_importing_napari():
     assert src.index("NUMBA_CACHE_DIR") < src.index(
         "from patchworks.plugins.napari import"
     )
+    # napari reads its settings when imported: asynchronous loading too.
+    assert src.index("NAPARI_ASYNC") < src.index(
+        "from patchworks.plugins.napari import"
+    )
 
 
 def test_axes_come_from_the_store_not_a_guess(tmp_path, caplog):
@@ -429,3 +433,20 @@ def test_axes_come_from_the_store_not_a_guess(tmp_path, caplog):
         scale, _ = _pyramid_calibration(store, 4)
     assert scale[1:] == [2.0, 0.5, 0.5]
     assert "guessing" not in caplog.text
+
+
+def test_each_channel_is_its_own_layer(tmp_path, stub_napari):
+    """One layer with a channel slider read a new plane at every change of
+    channel and kept none: each channel is now a layer of its own, shown
+    together, with the scale of z, y and x only."""
+    store = _multi_store(tmp_path)
+    nplugin.view_in_napari(str(store), show=False, glasbey=False)
+    kind, name, data, kwargs = stub_napari[0]
+    assert kwargs["channel_axis"] == 0
+    assert name == ["image [0]", "image [1]"]
+    assert len(kwargs["scale"]) == len(kwargs["units"]) == 3
+    assert kwargs["scale"][0] == 0.24
+    # One channel asked for: one layer, as before.
+    stub_napari.clear()
+    nplugin.view_in_napari(str(store), channel=1, show=False, glasbey=False)
+    assert "channel_axis" not in stub_napari[0][3]
