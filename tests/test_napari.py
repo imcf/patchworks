@@ -528,3 +528,65 @@ def test_object_tables_are_read_after_the_window_opens(monkeypatch):
         app.processEvents()
         time.sleep(0.02)
     assert layers["cells"].features == "features"
+
+
+def test_channel_layers_are_named_after_the_channels(tmp_path, stub_napari):
+    """Each channel's layer takes its name from the store (NGFF omero
+    metadata), as converting from a CZI, LIF, ND2 or IMS file now writes."""
+    from patchworks.plugins.ome_zarr import channel_names, write_channel_names
+
+    store = _multi_store(tmp_path)
+    assert channel_names(str(store)) is None
+    with pytest.raises(ValueError, match="3 channel name"):
+        write_channel_names(str(store), ["a", "b", "c"])
+    write_channel_names(str(store), ["DAPI", "Phalloidin"])
+    assert channel_names(str(store)) == ["DAPI", "Phalloidin"]
+    nplugin.view_in_napari(str(store), show=False, glasbey=False)
+    assert stub_napari[0][1] == ["DAPI", "Phalloidin"]
+    # The names travel in a bundle too.
+    stub_napari.clear()
+    nplugin.view_in_napari(
+        str(_bundle(store, tmp_path)), show=False, glasbey=False
+    )
+    assert stub_napari[0][1] == ["DAPI", "Phalloidin"]
+
+
+def test_fix_metadata_names_the_channels(tmp_path, capsys):
+    from patchworks.cli import main
+    from patchworks.plugins.ome_zarr import channel_names
+
+    store = _multi_store(tmp_path)
+    assert main(["fix-metadata", str(store), "--channel-names", "A, B"]) == 0
+    assert channel_names(str(store)) == ["A", "B"]
+    assert "channels named: A, B" in capsys.readouterr().out
+
+
+def test_conversion_keeps_the_source_channel_names(tmp_path, monkeypatch):
+    """bioio reports a file's channel names: the new store carries them."""
+    import sys
+    import types
+
+    from patchworks.plugins import ome_zarr
+    from patchworks.plugins.ome_zarr import channel_names, source_channel_names
+
+    class BioImage:
+        scenes = ["s0"]
+        channel_names = ["DAPI", "Cilia"]
+
+        def __init__(self, path):
+            pass
+
+        def set_scene(self, scene):
+            pass
+
+    monkeypatch.setitem(
+        sys.modules, "bioio", types.SimpleNamespace(BioImage=BioImage)
+    )
+    assert source_channel_names("scan.czi") == ["DAPI", "Cilia"]
+    # Converting (here from a store that has names) writes them.
+    named = _multi_store(tmp_path / "a")
+    ome_zarr.write_channel_names(str(named), ["DAPI", "Cilia"])
+    out = ome_zarr.to_ome_zarr(
+        str(named), tmp_path / "b.zarr", n_levels=1, progress=False
+    )
+    assert channel_names(out) == ["DAPI", "Cilia"]

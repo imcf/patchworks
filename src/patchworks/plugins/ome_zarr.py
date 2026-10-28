@@ -444,6 +444,117 @@ def write_ngff_attrs(group, **entries) -> None:
     group.attrs["ome"] = merged
 
 
+# Channel colours, cycled, when the source gives none (as napari's own).
+_CHANNEL_COLORS = ("00FF00", "FF00FF", "00FFFF", "FFFF00", "FFFFFF", "FF0000")
+
+
+def channel_names(store: Union[str, Path]) -> "list[str] | None":
+    """The channels' names, from the store's ``omero`` metadata; None when
+    it has none."""
+    from .._io import open_group_any
+
+    try:
+        omero = read_ngff_attr(open_group_any(store).attrs, "omero") or {}
+    except Exception:  # noqa: BLE001 - unreadable: no names
+        return None
+    names = [str(c.get("label") or "") for c in omero.get("channels") or []]
+    return names if names and all(names) else None
+
+
+def write_channel_names(
+    store: Union[str, Path], names: "list[str]", colors=None
+) -> None:
+    """Name the image's channels (NGFF ``omero`` metadata), in place.
+
+    napari, Fiji/MoBIE and other OME-Zarr readers show these names instead
+    of channel numbers. Raises ValueError when *names* does not match the
+    channel axis.
+    """
+    group = _open_group(str(store), mode="r+")
+    meta = read_ngff_attr(group.attrs, "multiscales")[0]
+    axes = "".join(
+        str(a.get("name", "") if isinstance(a, dict) else a)[:1]
+        for a in meta["axes"]
+    )
+    n = (
+        group[meta["datasets"][0]["path"]].shape[axes.index("c")]
+        if ("c" in axes)
+        else 1
+    )
+    if len(names) != n:
+        raise ValueError(
+            f"{len(names)} channel name(s) for {n} channel(s): {names}"
+        )
+    colors = list(colors or [])
+    omero = dict(read_ngff_attr(group.attrs, "omero") or {})
+    old = list(omero.get("channels") or [])
+    omero["channels"] = [
+        {
+            **(old[i] if i < len(old) else {}),
+            "label": str(name),
+            "color": (
+                colors[i]
+                if i < len(colors) and colors[i]
+                else (old[i].get("color") if i < len(old) else None)
+                or _CHANNEL_COLORS[i % len(_CHANNEL_COLORS)]
+            ),
+            "active": True,
+        }
+        for i, name in enumerate(names)
+    ]
+    write_ngff_attrs(group, omero=omero)
+
+
+def source_channel_names(
+    source: Union[str, Path], scene: int = 0
+) -> "list[str] | None":
+    """The channels' names in an image file (CZI, LIF, ND2, OME-TIFF, ...
+    through bioio; Imaris; OME-Zarr), or None when it gives none."""
+    path = str(source)
+    try:
+        if path.endswith(".zarr") or ".zarr.zip" in path:
+            return channel_names(path)
+        if path.lower().endswith(".ims"):
+            import h5py
+
+            names = []
+            with h5py.File(path, "r") as hf:
+                info = hf["DataSetInfo"]
+                c = 0
+                while f"Channel {c}" in info:
+                    raw = info[f"Channel {c}"].attrs.get("Name")
+                    names.append(
+                        b"".join(raw).decode(errors="replace")
+                        if raw is not None
+                        else ""
+                    )
+                    c += 1
+        else:
+            from bioio import BioImage
+
+            img = BioImage(path)
+            img.set_scene(img.scenes[scene])
+            names = [str(n) for n in (img.channel_names or [])]
+    except Exception:  # noqa: BLE001 - names are a nicety, never an error
+        logger.debug("no channel names in %s", path, exc_info=True)
+        return None
+    return names if names and all(n.strip() for n in names) else None
+
+
+def _name_channels_from(source: object, out: str, scene: int = 0) -> None:
+    """Carry the source file's channel names into the new store."""
+    if not isinstance(source, (str, Path)):
+        return
+    names = source_channel_names(source, scene)
+    if not names:
+        return
+    try:
+        write_channel_names(out, names)
+        logger.info("channel names from %s: %s", source, ", ".join(names))
+    except ValueError as exc:  # e.g. a singleton channel axis dropped
+        logger.info("channel names not kept: %s", exc)
+
+
 def _effective_shard(
     requested: tuple[int, ...],
     chunks: tuple[int, ...],
@@ -2418,6 +2529,7 @@ def _write_imaris_pyramid(
     _write_multiscales(
         out, axes, datasets, Path(out).stem, calibrated=calibrated
     )
+    _name_channels_from(path, out)
     return out
 
 
@@ -2657,6 +2769,7 @@ def to_ome_zarr(
         _write_multiscales(
             out, axes, datasets, Path(out).stem, calibrated=bool(ps)
         )
+        _name_channels_from(source, out, scene)
         return out
 
 

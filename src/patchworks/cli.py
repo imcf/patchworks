@@ -281,6 +281,21 @@ def _cmd_fix_metadata(args: argparse.Namespace) -> int:
     from .plugins.ome_zarr import fix_ngff_metadata
 
     changes = fix_ngff_metadata(args.store)
+    names = None
+    if args.channel_names:
+        names = [n.strip() for n in args.channel_names.split(",")]
+    elif args.channels_from:
+        from .plugins.ome_zarr import source_channel_names
+
+        names = source_channel_names(args.channels_from)
+        if not names:
+            print(f"{args.channels_from}: no channel names in it")
+            return 1
+    if names:
+        from .plugins.ome_zarr import write_channel_names
+
+        write_channel_names(args.store, names)
+        changes.append(f"channels named: {', '.join(names)}")
     for line in changes:
         print(line)
     if not changes:
@@ -579,6 +594,17 @@ def build_parser() -> argparse.ArgumentParser:
         "metadata only)",
     )
     p.add_argument("store")
+    names = p.add_mutually_exclusive_group()
+    names.add_argument(
+        "--channel-names",
+        metavar="A,B,C",
+        help="name the image's channels, in order (shown by napari, Fiji)",
+    )
+    names.add_argument(
+        "--channels-from",
+        metavar="FILE",
+        help="name them as in the original file (CZI, LIF, ND2, IMS, ...)",
+    )
     p.set_defaults(func=_cmd_fix_metadata)
 
     p = sub.add_parser("view", help="open in napari")

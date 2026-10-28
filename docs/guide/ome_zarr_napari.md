@@ -16,7 +16,9 @@ to_ome_zarr(array, "scan.zarr", axes="czyx", pixel_size={"z": 2.0, "y": 0.32, "x
 
 Inputs are read lazily and the pyramid is written level by level, so any size
 converts in bounded memory. The voxel size is read from the file and stored
-in µm. Useful options:
+in µm, and the channels' names too (napari names each channel's layer after
+them; add them to an older store with `patchworks fix-metadata scan.zarr
+--channels-from scan.czi`). Useful options:
 
 | Option | Does |
 | --- | --- |

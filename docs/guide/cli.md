@@ -27,6 +27,10 @@ patchworks review scan.zarr --expect cells:nuclei=1
 
 # Bring a store written by an older patchworks up to the OME-Zarr spec
 patchworks fix-metadata scan.zarr
+
+# Name the channels (napari, Fiji show them): from the original file, or typed
+patchworks fix-metadata scan.zarr --channels-from scan.czi
+patchworks fix-metadata scan.zarr --channel-names DAPI,Membrane,Cilia,Actin
 ```
 
 `fix-metadata` only touches metadata, in place, and is safe to run twice.
