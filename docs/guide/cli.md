@@ -22,6 +22,12 @@ patchworks view scan.zarr
 # One row per object; which cell each nucleus is in
 patchworks tables scan.zarr --relate nuclei:cells
 
+# The objects' volumes, and the min_volume that drops the specks
+patchworks sizes scan.zarr cilia_labels
+
+# Without them, as a new label image (the original stays; a job on a cluster)
+patchworks filter scan.zarr cilia_labels --min-volume 0.3
+
 # Look at the likely mistakes one by one and fix them (napari)
 patchworks review scan.zarr --expect cells:nuclei=1
 

@@ -312,6 +312,33 @@ def _cmd_fix_metadata(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_sizes(args: argparse.Namespace) -> int:
+    from ._filter import format_size_report, size_report
+
+    print(format_size_report(args.name, size_report(args.store, args.name)))
+    return 0
+
+
+def _cmd_filter(args: argparse.Namespace) -> int:
+    from ._filter import filter_labels
+
+    if args.min_volume is None and args.max_volume is None:
+        print("give --min-volume and/or --max-volume")
+        return 2
+    out, kept, dropped = filter_labels(
+        args.store,
+        args.name,
+        min_volume=args.min_volume,
+        max_volume=args.max_volume,
+        out=args.out,
+    )
+    print(
+        f"labels/{out}: {kept:,} objects kept, {dropped:,} dropped "
+        f"(labels/{args.name} is unchanged)"
+    )
+    return 0
+
+
 def _cmd_view(args: argparse.Namespace) -> int:
     from .plugins.napari import view_in_napari
 
@@ -622,6 +649,32 @@ def build_parser() -> argparse.ArgumentParser:
         "(its (?P<C>...) group says each file's channel)",
     )
     p.set_defaults(func=_cmd_fix_metadata)
+
+    p = sub.add_parser(
+        "sizes",
+        help="the objects' volumes, and the min_volume that drops the specks",
+    )
+    p.add_argument("store")
+    p.add_argument("name", help="label image, e.g. cilia_labels")
+    p.set_defaults(func=_cmd_sizes)
+
+    p = sub.add_parser(
+        "filter",
+        help="a label image without the objects outside a volume range "
+        "(written as a new one; run it as a job on a cluster)",
+    )
+    p.add_argument("store")
+    p.add_argument("name", help="label image, e.g. cilia_labels")
+    p.add_argument(
+        "--min-volume", type=float, help="µm³ (voxels if uncalibrated)"
+    )
+    p.add_argument(
+        "--max-volume", type=float, help="µm³ (voxels if uncalibrated)"
+    )
+    p.add_argument(
+        "--out", help="new label image's name (default NAME_filtered)"
+    )
+    p.set_defaults(func=_cmd_filter)
 
     p = sub.add_parser("view", help="open in napari")
     p.add_argument("image")
