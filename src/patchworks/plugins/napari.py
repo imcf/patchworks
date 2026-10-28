@@ -414,7 +414,14 @@ def image_layers(
         if "c" in axes and shape[axes.index("c")] > 1:
             c = axes.index("c")
             extra.setdefault("channel_axis", c)
-            name = [f"{image_name} [{i}]" for i in range(shape[c])]
+            from .ome_zarr import channel_names
+
+            # The channels' own names (the store's omero metadata), or
+            # their numbers.
+            names = channel_names(image)
+            if names is None or len(names) != shape[c]:
+                names = [f"{image_name} [{i}]" for i in range(shape[c])]
+            name = names
             on = set(shown) if shown is not None else {0}
             extra.setdefault("visible", [i in on for i in range(shape[c])])
             if scale is not None:
