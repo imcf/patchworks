@@ -28,7 +28,7 @@ import logging
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Mapping, Union
+from typing import Any, Mapping, Sequence, Union
 
 import dask.array as da
 import numpy as np
@@ -388,16 +388,18 @@ def image_layers(
     channel: int | None,
     image_name: str = "image",
     extra: Mapping[str, Any] | None = None,
-    split_channels: bool = False,
+    split_channels: bool = True,
+    shown: "Sequence[int] | None" = None,
 ) -> list[tuple[Any, Any, dict]]:
     """The image layers for napari: ``(data, name, add_image kwargs)``.
 
     Lazy dask arrays: napari cuts the region on screen out of every axis
     not displayed before it picks the plane, which is free on dask but
     reads every channel and plane of it from a zarr array (8 minutes for a
-    whole slide). All channels are one layer with a channel slider;
-    *split_channels* makes each its own layer, shown together -- every zoom
-    and pan then reads every channel.
+    whole slide). Each channel is a layer of its own, so several can be
+    shown at once; only those in *shown* (default: the first) are visible,
+    and napari reads a hidden layer only once it is switched on.
+    *split_channels* False puts them all on one layer's channel slider.
     """
     extra = dict(extra or {})
     img = _resolve_image(image, channel)
@@ -413,6 +415,8 @@ def image_layers(
             c = axes.index("c")
             extra.setdefault("channel_axis", c)
             name = [f"{image_name} [{i}]" for i in range(shape[c])]
+            on = set(shown) if shown is not None else {0}
+            extra.setdefault("visible", [i in on for i in range(shape[c])])
             if scale is not None:
                 scale = [v for i, v in enumerate(scale) if i != c]
                 units = [v for i, v in enumerate(units) if i != c]
@@ -430,7 +434,8 @@ def view_in_napari(
     labels_name: str = "labels",
     glasbey: bool = True,
     show: bool = True,
-    split_channels: bool = False,
+    split_channels: bool = True,
+    shown: "Sequence[int] | None" = None,
     hover: bool = True,
     **add_image_kwargs: Any,
 ):
@@ -465,9 +470,12 @@ def view_in_napari(
         Start the napari event loop (blocking). Set ``False`` in scripts/tests
         that manage the loop themselves.
     split_channels : bool, optional
-        Each channel its own layer, shown together in its own colour,
-        instead of one layer with a channel slider. Every zoom and pan then
-        reads every channel.
+        Each channel its own layer (default), so several can be shown
+        together, each in its own colour; ``False``: one layer with a
+        channel slider.
+    shown : sequence of int, optional
+        The channels visible at first (default: the first). A hidden
+        channel is not read until it is switched on.
     hover : bool, optional
         Show each object's parent and children when hovering it, from the
         object tables, read in the background once the window is up (for a
@@ -503,7 +511,7 @@ def view_in_napari(
         viewer = napari.Viewer()
     with _timed("image: opening its arrays"):
         layers = image_layers(
-            image, channel, image_name, add_image_kwargs, split_channels
+            image, channel, image_name, add_image_kwargs, split_channels, shown
         )
     with _timed("image: napari adding the layer"):
         for data, name, kwargs in layers:
@@ -607,9 +615,38 @@ def view_in_napari(
                 image,
             )
 
+    _name_axes(viewer, image)
     if show:
         napari.run()
     return viewer
+
+
+AXIS_NAMES = {"t": "time", "c": "channel", "z": "z", "y": "y", "x": "x"}
+
+
+def _name_axes(viewer: Any, image: Any) -> None:
+    """The sliders named after the store's axes (channel, z) rather than
+    napari's bare -3, -4."""
+    if not _is_zarr(image):
+        return
+    try:
+        layers = list(viewer.layers)
+        ndim = int(viewer.dims.ndim)
+    except (AttributeError, TypeError):
+        return  # not a real viewer
+    axes = _store_axes(image, len(_multiscale_meta_axes(image)))
+    if layers and layers[0].ndim < len(axes):
+        axes = axes.replace("c", "")  # split into one layer per channel
+    names = [AXIS_NAMES.get(a, a) for a in axes]
+    if len(names) < ndim:
+        names = [f"axis {i}" for i in range(ndim - len(names))] + names
+    viewer.dims.axis_labels = tuple(names[-ndim:])
+
+
+def _multiscale_meta_axes(image: Any) -> list:
+    from .ome_zarr import _multiscale_meta
+
+    return list((_multiscale_meta(str(image)) or {}).get("axes") or [])
 
 
 def _hover_tables(store: Any) -> dict:

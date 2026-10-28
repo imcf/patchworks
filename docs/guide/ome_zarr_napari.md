@@ -72,9 +72,10 @@ view_in_napari("scan.zarr", channel=0)   # one channel
 ```
 
 Only what is on screen is read, so it opens at once even for terabytes.
-Channels are on a slider (`--split-channels` shows them together, one
-layer each, at the cost of reading every channel at every zoom). From the
-cluster workflow:
+Each channel is a layer of its own, so several can be shown together; only
+the first is visible at first (`--show 0,2` for others), and a hidden
+channel is not read until you switch it on. `--slider` puts all channels
+on one layer's slider instead. From the cluster workflow:
 `pixi run -e viewer napari <work_dir>/image.zarr` (needs a display). To
 check and correct the results, see [Reviewing](review.md).
 
