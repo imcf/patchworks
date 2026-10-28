@@ -18,6 +18,7 @@ VNC session. It cannot open over a plain headless SSH session.
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import sys
 import tempfile
@@ -36,6 +37,10 @@ if "--async" in sys.argv:
     os.environ.setdefault("NAPARI_ASYNC", "1")
 
 from patchworks.plugins.napari import view_in_napari  # noqa: E402
+
+# What opening does and how long each part takes, on the console.
+logging.basicConfig(format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
+logging.getLogger("patchworks").setLevel(logging.INFO)
 
 
 def _warn_if_slow_to_read(path: str) -> None:

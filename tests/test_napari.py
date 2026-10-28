@@ -473,3 +473,13 @@ def test_channels_on_a_slider_or_split(tmp_path, stub_napari):
     ((_, name, data, kwargs),) = stub_napari[:1]
     assert name == "image" and "colormap" not in kwargs
     assert np.array_equal(data[0][2], image[1, 2])
+
+
+def test_label_colours_need_no_glasbey_package():
+    """The palette is stored: importing glasbey took ~15 s and building the
+    palette ~3 s, at every opening of the viewer."""
+    from patchworks.plugins.napari import GLASBEY_256
+
+    assert len(GLASBEY_256) == len(set(GLASBEY_256)) == 256
+    assert GLASBEY_256[0] == "db202d"
+    assert all(len(h) == 6 and int(h, 16) >= 0 for h in GLASBEY_256)
