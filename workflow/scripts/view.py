@@ -103,9 +103,15 @@ def main() -> None:
         help="no parent/children on hover: the object tables are not read",
     )
     parser.add_argument(
-        "--split-channels",
+        "--show",
+        default="0",
+        help="channels visible at first, e.g. 0,2 (each channel is a layer; "
+        "a hidden one is read only once switched on)",
+    )
+    parser.add_argument(
+        "--slider",
         action="store_true",
-        help="each channel its own layer, shown together (reads them all)",
+        help="all channels on one layer with a channel slider",
     )
     args = parser.parse_args()
     _warn_if_slow_to_read(args.image)
@@ -117,7 +123,8 @@ def main() -> None:
         args.image,
         channel=args.channel,
         glasbey=not args.no_glasbey,
-        split_channels=args.split_channels,
+        split_channels=not args.slider,
+        shown=[int(c) for c in args.show.split(",") if c.strip()],
         hover=not args.no_hover,
     )
 

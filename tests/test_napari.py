@@ -318,7 +318,7 @@ def test_view_in_napari_loads_a_bundle_exactly_like_a_directory(
 
     # The image plus all three label groups, auto-loaded.
     assert [(kind, name) for kind, name, *_ in from_directory] == [
-        ("image", "image"),
+        ("image", ["image [0]", "image [1]"]),
         ("labels", "nuclei_labels"),
         ("labels", "cyto_labels"),
         ("labels", "cilia_labels"),
@@ -354,7 +354,7 @@ def test_bundle_name_need_not_match_the_store(tmp_path, stub_napari):
     stub_napari.clear()
     nplugin.view_in_napari(str(bundle), show=False, glasbey=False)
     assert [name for _, name, _, _ in stub_napari] == [
-        "image",
+        ["image [0]", "image [1]"],
         "nuclei_labels",
         "cyto_labels",
         "cilia_labels",
@@ -439,16 +439,18 @@ def test_channels_on_a_slider_or_split(tmp_path, stub_napari):
     """The image goes to napari lazily (dask): napari cuts the region on
     screen out of every axis before picking the plane, which read every
     channel and plane of it from a zarr array -- 8 minutes for a whole
-    slide. Channels stay on one layer's slider unless split, then one layer
-    each with the scale of z, y and x only."""
+    slide. Each channel is a layer, so several can be seen at once; only
+    the first is visible (napari reads a hidden layer only once shown)."""
     import dask.array as da
 
     store = _multi_store(tmp_path)
     image = np.arange(2 * 4 * 32 * 32, dtype="uint16").reshape(2, 4, 32, 32)
     nplugin.view_in_napari(str(store), show=False, glasbey=False)
     (kind, name, data, kwargs) = stub_napari[0]
-    assert name == "image" and len(kwargs["scale"]) == 4
-    assert "channel_axis" not in kwargs
+    assert name == ["image [0]", "image [1]"] and kwargs["channel_axis"] == 0
+    assert kwargs["visible"] == [True, False]
+    assert len(kwargs["scale"]) == len(kwargs["units"]) == 3
+    assert kwargs["scale"][0] == 0.24
     assert all(isinstance(level, da.Array) for level in data)
     assert np.array_equal(np.asarray(data[0][1, 2]), image[1, 2])
     assert all(
@@ -457,13 +459,39 @@ def test_channels_on_a_slider_or_split(tmp_path, stub_napari):
         for level in data
     )
     stub_napari.clear()
+    nplugin.view_in_napari(str(store), show=False, glasbey=False, shown=[0, 1])
+    assert stub_napari[0][3]["visible"] == [True, True]
+    stub_napari.clear()
     nplugin.view_in_napari(
-        str(store), show=False, glasbey=False, split_channels=True
+        str(store), show=False, glasbey=False, split_channels=False
     )
     (kind, name, data, kwargs) = stub_napari[0]
-    assert name == ["image [0]", "image [1]"] and kwargs["channel_axis"] == 0
-    assert len(kwargs["scale"]) == len(kwargs["units"]) == 3
-    assert kwargs["scale"][0] == 0.24
+    assert name == "image" and "channel_axis" not in kwargs
+    assert len(kwargs["scale"]) == 4
+
+
+def test_sliders_are_named_after_the_axes(tmp_path):
+    """napari labels its sliders -3, -4: they are named from the store."""
+    import types
+
+    from napari.components import ViewerModel
+
+    pytest.importorskip("napari")
+    store = _multi_store(tmp_path)
+    viewer = ViewerModel()
+    for data, name, kwargs in nplugin.image_layers(str(store), None):
+        viewer.add_image(data, name=name, **kwargs)
+    nplugin._name_axes(viewer, str(store))
+    assert tuple(viewer.dims.axis_labels) == ("z", "y", "x")
+    viewer = ViewerModel()
+    for data, name, kwargs in nplugin.image_layers(
+        str(store), None, split_channels=False
+    ):
+        viewer.add_image(data, name=name, **kwargs)
+    nplugin._name_axes(viewer, str(store))
+    assert tuple(viewer.dims.axis_labels) == ("channel", "z", "y", "x")
+    # The test stand-in has no dims: nothing to name, no error.
+    nplugin._name_axes(types.SimpleNamespace(layers=[]), str(store))
 
 
 def test_label_colours_need_no_glasbey_package():
