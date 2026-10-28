@@ -436,23 +436,23 @@ def test_axes_come_from_the_store_not_a_guess(tmp_path, caplog):
 
 
 def test_channels_on_a_slider_or_split(tmp_path, stub_napari):
-    """The image goes to napari as zarr arrays (through dask a view of a
-    whole slide took ~1.3 s against 0.01 s). Channels stay on one layer's
-    slider -- split into layers, every zoom read all of them and it was
-    slower -- unless asked: then each is a layer in its own colour, with
-    the scale of z, y and x only."""
-    from patchworks.plugins.napari import _ChannelView
+    """The image goes to napari lazily (dask): napari cuts the region on
+    screen out of every axis before picking the plane, which read every
+    channel and plane of it from a zarr array -- 8 minutes for a whole
+    slide. Channels stay on one layer's slider unless split, then one layer
+    each with the scale of z, y and x only."""
+    import dask.array as da
 
     store = _multi_store(tmp_path)
     image = np.arange(2 * 4 * 32 * 32, dtype="uint16").reshape(2, 4, 32, 32)
     nplugin.view_in_napari(str(store), show=False, glasbey=False)
     (kind, name, data, kwargs) = stub_napari[0]
     assert name == "image" and len(kwargs["scale"]) == 4
-    assert type(data[0]).__module__.startswith("zarr")
+    assert "channel_axis" not in kwargs
+    assert all(isinstance(level, da.Array) for level in data)
     assert np.array_equal(np.asarray(data[0][1, 2]), image[1, 2])
-    # The labels are zarr arrays too, not dask.
     assert all(
-        type(level).__module__.startswith("zarr")
+        isinstance(level, da.Array)
         for _, _, data, _ in stub_napari[1:]
         for level in data
     )
@@ -460,19 +460,10 @@ def test_channels_on_a_slider_or_split(tmp_path, stub_napari):
     nplugin.view_in_napari(
         str(store), show=False, glasbey=False, split_channels=True
     )
-    (k0, n0, d0, kw0), (k1, n1, d1, kw1) = stub_napari[:2]
-    assert (n0, n1) == ("image [0]", "image [1]")
-    assert kw0["colormap"] != kw1["colormap"]
-    assert len(kw0["scale"]) == len(kw0["units"]) == 3
-    assert kw0["scale"][0] == 0.24
-    assert all(isinstance(level, _ChannelView) for level in d1)
-    assert np.array_equal(d1[0][2], image[1, 2])
-    # One channel asked for: one layer of it.
-    stub_napari.clear()
-    nplugin.view_in_napari(str(store), channel=1, show=False, glasbey=False)
-    ((_, name, data, kwargs),) = stub_napari[:1]
-    assert name == "image" and "colormap" not in kwargs
-    assert np.array_equal(data[0][2], image[1, 2])
+    (kind, name, data, kwargs) = stub_napari[0]
+    assert name == ["image [0]", "image [1]"] and kwargs["channel_axis"] == 0
+    assert len(kwargs["scale"]) == len(kwargs["units"]) == 3
+    assert kwargs["scale"][0] == 0.24
 
 
 def test_label_colours_need_no_glasbey_package():
