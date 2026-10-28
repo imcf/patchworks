@@ -250,7 +250,6 @@ def _group_matches(
     import dask.array as da
     import zarr
 
-    from patchworks import label_relations
     from patchworks._relations import label_relations_many
 
     def array(name):
@@ -271,7 +270,11 @@ def _group_matches(
             flush=True,
         )
         (same if a.chunks == b.chunks else other).append(name)
-    out = label_relations_many({n: array(n) for n in same}, b) if same else {}
+    out = (
+        label_relations_many({n: array(n) for n in same}, b, parent_name=b_name)
+        if same
+        else {}
+    )
     for name in other:
         a = da.from_zarr(image_store, component=f"labels/{name}/0")
         bb = da.from_zarr(image_store, component=f"labels/{b_name}/0")
@@ -289,7 +292,9 @@ def _group_matches(
                 flush=True,
             )
             a = a.rechunk(bb.chunks)
-        out[name] = label_relations(a, bb)
+        out[name] = label_relations_many({name: a}, bb, parent_name=b_name)[
+            name
+        ]
     return out
 
 

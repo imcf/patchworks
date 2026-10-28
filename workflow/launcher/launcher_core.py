@@ -2004,11 +2004,14 @@ def parse_tails(output: str, paths: list[str]) -> dict[str, str]:
     return {p: "\n".join(lines) for p, lines in found.items()}
 
 
-def last_progress(text: str) -> dict[str, Any] | None:
+def last_progress(text: str, label: str | None = None) -> dict[str, Any] | None:
     """The last progress line a step logged (``patchworks._progress``):
-    ``label``, ``fraction``, ``elapsed``, ``left``."""
+    ``label``, ``fraction``, ``elapsed``, ``left``; with *label*, the last
+    one of that label (a relate job logs one per relation)."""
     for line in reversed(text.splitlines()):
         m = _PROGRESS.search(line)
+        if m and label is not None and m["label"].strip() != label:
+            continue
         if m:
             done = int(m["done"].replace(",", ""))
             total = int(m["total"].replace(",", ""))

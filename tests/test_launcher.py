@@ -2472,3 +2472,18 @@ def test_a_finished_step_of_one_segmentation_is_not_lost_to_another():
         + "Finished jobid: 5 (Rule: segment)\n"
     )
     assert [s["state"] for s in core.parse_steps(log)] == ["done", "done"]
+
+
+def test_a_relation_shows_its_own_progress():
+    """A relate job logs one progress line per relation; the Progress bar
+    of each relation reads its own."""
+    log = (
+        "11:46:32 INFO patchworks._progress: nuclei -> cells: "
+        "4,839/25,245 (19%) after 17m, ~72m left\n"
+        "11:46:32 INFO patchworks._progress: cilia -> cells: "
+        "900/1,000 (90%) after 17m, ~2m left\n"
+    )
+    nuclei = core.last_progress(log, "nuclei -> cells")
+    assert nuclei["done"] == 4839 and nuclei["left"] == "72m"
+    assert core.last_progress(log, "cilia -> cells")["fraction"] == 0.9
+    assert core.last_progress(log, "cells -> tissue") is None

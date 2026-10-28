@@ -2746,6 +2746,22 @@ def steps_view(steps: list[dict], queue: list[dict]) -> None:
                     )
 
 
+def _relation_progress(rel: dict, steps: list[dict]) -> dict | None:
+    """The progress of one relation, from its relate job's log: each logs a
+    line per relation (``nuclei -> cells: 4,839/12,000 (40%) ...``)."""
+    parent = re.sub(r"[^A-Za-z0-9_-]", "-", rel["b"])
+    for step in reversed(steps):
+        if (
+            step["rule"] == "relate"
+            and step.get("log")
+            and step["wildcards"].endswith(f"to-{parent}")
+        ):
+            return core.last_progress(
+                _tail(step["log"], TAIL_LINES), f"{rel['a']} -> {rel['b']}"
+            )
+    return None
+
+
 def job_progress(job: dict, steps: list[dict], result) -> dict | None:
     """How far the run got (scripts/status.py); returns that status."""
     rc, out, err = result
@@ -2791,6 +2807,9 @@ def job_progress(job: dict, steps: list[dict], result) -> dict | None:
             # "current" is missing from an older status script: files then.
             if rel.get("current", bool(rel["files"])):
                 frac, what = 1.0, "related"
+            elif merged and (got := _relation_progress(rel, steps)):
+                frac = got["fraction"]
+                what = f"relating: {frac:.0%}, ~{got['left']} left"
             elif merged:
                 frac, what = 0.0, "relating" + (f": {said[-1]}" if said else "")
             else:
