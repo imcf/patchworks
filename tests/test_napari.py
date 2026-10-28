@@ -474,9 +474,9 @@ def test_sliders_are_named_after_the_axes(tmp_path):
     """napari labels its sliders -3, -4: they are named from the store."""
     import types
 
+    pytest.importorskip("napari")
     from napari.components import ViewerModel
 
-    pytest.importorskip("napari")
     store = _multi_store(tmp_path)
     viewer = ViewerModel()
     for data, name, kwargs in nplugin.image_layers(str(store), None):
