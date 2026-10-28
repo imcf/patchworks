@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 import tempfile
 
 # Before napari imports numba: its cache path on a network share can
@@ -28,7 +29,30 @@ os.environ.setdefault(
     os.path.join(tempfile.gettempdir(), "patchworks-numba-cache"),
 )
 
+# Load tiles in the background, so the window stays responsive while a
+# view is read (napari's own setting, for this session only).
+if "--no-async" not in sys.argv:
+    os.environ.setdefault("NAPARI_ASYNC", "1")
+
 from patchworks.plugins.napari import view_in_napari  # noqa: E402
+
+
+def _warn_if_slow_to_read(path: str) -> None:
+    """A bundle on a network drive is read chunk by chunk over the network,
+    and one chunk at a time: copy it to this computer and unzip it."""
+    from bench_view import _drive
+
+    from patchworks._io import split_zip_path
+
+    split = split_zip_path(path)
+    if split and "network" in _drive(split[0]):
+        print(
+            "[view] this .zip is on a network drive: every zoom and pan "
+            "reads it over the network, one chunk at a time. For a fast "
+            "viewer, copy it to this computer and unzip it (or open the "
+            "unzipped image.zarr directly).",
+            flush=True,
+        )
 
 
 def main() -> None:
@@ -51,7 +75,13 @@ def main() -> None:
         action="store_true",
         help="use napari's default label colours instead of glasbey",
     )
+    parser.add_argument(
+        "--no-async",
+        action="store_true",
+        help="load each view before drawing it (napari's default)",
+    )
     args = parser.parse_args()
+    _warn_if_slow_to_read(args.image)
 
     # Leaving the labels argument at its default auto-loads every label
     # group under <image>/labels/<name>/ as its own Labels layer -- exactly

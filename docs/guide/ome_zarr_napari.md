@@ -72,9 +72,15 @@ view_in_napari("scan.zarr", channel=0)   # one channel
 ```
 
 Only what is on screen is read, so it opens at once even for terabytes.
-From the cluster workflow: `pixi run -e viewer napari <work_dir>/image.zarr`
-(needs a display). To check and correct the results, see
-[Reviewing](review.md).
+Each channel is a layer of its own, and views load in the background
+(`--no-async` to wait for each). From the cluster workflow:
+`pixi run -e viewer napari <work_dir>/image.zarr` (needs a display). To
+check and correct the results, see [Reviewing](review.md).
+
+If zooming or panning is slow, `pixi run bench <image.zarr>` (in
+`workflow/viewer`) says where the time goes: the store's chunks, the
+network, or drawing. A `.zip` on a network drive is read over the network
+one chunk at a time: copy it to your computer and unzip it.
 
 ## Remote stores
 
