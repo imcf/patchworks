@@ -322,14 +322,19 @@ def _cmd_sizes(args: argparse.Namespace) -> int:
 def _cmd_filter(args: argparse.Namespace) -> int:
     from ._filter import filter_labels
 
-    if args.min_volume is None and args.max_volume is None:
-        print("give --min-volume and/or --max-volume")
+    if (
+        args.min_volume is None
+        and args.max_volume is None
+        and (args.min_length is None)
+    ):
+        print("give --min-volume, --max-volume and/or --min-length")
         return 2
     out, kept, dropped = filter_labels(
         args.store,
         args.name,
         min_volume=args.min_volume,
         max_volume=args.max_volume,
+        min_length=args.min_length,
         out=args.out,
     )
     print(
