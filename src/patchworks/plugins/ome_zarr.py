@@ -616,12 +616,12 @@ def tiff_sequence_channel_names(
         if len(names) == n and all(names):
             return names
     try:
-        names = [_tiff_channel_name(first[c]) for c in sorted(first)]
+        found = [_tiff_channel_name(first[c]) for c in sorted(first)]
     except Exception:  # noqa: BLE001 - names are a nicety, never an error
         logger.debug("no channel names in %s", pattern, exc_info=True)
         return None
-    if all(names) and len(set(names)) == n:
-        return [str(x) for x in names]
+    if all(found) and len(set(found)) == n:
+        return [str(x) for x in found]
     # The same OME-XML in every file, naming all the channels.
     try:
         import tifffile
