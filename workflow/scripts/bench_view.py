@@ -127,7 +127,7 @@ def _timed(fn) -> tuple[float, object]:
 
 def _bench(name: str, arrays: list, axes: list[str], open_dask) -> None:
     opened, dask_levels = _timed(open_dask)
-    print(f"  {name}: opened as the viewer does (dask) in {opened:.2f} s")
+    print(f"  {name}: opened as the viewer does in {opened:.2f} s")
     for level in sorted({0, min(2, len(arrays) - 1)}):
         arr = arrays[level]
         sl = _view(arr, axes, level)
@@ -141,13 +141,17 @@ def _bench(name: str, arrays: list, axes: list[str], open_dask) -> None:
         cold, data = _timed(lambda: np.asarray(arr[sl]))
         warm, _ = _timed(lambda: np.asarray(arr[sl]))
         lazy = dask_levels[level]
+        if lazy.ndim < len(axes):  # one channel's view: no channel index
+            other = tuple(
+                k for k, ax in zip(other, axes) if ax not in ("c", "t")
+            )
         via_dask, _ = _timed(lambda: np.asarray(lazy[other]))
         dask_warm, _ = _timed(lambda: np.asarray(lazy[other]))
         print(
             f"  {name} level {level}: view {data.shape}, {touched} chunk(s) "
             f"= {touched * chunk_mb:,.0f} MB decompressed for "
             f"{data.nbytes / 1e6:,.0f} MB shown | zarr {cold:.2f} s, again "
-            f"{warm:.2f} s | dask (next plane) {via_dask:.2f} s, again "
+            f"{warm:.2f} s | viewer (next plane) {via_dask:.2f} s, again "
             f"{dask_warm:.2f} s"
         )
 
@@ -225,8 +229,7 @@ def main() -> None:
         f"{1000 * _latency(image[0]):.0f} ms"
     )
 
-    from patchworks._io import load_ome_zarr
-    from patchworks.plugins.napari import _multiscale_levels
+    from patchworks.plugins.napari import _label_levels, image_layers
 
     print(f"\none view ({SCREEN} x {SCREEN} pixels, middle plane):")
     c = 0 if "c" in axes else None
@@ -234,12 +237,7 @@ def main() -> None:
         "image",
         image,
         axes,
-        lambda: [
-            load_ome_zarr(store, channel=c, level=i)[None]
-            if c is not None
-            else load_ome_zarr(store, channel=None, level=i)
-            for i in range(len(image))
-        ],
+        lambda: image_layers(store, c)[0][0],
     )
     for name, arrays, lab_axes in labels:
         group = f"{store}/labels/{name}"
@@ -247,9 +245,7 @@ def main() -> None:
             f"labels/{name}",
             arrays,
             lab_axes,
-            lambda g=group: [
-                lvl.astype("int32") for lvl in _multiscale_levels(g, None)
-            ],
+            lambda g=group: _label_levels(g),
         )
 
     if args.render and labels:

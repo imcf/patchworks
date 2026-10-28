@@ -26,9 +26,10 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Union
+from typing import Any, Mapping, Union
 
 import dask.array as da
+import numpy as np
 
 from .._io import from_zarr_any, load_ome_zarr, open_group_any
 from .ome_zarr import read_ngff_attr
@@ -334,6 +335,121 @@ def _resolve_labels(
     return arr.astype("int32")
 
 
+class _ChannelView:
+    """One channel of a zarr array, read lazily, without dask.
+
+    napari reads a zarr pyramid as it is, but splitting channels (its
+    ``channel_axis``) wraps each array in dask, and slicing a dask array of
+    a million chunks -- a whole-slide image in 1024-pixel chunks -- cost
+    ~1.3 s per view and channel against 0.01 s straight from zarr.
+    """
+
+    def __init__(self, array: Any, axis: int, index: int):
+        self.array, self.axis, self.index = array, axis, index
+        shape = tuple(array.shape)
+        self.shape = shape[:axis] + shape[axis + 1 :]
+        self.dtype = array.dtype
+        self.ndim = len(self.shape)
+        self.size = int(np.prod(self.shape))
+
+    def __getitem__(self, key: Any) -> np.ndarray:
+        key = key if isinstance(key, tuple) else (key,)
+        if any(k is Ellipsis for k in key):
+            at = next(i for i, k in enumerate(key) if k is Ellipsis)
+            fill = (slice(None),) * (self.ndim - len(key) + 1)
+            key = key[:at] + fill + key[at + 1 :]
+        key = key + (slice(None),) * (self.ndim - len(key))
+        full = key[: self.axis] + (self.index,) + key[self.axis :]
+        return np.asarray(self.array[full])
+
+    def __array__(self, dtype=None, copy=None) -> np.ndarray:
+        out = self[...]
+        return out if dtype is None else out.astype(dtype)
+
+    def __len__(self) -> int:
+        return self.shape[0]
+
+
+def _zarr_levels(path: Union[str, Path]) -> list:
+    """Every pyramid level as the zarr array it is (no dask)."""
+    root = open_group_any(path)
+    datasets = read_ngff_attr(root.attrs, "multiscales")[0]["datasets"]
+    return [root[d["path"]] for d in datasets]
+
+
+def _label_levels(path: Union[str, Path]) -> list:
+    """A label pyramid for napari: the zarr arrays themselves when they hold
+    integers, else cast to int32 (through dask)."""
+    levels = _zarr_levels(path)
+    if all(np.dtype(lvl.dtype).kind in "iu" for lvl in levels):
+        return levels
+    return [lvl.astype("int32") for lvl in _multiscale_levels(path, None)]
+
+
+# Each channel's colour when all are shown together.
+CHANNEL_COLORMAPS = ("green", "magenta", "cyan", "yellow", "gray", "red")
+
+
+def image_layers(
+    image: Any,
+    channel: int | None,
+    image_name: str = "image",
+    extra: Mapping[str, Any] | None = None,
+) -> list[tuple[Any, Any, dict]]:
+    """The image layers for napari: ``(data, name, add_image kwargs)``.
+
+    An OME-Zarr pyramid is handed over as zarr arrays, each channel its own
+    layer -- shown together, in its own colour, switched on and off at once
+    (on one layer with a channel slider, every change of channel read a new
+    plane and cached none).
+    """
+    extra = dict(extra or {})
+    if (
+        not (_is_zarr(image) and _has_multiscales(image))
+        or "channel_axis" in extra
+    ):
+        img = _resolve_image(image, channel)
+        ndim = img[0].ndim if isinstance(img, list) else img.ndim
+        scale, units = (
+            _pyramid_calibration(image, ndim)
+            if _is_zarr(image)
+            else (None, None)
+        )
+        kwargs = {"multiscale": isinstance(img, list), "scale": scale}
+        return [(img, image_name, {**kwargs, "units": units, **extra})]
+    levels = _zarr_levels(image)
+    ndim = levels[0].ndim
+    axes = _store_axes(image, ndim)
+    scale, units = _pyramid_calibration(image, ndim)
+    if "c" not in axes:
+        kwargs = {"multiscale": True, "scale": scale, "units": units}
+        return [(levels, image_name, {**kwargs, **extra})]
+    c = axes.index("c")
+    if scale is not None:
+        scale = [v for i, v in enumerate(scale) if i != c]
+        units = [v for i, v in enumerate(units) if i != c]
+    n = levels[0].shape[c]
+    together = channel is None and n > 1
+    out = []
+    for i in range(n) if channel is None else [channel]:
+        kwargs: dict[str, Any] = {
+            "multiscale": True,
+            "scale": scale,
+            "units": units,
+        }
+        if together:
+            kwargs["colormap"] = CHANNEL_COLORMAPS[i % len(CHANNEL_COLORMAPS)]
+            kwargs["blending"] = "additive"
+        out.append(
+            (
+                [_ChannelView(lvl, c, i) for lvl in levels],
+                f"{image_name} [{i}]" if together else image_name,
+                {**kwargs, **extra},
+            )
+        )
+    return out
+
+
 def view_in_napari(
     image: Union[da.Array, str, Path],
     labels: Union[da.Array, str, Path, None] = None,
@@ -404,40 +520,11 @@ def view_in_napari(
     """
     napari = _require_napari()
 
-    img = _resolve_image(image, channel)
-    img_ndim = img[0].ndim if isinstance(img, list) else img.ndim
-    img_scale, img_units = (
-        _pyramid_calibration(image, img_ndim)
-        if _is_zarr(image)
-        else (None, None)
-    )
-    # Every channel its own layer: shown together, each switched on and off
-    # at once. On one layer with a channel slider, every change of channel
-    # read a new plane and cached none.
-    name: Any = image_name
-    if (
-        channel is None
-        and _is_zarr(image)
-        and "channel_axis" not in add_image_kwargs
-    ):
-        axes = _store_axes(image, img_ndim)
-        shape = img[0].shape if isinstance(img, list) else img.shape
-        if "c" in axes and shape[axes.index("c")] > 1:
-            c = axes.index("c")
-            add_image_kwargs["channel_axis"] = c
-            name = [f"{image_name} [{i}]" for i in range(shape[c])]
-            if img_scale is not None:
-                img_scale = [v for i, v in enumerate(img_scale) if i != c]
-                img_units = [v for i, v in enumerate(img_units) if i != c]
     viewer = napari.Viewer()
-    viewer.add_image(
-        img,
-        name=name,
-        multiscale=isinstance(img, list),
-        scale=img_scale,
-        units=img_units,
-        **add_image_kwargs,
-    )
+    for data, name, kwargs in image_layers(
+        image, channel, image_name, add_image_kwargs
+    ):
+        viewer.add_image(data, name=name, **kwargs)
 
     label_kwargs: dict[str, Any] = {}
     if glasbey:
@@ -512,8 +599,7 @@ def view_in_napari(
             store = f"{image}/labels/{name}"
             # One bad label image must not hide the others.
             try:
-                levels = _multiscale_levels(store, None)
-                lab = [lvl.astype("int32") for lvl in levels]
+                lab = _label_levels(store)
                 lab_scale, lab_units = _pyramid_calibration(store, lab[0].ndim)
                 viewer.add_labels(
                     lab,
