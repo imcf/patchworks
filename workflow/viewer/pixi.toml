@@ -37,3 +37,6 @@ napari = "python ../scripts/view.py"
 # "Reviewing and correcting results"). The store must be writable: unzip a
 # bundle first, since decisions are saved in it.
 review = "patchworks review"
+# Where the time goes when napari is slow (chunking, the store's latency,
+# decompressing, drawing). Reads only.
+bench = "python ../scripts/bench_view.py"
