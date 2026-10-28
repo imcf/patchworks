@@ -24,6 +24,37 @@ def _volumes(cols: dict[str, np.ndarray]) -> tuple[np.ndarray, str]:
     return np.asarray(cols["area_voxels"], dtype=float), "voxels"
 
 
+def _lengths(store: Union[str, Path], name: str, cols: dict) -> np.ndarray:
+    """Each object's length along its main axis (µm when calibrated), from
+    the spread its table records; NaN without one."""
+    import pandas as pd
+
+    from ._io import open_group_any
+    from ._tables import _level0, _spatial_axes, shape_columns
+    from .plugins.ome_zarr import read_pixel_size
+
+    path = _group(store, name)
+    group = open_group_any(path)
+    axes = _spatial_axes(group, _level0(group).ndim)
+    shape = shape_columns(pd.DataFrame(cols), axes, read_pixel_size(path))
+    for key in ("length_um", "length_voxels"):
+        if key in shape:
+            return np.asarray(shape[key], dtype=float)
+    return np.full(len(cols["label"]), np.nan)
+
+
+def two_humps(volumes: np.ndarray, cut: float) -> bool:
+    """Whether the volumes fall in two groups with a dip at *cut*: the
+    histogram there under half the lower of the two peaks either side."""
+    v = np.log10(volumes[volumes > 0])
+    counts, edges = np.histogram(v, 16)
+    at = int(np.clip(np.searchsorted(edges, np.log10(cut)) - 1, 0, 15))
+    below, above = counts[:at], counts[at + 1 :]
+    if not below.size or not above.size:
+        return False
+    return counts[at] < 0.5 * min(below.max(), above.max())
+
+
 def suggest_min_volume(volumes: np.ndarray) -> float:
     """The cut between small specks and the objects: Otsu's threshold on the
     log of the volumes, where specks and real objects form two humps.
@@ -80,6 +111,7 @@ def size_report(store: Union[str, Path], name: str) -> dict[str, Any]:
     cols = read_columns(_group(store, name))
     volumes, unit = _volumes(cols)
     suggested = suggest_min_volume(volumes)
+    lengths = _lengths(store, name, cols)
     parents = {}
     for key in cols:
         if key.endswith("_id"):
@@ -98,10 +130,9 @@ def size_report(store: Union[str, Path], name: str) -> dict[str, Any]:
         {suggested}
         | {float(c) for c in nice if suggested / 4 <= c <= suggested * 4}
     )
-    cuts = []
-    for cut in candidates:
-        keep = volumes >= cut
-        row = {"min_volume": cut, "kept": int(keep.sum())}
+
+    def row_for(keep, **what):
+        row = {**what, "kept": int(keep.sum())}
         for parent, (ids, n_parents) in parents.items():
             inside = keep & (ids > 0)
             row[f"per {parent}"] = (
@@ -110,7 +141,17 @@ def size_report(store: Union[str, Path], name: str) -> dict[str, Any]:
             row[f"{parent} with one or more"] = (
                 len(np.unique(ids[inside])) / n_parents if n_parents else None
             )
-        cuts.append(row)
+        return row
+
+    cuts = [row_for(volumes >= cut, min_volume=cut) for cut in candidates]
+    by_length = (
+        []
+        if np.isnan(lengths).all()
+        else [
+            row_for(lengths >= cut, min_length=cut)
+            for cut in (0.5, 1.0, 1.5, 2.0, 3.0)
+        ]
+    )
     return {
         "unit": unit,
         "n": int(volumes.size),
@@ -120,7 +161,17 @@ def size_report(store: Union[str, Path], name: str) -> dict[str, Any]:
         },
         "suggested": suggested,
         "histogram": _histogram(volumes, unit, suggested),
+        "two_humps": two_humps(volumes, suggested),
         "cuts": cuts,
+        "length_quantiles": (
+            {}
+            if np.isnan(lengths).all()
+            else {
+                q: float(np.nanpercentile(lengths, q))
+                for q in (5, 25, 50, 75, 95)
+            }
+        ),
+        "by_length": by_length,
     }
 
 
@@ -133,19 +184,48 @@ def format_size_report(name: str, report: dict[str, Any]) -> str:
     )
     lines.append("  histogram (log scale):")
     lines += report["histogram"]
-    lines.append(
-        f"  suggested min_volume: {report['suggested']:.3g} {unit} (the "
-        "gap between the two humps; check a few objects either side of it)"
-    )
-    lines.append("  what a min_volume keeps:")
-    for row in report["cuts"]:
-        extra = "".join(
-            f", {v:.2f} {k}" if v is not None else ""
-            for k, v in row.items()
-            if k not in ("min_volume", "kept")
-        )
+    if report.get("two_humps", True):
         lines.append(
-            f"    {row['min_volume']:<10.3g} {row['kept']:>12,} objects{extra}"
+            f"  suggested min_volume: {report['suggested']:.3g} {unit} (the "
+            "gap between the two humps; check a few objects either side of it)"
+        )
+    else:
+        lines.append(
+            "  one hump, no gap: volume alone does not separate two kinds of "
+            "objects (any min_volume is a guess); see the lengths below"
+        )
+
+    def table(title, key, rows, fmt):
+        lines.append(title)
+        for row in rows:
+            extra = "".join(
+                f", {v:.2f} {k}" if v is not None else ""
+                for k, v in row.items()
+                if k not in (key, "kept")
+            )
+            lines.append(
+                f"    {fmt(row[key]):<10} {row['kept']:>12,} objects{extra}"
+            )
+
+    table(
+        "  what a min_volume keeps:",
+        "min_volume",
+        report["cuts"],
+        lambda v: f"{v:.3g}",
+    )
+    if report.get("length_quantiles"):
+        lines.append(
+            "  length along the main axis (µm): "
+            + ", ".join(
+                f"{q}%: {v:.3g}" for q, v in report["length_quantiles"].items()
+            )
+        )
+        table(
+            "  what a min_length (µm) keeps -- a cilium is a rod >~1 µm, a "
+            "speck as short as the optics allow (~0.3-0.5 µm):",
+            "min_length",
+            report["by_length"],
+            lambda v: f"{v:g}",
         )
     return "\n".join(lines)
 
@@ -156,11 +236,13 @@ def filter_labels(
     *,
     min_volume: float | None = None,
     max_volume: float | None = None,
+    min_length: float | None = None,
     out: str | None = None,
 ) -> tuple[str, int, int]:
     """Write ``labels/<out>``: *name* without the objects whose volume (µm³
     when calibrated, else voxels) is outside ``[min_volume, max_volume]``,
-    numbered 1..N, with its table. *name* is left as it is.
+    numbered 1..N, with its table. *name* is left as it is. *min_length*
+    (µm when calibrated) drops objects shorter along their main axis.
 
     Returns
     -------
@@ -182,6 +264,8 @@ def filter_labels(
         keep &= volumes >= float(min_volume)
     if max_volume is not None:
         keep &= volumes <= float(max_volume)
+    if min_length is not None:
+        keep &= _lengths(store, name, cols) >= float(min_length)
     labels = np.asarray(cols["label"], dtype=np.int64)
     group = open_group_any(group_path)
     level0 = da.from_zarr(_level0(group))
@@ -196,6 +280,7 @@ def filter_labels(
         "from": name,
         "min_volume": min_volume,
         "max_volume": max_volume,
+        "min_length": min_length,
         "unit": unit,
         "kept": int(keep.sum()),
         "dropped": int((~keep).sum()),
