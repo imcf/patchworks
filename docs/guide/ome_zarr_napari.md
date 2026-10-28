@@ -46,6 +46,9 @@ to_ome_zarr(
 ```
 
 On the cluster: `sequence_pattern:` in the config, with `input:` the glob.
+The channels' names come from the files when they carry them (OME-XML,
+ImageJ labels, Micro-Manager metadata) or from a companion `*.ome.xml`
+beside them.
 
 ## Labels in the store
 

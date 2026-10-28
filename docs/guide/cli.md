@@ -31,6 +31,7 @@ patchworks fix-metadata scan.zarr
 # Name the channels (napari, Fiji show them): from the original file, or typed
 patchworks fix-metadata scan.zarr --channels-from scan.czi
 patchworks fix-metadata scan.zarr --channel-names DAPI,Membrane,Cilia,Actin
+patchworks fix-metadata scan.zarr --channels-from "planes/*.tif" --sequence-pattern "_Z(?P<Z>\d+)_C(?P<C>\d+)"
 ```
 
 `fix-metadata` only touches metadata, in place, and is safe to run twice.

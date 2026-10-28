@@ -590,3 +590,74 @@ def test_conversion_keeps_the_source_channel_names(tmp_path, monkeypatch):
         str(named), tmp_path / "b.zarr", n_levels=1, progress=False
     )
     assert channel_names(out) == ["DAPI", "Cilia"]
+
+
+def _tiff_folder(folder, how):
+    import tifffile
+
+    folder.mkdir()
+    for z in range(2):
+        for c, name in enumerate(("DAPI", "Membrane", "Cilia")):
+            plane = np.full((8, 8), c, "uint16")
+            path = folder / f"s_Z{z:03d}_C{c}.tif"
+            if how == "imagej":
+                tifffile.imwrite(
+                    path, plane, imagej=True, metadata={"Labels": [name]}
+                )
+            elif how == "ome":
+                tifffile.imwrite(
+                    path, plane, ome=True, metadata={"Channel": {"Name": name}}
+                )
+            else:
+                tifffile.imwrite(path, plane)
+    return str(folder / "*.tif")
+
+
+def test_a_folder_of_tiffs_names_its_channels(tmp_path, monkeypatch):
+    """Single-plane TIFFs carry their channel's name too: ImageJ's Labels,
+    OME-XML, or a companion OME-XML beside them."""
+    from patchworks.cli import main
+    from patchworks.plugins.ome_zarr import (
+        channel_names,
+        tiff_sequence_channel_names,
+        to_ome_zarr,
+    )
+
+    pattern = r"_Z(?P<Z>\d+)_C(?P<C>\d+)"
+    want = ["DAPI", "Membrane", "Cilia"]
+    for how in ("imagej", "ome"):
+        glob = _tiff_folder(tmp_path / how, how)
+        assert tiff_sequence_channel_names(glob, pattern) == want, how
+    plain = _tiff_folder(tmp_path / "plain", "none")
+    assert tiff_sequence_channel_names(plain, pattern) is None
+    (tmp_path / "plain" / "dataset.companion.ome").write_text(
+        '<OME xmlns="http://www.openmicroscopy.org/Schemas/OME/2016-06">'
+        '<Image ID="Image:0"><Pixels ID="Pixels:0">'
+        + "".join(
+            f'<Channel ID="Channel:0:{i}" Name="{n}"/>'
+            for i, n in enumerate(want)
+        )
+        + "</Pixels></Image></OME>"
+    )
+    assert tiff_sequence_channel_names(plain, pattern) == want
+    # Converting the folder names the store's channels.
+    out = to_ome_zarr(
+        _tiff_folder(tmp_path / "conv", "imagej"),
+        tmp_path / "conv.zarr",
+        sequence_pattern=pattern,
+        n_levels=1,
+        progress=False,
+    )
+    assert channel_names(out) == want
+    # And an older store, from the folder.
+    store = to_ome_zarr(
+        _tiff_folder(tmp_path / "old", "none"),
+        tmp_path / "old.zarr",
+        sequence_pattern=pattern,
+        n_levels=1,
+        progress=False,
+    )
+    assert channel_names(store) is None
+    args = ["fix-metadata", store, "--channels-from"]
+    assert main([*args, glob, "--sequence-pattern", pattern]) == 0
+    assert channel_names(store) == want
