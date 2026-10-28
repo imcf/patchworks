@@ -285,9 +285,18 @@ def _cmd_fix_metadata(args: argparse.Namespace) -> int:
     if args.channel_names:
         names = [n.strip() for n in args.channel_names.split(",")]
     elif args.channels_from:
-        from .plugins.ome_zarr import source_channel_names
+        from .plugins.ome_zarr import (
+            source_channel_names,
+            tiff_sequence_channel_names,
+        )
 
-        names = source_channel_names(args.channels_from)
+        names = (
+            tiff_sequence_channel_names(
+                args.channels_from, args.sequence_pattern
+            )
+            if args.sequence_pattern
+            else source_channel_names(args.channels_from)
+        )
         if not names:
             print(f"{args.channels_from}: no channel names in it")
             return 1
@@ -603,7 +612,14 @@ def build_parser() -> argparse.ArgumentParser:
     names.add_argument(
         "--channels-from",
         metavar="FILE",
-        help="name them as in the original file (CZI, LIF, ND2, IMS, ...)",
+        help="name them as in the original file (CZI, LIF, ND2, IMS, ...), "
+        "or a folder of TIFFs: its glob, with --sequence-pattern",
+    )
+    p.add_argument(
+        "--sequence-pattern",
+        metavar="REGEX",
+        help="with --channels-from a glob: the conversion's sequence_pattern "
+        "(its (?P<C>...) group says each file's channel)",
     )
     p.set_defaults(func=_cmd_fix_metadata)
 

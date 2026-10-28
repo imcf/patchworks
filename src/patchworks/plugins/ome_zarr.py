@@ -541,11 +541,112 @@ def source_channel_names(
     return names if names and all(n.strip() for n in names) else None
 
 
-def _name_channels_from(source: object, out: str, scene: int = 0) -> None:
+def _ome_channel_names(xml: str) -> "list[str]":
+    """The Channel names of an OME-XML document's first Image."""
+    import xml.etree.ElementTree as ET
+
+    try:
+        root = ET.fromstring(xml)
+    except ET.ParseError:
+        return []
+    image = next((e for e in root.iter() if e.tag.endswith("}Image")), root)
+    return [
+        e.attrib.get("Name", "")
+        for e in image.iter()
+        if e.tag.endswith("}Channel") or e.tag == "Channel"
+    ]
+
+
+def _tiff_channel_name(path: str) -> "str | None":
+    """One single-channel TIFF's channel name: OME-XML, ImageJ's Labels,
+    or Micro-Manager's metadata."""
+    import tifffile
+
+    with tifffile.TiffFile(path) as tif:
+        names = _ome_channel_names(tif.ome_metadata or "")
+        if len(names) == 1 and names[0]:
+            return names[0]
+        labels = (tif.imagej_metadata or {}).get("Labels")
+        if isinstance(labels, (list, tuple)):
+            labels = labels[0] if len(labels) == 1 else None
+        if labels:
+            return str(labels)
+        mm = tif.micromanager_metadata or {}
+        for key in ("Channel", "ChannelName"):
+            value = (mm.get("FrameKey") or mm).get(key)
+            if isinstance(value, str) and value:
+                return value
+    return None
+
+
+def tiff_sequence_channel_names(
+    pattern: str, sequence_pattern: str
+) -> "list[str] | None":
+    """The channels' names in a folder of single-plane TIFFs.
+
+    From a companion OME-XML in the folder (``*.ome.xml``,
+    ``*.companion.ome``) naming every channel, else from each channel's
+    first file (its OME-XML, ImageJ ``Labels`` or Micro-Manager metadata).
+    None when the files do not name every channel.
+    """
+    import glob
+    import re
+
+    files = sorted(glob.glob(pattern))
+    if not files or "(?P<C>" not in sequence_pattern:
+        return None
+    first: dict[int, str] = {}
+    for f in files:
+        m = re.search(sequence_pattern, Path(f).name) or re.search(
+            sequence_pattern, f
+        )
+        if m and m.group("C") is not None:
+            first.setdefault(int(m.group("C")), f)
+    n = len(first)
+    if n < 2:
+        return None
+    folder = Path(files[0]).parent
+    for companion in sorted(
+        [*folder.glob("*.ome.xml"), *folder.glob("*.companion.ome")]
+    ):
+        try:
+            names = _ome_channel_names(companion.read_text(errors="replace"))
+        except OSError:
+            continue
+        if len(names) == n and all(names):
+            return names
+    try:
+        names = [_tiff_channel_name(first[c]) for c in sorted(first)]
+    except Exception:  # noqa: BLE001 - names are a nicety, never an error
+        logger.debug("no channel names in %s", pattern, exc_info=True)
+        return None
+    if all(names) and len(set(names)) == n:
+        return [str(x) for x in names]
+    # The same OME-XML in every file, naming all the channels.
+    try:
+        import tifffile
+
+        with tifffile.TiffFile(files[0]) as tif:
+            names = _ome_channel_names(tif.ome_metadata or "")
+    except Exception:  # noqa: BLE001
+        return None
+    return names if len(names) == n and all(names) else None
+
+
+def _name_channels_from(
+    source: object,
+    out: str,
+    scene: int = 0,
+    sequence_pattern: "str | None" = None,
+) -> None:
     """Carry the source file's channel names into the new store."""
     if not isinstance(source, (str, Path)):
         return
-    names = source_channel_names(source, scene)
+    names = (
+        tiff_sequence_channel_names(str(source), sequence_pattern)
+        if sequence_pattern
+        else source_channel_names(source, scene)
+    )
     if not names:
         return
     try:
@@ -2769,7 +2870,7 @@ def to_ome_zarr(
         _write_multiscales(
             out, axes, datasets, Path(out).stem, calibrated=bool(ps)
         )
-        _name_channels_from(source, out, scene)
+        _name_channels_from(source, out, scene, sequence_pattern)
         return out
 
 
