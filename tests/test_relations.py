@@ -78,7 +78,7 @@ def test_label_relations_reports_progress(caplog, monkeypatch):
     text = caplog.text
     assert "8 of 8 chunk(s) hold child labels" in text
     # Periodic lines while it runs, including a final 100%.
-    assert "label_relations: 1/8" in text
+    assert "a -> parent: 1/8" in text  # one line per relation, named
     assert "8/8 (100%)" in text
 
 
@@ -173,9 +173,20 @@ def test_many_children_read_the_parent_once_and_skip_unwritten_chunks(
         return wrapped
 
     monkeypatch.setattr(_relations, "_reader", counting)
-    out = _relations.label_relations_many(
-        {"nuc": paths["nuc"], "cil": paths["cil"]}, paths["cells"]
+    logged = []
+    monkeypatch.setattr(
+        _relations,
+        "log_progress",
+        lambda label, d, t, s: logged.append((label, d, t)),
     )
+    out = _relations.label_relations_many(
+        {"nuc": paths["nuc"], "cil": paths["cil"]},
+        paths["cells"],
+        parent_name="cells",
+    )
+    # One progress line per relation, over the chunks it needs.
+    assert ("nuc -> cells", 1, 1) in logged
+    assert ("cil -> cells", 1, 1) in logged
     assert out["nuc"] == {
         7: {"match": 1, "overlap_voxels": 32, "overlap_fraction": 1.0}
     }

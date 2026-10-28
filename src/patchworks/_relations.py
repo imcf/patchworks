@@ -125,6 +125,7 @@ def label_relations_many(
     *,
     component: str = "",
     n_workers: int | None = None,
+    parent_name: str = "parent",
 ) -> "dict[str, dict[int, dict[str, float]]]":
     """:func:`label_relations` of several children against one parent,
     reading the parent once.
@@ -146,6 +147,9 @@ def label_relations_many(
     n_workers : int or None, optional
         Chunks in flight. Default twice the CPUs this process may use: the
         work waits on reads more than it computes. Each holds a few chunks.
+    parent_name : str, optional
+        The parent's name in the progress lines, one per child:
+        ``nuclei -> cells: 4,839/12,000 (40%) ...``.
 
     Returns
     -------
@@ -201,17 +205,35 @@ def label_relations_many(
             out[name] = _chunk_pairs(a_block, b_block)
         return out
 
+    # Each relation's own progress: the chunks where that child has labels
+    # (a pass over the parent serves them all, but not every child needs
+    # every chunk).
+    totals = {
+        name: sum(1 for idx in todo if s is None or idx in s)
+        for name, s in stored.items()
+    }
+    counts = dict.fromkeys(kids, 0)
     started = _time.monotonic()
     last = started
     parts: dict[str, list] = {name: [] for name in kids}
     with ThreadPoolExecutor(max_workers=max(1, nw)) as ex:
-        futures = [ex.submit(_one, idx) for idx in todo]
+        futures = {ex.submit(_one, idx): idx for idx in todo}
         for done, future in enumerate(as_completed(futures), start=1):
+            idx = futures[future]
             for name, part in future.result().items():
                 parts[name].append(part)
+            for name, s in stored.items():
+                if s is None or idx in s:
+                    counts[name] += 1
             now = _time.monotonic()
             if now - last >= _PROGRESS_INTERVAL_S or done == len(todo):
-                log_progress("label_relations", done, len(todo), started)
+                for name in kids:
+                    log_progress(
+                        f"{name} -> {parent_name}",
+                        counts[name],
+                        totals[name],
+                        started,
+                    )
                 last = now
     out = {}
     for name in kids:
