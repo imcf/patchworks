@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import contextvars
+import functools
 import logging
+import os
 import re
 from contextlib import contextmanager
 from pathlib import Path
@@ -212,11 +214,26 @@ def open_zarr_source(
     if split is None:
         return str(store_path), ""
 
-    import zipfile
-
     # The bundle may be addressed with a group path after it, e.g.
     # "scan.zarr.zip/labels/cells" -- callers build those by string-joining.
     archive_path, inner = split
+    stat = os.stat(archive_path)
+    store, prefix = _open_zip(
+        os.path.abspath(archive_path), stat.st_mtime_ns, stat.st_size
+    )
+    if inner:
+        prefix = f"{prefix}/{inner}"
+    return store, prefix
+
+
+@functools.lru_cache(maxsize=8)
+def _open_zip(archive_path: str, mtime_ns: int, size: int):
+    """One read-only store per bundle (and version of it), and its store's
+    name. Opening reads the archive's whole index: a viewer opening every
+    level of every label image did it ~20 times, ~18 s on a network drive.
+    """
+    import zipfile
+
     with zipfile.ZipFile(archive_path) as archive:
         tops = {
             name.split("/", 1)[0] for name in archive.namelist() if "/" in name
@@ -227,10 +244,7 @@ def open_zarr_source(
             f"{sorted(tops) or 'nothing'}. Bundles written by "
             "`pixi run zip` always do."
         )
-    prefix = tops.pop()
-    if inner:
-        prefix = f"{prefix}/{inner}"
-    return zarr.storage.ZipStore(archive_path, mode="r"), prefix
+    return zarr.storage.ZipStore(archive_path, mode="r"), tops.pop()
 
 
 def open_group_any(path: Union[str, Path], mode: str = "r"):
