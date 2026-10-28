@@ -218,20 +218,22 @@ def open_zarr_source(
     # "scan.zarr.zip/labels/cells" -- callers build those by string-joining.
     archive_path, inner = split
     stat = os.stat(archive_path)
-    store, prefix = _open_zip(
+    prefix = _zip_top(
         os.path.abspath(archive_path), stat.st_mtime_ns, stat.st_size
     )
     if inner:
         prefix = f"{prefix}/{inner}"
-    return store, prefix
+    # A store of its own per caller: a ZipStore serves one read at a time,
+    # and one shared by every level of every layer made napari wait for
+    # each chunk in turn over the network.
+    return zarr.storage.ZipStore(archive_path, mode="r"), prefix
 
 
 @functools.lru_cache(maxsize=8)
-def _open_zip(archive_path: str, mtime_ns: int, size: int):
-    """One read-only store per bundle (and version of it), and its store's
-    name. Opening reads the archive's whole index: a viewer opening every
-    level of every label image did it ~20 times, ~18 s on a network drive.
-    """
+def _zip_top(archive_path: str, mtime_ns: int, size: int) -> str:
+    """The name of the one store in a bundle (and version of it): reading
+    the archive's whole index for it again for every level was a second
+    index read each time, on top of the store's own."""
     import zipfile
 
     with zipfile.ZipFile(archive_path) as archive:
@@ -244,7 +246,7 @@ def _open_zip(archive_path: str, mtime_ns: int, size: int):
             f"{sorted(tops) or 'nothing'}. Bundles written by "
             "`pixi run zip` always do."
         )
-    return zarr.storage.ZipStore(archive_path, mode="r"), tops.pop()
+    return tops.pop()
 
 
 def open_group_any(path: Union[str, Path], mode: str = "r"):

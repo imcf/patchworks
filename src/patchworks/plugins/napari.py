@@ -431,6 +431,7 @@ def view_in_napari(
     glasbey: bool = True,
     show: bool = True,
     split_channels: bool = False,
+    hover: bool = True,
     **add_image_kwargs: Any,
 ):
     """Open *image* in napari and overlay *labels* as a Labels layer.
@@ -467,6 +468,10 @@ def view_in_napari(
         Each channel its own layer, shown together in its own colour,
         instead of one layer with a channel slider. Every zoom and pan then
         reads every channel.
+    hover : bool, optional
+        Show each object's parent and children when hovering it, from the
+        object tables, read in the background once the window is up (for a
+        whole slide, minutes of reading the network shares with zooming).
     **add_image_kwargs
         Extra keyword arguments forwarded to ``viewer.add_image``
         (e.g. ``colormap``, ``contrast_limits``).
@@ -585,7 +590,9 @@ def view_in_napari(
                 continue
             loaded += 1
             logger.info("auto-loaded labels/%s from %s", name, image)
-        if loaded and show:
+        if not hover:
+            pass
+        elif loaded and show:
             # Minutes for a whole slide's tables: read after the window
             # is up, not before.
             _show_relations_later(viewer, image)

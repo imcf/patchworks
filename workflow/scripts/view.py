@@ -98,6 +98,11 @@ def main() -> None:
         help="load views in the background: a coarse level shows first",
     )
     parser.add_argument(
+        "--no-hover",
+        action="store_true",
+        help="no parent/children on hover: the object tables are not read",
+    )
+    parser.add_argument(
         "--split-channels",
         action="store_true",
         help="each channel its own layer, shown together (reads them all)",
@@ -113,6 +118,7 @@ def main() -> None:
         channel=args.channel,
         glasbey=not args.no_glasbey,
         split_channels=args.split_channels,
+        hover=not args.no_hover,
     )
 
 
