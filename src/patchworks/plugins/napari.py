@@ -395,13 +395,14 @@ def image_layers(
     channel: int | None,
     image_name: str = "image",
     extra: Mapping[str, Any] | None = None,
+    split_channels: bool = False,
 ) -> list[tuple[Any, Any, dict]]:
     """The image layers for napari: ``(data, name, add_image kwargs)``.
 
-    An OME-Zarr pyramid is handed over as zarr arrays, each channel its own
-    layer -- shown together, in its own colour, switched on and off at once
-    (on one layer with a channel slider, every change of channel read a new
-    plane and cached none).
+    An OME-Zarr pyramid is handed over as zarr arrays: through dask, a view
+    of a whole slide took ~1.3 s against 0.01 s. All channels are one layer
+    with a channel slider; *split_channels* makes each its own layer, shown
+    together -- every zoom and pan then reads every channel.
     """
     extra = dict(extra or {})
     if (
@@ -421,7 +422,7 @@ def image_layers(
     ndim = levels[0].ndim
     axes = _store_axes(image, ndim)
     scale, units = _pyramid_calibration(image, ndim)
-    if "c" not in axes:
+    if "c" not in axes or (channel is None and not split_channels):
         kwargs = {"multiscale": True, "scale": scale, "units": units}
         return [(levels, image_name, {**kwargs, **extra})]
     c = axes.index("c")
@@ -460,6 +461,7 @@ def view_in_napari(
     labels_name: str = "labels",
     glasbey: bool = True,
     show: bool = True,
+    split_channels: bool = False,
     **add_image_kwargs: Any,
 ):
     """Open *image* in napari and overlay *labels* as a Labels layer.
@@ -493,6 +495,10 @@ def view_in_napari(
     show : bool, optional
         Start the napari event loop (blocking). Set ``False`` in scripts/tests
         that manage the loop themselves.
+    split_channels : bool, optional
+        Each channel its own layer, shown together in its own colour,
+        instead of one layer with a channel slider. Every zoom and pan then
+        reads every channel.
     **add_image_kwargs
         Extra keyword arguments forwarded to ``viewer.add_image``
         (e.g. ``colormap``, ``contrast_limits``).
@@ -522,7 +528,7 @@ def view_in_napari(
 
     viewer = napari.Viewer()
     for data, name, kwargs in image_layers(
-        image, channel, image_name, add_image_kwargs
+        image, channel, image_name, add_image_kwargs, split_channels
     ):
         viewer.add_image(data, name=name, **kwargs)
 

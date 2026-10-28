@@ -29,9 +29,10 @@ os.environ.setdefault(
     os.path.join(tempfile.gettempdir(), "patchworks-numba-cache"),
 )
 
-# Load tiles in the background, so the window stays responsive while a
-# view is read (napari's own setting, for this session only).
-if "--no-async" not in sys.argv:
+# --async: load views in the background (napari's own setting, for this
+# session only). The window stays responsive, but a coarse level shows
+# until the fine one is read, so zooming in felt slower: off by default.
+if "--async" in sys.argv:
     os.environ.setdefault("NAPARI_ASYNC", "1")
 
 from patchworks.plugins.napari import view_in_napari  # noqa: E402
@@ -76,9 +77,15 @@ def main() -> None:
         help="use napari's default label colours instead of glasbey",
     )
     parser.add_argument(
-        "--no-async",
+        "--async",
+        dest="async_",
         action="store_true",
-        help="load each view before drawing it (napari's default)",
+        help="load views in the background: a coarse level shows first",
+    )
+    parser.add_argument(
+        "--split-channels",
+        action="store_true",
+        help="each channel its own layer, shown together (reads them all)",
     )
     args = parser.parse_args()
     _warn_if_slow_to_read(args.image)
@@ -87,7 +94,10 @@ def main() -> None:
     # group under <image>/labels/<name>/ as its own Labels layer -- exactly
     # what's wanted here, so there is nothing further to wire up.
     view_in_napari(
-        args.image, channel=args.channel, glasbey=not args.no_glasbey
+        args.image,
+        channel=args.channel,
+        glasbey=not args.no_glasbey,
+        split_channels=args.split_channels,
     )
 
 
