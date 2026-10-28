@@ -25,6 +25,8 @@ Usage
 from __future__ import annotations
 
 import logging
+import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Mapping, Union
 
@@ -335,6 +337,47 @@ def _resolve_labels(
     return arr.astype("int32")
 
 
+# glasbey.create_palette(256, lightness_bounds=(40, 100)): many distinct
+# colours that read on napari's dark canvas. Stored, not computed: the
+# glasbey package took ~15 s to import and ~3 s per palette, every opening.
+GLASBEY_256 = (
+    "db202d 009a00 8259ff aefb00 00b6ca ff86e7 f79a00 8a7569 0cffc2 babeff "
+    "9eba71 c210d7 dbaeaa ba5900 ffef92 657d9e 358a71 f3149a 9eefff 04d220 "
+    "a682b2 8a8210 ff7971 869ea2 55a6ff ffd2ff b25971 00c28a d7c600 bee7c2 "
+    "ba9259 b686ff f35100 cad2df 8aeb82 7d9269 d782a2 7daa00 2875ff 86cabe "
+    "6dc6ff cea6d7 dbb675 db61ff 008a9a 969ac6 ffdbc6 9e5dce d259b2 c27155 "
+    "ba9e10 ffef00 ae8a92 ffaace babeaa ffa275 718282 ff3969 3da25d 5da696 "
+    "7582d7 0092ca 00ebe3 9ece00 d7ff8a 9a713d fb39ef e37d31 719eb6 82798e "
+    "d2fff7 ff51a6 efffdb c6db8a df0061 c24d2d ffca51 86d29e ce08aa aebac6 "
+    "b27d00 929eff 65c261 e392ff 698635 8271ae 4dff4d 9a7182 a69e86 dbc2ca "
+    "beaebe df9286 00b228 aa5992 db6171 00beae 8effeb 1cdbf7 ffaeff 8e9e45 "
+    "b6dbff 00e38a 92b69a dfd7ff ff8ea6 9affbe ce86c6 00baef b60cff 009e96 "
+    "eb5149 7dc2d2 dbdbb2 00dfb6 aaba35 b28675 c6458a 00a67d b6dbd7 a2695d "
+    "dfae39 cee300 c6a6fb 82aadf ba7ddb ffebfb d78e10 baaa5d d7a27d 9292a2 "
+    "a269ff e3beff ce9eb6 7d7d45 b67196 fbbe9e d7efff ba757d ba59ca c64169 "
+    "659200 618269 7192c2 d2ffba ffbec2 ffd79a ff713d 208e55 9a8661 9a82ce "
+    "8e9e92 0cff8a 619296 a2d265 db3100 009eba ae9aba e320f7 71b279 ff658a "
+    "ba793d ffb661 92e7c6 a6beba cac25d ef20c2 a28e3d aa653d db6196 e79a51 "
+    "dbebdf 619a75 aece9e ff86c2 ebdf59 be55ff d76531 b2aed7 4d7dca 31e75d "
+    "49cece 69aeb2 e76ddf 9aff6d 598aff 9e41ff eb8661 dbc2a6 e7b6db 9aa26d "
+    "ffa69e 656dff 797d65 9282ff 8286aa 71c228 96beff 8e6d96 6dbe9e bebe8a "
+    "ba45ae e79ace ffff75 8ee3df 71aa4d aacedf ba96d7 65e318 c29a92 e375ba "
+    "4586a6 aae7a2 8665ce 00ba61 ba8aaa ebebff baffdf 96bedf 71ebaa 9ea200 "
+    "bac6e7 a6d2ba e7457d c2ae8e ca8a65 5dffff ff8610 798e9e e79eaa aeff9e "
+    "e7d279 a2a6ba dfff4d d70082 6d9286 ff5dd2 0c92f3 ffefba ffb200 b65d51 "
+    "8ad7f3 a69ae7 ca7500 96710c ffd200 ffcae3 9a869a 419239 c6e361 df3d55 "
+    "b66db2 e77d8a e36d59 d2c2df 4da2d2 8eaebe"
+).split()
+
+
+@contextmanager
+def _timed(what: str):
+    """Log how long *what* took: opening a large store, the slow part shows."""
+    start = time.perf_counter()
+    yield
+    logger.info("%s: %.1f s", what, time.perf_counter() - start)
+
+
 class _ChannelView:
     """One channel of a zarr array, read lazily, without dask.
 
@@ -490,8 +533,7 @@ def view_in_napari(
     glasbey : bool, optional
         Colour the labels with a glasbey palette (many distinct, high-contrast
         colours, tuned to read on the dark canvas) instead of napari's default.
-        Default ``True``. Needs the ``glasbey`` package (ships with
-        ``patchworks[napari]``).
+        Default ``True``.
     show : bool, optional
         Start the napari event loop (blocking). Set ``False`` in scripts/tests
         that manage the loop themselves.
@@ -526,38 +568,26 @@ def view_in_napari(
     """
     napari = _require_napari()
 
-    viewer = napari.Viewer()
-    for data, name, kwargs in image_layers(
-        image, channel, image_name, add_image_kwargs, split_channels
-    ):
-        viewer.add_image(data, name=name, **kwargs)
+    with _timed("napari window"):
+        viewer = napari.Viewer()
+    with _timed("image"):
+        for data, name, kwargs in image_layers(
+            image, channel, image_name, add_image_kwargs, split_channels
+        ):
+            viewer.add_image(data, name=name, **kwargs)
 
     label_kwargs: dict[str, Any] = {}
     if glasbey:
-        try:
-            import glasbey as _glasbey
-            import numpy as np
-            from napari.utils.colormaps import CyclicLabelColormap
+        from napari.utils.colormaps import CyclicLabelColormap
 
-            # Glasbey colours, lightened for the dark canvas, cycled per label.
-            palette = _glasbey.create_palette(256, lightness_bounds=(40, 100))
-            colors = np.array(
-                [
-                    [
-                        int(h[1:3], 16) / 255,
-                        int(h[3:5], 16) / 255,
-                        int(h[5:7], 16) / 255,
-                        1.0,
-                    ]
-                    for h in palette
-                ]
-            )
-            label_kwargs["colormap"] = CyclicLabelColormap(colors=colors)
-        except ImportError:
-            logger.warning(
-                "glasbey not installed; using napari's default label colours "
-                "(pip install glasbey, or it ships with patchworks[napari])."
-            )
+        # Glasbey colours, cycled per label.
+        colors = np.array(
+            [
+                [int(h[i : i + 2], 16) / 255 for i in (0, 2, 4)] + [1.0]
+                for h in GLASBEY_256
+            ]
+        )
+        label_kwargs["colormap"] = CyclicLabelColormap(colors=colors)
 
     if labels is not None:
         lab = _resolve_labels(labels, labels_component)
@@ -607,16 +637,17 @@ def view_in_napari(
             try:
                 lab = _label_levels(store)
                 lab_scale, lab_units = _pyramid_calibration(store, lab[0].ndim)
-                viewer.add_labels(
-                    lab,
-                    name=name,
-                    multiscale=True,
-                    scale=lab_scale,
-                    translate=_pyramid_translate(store, lab[0].ndim),
-                    units=lab_units,
-                    metadata=_label_hint(store),
-                    **label_kwargs,
-                )
+                with _timed(f"labels/{name}"):
+                    viewer.add_labels(
+                        lab,
+                        name=name,
+                        multiscale=True,
+                        scale=lab_scale,
+                        translate=_pyramid_translate(store, lab[0].ndim),
+                        units=lab_units,
+                        metadata=_label_hint(store),
+                        **label_kwargs,
+                    )
             except Exception:
                 logger.exception(
                     "could not add labels/%s as a layer; skipping it and "
@@ -627,7 +658,8 @@ def view_in_napari(
             loaded += 1
             logger.info("auto-loaded labels/%s from %s", name, image)
         if loaded:
-            _show_relations(viewer, image)
+            with _timed("object tables, for hovering"):
+                _show_relations(viewer, image)
         if names and not loaded:
             logger.error(
                 "found %d label image(s) in %s/labels but none could be "

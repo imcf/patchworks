@@ -93,7 +93,6 @@ imaris = ["imaris-ims-file-reader"]
 # - ipykernel < 7: napari-console requires ipykernel < 7.
 # - lxml-html-clean: napari's notebook_display imports lxml.html.clean, split
 #   into a separate package in lxml >= 5.2 (else ImportError on Viewer()).
-# - glasbey: distinct high-contrast label LUTs for view_in_napari.
 # - napari-chunked-regionprops (https://github.com/imcf/napari-chunked-regionprops):
 #   out-of-core regionprops-style measurements (area/centroid/intensity
 #   stats) for huge Labels layers, straight off their backing dask/zarr
@@ -110,7 +109,6 @@ napari = [
     "numpy<2.5",
     "ipykernel<7",
     "lxml-html-clean",
-    "glasbey",
     "napari-chunked-regionprops>=0.1.0",
     "pyqt6<6.10",
 ]
