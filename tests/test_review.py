@@ -69,6 +69,31 @@ def test_decisions_apply_everywhere_and_persist(scene):
     assert 4 in Review(scene).effective("cilia_labels").index
 
 
+def test_a_zip_bundle_is_reviewed_read_only(scene):
+    """A zipped store opens (napari-chunked-regionprops shows its corrected
+    tables through this), keeps its decisions, and refuses new ones."""
+    import os
+    import zipfile
+
+    rv = Review(scene, expect=EXPECT)
+    rv.decide("cilia_labels", 4, "wrong")
+    bundle = f"{scene}.zip"
+    root = os.path.dirname(str(scene))
+    with zipfile.ZipFile(bundle, "w") as archive:
+        for here, _, files in os.walk(scene):
+            for f in files:
+                path = os.path.join(here, f)
+                archive.write(path, os.path.relpath(path, root))
+
+    zipped = Review(bundle, expect=EXPECT)
+    assert 4 not in zipped.effective("cilia_labels").index
+    pd.testing.assert_frame_equal(
+        zipped.effective("cyto_labels"), rv.effective("cyto_labels")
+    )
+    with pytest.raises(PermissionError):
+        zipped.decide("cilia_labels", 5, "wrong")
+
+
 def test_merging_a_parent_moves_its_children(scene):
     rv = Review(scene, expect=EXPECT)
     rv.decide("cyto_labels", 2, "merge", into=1)

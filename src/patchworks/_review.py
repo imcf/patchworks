@@ -293,7 +293,10 @@ class Review:
         )
 
     def _load_decisions(self, name: str) -> None:
+        from ._io import open_group_any
+
         log = dict(self._table_group(name).attrs.get(REVIEW_KEY) or {})
+        # open_group_any: a .zip bundle is read in place (never saved to).
         fingerprint = label_fingerprint(
             open_group_any(_label_group(self.store, name))
         )
