@@ -11,7 +11,9 @@
   `ruff format <files>` then `ruff check <files>` (the version CI pins,
   see `.github/workflows/lint.yml`), and `mypy` for `src/`.
 
-## Writing to the user
+## Backticks
 
-- Code, commands and paths in single backticks, inline: never fenced
-  blocks with triple backticks.
+- Code, names, commands and paths in single backticks (`image.zarr`),
+  never double ones (``image.zarr``): in docstrings, comments, commit
+  messages, docs and messages to the user alike. Existing docstrings
+  still use double backticks; new or edited text uses single ones.
