@@ -2531,3 +2531,77 @@ def explain_remote_error(text: str) -> str:
             "on the cluster, or *Update it* in the sidebar."
         )
     return last_error_line(text)
+
+
+# ---------------------------------------------------------------------------
+# Neuroglancer: `patchworks serve` on the cluster, tunnelled by the launcher
+# ---------------------------------------------------------------------------
+
+SERVE_TAG = "PATCHWORKS_SERVE"
+NEUROGLANCER = "https://neuroglancer-demo.appspot.com/"
+
+
+def serve_command(
+    workflow_dir: str,
+    setup_cmd: str,
+    store: str,
+    log: str,
+    *,
+    in_job: bool = True,
+    time: str = "06:00:00",
+    partition: str = "",
+    qos: str = "",
+    account: str = "",
+) -> str:
+    """Start ``pixi run serve <store>`` in the background, its output in
+    *log*: as a small SLURM job (it prints ``JOB:<id>``), or on the login
+    node (``PID:<pid>``)."""
+    inner = inner_command(
+        workflow_dir, setup_cmd, f"pixi run serve {shlex.quote(store)}"
+    )
+    if not in_job:
+        return (
+            f"nohup setsid bash -c {shlex.quote(inner)} > {shlex.quote(log)} "
+            "2>&1 < /dev/null & echo PID:$!"
+        )
+    args = [
+        "sbatch",
+        "--parsable",
+        "--job-name=pw-serve",
+        f"--time={time}",
+        "--mem=4G",
+        "--cpus-per-task=4",
+        f"--output={log}",
+    ]
+    for flag, value in (
+        ("partition", partition),
+        ("qos", qos),
+        ("account", account),
+    ):
+        if value:
+            args.append(f"--{flag}={value}")
+    args += ["--wrap", inner]
+    return " ".join(shlex.quote(a) for a in args) + " | sed 's/^/JOB:/'"
+
+
+def parse_serve(text: str) -> dict[str, Any] | None:
+    """Where ``patchworks serve`` listens and its Neuroglancer state, from
+    the line it prints for programs; None until it has."""
+    for line in reversed(text.splitlines()):
+        if line.startswith(SERVE_TAG + " "):
+            try:
+                return json.loads(line[len(SERVE_TAG) + 1 :])
+            except ValueError:
+                return None
+    return None
+
+
+def neuroglancer_link(state: dict, remote_port: int, local_port: int) -> str:
+    """The Neuroglancer link, its sources moved to the local end of the
+    tunnel."""
+    import urllib.parse
+
+    text = json.dumps(state, separators=(",", ":")).replace(
+        f"localhost:{remote_port}/", f"localhost:{local_port}/"
+    )
+    return NEUROGLANCER + "#!" + urllib.parse.quote(text)

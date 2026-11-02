@@ -24,6 +24,10 @@ from typing import Any, Union
 
 NEUROGLANCER = "https://neuroglancer-demo.appspot.com/"
 
+#: The line ``serve`` prints for a program (the web launcher) to read:
+#: ``PATCHWORKS_SERVE {"host", "port", "base", "state"}``.
+SERVE_TAG = "PATCHWORKS_SERVE"
+
 # Each channel's colour in Neuroglancer when several are shown.
 _COLORS = ("#00ff00", "#ff00ff", "#00ffff", "#ffff00", "#ffffff", "#ff0000")
 
@@ -264,14 +268,21 @@ def serve(
         tunnel = f"ssh -N -L {port}:{here}:{port} {user}@{login}"
     else:
         tunnel = f"ssh -N -L {port}:localhost:{port} {user}@{here}"
+    state = neuroglancer_state(store, base)
+    print(
+        SERVE_TAG,
+        json.dumps({"host": here, "port": port, "base": base, "state": state}),
+        flush=True,
+    )
     print(f"serving {store} on {here}:{port} (Ctrl+C to stop)")
     print("\n1. On your computer, open the tunnel (and keep it open):")
     print(f"   {tunnel}")
     print("\n2. Open this link in Chrome or Firefox:")
-    print(f"   {neuroglancer_link(neuroglancer_state(store, base))}")
+    print(f"   {neuroglancer_link(state)}")
     print(
         "\n   Each channel is a layer (the first shown); the label images "
-        "are segmentation layers, switched off: tick them in the layer list."
+        "are segmentation layers, switched off: tick them in the layer list.",
+        flush=True,
     )
     try:
         server.serve_forever()

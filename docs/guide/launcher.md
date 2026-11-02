@@ -72,7 +72,11 @@ while connected; **Disconnect** closes it.
 4. **Jobs**: every launch, from any browser: its state, progress per
    segmentation, then the results (object counts, seam report, relation
    workbooks to download); **Stop**, **Unlock** after a killed run,
-   **Relaunch**.
+   **Relaunch**. **View in Neuroglancer** serves the store from the cluster
+   (a small SLURM job, or the login node) and tunnels it over the
+   launcher's own SSH connection: the link opens Neuroglancer in your
+   browser, on the computer the launcher runs on, with nothing copied.
+   **Stop** ends the server and the tunnel.
 
 The configs it writes (`config/launcher_*.yaml`) are ordinary workflow
 configs you can also run from a terminal.
