@@ -53,14 +53,14 @@ def seam_report(
     of labels touching one side of a seam with nothing continuing on the
     other -- against the same rate on control planes halfway through each
     tile. A seam rate well above the interior rate means the tiling shows:
-    raise ``overlap`` (it should cover about one object), or try
-    ``stitch="iou"``.
+    raise `overlap` (it should cover about one object), or try
+    `stitch="iou"`.
 
     Parameters
     ----------
     labels : str, Path or zarr.Array
         The merged labels: a zarr array, or a group path plus *component*
-        (default ``"0"``, a label group's full resolution).
+        (default `"0"`, a label group's full resolution).
     tile_shape : sequence of int
         The tile shape the segmentation ran with.
     component : str, optional
@@ -79,10 +79,10 @@ def seam_report(
     Returns
     -------
     dict
-        ``{"axes": {axis: {...}}, "worst_seams": [...]}``. Per axis:
-        ``seam_labels``, ``seam_orphans``, ``seam_rate``, ``interior_rate``
+        `{"axes": {axis: {...}}, "worst_seams": [...]}`. Per axis:
+        `seam_labels`, `seam_orphans`, `seam_rate`, `interior_rate`
         (None when tiles are one voxel thick there, leaving no interior
-        plane), and ``ratio``. ``worst_seams`` lists the faces with the most
+        plane), and `ratio`. `worst_seams` lists the faces with the most
         orphans, with their position, for a look in the viewer.
 
     Examples

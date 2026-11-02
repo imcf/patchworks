@@ -66,19 +66,19 @@ def _snakemake_cmd(
 ) -> list[str]:
     """Build one snakemake invocation.
 
-    Every path is absolutised because ``--directory`` moves the working
-    directory: each config needs its own ``.snakemake`` state directory, or
-    concurrent runs would contend for the same ``.snakemake/locks/``.
+    Every path is absolutised because `--directory` moves the working
+    directory: each config needs its own `.snakemake` state directory, or
+    concurrent runs would contend for the same `.snakemake/locks/`.
 
-    *common*, when given, is passed as the first of two ``--configfile``
+    *common*, when given, is passed as the first of two `--configfile`
     values. Snakemake merges them in order with the later winning, so the
     settings every config shares -- the input, the work_dir, everything
-    ``convert`` reads -- live in one file and the per-config file carries only
+    `convert` reads -- live in one file and the per-config file carries only
     what actually differs.
 
     *extra_configfiles*, when given, are appended after *configfile* and so
     win over both it and *common* -- used to pin a driver-computed value
-    (e.g. a resolved ``tile_shape``) across every config without editing any
+    (e.g. a resolved `tile_shape`) across every config without editing any
     config file on disk.
     """
     configfiles = [str(configfile.resolve())]
@@ -117,8 +117,8 @@ def slurm_jobname_prefix(label: str) -> str:
     """Sanitise *label* into a SLURM job-name prefix the executor accepts.
 
     The SLURM executor names every job after its run UUID and refuses a
-    ``--job-name`` in ``slurm_extra``, so a prefix is the only way to get
-    something recognisable into ``squeue``. It becomes ``<prefix>_<uuid>``,
+    `--job-name` in `slurm_extra`, so a prefix is the only way to get
+    something recognisable into `squeue`. It becomes `<prefix>_<uuid>`,
     which puts the readable part first -- the part that survives truncation
     in a queue listing.
 
@@ -214,17 +214,17 @@ def _relate_settings(multi_cfg: dict, args) -> dict:
     Precedence is flag > config > default. Putting them in the config file
     matters because the shipped `pixi run multi-slurm` task is a fixed
     command: a cluster whose default QOS caps the wall time below
-    ``time`` has no way to say so without either editing that task or
+    `time` has no way to say so without either editing that task or
     abandoning it for a hand-written command line.
 
     Parameters
     ----------
     multi_cfg : dict
-        The parsed multi-segmentation config, whose optional ``relate:``
-        block may carry any of ``partition``, ``mem``, ``cpus``, ``time``,
-        ``qos``.
+        The parsed multi-segmentation config, whose optional `relate:`
+        block may carry any of `partition`, `mem`, `cpus`, `time`,
+        `qos`.
     args : argparse.Namespace
-        Parsed CLI arguments; each ``relate_*`` is None when not passed.
+        Parsed CLI arguments; each `relate_*` is None when not passed.
 
     Returns
     -------
@@ -234,7 +234,7 @@ def _relate_settings(multi_cfg: dict, args) -> dict:
     Raises
     ------
     ValueError
-        If ``relate:`` is not a mapping, or carries an unknown key -- a
+        If `relate:` is not a mapping, or carries an unknown key -- a
         typo there would otherwise be silently ignored and the job would
         run with the default that the user thought they had replaced.
     """
@@ -320,7 +320,7 @@ def _bundle_cmd(
 ) -> list[str]:
     """Build the invocation that packs the finished store into one file.
 
-    Under ``--profile`` this is an ``srun``, for the same reason the
+    Under `--profile` this is an `srun`, for the same reason the
     occupancy and relate steps are: it reads every file the run produced,
     which a login node kills without a message.
     """
@@ -391,15 +391,15 @@ def _relate_cmd(
     relate_time: int,
     relate_qos: str | None,
 ) -> list[str]:
-    """Build one ``srun`` invocation of ``relate.py`` for the relations of
+    """Build one `srun` invocation of `relate.py` for the relations of
     one parent (a single pair, or several children of the same parent).
 
-    One job per parent, not one for the whole ``relations:`` list: a single
-    shared ``srun`` time budget let a slow pair starve the others out of a
-    fixed ``--relate-time``, and a kill that way lost everything not yet
+    One job per parent, not one for the whole `relations:` list: a single
+    shared `srun` time budget let a slow pair starve the others out of a
+    fixed `--relate-time`, and a kill that way lost everything not yet
     written. Not one per pair either: the children of one parent are
     related in a single pass that reads the parent once. Jobs of different
-    parents run concurrently, and ``relate.py`` skips a pair whose workbook
+    parents run concurrently, and `relate.py` skips a pair whose workbook
     is already up to date, so a retry only redoes what actually failed.
     """
     rels = [rel] if isinstance(rel, dict) else list(rel)
@@ -470,15 +470,15 @@ _PLACEHOLDER_PREFIX = "/path/to"
 
 
 def _review_rules(multi_cfg: dict, label_names: list[str]) -> dict:
-    """The ``review:`` block of the multi config, checked.
+    """The `review:` block of the multi config, checked.
 
-    ``expect`` maps a parent label image to the number of each child it
-    should hold (``1`` or ``[min, max]``); ``min_overlap`` is the fraction
+    `expect` maps a parent label image to the number of each child it
+    should hold (`1` or `[min, max]`); `min_overlap` is the fraction
     of a child that must be inside its parent (a number, or per
-    ``{child: {parent: value}}``); ``position`` classifies children by where
-    they sit in their parent (apical, basal, lateral, central). ``patchworks
-    review`` flags whatever breaks them. Relations may also carry
-    ``max_distance_um`` (the nearest parent for a child touching none).
+    `{child: {parent: value}}`); `position` classifies children by where
+    they sit in their parent (apical, basal, lateral, central). `patchworks
+    review` flags whatever breaks them. Relations may also carry
+    `max_distance_um` (the nearest parent for a child touching none).
     """
     block = multi_cfg.get("review") or {}
     if not isinstance(block, dict):
@@ -567,19 +567,19 @@ def _review_rules(multi_cfg: dict, label_names: list[str]) -> dict:
 
 
 def _tile_channels(cfg: dict) -> int:
-    """Channels a segment tile carries (as ``_pw.tile_channels``): the
+    """Channels a segment tile carries (as `_pw.tile_channels`): the
     nuclei channel or the seed labels are stacked onto the image."""
     two = cfg.get("nuclei_channel") is not None or bool(cfg.get("seed_labels"))
     return 2 if two else 1
 
 
 def seed_dependencies(cfgs: list[dict]) -> dict[int, int]:
-    """``{config index: index of the config whose labels it grows from}``.
+    """`{config index: index of the config whose labels it grows from}`.
 
-    A config with ``seed_labels: <name>`` reads that label image in every
-    tile, so the config producing ``<name>`` must have finished first.
+    A config with `seed_labels: <name>` reads that label image in every
+    tile, so the config producing `<name>` must have finished first.
     Labels no listed config produces are taken from the store as they are
-    (an earlier run); ``prepare`` checks they exist.
+    (an earlier run); `prepare` checks they exist.
     """
     by_name = {cfg.get("label_name"): i for i, cfg in enumerate(cfgs)}
     return {
@@ -590,14 +590,14 @@ def seed_dependencies(cfgs: list[dict]) -> dict[int, int]:
 
 
 def seed_plan(cfgs: list[dict], image_store: str) -> list[str]:
-    """What each ``seed_labels`` config will grow from, said up front.
+    """What each `seed_labels` config will grow from, said up front.
 
     A name no listed config produces is taken from the store as it is --
     typically left by an earlier run under that name, so the cells would
     grow from old seeds while the current nuclei are re-segmented next to
     them, with nothing to show for it. Say so loudly, and name the configs'
-    own label images, since a near-miss (``nuclei_labels`` for
-    ``nuclei_labels_cpsam``) is the usual cause.
+    own label images, since a near-miss (`nuclei_labels` for
+    `nuclei_labels_cpsam`) is the usual cause.
     """
     names = [cfg.get("label_name") for cfg in cfgs]
     lines = []
@@ -626,7 +626,7 @@ def seed_plan(cfgs: list[dict], image_store: str) -> list[str]:
 
 
 def label_ready(image_store: str | Path, name: str) -> bool:
-    """Whether ``labels/<name>`` in *image_store* is a finished label image.
+    """Whether `labels/<name>` in *image_store* is a finished label image.
 
     Finished, not merely there: segmenting in place writes tiles into a bare
     group, and only the end of the merge registers it (multiscales).
@@ -669,8 +669,8 @@ def relation_problems(
 def stale_runs(cfgs: list[dict], image_store: str | Path) -> list[Path]:
     """Run directories that say done while their labels are gone.
 
-    A run is done for Snakemake once ``<work_dir>/<label_name>/labels.done``
-    exists; the labels themselves live in ``image.zarr/labels/<label_name>``.
+    A run is done for Snakemake once `<work_dir>/<label_name>/labels.done`
+    exists; the labels themselves live in `image.zarr/labels/<label_name>`.
     Deleting the label group is how a segmentation is redone, but with the
     marker still there nothing would re-make it: the run would report ok and
     only the relations fail, on labels that are not there. The caller clears
@@ -702,7 +702,7 @@ def _validate_configs(paths: list[Path], cfgs: list[dict]) -> str:
     Returns
     -------
     str
-        The shared ``work_dir``.
+        The shared `work_dir`.
     """
     problems = config_set_problems(paths, cfgs)
     if problems:
@@ -718,7 +718,7 @@ def config_set_problems(paths: list[Path], cfgs: list[dict]) -> list[str]:
 
     These used to surface hours later -- as a shape mismatch from
     label_relations, or not at all when two configs quietly overwrote each
-    other's label group. Only ``work_dir`` was checked, and only when
+    other's label group. Only `work_dir` was checked, and only when
     relations were configured and it was not a dry run.
     """
     problems = []
@@ -813,32 +813,32 @@ def config_set_problems(paths: list[Path], cfgs: list[dict]) -> list[str]:
 def _resolve_shared_tile_shape(
     seg_cfgs: list[dict], image_store: str, work_dir: str
 ) -> Path:
-    """Auto-size ``tile_shape`` once, shared across every config.
+    """Auto-size `tile_shape` once, shared across every config.
 
-    ``tile_shape: "auto"`` resolves differently per config when
-    ``nuclei_channel`` differs -- the sizer charges per channel, so a
+    `tile_shape: "auto"` resolves differently per config when
+    `nuclei_channel` differs -- the sizer charges per channel, so a
     two-channel config gets a smaller tile. Left alone, the label groups
-    would end up with different chunk layouts and ``label_relations`` would
+    would end up with different chunk layouts and `label_relations` would
     raise, after every segmentation had already run.
 
-    Computes what each config's own settings (channel count, ``do_3D``,
-    ``diameter``, GPU budget) would actually produce, then pins every config
+    Computes what each config's own settings (channel count, `do_3D`,
+    `diameter`, GPU budget) would actually produce, then pins every config
     to the *smallest* of them by voxel count -- the most memory-constrained
     case, and safe for every config since a smaller tile only ever asks for
     less memory than that config's own budget allows, never more. Configs
-    can therefore use different ``do_3D``/``diameter``/channel-count
-    settings and still end up with one shared, valid ``tile_shape``.
+    can therefore use different `do_3D`/`diameter`/channel-count
+    settings and still end up with one shared, valid `tile_shape`.
 
     Only called once the converted image exists (the sizer needs its real
-    shape/dtype), so this runs from ``main()`` after phase A, not from
-    ``_validate_configs()``.
+    shape/dtype), so this runs from `main()` after phase A, not from
+    `_validate_configs()`.
 
     Returns
     -------
     Path
-        A generated one-key YAML file (``tile_shape: [...]``), meant to be
-        passed as an ``extra_configfiles`` entry to ``_snakemake_cmd`` so it
-        overrides every config's own (or common's) ``tile_shape`` value.
+        A generated one-key YAML file (`tile_shape: [...]`), meant to be
+        passed as an `extra_configfiles` entry to `_snakemake_cmd` so it
+        overrides every config's own (or common's) `tile_shape` value.
     """
     from functools import partial
 
@@ -915,9 +915,9 @@ def run_after(
     segmentation needs its seeds' labels, not their object table, which can
     take hours more.)
 
-    *launch(i)* starts job *i* and returns its ``Popen``. Jobs without a
+    *launch(i)* starts job *i* and returns its `Popen`. Jobs without a
     dependency start at once, side by side. One whose dependency failed is
-    not started (``"skipped"``) unless *skip_after_failure* is False; a
+    not started (`"skipped"`) unless *skip_after_failure* is False; a
     failure does not stop the others, which are independent and may hold
     hours of finished GPU work.
 
@@ -926,7 +926,7 @@ def run_after(
     Returns
     -------
     list of (str, str)
-        ``(name, "ok" | "FAILED" | "skipped (<dependency> failed)")``, in
+        `(name, "ok" | "FAILED" | "skipped (<dependency> failed)")`, in
         *names* order.
     """
     import time
@@ -966,7 +966,7 @@ RUN_STATE = "run_multi_state.json"
 
 
 def write_run_state(run: Path, **fields) -> None:
-    """Record how *run*'s Snakemake is doing (``state``, ``exit``, times)."""
+    """Record how *run*'s Snakemake is doing (`state`, `exit`, times)."""
     import time
 
     path = run / RUN_STATE
@@ -1011,10 +1011,10 @@ def tee_output(proc: subprocess.Popen, path: Path):
 def relation_dependencies(
     relations: list[dict], review_rules: dict | None
 ) -> dict[int, int]:
-    """Relations to wait for: ``{i: j}``, relation *i* after relation *j*.
+    """Relations to wait for: `{i: j}`, relation *i* after relation *j*.
 
-    A position rule orienting the cells by their nuclei (``cilia_labels:
-    {parent: cells, apical: nuclei}``) classifies the cilia in the cilia ->
+    A position rule orienting the cells by their nuclei (`cilia_labels:
+    {parent: cells, apical: nuclei}`) classifies the cilia in the cilia ->
     cells workbook from the nuclei -> cells relation; run side by side, the
     cilia job could finish first and find no nuclei related yet.
     """
@@ -1039,7 +1039,7 @@ DRIVER_FILE = ".run_multi.pid"
 
 def _slurm_job_running(job_id: str) -> bool | None:
     """Whether SLURM job *job_id* (yours) is still queued or running; None
-    when SLURM cannot be asked. All your jobs, not ``squeue -j``: that
+    when SLURM cannot be asked. All your jobs, not `squeue -j`: that
     errors out for an id SLURM has already forgotten -- a finished job."""
     try:
         out = subprocess.run(
@@ -1071,7 +1071,7 @@ def _slurm_job_running(job_id: str) -> bool | None:
 
 def _process_args(pid: int) -> list[str] | None:
     """The command line of *pid*: [] if there is no such process, None if
-    it cannot be read. /proc on Linux, ``ps`` elsewhere (macOS)."""
+    it cannot be read. /proc on Linux, `ps` elsewhere (macOS)."""
     cmdline = Path(f"/proc/{pid}/cmdline")
     if Path("/proc/self/cmdline").exists():
         try:
@@ -1274,7 +1274,7 @@ def held_locks(state_dir: Path) -> list[Path]:
 def _still_working(state_dir: Path, label: str) -> str | None:
     """Why the Snakemake of *state_dir* may still be at work, or None.
 
-    Its SLURM jobs (named ``pw-<label>_<uuid>``) still queued or running, or
+    Its SLURM jobs (named `pw-<label>_<uuid>`) still queued or running, or
     a snakemake process on this machine working in *state_dir* -- one left
     running when its run_multi was killed. Also a reason when neither can
     be checked.
@@ -1316,7 +1316,7 @@ def release_stale_locks(state_dirs: list[tuple[Path, str]]) -> None:
     (:func:`claim_driver`), so a lock in one of its state directories is
     left over from a run that was killed -- unless that run's Snakemake or
     its jobs outlived it, which :func:`_still_working` checks. Snakemake's
-    ``--unlock`` does the same: it deletes these files.
+    `--unlock` does the same: it deletes these files.
     """
     for state_dir, label in state_dirs:
         locks = held_locks(state_dir)
@@ -1350,13 +1350,13 @@ def _resolve(path_str: str, *bases: Path) -> Path:
 
 
 def _config_bases(workflow_dir: Path) -> list[Path]:
-    """Where a relative ``--config`` is looked for, in order.
+    """Where a relative `--config` is looked for, in order.
 
-    pixi runs a task from the workspace root (``workflow/``) whatever
-    directory it was called from, and says which in ``INIT_CWD``: so
-    ``pixi run multi-slurm --config my_multi.yaml`` from a project folder
-    finds the file there, while the shipped ``config/multi.yaml`` still
-    resolves against ``workflow/``.
+    pixi runs a task from the workspace root (`workflow/`) whatever
+    directory it was called from, and says which in `INIT_CWD`: so
+    `pixi run multi-slurm --config my_multi.yaml` from a project folder
+    finds the file there, while the shipped `config/multi.yaml` still
+    resolves against `workflow/`.
     """
     bases = []
     for base in (os.environ.get("INIT_CWD"), os.getcwd(), workflow_dir):

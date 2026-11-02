@@ -1,7 +1,7 @@
 """Snakemake script: stitch the segmented tiles into one label image.
 
 Joins objects across tile seams, renumbers them, applies the size filter,
-and writes ``image.zarr/labels/<name>/``: a calibrated pyramid with its
+and writes `image.zarr/labels/<name>/`: a calibrated pyramid with its
 object table, provenance and seam report.
 """
 

@@ -49,8 +49,8 @@ def _n_objects(image_store: str, name: str) -> str:
 
 
 def written_outputs(out_path: Path, a_name: str, b_name: str) -> list[Path]:
-    """What a relation's workbook was written as: the ``.xlsx``, or -- a
-    sheet too long for Excel -- its two csv files (``<stem>_<name>.csv``).
+    """What a relation's workbook was written as: the `.xlsx`, or -- a
+    sheet too long for Excel -- its two csv files (`<stem>_<name>.csv`).
 
     Only the .xlsx used to count, so every relation of more than a million
     objects was recomputed from scratch on each run: hours each.
@@ -69,11 +69,11 @@ def _relation_up_to_date(
     """Whether *out_path* already reflects the current *a_name*/*b_name* labels.
 
     Mirrors the workflow's existing "delete to force" convention (see
-    ``image.zarr`` not being reconverted once it exists): a relation is
+    `image.zarr` not being reconverted once it exists): a relation is
     considered current when its workbook is newer than both labels'
-    ``labels.done`` merge marker, and stale (or never computed) otherwise.
+    `labels.done` merge marker, and stale (or never computed) otherwise.
     Missing markers -- a label group written before merge started recording
-    one, or a nonstandard ``image_store`` layout -- are treated as "unknown,
+    one, or a nonstandard `image_store` layout -- are treated as "unknown,
     recompute" rather than raise, since staleness can't be judged without them.
     """
     outputs = written_outputs(out_path, a_name, b_name)
@@ -118,19 +118,19 @@ def run_relations(
     :func:`_relation_up_to_date`) is skipped rather than recomputed -- so
     retrying a partially-failed run (this step has no Snakemake rule of its
     own to track that for it) only redoes what's actually missing or stale.
-    Delete the ``.xlsx`` yourself to force a specific relation to recompute.
+    Delete the `.xlsx` yourself to force a specific relation to recompute.
 
     Parameters
     ----------
     work_dir : str
         Directory relation workbooks are written into (a relation's
-        ``output``, when relative, resolves against this).
+        `output`, when relative, resolves against this).
     image_store : str
-        The shared ``image.zarr`` holding every config's ``labels/<name>``.
+        The shared `image.zarr` holding every config's `labels/<name>`.
     relations : list of dict
-        Each ``{"a": ..., "b": ..., "output": ...}`` (``output`` optional,
-        defaults to ``<a>_to_<b>.xlsx``), matching ``multi.yaml``'s
-        ``relations:`` list.
+        Each `{"a": ..., "b": ..., "output": ...}` (`output` optional,
+        defaults to `<a>_to_<b>.xlsx`), matching `multi.yaml`'s
+        `relations:` list.
     """
     from patchworks._review import Review, review_updated
     from patchworks._tables import (

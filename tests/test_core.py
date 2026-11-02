@@ -431,8 +431,8 @@ def test_auto_tile_shape_charges_for_extra_channels():
 def test_stage_stores_never_collide(tmp_path):
     """Two runs sharing a directory must each get their own stage store.
 
-    A fixed ``_pws_stage.zarr`` name let concurrent runs writing side by side
-    (``nuclei.zarr`` and ``cyto.zarr``) overwrite each other's tiles.
+    A fixed `_pws_stage.zarr` name let concurrent runs writing side by side
+    (`nuclei.zarr` and `cyto.zarr`) overwrite each other's tiles.
     """
     from patchworks._merge import _scratch_store
 
@@ -500,7 +500,7 @@ def test_tile_process_writes_no_log_file_by_default(tmp_path):
 
 
 def test_zarr_path_detection_tolerates_a_trailing_slash():
-    """``image.zarr/`` is still a store the labels go back into."""
+    """`image.zarr/` is still a store the labels go back into."""
     from patchworks._core import _is_zarr_path
 
     assert _is_zarr_path("/data/image.zarr")

@@ -10,7 +10,7 @@ Two-pass streaming algorithm, mirroring :func:`patchworks.relabel_sequential_zar
 -- safe for arrays far larger than RAM. Pass 1 does a chunk-wise
 unique+count to get every label's voxel count (bounded memory: a Python
 dict keyed by label id, not the voxels themselves). Pass 2 builds a LUT
-that zeroes labels outside ``[min_voxels, max_voxels]`` -- optionally
+that zeroes labels outside `[min_voxels, max_voxels]` -- optionally
 renumbering the survivors to a contiguous range in the same pass -- and
 applies it chunk by chunk, writing back into the same store.
 """
@@ -37,14 +37,14 @@ def voxel_volume(voxel_size: "dict[str, float]") -> float:
     """Physical volume of one voxel, from a per-axis calibration.
 
     Axes missing from *voxel_size* are treated as 1.0 -- e.g. a 2-D
-    calibration with no ``z`` gives an area, not a bogus volume shrunk by a
+    calibration with no `z` gives an area, not a bogus volume shrunk by a
     fake axis. Units follow whatever *voxel_size* is in (micrometers for
     :func:`patchworks.plugins.ome_zarr.read_pixel_size`).
 
     Parameters
     ----------
     voxel_size : dict
-        Per-axis physical size, e.g. ``{"z": .., "y": .., "x": ..}``.
+        Per-axis physical size, e.g. `{"z": .., "y": .., "x": ..}`.
 
     Returns
     -------
@@ -130,7 +130,7 @@ def filter_labels_by_size(
     relabel: bool = True,
     n_workers: "int | None" = None,
 ) -> "tuple[int, int]":
-    """Drop label objects outside ``[min_voxels, max_voxels]``, in place.
+    """Drop label objects outside `[min_voxels, max_voxels]`, in place.
 
     Two-pass streaming scan (see module docstring) -- the array never has
     to fit in RAM.
@@ -142,18 +142,18 @@ def filter_labels_by_size(
     component : str
         Array name inside the store to filter in place.
     min_voxels : int, optional
-        Objects with fewer voxels than this are zeroed (dropped). ``None``
+        Objects with fewer voxels than this are zeroed (dropped). `None`
         (default) sets no lower bound. Use :func:`min_voxels_for_volume` to
         derive this from a physical volume and calibration.
     max_voxels : int, optional
         Objects with more voxels than this are zeroed (dropped) -- e.g. a
         segmentation artifact where several objects merged into one giant
-        blob. ``None`` (default) sets no upper bound. Use
+        blob. `None` (default) sets no upper bound. Use
         :func:`max_voxels_for_volume` to derive this from a physical volume
         and calibration.
     relabel : bool, optional
-        Renumber the surviving objects to a contiguous ``1..N`` range in
-        the same LUT that drops the out-of-range ones (default ``True``)
+        Renumber the surviving objects to a contiguous `1..N` range in
+        the same LUT that drops the out-of-range ones (default `True`)
         -- otherwise the removed ids leave permanent gaps and survivors
         keep their original ids.
     n_workers : int, optional
@@ -163,7 +163,7 @@ def filter_labels_by_size(
     Returns
     -------
     tuple of int
-        ``(n_kept, n_removed)``.
+        `(n_kept, n_removed)`.
 
     Examples
     --------

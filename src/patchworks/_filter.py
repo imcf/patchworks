@@ -101,9 +101,9 @@ def size_report(store: Union[str, Path], name: str) -> dict[str, Any]:
     Returns
     -------
     dict
-        ``unit``, ``n``, ``quantiles`` ({percent: volume}), ``suggested``
-        (the cut from :func:`suggest_min_volume`), ``histogram`` (lines),
-        ``cuts``: for the suggestion and round values around it, the objects
+        `unit`, `n`, `quantiles` ({percent: volume}), `suggested`
+        (the cut from :func:`suggest_min_volume`), `histogram` (lines),
+        `cuts`: for the suggestion and round values around it, the objects
         kept and, when the table relates them to a parent, kept per parent.
     """
     from ._tables import read_columns
@@ -239,15 +239,15 @@ def filter_labels(
     min_length: float | None = None,
     out: str | None = None,
 ) -> tuple[str, int, int]:
-    """Write ``labels/<out>``: *name* without the objects whose volume (µm³
-    when calibrated, else voxels) is outside ``[min_volume, max_volume]``,
+    """Write `labels/<out>`: *name* without the objects whose volume (µm³
+    when calibrated, else voxels) is outside `[min_volume, max_volume]`,
     numbered 1..N, with its table. *name* is left as it is. *min_length*
     (µm when calibrated) drops objects shorter along their main axis.
 
     Returns
     -------
     tuple
-        ``(out, kept, dropped)``.
+        `(out, kept, dropped)`.
     """
     import dask.array as da
 

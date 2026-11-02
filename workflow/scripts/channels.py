@@ -5,7 +5,7 @@
 
 Each channel's maximum over z, from a pyramid level about 1024 pixels
 across, stretched between its 1st and 99.5th percentiles, as
-``<work_dir>/previews/channels/channel_<i>.png``. Also prints the image's
+`<work_dir>/previews/channels/channel_<i>.png`. Also prints the image's
 shape and voxel size (a Cellpose diameter, a max_radius_um ...). Light
 enough for the login node; the image must be converted first.
 """
@@ -30,7 +30,7 @@ def channel_pictures(store: str, out: Path, region=None) -> dict:
     """A picture per channel: each one's maximum over z.
 
     The whole image, from the finest pyramid level about MAX_SIDE wide; or
-    with *region* ``(y0, y1, x0, x1)``, fractions of the image's height and
+    with *region* `(y0, y1, x0, x1)`, fractions of the image's height and
     width, that region alone, from the finest level that draws it about
     MAX_SIDE wide -- a zoom with the detail of the finer levels, reading
     only that region.

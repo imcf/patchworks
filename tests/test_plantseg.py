@@ -2,7 +2,7 @@
 
 PlantSeg is conda-forge only (vigra, nifty, elf), so these tests replace it
 with a module exposing the same functions (plant-seg 2.0) that records how it
-is called; the real thing runs where the workflow's ``plantseg`` environment
+is called; the real thing runs where the workflow's `plantseg` environment
 is installed.
 """
 

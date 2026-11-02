@@ -15,7 +15,7 @@ _LUT_WARN_THRESHOLD = 100_000_000  # warn when max_label > 100 M (LUT > 800 MB)
 
 
 def _sequential_lut(ids: np.ndarray) -> tuple[np.ndarray, int]:
-    """LUT mapping the sorted distinct *ids* onto ``1..N`` (0 stays 0).
+    """LUT mapping the sorted distinct *ids* onto `1..N` (0 stays 0).
 
     Numbering from 1 whether or not 0 is among *ids*: counting from 0
     whenever background happened to be absent turned the smallest object
@@ -29,7 +29,7 @@ def _sequential_lut(ids: np.ndarray) -> tuple[np.ndarray, int]:
     Returns
     -------
     tuple
-        ``(lut, n)`` -- the lookup table and the object count ``N``.
+        `(lut, n)` -- the lookup table and the object count `N`.
     """
     if ids.size and ids[0] < 0:
         raise ValueError(f"labels must be non-negative, found {int(ids[0])}")
@@ -41,10 +41,10 @@ def _sequential_lut(ids: np.ndarray) -> tuple[np.ndarray, int]:
 
 
 def relabel_sequential_array(labels: np.ndarray) -> np.ndarray:
-    """Remap *labels* to a contiguous ``0, 1, … N`` range.
+    """Remap *labels* to a contiguous `0, 1, … N` range.
 
-    Background (0) stays 0. Runs in one ``np.unique`` + a lookup-table gather,
-    i.e. O(voxels) — unlike dask's ``relabel_sequential`` which is O(n_chunks²).
+    Background (0) stays 0. Runs in one `np.unique` + a lookup-table gather,
+    i.e. O(voxels) — unlike dask's `relabel_sequential` which is O(n_chunks²).
 
     Parameters
     ----------
@@ -54,7 +54,7 @@ def relabel_sequential_array(labels: np.ndarray) -> np.ndarray:
     Returns
     -------
     np.ndarray
-        Labels remapped to a contiguous ``0, 1, … N`` range.
+        Labels remapped to a contiguous `0, 1, … N` range.
 
     Examples
     --------
@@ -90,13 +90,13 @@ def relabel_sequential_zarr(store_path: str, component: str = "labels") -> int:
         Path to the zarr store containing the label array.
     component : str, optional
         Array name inside the store to relabel in place (default
-        ``"labels"``).
+        `"labels"`).
 
     Returns
     -------
     int
-        Number of distinct objects (``N``); the array now holds ``1..N``
-        (background ``0`` unchanged).
+        Number of distinct objects (`N`); the array now holds `1..N`
+        (background `0` unchanged).
 
     Examples
     --------

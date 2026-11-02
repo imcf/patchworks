@@ -1,4 +1,4 @@
-"""``patchworks`` command line: convert, segment, inspect and view.
+"""`patchworks` command line: convert, segment, inspect and view.
 
 The same building blocks as the Python API and the Snakemake workflow, for a
 one-off run on a workstation without writing a script or a config::
@@ -359,7 +359,7 @@ def _cmd_view(args: argparse.Namespace) -> int:
 
 
 def _pair(text: str) -> tuple[str, str]:
-    """``child:parent`` -> ("child", "parent")."""
+    """`child:parent` -> ("child", "parent")."""
     child, sep, parent = text.partition(":")
     if not sep or not child or not parent:
         raise argparse.ArgumentTypeError(f"expected CHILD:PARENT, got {text!r}")
@@ -367,7 +367,7 @@ def _pair(text: str) -> tuple[str, str]:
 
 
 def _expect(text: str) -> tuple[str, str, tuple[int, int]]:
-    """``parent:child=1`` or ``parent:child=0-2`` -> (parent, child, range)."""
+    """`parent:child=1` or `parent:child=0-2` -> (parent, child, range)."""
     pair, sep, rng = text.partition("=")
     parent, child = _pair(pair)
     try:
@@ -404,7 +404,7 @@ def _cmd_tables(args: argparse.Namespace) -> int:
 
 
 def _position(text: str) -> tuple[str, dict]:
-    """``child:parent=apical`` -> ("child", {"parent": ..., "apical": ...})."""
+    """`child:parent=apical` -> ("child", {"parent": ..., "apical": ...})."""
     pair, sep, apical = text.partition("=")
     child, parent = _pair(pair)
     if not sep or not apical:
@@ -475,7 +475,7 @@ def _cmd_denoise_train(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """The ``patchworks`` argument parser (exposed for tests and docs)."""
+    """The `patchworks` argument parser (exposed for tests and docs)."""
     parser = argparse.ArgumentParser(
         prog="patchworks",
         description="Tiled processing of arbitrarily large images.",
@@ -784,7 +784,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Entry point of the ``patchworks`` command."""
+    """Entry point of the `patchworks` command."""
     args = build_parser().parse_args(argv)
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,

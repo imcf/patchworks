@@ -1,23 +1,23 @@
 """Exact per-tile occupancy from a max-pooled summary of the image.
 
-``estimate_empty_tiles`` decides whether a tile is background by reading a
-small *centred* window of it. On a ``(16, 1024, 1024)`` tile with the default
-``(24, 256, 256)`` window that is 6.25% of the tile's area, so an object
+`estimate_empty_tiles` decides whether a tile is background by reading a
+small *centred* window of it. On a `(16, 1024, 1024)` tile with the default
+`(24, 256, 256)` window that is 6.25% of the tile's area, so an object
 sitting in the tile's outer ring is never seen -- and when the result is used
 as a skip list (as the Snakemake workflow does) that tile is never segmented.
 
 This module trades that sampling for a one-off reduction. Each
-``block``-sized brick of the image is reduced to its **maximum** and stored in
+`block`-sized brick of the image is reduced to its **maximum** and stored in
 a small array beside the image. Two properties make the result exact rather
 than approximate:
 
-* ``max`` never loses a bright voxel, so no signal can hide between samples.
-* ``block_max > threshold`` is true exactly when *some* voxel in the block
-  exceeds ``threshold``. Comparing pooled maxima against a threshold derived
+* `max` never loses a bright voxel, so no signal can hide between samples.
+* `block_max > threshold` is true exactly when *some* voxel in the block
+  exceeds `threshold`. Comparing pooled maxima against a threshold derived
   from raw voxels therefore gives the same answer as scanning every voxel.
 
 The map is ~1/16384 of the image at the default block size, is written once
-next to ``image.zarr``, and is shared by every segmentation config that reads
+next to `image.zarr`, and is shared by every segmentation config that reads
 that image -- replacing one sampling pass *per config* with one pooling pass
 in total.
 """
@@ -100,7 +100,7 @@ def _block_max(arr: np.ndarray, block: tuple[int, ...]) -> np.ndarray:
     Returns
     -------
     np.ndarray
-        Array of per-brick maxima, ``ceil(arr.shape / block)`` in shape.
+        Array of per-brick maxima, `ceil(arr.shape / block)` in shape.
     """
     pad = [(0, (-s) % b) for s, b in zip(arr.shape, block)]
     if any(after for _, after in pad):
@@ -143,7 +143,7 @@ def occupancy_path(image_store: Union[str, Path], level: int = 0) -> str:
     Deliberately a **sibling** of the image store, not a node inside it. The
     map is not an NGFF array, and zarr refuses to walk a hierarchy containing
     one ("Object at ... is not recognized as a component of a Zarr
-    hierarchy"), which would make every ``members()``/``arrays()`` call on the
+    hierarchy"), which would make every `members()`/`arrays()` call on the
     user's image warn.
     """
     store = str(image_store).rstrip("/")
@@ -160,14 +160,14 @@ def build_occupancy_map(
 ) -> str:
     """Max-pool every channel of an OME-ZARR level into a small summary array.
 
-    Reads the image once and writes ``<image>.occupancy.zarr/<level>`` (a
+    Reads the image once and writes `<image>.occupancy.zarr/<level>` (a
     sibling of the store, see :func:`occupancy_path`), an
-    array of shape ``(n_channels, *ceil(spatial_shape / block))`` holding the
+    array of shape `(n_channels, *ceil(spatial_shape / block))` holding the
     maximum of each brick. Cheap to keep (~1/16384 of the image by default)
     and reusable by every config that segments this image.
 
     Idempotent: an existing map is reused unless *overwrite* is set, so
-    concurrent segmentation runs against one ``work_dir`` build it at most
+    concurrent segmentation runs against one `work_dir` build it at most
     once. The map is written to a temporary sibling and moved into place, so a
     crash mid-build never leaves a partial map behind.
 
@@ -178,7 +178,7 @@ def build_occupancy_map(
     level : int, optional
         Pyramid level to read (default 0, full resolution).
     block : tuple of int, optional
-        Brick shape over the spatial axes (default ``(1, 128, 128)``: no z
+        Brick shape over the spatial axes (default `(1, 128, 128)`: no z
         reduction, so any z-tiling works).
     overwrite : bool, optional
         Rebuild even if a map already exists.
@@ -349,9 +349,9 @@ def tile_occupancy(
     Returns
     -------
     dict
-        ``threshold``, ``n_tiles``, ``n_occupied``, ``empty_fraction``,
-        ``occupancy`` (bool array over the tile grid), matching
-        :func:`patchworks.estimate_empty_tiles`, and ``filled`` (the share
+        `threshold`, `n_tiles`, `n_occupied`, `empty_fraction`,
+        `occupancy` (bool array over the tile grid), matching
+        :func:`patchworks.estimate_empty_tiles`, and `filled` (the share
         of each tile's bricks over the threshold: how full it is).
     """
     arr = zarr.open_array(occupancy_path(image_store, level), mode="r")

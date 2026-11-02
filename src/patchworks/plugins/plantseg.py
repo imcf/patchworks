@@ -10,18 +10,18 @@ model misses, and the partitioning closes a wall that is faint in places.
 
 With a nuclear channel, the nuclei constrain the result too:
 
-``"lifted_multicut"``
+`"lifted_multicut"`
     PlantSeg's lifted multicut: supervoxels in the same nucleus are pulled
     together, supervoxels in different nuclei pushed apart.
-``"nuclei_watershed"``
+`"nuclei_watershed"`
     The boundary map flooded from the nuclei, one cell per nucleus (the
     seeded flooding of :mod:`patchworks.plugins.watershed`, on the U-Net's
     boundaries rather than the raw stain).
 
-PlantSeg is installed from conda-forge (``plant-seg``), not PyPI -- see the
-``plantseg`` environment of the workflow's pixi.toml. Its U-Nets download
-from the PlantSeg model zoo on first use into ``$PLANTSEG_HOME`` (default
-``~/.plantseg_models``): run :func:`fetch_model` once on a node with
+PlantSeg is installed from conda-forge (`plant-seg`), not PyPI -- see the
+`plantseg` environment of the workflow's pixi.toml. Its U-Nets download
+from the PlantSeg model zoo on first use into `$PLANTSEG_HOME` (default
+`~/.plantseg_models`): run :func:`fetch_model` once on a node with
 internet access when the GPU nodes have none.
 
 Usage
@@ -72,7 +72,7 @@ SEGMENTATIONS = (
     "lifted_multicut",
     "nuclei_watershed",
 )
-#: The ones that need the nuclear channel (``nuclei_channel`` in the config).
+#: The ones that need the nuclear channel (`nuclei_channel` in the config).
 NEEDS_NUCLEI = ("lifted_multicut", "nuclei_watershed")
 #: Rescaling closer than this to 1 on every axis is skipped.
 _RESCALE_TOLERANCE = 0.1
@@ -265,7 +265,7 @@ def smaller_patch(patch: tuple[int, int, int]) -> tuple[int, int, int] | None:
 
 
 def fetch_model(model: str = "generic_confocal_3D_unet") -> None:
-    """Download a zoo model into ``$PLANTSEG_HOME`` now, not on a GPU node.
+    """Download a zoo model into `$PLANTSEG_HOME` now, not on a GPU node.
 
     Compute nodes often have no internet access; the segment jobs then load
     the copy fetched here.
@@ -283,7 +283,7 @@ def rescale_factors(
 ) -> tuple[float, ...] | None:
     """Zoom per axis taking the image to the model's training resolution.
 
-    ``None`` when either is unknown or every factor is within 10 % of 1.
+    `None` when either is unknown or every factor is within 10 % of 1.
 
     Examples
     --------
@@ -332,29 +332,29 @@ def plantseg_fn(
     voxel_size: dict[str, float] | None = None,
     intensity_stats: "tuple[float, float] | None" = None,
 ) -> Callable[[np.ndarray], np.ndarray]:
-    """Return a PlantSeg segmentation for ``tile_process``.
+    """Return a PlantSeg segmentation for `tile_process`.
 
     Parameters
     ----------
     model :
-        PlantSeg zoo model (``available_models()``), e.g.
-        ``"generic_confocal_3D_unet"`` or ``"generic_light_sheet_3D_unet"``.
+        PlantSeg zoo model (`available_models()`), e.g.
+        `"generic_confocal_3D_unet"` or `"generic_light_sheet_3D_unet"`.
     model_id :
         Or a BioImage.IO model zoo id instead of *model*.
     config_path, weights_path :
         Or your own trained U-Net (PlantSeg's training config and weights).
     segmentation :
-        One of :data:`SEGMENTATIONS`. ``"gasp"`` (default), ``"mutex_ws"``
-        and ``"multicut"`` agglomerate watershed supervoxels;
-        ``"dt_watershed"`` stops at the supervoxels; ``"lifted_multicut"``
-        and ``"nuclei_watershed"`` also use the nuclear channel.
+        One of :data:`SEGMENTATIONS`. `"gasp"` (default), `"mutex_ws"`
+        and `"multicut"` agglomerate watershed supervoxels;
+        `"dt_watershed"` stops at the supervoxels; `"lifted_multicut"`
+        and `"nuclei_watershed"` also use the nuclear channel.
     beta :
         Agglomeration bias: lower merges more (under-segments), higher
         splits more. PlantSeg's GUI default is 0.6.
     post_minsize :
         Cells smaller than this many voxels are merged into a neighbour.
     ws_threshold, ws_sigma_seeds, ws_min_size, ws_stacked :
-        The supervoxel watershed (PlantSeg's ``dt_watershed``); *ws_stacked*
+        The supervoxel watershed (PlantSeg's `dt_watershed`); *ws_stacked*
         runs it plane by plane, for a coarse z.
     nuclei_sigma, nuclei_threshold, nuclei_min_size :
         How nuclei are found in the nuclear channel, see
@@ -370,24 +370,24 @@ def plantseg_fn(
         predicting (and the prediction back), from *voxel_size*. The single
         biggest factor in a pretrained U-Net's quality.
     patch :
-        U-Net patch shape (z, y, x). ``None``: the zoo's recommendation for
+        U-Net patch shape (z, y, x). `None`: the zoo's recommendation for
         *model* (80, 160, 160 for the generic ones), no larger than the
         tile; it shrinks by itself on a GPU out-of-memory, down to
         PlantSeg's 64-pixel minimum in y and x.
     device :
-        ``"cuda"`` or ``"cpu"``.
+        `"cuda"` or `"cpu"`.
     n_threads :
         Threads for the watershed and agglomeration.
     seeds :
-        For the modes using nuclei: ``"channel"`` (default) finds them in
-        the tile's nuclear channel (``nuclei_*`` options); ``"labels"``
+        For the modes using nuclei: `"channel"` (default) finds them in
+        the tile's nuclear channel (`nuclei_*` options); `"labels"`
         takes them as given, one object per seed -- the workflow's
-        ``seed_labels``, e.g. Cellpose's nuclei, which sets this itself.
+        `seed_labels`, e.g. Cellpose's nuclei, which sets this itself.
     voxel_size :
-        ``{"z": .., "y": .., "x": ..}`` in micrometres; the workflow passes
+        `{"z": .., "y": .., "x": ..}` in micrometres; the workflow passes
         the image's own calibration.
     intensity_stats :
-        ``(mean, std)`` of the membrane channel over the whole image, used
+        `(mean, std)` of the membrane channel over the whole image, used
         to standardize every tile. PlantSeg otherwise standardizes each input
         with its own mean and std, so every tile gets its own contrast and
         neighbouring tiles disagree at the seams. The workflow measures it
@@ -396,7 +396,7 @@ def plantseg_fn(
     Returns
     -------
     Callable[[ndarray], ndarray]
-        Picklable labeller: ``([2,] [z,] y, x) -> ([z,] y, x)``.
+        Picklable labeller: `([2,] [z,] y, x) -> ([z,] y, x)`.
     """
     if segmentation not in SEGMENTATIONS:
         raise ValueError(
@@ -631,10 +631,10 @@ def partition(
     seeds: np.ndarray | None = None,
     mask: np.ndarray | None = None,
 ) -> np.ndarray:
-    """Cells from a boundary map, by the configured ``segmentation``.
+    """Cells from a boundary map, by the configured `segmentation`.
 
     *mask* (where cells may be) bounds the flooding of
-    ``"nuclei_watershed"``; the other modes cover the whole tile and are
+    `"nuclei_watershed"`; the other modes cover the whole tile and are
     masked afterwards.
     """
     mode = cfg["segmentation"]
@@ -696,7 +696,7 @@ def partition(
 
 
 def _split(tile: np.ndarray, cfg: dict[str, Any]):
-    """``(membrane, nuclei or None)``, from what the mode expects.
+    """`(membrane, nuclei or None)`, from what the mode expects.
 
     A (2, y, x) tile is a [membrane, nuclei] pair only for a mode that uses
     nuclei; otherwise it is a 3-D tile two planes deep (the last z-tile of a
@@ -772,7 +772,7 @@ def _run(tile: np.ndarray, cfg: dict[str, Any]) -> np.ndarray:
 
 def segment(tile: np.ndarray, **kwargs: Any) -> np.ndarray:
     """:func:`plantseg_fn` as a direct call, for the workflow's
-    ``method: "custom"`` (``function: "segment"``)."""
+    `method: "custom"` (`function: "segment"`)."""
     return plantseg_fn(**kwargs)(tile)
 
 

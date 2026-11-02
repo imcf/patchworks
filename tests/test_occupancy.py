@@ -14,7 +14,7 @@ from patchworks import (
 
 
 def _write_store(tmp_path, data):
-    """Write a minimal single-level OME-ZARR holding ``(c, z, y, x)`` data."""
+    """Write a minimal single-level OME-ZARR holding `(c, z, y, x)` data."""
     store = str(tmp_path / "image.zarr")
     root = zarr.open_group(store, mode="w")
     root.create_array(
@@ -60,7 +60,7 @@ def test_corner_signal_is_found(tmp_path):
 def test_edge_tile_verdict_uses_only_its_own_extent(tmp_path):
     """A partial edge tile must not inherit its neighbour's signal.
 
-    The old clamp (``min(start, s - w)``) slid the last tile's sampling window
+    The old clamp (`min(start, s - w)`) slid the last tile's sampling window
     backwards into the previous tile whenever the last tile was narrower than
     the centring offset.
     """
@@ -81,8 +81,8 @@ def test_edge_tile_verdict_uses_only_its_own_extent(tmp_path):
 def test_occupancy_matches_a_full_scan(tmp_path):
     """Pooled maxima give the same verdicts as testing every voxel.
 
-    ``block_max > t`` holds exactly when some voxel in the block exceeds
-    ``t``, so this is an equality, not an approximation.
+    `block_max > t` holds exactly when some voxel in the block exceeds
+    `t`, so this is an equality, not an approximation.
     """
     rng = np.random.default_rng(0)
     data = (rng.random((2, 4, 64, 64)) * 50).astype("uint16")

@@ -1,6 +1,6 @@
 """Review panel for napari: look at the objects most likely to be wrong, fix them.
 
-Open it with ``patchworks review image.zarr`` (or :func:`review_in_napari`).
+Open it with `patchworks review image.zarr` (or :func:`review_in_napari`).
 The panel walks through a queue of objects; for each one the view jumps to
 it and shows it with the object it belongs to (outlined) and the objects it
 holds, everything else hidden. One key per decision:
@@ -70,7 +70,7 @@ def review_in_napari(
     ----------
     store : str or Path
         OME-ZARR image store whose label images carry object tables
-        (the workflow writes them; ``patchworks tables`` adds them).
+        (the workflow writes them; `patchworks tables` adds them).
     expect, min_overlap, position
         Review rules, see :class:`patchworks._review.Review`.
     show : bool
@@ -81,7 +81,7 @@ def review_in_napari(
     Returns
     -------
     tuple
-        ``(viewer, widget)``.
+        `(viewer, widget)`.
     """
     from .napari import _require_napari, view_in_napari
 
@@ -186,7 +186,7 @@ def _hex_rgba(colour: str) -> np.ndarray:
 
 
 def _camera(viewer):
-    """napari >= 0.9 moved the camera to ``viewer.scene.camera``."""
+    """napari >= 0.9 moved the camera to `viewer.scene.camera`."""
     scene = getattr(viewer, "scene", None)
     return getattr(scene, "camera", None) or viewer.camera
 
@@ -545,7 +545,7 @@ class _ReviewPanel:
         self.go(upcoming[0] if upcoming else None)
 
     def decide(self, action: str) -> None:
-        """``ok`` or ``wrong`` for the current object."""
+        """`ok` or `wrong` for the current object."""
         self._record(action)
 
     def start(self, what: str) -> None:

@@ -58,7 +58,7 @@ def test_streaming_pyramid_matches_dask(tmp_path):
 def test_streaming_level_reads_one_source_chunk_per_task(tmp_path):
     """Each output chunk must map onto exactly one source chunk.
 
-    That alignment is what makes peak memory ``n_workers x one chunk`` and so
+    That alignment is what makes peak memory `n_workers x one chunk` and so
     is the property the OOM fix rests on -- not an incidental detail.
     """
     from patchworks.plugins.ome_zarr import _level_chunks
@@ -712,7 +712,7 @@ def test_ngff_version_pins_the_layout_and_the_zarr_format(tmp_path, version):
     """Version and zarr format are one choice, not two.
 
     0.4 is specified over zarr v2 with the NGFF keys at the top level; 0.5 is
-    the v3 revision and nests them under ``ome``. A store written half one
+    the v3 revision and nests them under `ome`. A store written half one
     way and half the other is one no reader can open.
     """
     a = np.arange(4 * 32 * 32, dtype="uint16").reshape(4, 32, 32)

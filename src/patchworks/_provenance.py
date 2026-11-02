@@ -81,11 +81,11 @@ def read_provenance(store: Any, component: str | None = None) -> dict | None:
     Parameters
     ----------
     store : str, Path, zarr.Group or zarr.Array
-        A label group path such as ``"scan.zarr/labels/cells"``, or an
+        A label group path such as `"scan.zarr/labels/cells"`, or an
         opened zarr node.
     component : str, optional
-        Array inside *store* to read instead (e.g. ``write_to`` stores keep
-        it on the ``"labels"`` array).
+        Array inside *store* to read instead (e.g. `write_to` stores keep
+        it on the `"labels"` array).
 
     Returns
     -------

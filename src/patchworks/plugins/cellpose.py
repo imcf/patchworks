@@ -31,8 +31,8 @@ logger = logging.getLogger(__name__)
 def _parse_version(raw: str) -> tuple[int, ...]:
     """Leading numeric components of a version string.
 
-    ``int(x)`` over the raw segments blows up on any suffixed release
-    (``"4.0rc1"``, ``"4.0.1.dev0"``) — and at *import* time, where only
+    `int(x)` over the raw segments blows up on any suffixed release
+    (`"4.0rc1"`, `"4.0.1.dev0"`) — and at *import* time, where only
     ImportError was being caught, so the package became unimportable rather
     than degrading.
     """
@@ -78,9 +78,9 @@ def _require_cellpose():
 
 
 def cellpose_anisotropy(voxel_size: dict[str, float]) -> float | None:
-    """Cellpose's ``anisotropy`` (z voxel size / lateral voxel size) from a calibration.
+    """Cellpose's `anisotropy` (z voxel size / lateral voxel size) from a calibration.
 
-    ``do_3D`` assumes isotropic voxels unless told otherwise: without this,
+    `do_3D` assumes isotropic voxels unless told otherwise: without this,
     Cellpose builds its 3-D flow-field consensus across z-planes it thinks
     are spaced the same as the xy pixels, which for real data rarely holds
     and fragments or distorts objects across z. Getting this wrong does not
@@ -91,13 +91,13 @@ def cellpose_anisotropy(voxel_size: dict[str, float]) -> float | None:
     ----------
     voxel_size : dict
         Image calibration, e.g. from
-        :func:`patchworks.plugins.ome_zarr.read_pixel_size`. Needs ``z`` and
-        ``x`` (or ``y``) for the lateral size.
+        :func:`patchworks.plugins.ome_zarr.read_pixel_size`. Needs `z` and
+        `x` (or `y`) for the lateral size.
 
     Returns
     -------
     float or None
-        ``z / lateral``, or None if the calibration lacks what is needed.
+        `z / lateral`, or None if the calibration lacks what is needed.
 
     Examples
     --------
@@ -124,7 +124,7 @@ def cellpose_fn(
     fragments: "float | None | str" = "auto",
     **cellpose_kwargs: Any,
 ) -> Callable[[np.ndarray], np.ndarray]:
-    """Return a ready-to-use Cellpose function for ``tile_process``.
+    """Return a ready-to-use Cellpose function for `tile_process`.
 
     One-liner convenience wrapper: combines model configuration and function
     creation into a single call.
@@ -132,31 +132,31 @@ def cellpose_fn(
     Parameters
     ----------
     model:
-        Cellpose model type: ``"cyto3"``, ``"cyto2"``, ``"nuclei"``, etc.
+        Cellpose model type: `"cyto3"`, `"cyto2"`, `"nuclei"`, etc.
     gpu:
         Use GPU for inference.
     diameter:
-        Expected cell diameter in pixels. ``None`` → Cellpose auto-estimates.
+        Expected cell diameter in pixels. `None` → Cellpose auto-estimates.
     do_3D:
         Run in 3-D mode. Each tile must contain the full z-stack — use
-        ``auto_tile_shape_cellpose(do_3D=True)`` for appropriate tile shapes.
+        `auto_tile_shape_cellpose(do_3D=True)` for appropriate tile shapes.
     channels:
-        *Cellpose 3 only.* ``[cytoplasm_channel, nucleus_channel]`` (1-based,
-        0 = greyscale). ``[0, 0]`` → greyscale. ``[1, 2]`` → cyto=ch1, nuc=ch2.
+        *Cellpose 3 only.* `[cytoplasm_channel, nucleus_channel]` (1-based,
+        0 = greyscale). `[0, 0]` → greyscale. `[1, 2]` → cyto=ch1, nuc=ch2.
     channel_axis:
         *Cellpose 4 only.* Index of the channel axis in the input array.
-        ``None`` → greyscale input.
+        `None` → greyscale input.
     voxel_size:
-        Physical voxel size as ``{"z": .., "y": .., "x": ..}``. When
-        ``do_3D`` is set and ``anisotropy`` is not already in
-        ``cellpose_kwargs``, it is derived from this via
-        :func:`cellpose_anisotropy` -- an explicit ``anisotropy=`` always
+        Physical voxel size as `{"z": .., "y": .., "x": ..}`. When
+        `do_3D` is set and `anisotropy` is not already in
+        `cellpose_kwargs`, it is derived from this via
+        :func:`cellpose_anisotropy` -- an explicit `anisotropy=` always
         wins. The Snakemake workflow passes the image's own calibration
         automatically; from the API,
         :func:`patchworks.plugins.ome_zarr.read_pixel_size` reads it from a
         store.
     intensity_range:
-        ``(low, high)``, or one per channel, mapped to 0 and 1 in every
+        `(low, high)`, or one per channel, mapped to 0 and 1 in every
         tile before Cellpose sees it, with Cellpose's own per-input
         normalisation turned off. Without it, each tile is stretched from
         its own percentiles, so neighbouring tiles get different contrast
@@ -168,19 +168,19 @@ def cellpose_fn(
         those touching nothing
         (:func:`patchworks.absorb_fragments`), per tile before the halo is
         trimmed. 3-D Cellpose often splits a cell into a body and slivers,
-        and leaves specks in dim regions. ``"auto"`` (default): 0.1 in 3-D
+        and leaves specks in dim regions. `"auto"` (default): 0.1 in 3-D
         when *diameter* is given (the size it is judged against), else off;
-        ``None`` turns it off. 3-D runs also smooth
-        the flows (``flow3D_smooth=1``) unless told otherwise, Cellpose's own
+        `None` turns it off. 3-D runs also smooth
+        the flows (`flow3D_smooth=1`) unless told otherwise, Cellpose's own
         remedy for fragmentation along z.
     **cellpose_kwargs:
-        Extra kwargs forwarded to ``model.eval()``
-        (e.g. ``flow_threshold``, ``cellprob_threshold``, ``anisotropy``).
+        Extra kwargs forwarded to `model.eval()`
+        (e.g. `flow_threshold`, `cellprob_threshold`, `anisotropy`).
 
     Returns
     -------
     Callable[[ndarray], ndarray]
-        Picklable function ready for ``tile_process``.
+        Picklable function ready for `tile_process`.
 
     Examples
     --------
@@ -250,7 +250,7 @@ def applied_defaults(do_3D: bool, settings: dict[str, Any]) -> dict[str, Any]:
 
 
 def _accepts(name: str) -> bool:
-    """Whether the installed Cellpose's ``eval`` takes *name*."""
+    """Whether the installed Cellpose's `eval` takes *name*."""
     import inspect
 
     cls = getattr(_cellpose_models, "CellposeModel", None)
@@ -280,19 +280,19 @@ def _make_config(
     gpu : bool
         Run on the GPU.
     channels : list of int or None
-        *Cellpose 3 only.* ``[cyto, nucleus]``, 1-based into the channel axis
-        (0 = grayscale). ``None`` resolves per tile: ``[1, 2]`` when the tile
-        carries two channels, else ``[0, 0]``. Cellpose 4 dropped this
+        *Cellpose 3 only.* `[cyto, nucleus]`, 1-based into the channel axis
+        (0 = grayscale). `None` resolves per tile: `[1, 2]` when the tile
+        carries two channels, else `[0, 0]`. Cellpose 4 dropped this
         argument, so it is ignored there.
     channel_axis : int or None
-        Axis of the tile holding channels, forwarded to ``eval`` for both
-        Cellpose 3 and 4. ``None`` means single-channel tiles.
+        Axis of the tile holding channels, forwarded to `eval` for both
+        Cellpose 3 and 4. `None` means single-channel tiles.
     diameter : float or None
         Expected cell diameter in pixels.
     do_3D : bool
         Segment in 3-D.
     **cellpose_kwargs : Any
-        Extra arguments forwarded to ``model.eval()``.
+        Extra arguments forwarded to `model.eval()`.
 
     Returns
     -------
@@ -316,7 +316,7 @@ def available_models() -> list[str]:
     """Pretrained model names the installed Cellpose actually accepts.
 
     The name set changed completely between major versions -- v3 ships
-    ``cyto3``/``nuclei``/… , v4 replaced them with ``cpsam``-family names --
+    `cyto3`/`nuclei`/… , v4 replaced them with `cpsam`-family names --
     and neither version raises on an unknown one. v4 falls back to its
     default model with only a log line, so a v3 name in a v4 environment
     segments everything with the wrong model and nothing fails. Checking the
@@ -343,7 +343,7 @@ def _get_model(cellpose_dict: dict[str, Any]) -> Any:
     Returns
     -------
     Any
-        A Cellpose model instance (cached per ``(model, gpu)`` per process).
+        A Cellpose model instance (cached per `(model, gpu)` per process).
     """
     _require_cellpose()
     key = (cellpose_dict["model"], cellpose_dict.get("gpu", False))
@@ -373,15 +373,15 @@ def fetch_weights(model: str) -> str:
     Loading Cellpose-SAM takes gigabytes of RAM: done by several
     segmentations at once inside a small controller job, that got one of
     them killed. Only the file is needed before the GPU jobs start.
-    Cellpose 4.2 names the download ``cache_model_path(name)``, 4.0-4.1
-    ``cache_CPSAM_model_path()``, Cellpose 3 ``model_path(name)`` (plus
-    ``size_model_path`` for the classic models). A release with none of
+    Cellpose 4.2 names the download `cache_model_path(name)`, 4.0-4.1
+    `cache_CPSAM_model_path()`, Cellpose 3 `model_path(name)` (plus
+    `size_model_path` for the classic models). A release with none of
     these, and user models by name, are loaded as before.
 
     Parameters
     ----------
     model : str
-        A built-in model name (``"cpsam"``), or a path.
+        A built-in model name (`"cpsam"`), or a path.
 
     Returns
     -------
@@ -430,7 +430,7 @@ def _eval_with_oom_fallback(
     kwargs: dict[str, Any],
     cellpose_dict: dict[str, Any],
 ) -> np.ndarray:
-    """Run ``model.eval``, surviving transient GPU contention.
+    """Run `model.eval`, surviving transient GPU contention.
 
     Cluster GPUs are often shared: another job's memory footprint can grow
     mid-run and push an otherwise-fine tile size over the edge. Staying on
@@ -445,14 +445,14 @@ def _eval_with_oom_fallback(
     img : np.ndarray
         Image to segment.
     kwargs : dict
-        Keyword arguments for ``model.eval``.
+        Keyword arguments for `model.eval`.
     cellpose_dict : dict
         Configuration from :func:`_make_config`.
 
     Returns
     -------
     np.ndarray
-        Label array from ``model.eval``.
+        Label array from `model.eval`.
     """
     return retry_on_oom(
         lambda: _get_model(cellpose_dict).eval(img, **kwargs)[0],
@@ -474,7 +474,7 @@ def _run(block: np.ndarray, cellpose_dict: dict[str, Any]) -> np.ndarray:
     Returns
     -------
     np.ndarray
-        Integer (``int32``) label array of the same spatial shape.
+        Integer (`int32`) label array of the same spatial shape.
     """
     do_3D = cellpose_dict["do_3D"]
     channel_axis = cellpose_dict.get("channel_axis")
@@ -543,7 +543,7 @@ def cell_voxels(cellpose_dict: dict[str, Any], ndim: int) -> float:
 
 
 def _clean(masks: np.ndarray, cellpose_dict: dict[str, Any]) -> np.ndarray:
-    """Fold fragments into the cells they belong to (``fragments=``).
+    """Fold fragments into the cells they belong to (`fragments=`).
 
     The size limit comes from the diameter, not from what each tile holds:
     measured per tile, a tile of texture without cells kept all its

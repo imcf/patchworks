@@ -1,6 +1,6 @@
 """What each setting of the launcher means, with an example.
 
-Shown by Streamlit's ``help=`` (the small question mark next to a field,
+Shown by Streamlit's `help=` (the small question mark next to a field,
 read on hover). Kept here, in one place, so the form stays readable and the
 texts can be checked against the workflow's documentation
 (docs/guide/snakemake.md, workflow/config/config.yaml).

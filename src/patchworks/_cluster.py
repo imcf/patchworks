@@ -15,7 +15,7 @@ def _distributed_client():
     Returns
     -------
     distributed.Client or None
-        The current client, or ``None`` if none is active / distributed is not
+        The current client, or `None` if none is active / distributed is not
         installed.
     """
     try:
@@ -27,7 +27,7 @@ def _distributed_client():
 
 
 def _client_is_in_process(client) -> bool:
-    """Whether *client* runs its worker in this process (``processes=False``).
+    """Whether *client* runs its worker in this process (`processes=False`).
 
     An in-process worker shares the GIL. A long task that holds the GIL
     (e.g. a Cellpose/torch eval) starves the worker heartbeat, the scheduler
@@ -42,7 +42,7 @@ def _client_is_in_process(client) -> bool:
     Returns
     -------
     bool
-        True if any worker address uses the ``inproc://`` transport.
+        True if any worker address uses the `inproc://` transport.
     """
     try:
         for addr in client.scheduler_info().get("workers", {}):
@@ -62,8 +62,8 @@ def make_local_cluster(
 ):
     """Create a process-based Dask cluster for tiled processing.
 
-    Always uses worker subprocesses (``processes=True``). An in-process
-    (threaded) worker breaks the label merge when ``segment_fn`` holds the
+    Always uses worker subprocesses (`processes=True`). An in-process
+    (threaded) worker breaks the label merge when `segment_fn` holds the
     GIL — see the patchworks docs for details.
 
     For GPU work defaults to a single worker (one CUDA context, no contention).
@@ -78,15 +78,15 @@ def make_local_cluster(
     threads_per_worker:
         Keep at 1 so a GIL-holding tile function doesn't block heartbeats.
     memory_limit:
-        Per-worker memory cap (e.g. ``"8GB"``). ``"auto"`` (default) splits
+        Per-worker memory cap (e.g. `"8GB"`). `"auto"` (default) splits
         the memory this job may use (SLURM, cgroup and free RAM, see
-        ``safe_worker_count``) evenly across the workers. A limit is what
+        `safe_worker_count`) evenly across the workers. A limit is what
         lets a worker spill, pause and restart before the OOM killer ends the
-        whole job; ``None`` disables it and all of that with it. (Not
-        distributed's own ``"auto"``, which scales by threads per core: one
+        whole job; `None` disables it and all of that with it. (Not
+        distributed's own `"auto"`, which scales by threads per core: one
         single-threaded GPU worker on a 32-core node would get 1/32 of it.)
     **cluster_kwargs:
-        Extra arguments forwarded to ``dask.distributed.LocalCluster``.
+        Extra arguments forwarded to `dask.distributed.LocalCluster`.
 
     Returns
     -------

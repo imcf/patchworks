@@ -21,7 +21,7 @@ def chunk_slices(
 
     Iterating actual chunk boundaries (rather than z-slabs) keeps each read
     bounded to one chunk's worth of memory, whatever the array's shape. The
-    row-major order matches ``spatial_tiles``, so chunk *i* is tile *i*.
+    row-major order matches `spatial_tiles`, so chunk *i* is tile *i*.
 
     Parameters
     ----------
@@ -71,14 +71,14 @@ def auto_overlap(
         Multiplier on top of diameter. Default 1.0 (= one cell width).
         Use 1.5–2.0 for elongated or irregularly-shaped cells.
     voxel_size:
-        Physical size per axis, in any single unit (e.g. ``(2.0, 0.1, 0.1)``
-        for a 2 µm z-step and 100 nm pixels). ``None`` → one isotropic
+        Physical size per axis, in any single unit (e.g. `(2.0, 0.1, 0.1)`
+        for a 2 µm z-step and 100 nm pixels). `None` → one isotropic
         number, as before.
 
     Returns
     -------
     int or tuple of int
-        Overlap depth to pass to ``tile_process(..., overlap=...)``. A tuple
+        Overlap depth to pass to `tile_process(..., overlap=...)`. A tuple
         (one entry per axis) when *voxel_size* is given.
 
     Examples
@@ -108,7 +108,7 @@ _GPU_MEMORY_FALLBACK = 8 * 1024**3
 def cpu_allocation() -> int:
     """Return the number of CPUs this process may actually use.
 
-    ``os.cpu_count()`` reports the machine's cores, which on a shared cluster
+    `os.cpu_count()` reports the machine's cores, which on a shared cluster
     node is wildly more than a job was granted -- a 4-core allocation on a
     128-core node would size itself for 128. Prefer what the scheduler says,
     then the process' CPU affinity mask, and only then the machine.
@@ -141,15 +141,15 @@ def _cgroup_dirs(controller: str) -> list[Path]:
     """This process' cgroup directory for *controller*, then its ancestors.
 
     The limit that gets a job OOM-killed sits on the job's *own* cgroup --
-    e.g. ``/sys/fs/cgroup/system.slice/slurmstepd.scope/job_42/...`` under
+    e.g. `/sys/fs/cgroup/system.slice/slurmstepd.scope/job_42/...` under
     SLURM on cgroup v2 -- not on the mount root, which is all a container
-    with a cgroup namespace sees. ``/proc/self/cgroup`` names the directory;
+    with a cgroup namespace sees. `/proc/self/cgroup` names the directory;
     every ancestor can cap it too, so all of them are returned, leaf first.
 
     Parameters
     ----------
     controller : str
-        cgroup v1 controller name (``"memory"``, ``"cpu"``). cgroup v2 has a
+        cgroup v1 controller name (`"memory"`, `"cpu"`). cgroup v2 has a
         single unified hierarchy and is always included.
 
     Returns
@@ -209,7 +209,7 @@ def _cgroup_memory_limit() -> "int | None":
     """Memory this process' cgroups still allow it, if any limit applies.
 
     SLURM confines jobs with cgroups, so this is the limit that actually gets
-    the process OOM-killed -- unlike the node-wide figure ``psutil`` reports.
+    the process OOM-killed -- unlike the node-wide figure `psutil` reports.
     Each level's headroom is its limit minus the anonymous memory already
     charged to it (the limit alone overstates it by everything resident;
     page cache is left out, being reclaimable); the tightest level wins.
@@ -237,7 +237,7 @@ def _cgroup_memory_limit() -> "int | None":
 def _cgroup_anon_bytes(d: Path, key: str) -> int:
     """Non-reclaimable (anonymous) memory charged to cgroup *d*.
 
-    Not ``memory.current``/``usage_in_bytes``: those include page cache,
+    Not `memory.current`/`usage_in_bytes`: those include page cache,
     which reading a large store fills up to the limit and which the kernel
     drops on demand -- counting it would leave a job that has just staged
     its tiles believing it has no room for a second merge worker.
@@ -255,9 +255,9 @@ def _cgroup_anon_bytes(d: Path, key: str) -> int:
 def _cgroup_cpu_limit() -> "int | None":
     """CPU quota of this process' cgroups, rounded up to whole CPUs.
 
-    Containers (``docker --cpus``, Kubernetes limits) cap CPU with a quota,
+    Containers (`docker --cpus`, Kubernetes limits) cap CPU with a quota,
     not an affinity mask, so every core stays visible to
-    ``sched_getaffinity`` while only a few can actually be used.
+    `sched_getaffinity` while only a few can actually be used.
 
     Returns
     -------
@@ -342,17 +342,17 @@ def safe_worker_count(
 
     * **CPU** — leaves at least one core free so the box stays responsive
       (never pins every core).
-    * **RAM** — at most ``ram_fraction`` of available memory, assuming each
-      in-flight tile needs ``fn_overhead`` copies (halo + output + temporaries).
+    * **RAM** — at most `ram_fraction` of available memory, assuming each
+      in-flight tile needs `fn_overhead` copies (halo + output + temporaries).
 
     On GPU the answer is always 1: one evaluation at a time so concurrent
-    tiles can never exhaust VRAM. Without ``psutil`` it returns a conservative
+    tiles can never exhaust VRAM. Without `psutil` it returns a conservative
     default rather than guessing high.
 
     Parameters
     ----------
     tile_nbytes : int
-        Size of one tile in bytes (``prod(tile_shape) * dtype.itemsize``).
+        Size of one tile in bytes (`prod(tile_shape) * dtype.itemsize`).
     use_gpu : bool, optional
         Whether tiles are processed on the GPU.
     fn_overhead : int, optional
@@ -383,10 +383,10 @@ _GPU_HEADROOM = 0.8
 def _get_gpu_memory() -> int:
     """Return usable GPU VRAM in bytes for the device we were granted.
 
-    NVML enumerates every GPU on the node regardless of ``--gres=gpu:1``, so
+    NVML enumerates every GPU on the node regardless of `--gres=gpu:1`, so
     asking for index 0 unconditionally reads the *wrong* device's free memory
     whenever SLURM granted anything but the first one -- and tile sizing was
-    built on that number. Resolve the device from ``CUDA_VISIBLE_DEVICES``,
+    built on that number. Resolve the device from `CUDA_VISIBLE_DEVICES`,
     then keep a headroom fraction rather than claiming every free byte.
 
     Returns
@@ -440,19 +440,19 @@ def auto_tile_shape(
     Parameters
     ----------
     shape:
-        Full array shape, e.g. ``(z, y, x)`` or ``(t, c, z, y, x)``.
+        Full array shape, e.g. `(z, y, x)` or `(t, c, z, y, x)`.
     dtype:
         Array dtype.
     target_bytes:
         Memory ceiling per tile. Default 64 MiB.
     use_gpu:
         Size tiles against GPU VRAM rather than host RAM. Still capped by
-        host RAM too -- see ``available_memory``.
+        host RAM too -- see `available_memory`.
     gpu_memory:
         Available GPU VRAM in bytes; auto-queried when None.
     available_memory:
         Available host RAM in bytes; auto-queried when None. Consulted even
-        when ``use_gpu`` is set: the tile has to be loaded into host memory
+        when `use_gpu` is set: the tile has to be loaded into host memory
         before (and often after) it reaches the GPU, so it must fit both
         budgets, not just VRAM.
     n_workers:
@@ -460,7 +460,7 @@ def auto_tile_shape(
     n_channels:
         Channels each tile carries (default 1). Above 1 the per-voxel cost
         scales with it, so the tile shrinks accordingly -- e.g. the workflow's
-        ``nuclei_channel`` hands Cellpose a cyto+nuclei pair.
+        `nuclei_channel` hands Cellpose a cyto+nuclei pair.
     verbose:
         Log the chosen shape and estimated tile size.
 
@@ -551,7 +551,7 @@ def auto_tile_shape_cellpose(
     on orthogonal planes and takes a consensus.
 
     **do_3D=False (default)**
-        z is set to 1. Each tile is one 2-D ``(y, x)`` slice.
+        z is set to 1. Each tile is one 2-D `(y, x)` slice.
 
     **do_3D=True**
         z is kept at its full extent per tile. y and x are tiled based on the
@@ -560,19 +560,19 @@ def auto_tile_shape_cellpose(
     Parameters
     ----------
     shape:
-        Spatial shape, e.g. ``(z, y, x)``.
+        Spatial shape, e.g. `(z, y, x)`.
     dtype:
         Array dtype.
     diameter:
-        Expected cell diameter in pixels. Tile will be at least ``4 × diameter``.
+        Expected cell diameter in pixels. Tile will be at least `4 × diameter`.
     do_3D:
         Whether Cellpose will run in 3-D mode.
     use_gpu:
         Size tiles for GPU VRAM. Still capped by host RAM too -- see
-        ``available_memory``.
+        `available_memory`.
     gpu_memory, available_memory, n_workers:
-        Memory parameters (auto-queried when None). ``available_memory`` is
-        consulted even when ``use_gpu`` is set: Cellpose's ``do_3D``
+        Memory parameters (auto-queried when None). `available_memory` is
+        consulted even when `use_gpu` is set: Cellpose's `do_3D`
         preprocessing (orthogonal-view flows, mask assembly) copies the tile
         through host memory, so VRAM headroom alone doesn't guarantee the
         job's own host allocation can hold it.
@@ -581,20 +581,20 @@ def auto_tile_shape_cellpose(
     cellpose_memory_factor:
         Cellpose allocates roughly this multiple of raw input bytes (default
         20×). Applied against whichever of VRAM/host RAM is tighter --
-        ``ponytail:`` this reuses one factor for both budgets as an
+        `ponytail:` this reuses one factor for both budgets as an
         approximation; if it proves off in practice, calibrate a separate
-        host-side factor from a SLURM job's peak RSS (``seff``/
-        ``/usr/bin/time -v``) and pass it alongside this one.
+        host-side factor from a SLURM job's peak RSS (`seff`/
+        `/usr/bin/time -v`) and pass it alongside this one.
     n_channels:
         Channels each tile carries (default 1). Above 1 the per-voxel cost
         scales with it, so the tile shrinks accordingly -- e.g. the workflow's
-        ``nuclei_channel`` hands Cellpose a cyto+nuclei pair.
+        `nuclei_channel` hands Cellpose a cyto+nuclei pair.
     anisotropy:
-        The ``anisotropy`` Cellpose will be given (``do_3D`` only). It is not
+        The `anisotropy` Cellpose will be given (`do_3D` only). It is not
         merely a hint to the model: Cellpose resizes the tile to
-        ``z * anisotropy`` planes before the net runs, so a 2.2x anisotropy
-        costs 2.2x the z it was handed. Budgeting against the unscaled ``z``
-        under-counts by exactly that factor. ``None`` (the default) assumes
+        `z * anisotropy` planes before the net runs, so a 2.2x anisotropy
+        costs 2.2x the z it was handed. Budgeting against the unscaled `z`
+        under-counts by exactly that factor. `None` (the default) assumes
         isotropic, i.e. no resize.
     verbose:
         Log the chosen shape and memory estimates.

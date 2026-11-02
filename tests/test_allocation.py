@@ -1,6 +1,6 @@
 """Tests for cluster-allocation-aware CPU and memory detection.
 
-On a shared node ``os.cpu_count()`` and ``psutil.virtual_memory().available``
+On a shared node `os.cpu_count()` and `psutil.virtual_memory().available`
 describe the *machine*, not the slice of it this job was granted. Sizing work
 against the machine is how a job walks into an OOM kill, so these are the
 checks that would have caught it.
@@ -105,7 +105,7 @@ def test_gpu_tile_sizing_is_bounded_by_the_host_allocation(monkeypatch):
     This is the concrete failure a `do_3D` nuclei segmentation hit: an ample
     GPU (24 GiB) sized the tile against VRAM alone, and the job -- granted
     only 1 GiB of host RAM here -- was SIGKILLed loading it, unrelated to
-    ``nuclei_channel``. The sizer must take whichever budget is tighter.
+    `nuclei_channel`. The sizer must take whichever budget is tighter.
     """
     monkeypatch.delenv("SLURM_MEM_PER_CPU", raising=False)
     monkeypatch.setenv("SLURM_MEM_PER_NODE", str(1024))  # 1 GiB

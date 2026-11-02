@@ -27,8 +27,8 @@ def _chunk_pairs(
     Returns
     -------
     tuple of np.ndarray
-        ``(pairs, sizes)``: ``(a_id, b_id, voxels)`` rows where both are
-        non-background, and ``(a_id, voxels)`` rows counting *every* voxel of
+        `(pairs, sizes)`: `(a_id, b_id, voxels)` rows where both are
+        non-background, and `(a_id, voxels)` rows counting *every* voxel of
         each *a* label -- including those over *b*'s background, which the
         overlap fraction has to be taken against.
     """
@@ -54,7 +54,7 @@ def _chunk_pairs(
 
 def _stored_chunks(arr) -> "set[tuple[int, ...]] | None":
     """Chunk coordinates *arr* has actually written, from one listing of its
-    store; ``None`` when that cannot be told (a dask array, a sharded one).
+    store; `None` when that cannot be told (a dask array, a sharded one).
 
     A chunk never written holds only background, so a child's unwritten
     chunks need neither its read nor its parent's.
@@ -97,7 +97,7 @@ def _chunk_grid(arr) -> tuple:
 
 
 def _reader(arr, grid):
-    """``read(idx)`` returning chunk *idx* of *arr* as numpy."""
+    """`read(idx)` returning chunk *idx* of *arr* as numpy."""
     if isinstance(arr, zarr.Array):
         shape = arr.shape
 
@@ -149,12 +149,12 @@ def label_relations_many(
         work waits on reads more than it computes. Each holds a few chunks.
     parent_name : str, optional
         The parent's name in the progress lines, one per child:
-        ``nuclei -> cells: 4,839/12,000 (40%) ...``.
+        `nuclei -> cells: 4,839/12,000 (40%) ...`.
 
     Returns
     -------
     dict
-        ``{child_name: label_relations(child, parent)}``.
+        `{child_name: label_relations(child, parent)}`.
     """
     b = _as_source(parent, component)
     kids = {name: _as_source(a, component) for name, a in children.items()}
@@ -304,16 +304,16 @@ def label_relations(
 
     *a* and *b* must be two segmentations of the **same image** (identical
     shape and chunk layout) — e.g. two runs of the Snakemake workflow with
-    different ``label_name``/``cellpose:`` config but the same ``tile_shape``.
+    different `label_name`/`cellpose:` config but the same `tile_shape`.
 
     Parameters
     ----------
     a, b : da.Array, str or Path
         Two label arrays of identical shape and chunking. A path is read via
-        ``dask.array.from_zarr(path, component=...)``.
+        `dask.array.from_zarr(path, component=...)`.
     a_component, b_component : str, optional
         Zarr array name inside *a*/*b* when they're store paths (default
-        ``"labels"``).
+        `"labels"`).
     n_workers : int or None, optional
         Parallel chunk workers. Default: the CPUs this process may use (the
         SLURM allocation on a cluster). Each holds two chunks and their
@@ -322,9 +322,9 @@ def label_relations(
     Returns
     -------
     dict
-        ``{a_label: {"match": b_label, "overlap_voxels": int,
-        "overlap_fraction": float}}`` — one entry per *a* label that touches
-        at least one non-background *b* voxel. ``overlap_fraction`` is the
+        `{a_label: {"match": b_label, "overlap_voxels": int,
+        "overlap_fraction": float}}` — one entry per *a* label that touches
+        at least one non-background *b* voxel. `overlap_fraction` is the
         matched voxel count over *a* label's total voxel count, background
         included (1.0 = fully contained). Labels in *a* with zero overlap are
         omitted. On a tie the lowest *b* id wins.

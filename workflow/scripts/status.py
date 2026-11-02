@@ -54,8 +54,8 @@ def _attrs(path: Path) -> dict:
 def converted(store: Path) -> bool:
     """Whether the conversion into *store* finished.
 
-    Not just its root ``zarr.json`` (or ``.zgroup``): that is written when
-    the conversion starts; the ``multiscales`` metadata only at its end.
+    Not just its root `zarr.json` (or `.zgroup`): that is written when
+    the conversion starts; the `multiscales` metadata only at its end.
     """
     attrs = _attrs(store)
     return bool(
@@ -170,7 +170,7 @@ def _failure(step: str, log: Path) -> dict | None:
 
 
 def _slurm_logs(dirs: list[Path]) -> list[Path]:
-    """The SLURM executor's job logs (``.snakemake/slurm_logs``) there."""
+    """The SLURM executor's job logs (`.snakemake/slurm_logs`) there."""
     logs = []
     for d in dirs:
         root = d / ".snakemake" / "slurm_logs"
@@ -319,7 +319,7 @@ _SIGNALS = {9: "SIGKILL", 15: "SIGTERM", 2: "SIGINT", 1: "SIGHUP", 6: "SIGABRT"}
 
 def snakemake_state(run: Path) -> dict | None:
     """How a multi run's Snakemake for *run* is doing, as run_multi recorded
-    it: ``state`` (running, ok, failed), ``exit``, and its last output lines.
+    it: `state` (running, ok, failed), `exit`, and its last output lines.
     None when there is no record, or it is from before this run."""
     try:
         state = json.loads((run / RUN_STATE).read_text())
