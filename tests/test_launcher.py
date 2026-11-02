@@ -2487,3 +2487,111 @@ def test_a_relation_shows_its_own_progress():
     assert nuclei["done"] == 4839 and nuclei["left"] == "72m"
     assert core.last_progress(log, "cilia -> cells")["fraction"] == 0.9
     assert core.last_progress(log, "cells -> tissue") is None
+
+
+def test_neuroglancer_from_the_results(monkeypatch):
+    """View in Neuroglancer starts `pixi run serve` as a SLURM job, waits for
+    the line it prints, tunnels its port over the launcher's own SSH
+    connection and links Neuroglancer to the local end; Stop ends both."""
+    pytest.importorskip("paramiko")
+    status = {
+        "work_dir": "/scratch/run",
+        "segmentations": [
+            {
+                "label_name": "cells",
+                "stage": "done",
+                "batches": 1,
+                "batches_done": 1,
+                "objects": 12,
+                "seams": None,
+            }
+        ],
+        "relations": [],
+        "bundle": None,
+    }
+    ssh = _FakeSSH(
+        {
+            "scripts/status.py": json.dumps(status),
+            "pw-serve": "JOB:4242\n",
+            "squeue": "DONE\n",
+            "tail -n": "the log\n",
+        },
+        files={f"{WF}/{core.REGISTRY}": core.registry_line(_job()).encode()},
+    )
+    at = _app(ssh, input="/x.czi", work_dir="/scratch/run")
+    at.run()
+    assert not at.exception
+    next(
+        b for b in at.button if b.label == "View in Neuroglancer"
+    ).click().run()
+    sent = next(c for c in ssh.commands if "pw-serve" in c)
+    assert "--wrap" in sent and "pixi run serve /scratch/run/image.zarr" in sent
+    ng = at.session_state["neuroglancer"]
+    assert ng["job"] == "4242"
+    assert any("Starting the server" in i.value for i in at.info)
+    # The server is up: its line in the job's log.
+    state = {
+        "layers": [{"source": "zarr3://http://localhost:39001/t/image.zarr"}]
+    }
+    ssh.files[ng["log"]] = (
+        "PATCHWORKS_SERVE "
+        + json.dumps(
+            {"host": "sca30", "port": 39001, "base": "", "state": state}
+        )
+        + "\n"
+    ).encode()
+    at.run()
+    assert not at.exception
+    (link,) = [b for b in at.get("link_button")]
+    import urllib.parse
+
+    shown = json.loads(urllib.parse.unquote(link.proto.url.split("#!", 1)[1]))
+    local = shown["layers"][0]["source"].split("localhost:")[1].split("/")[0]
+    assert local.isdigit()
+    next(b for b in at.button if b.label == "Stop").click().run()
+    assert any("scancel 4242" in c for c in ssh.commands)
+    assert "neuroglancer" not in at.session_state
+
+
+def test_the_tunnel_forwards_to_the_server(tmp_path):
+    """The launcher's port forward: a browser's request to the local port
+    reaches the server through the SSH connection's channel."""
+    pytest.importorskip("paramiko")
+    import socket
+    import threading
+    import types
+    import urllib.request
+    from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+
+    (tmp_path / "hello.txt").write_text("through the tunnel")
+    from functools import partial
+
+    httpd = ThreadingHTTPServer(
+        ("127.0.0.1", 0),
+        partial(SimpleHTTPRequestHandler, directory=str(tmp_path)),
+    )
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    port = httpd.server_address[1]
+    opened = []
+
+    def open_channel(kind, dest, origin):
+        # What sshd does for direct-tcpip: connect to dest on its side.
+        opened.append((kind, dest))
+        return socket.create_connection(dest)
+
+    client = types.SimpleNamespace(
+        get_transport=lambda: types.SimpleNamespace(open_channel=open_channel)
+    )
+    # The function alone: the app runs a page when imported.
+    source = (ROOT / "workflow/launcher/app.py").read_text()
+    start = source.index("def _open_tunnel(")
+    end = source.index("\ndef _stop_neuroglancer(")
+    namespace: dict = {}
+    exec(source[start:end], namespace)
+    tunnel = namespace["_open_tunnel"](client, "127.0.0.1", port)
+    local = tunnel.server_address[1]
+    body = urllib.request.urlopen(f"http://127.0.0.1:{local}/hello.txt").read()
+    assert body == b"through the tunnel"
+    assert opened == [("direct-tcpip", ("127.0.0.1", port))]
+    tunnel.shutdown()
+    httpd.shutdown()

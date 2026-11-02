@@ -2884,6 +2884,158 @@ def job_failures(status: dict) -> None:
                 st.rerun()
 
 
+@st.cache_resource
+def _tunnels() -> dict:
+    """Open tunnels of this launcher process, by the server's log path:
+    kept across reloads, closed by Stop."""
+    return {}
+
+
+def _open_tunnel(client, host: str, port: int):
+    """Forward a local port (the same, if free) to *host*:*port* as the
+    cluster sees it, over the launcher's own SSH connection -- the
+    ``ssh -L`` the user would otherwise run."""
+    import select
+    import socketserver
+    import threading
+
+    transport = client.get_transport()
+
+    class Forward(socketserver.BaseRequestHandler):
+        def handle(self):
+            try:
+                chan = transport.open_channel(
+                    "direct-tcpip", (host, port), self.request.getpeername()
+                )
+            except Exception:  # noqa: BLE001 - the browser retries
+                return
+            if chan is None:
+                return
+            try:
+                while True:
+                    ready, _, _ = select.select(
+                        [self.request, chan], [], [], 300
+                    )
+                    if not ready:
+                        break
+                    if self.request in ready:
+                        data = self.request.recv(1 << 16)
+                        if not data:
+                            break
+                        chan.sendall(data)
+                    if chan in ready:
+                        data = chan.recv(1 << 16)
+                        if not data:
+                            break
+                        self.request.sendall(data)
+            finally:
+                chan.close()
+                self.request.close()
+
+    socketserver.ThreadingTCPServer.allow_reuse_address = True
+    for want in (port, 0):
+        try:
+            server = socketserver.ThreadingTCPServer(
+                ("127.0.0.1", want), Forward
+            )
+            break
+        except OSError:
+            continue
+    server.daemon_threads = True
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
+def _stop_neuroglancer(ng: dict) -> None:
+    tunnel = _tunnels().pop(ng["log"], None)
+    if tunnel is not None:
+        tunnel.shutdown()
+        tunnel.server_close()
+    stop = f"scancel {ng['job']}" if ng.get("job") else f"kill {ng['pid']}"
+    try:
+        run(get_client(), stop, timeout=30)
+    except Exception:  # noqa: BLE001 - it may have ended already
+        pass
+    st.session_state.pop("neuroglancer", None)
+
+
+def neuroglancer_view(store: str) -> None:
+    """Start ``patchworks serve`` on the cluster, tunnel it here, and link
+    Neuroglancer to it: the store viewed in the browser, nothing copied."""
+    st.markdown("**In Neuroglancer** (in the browser, nothing copied)")
+    ng = st.session_state.get("neuroglancer")
+    if ng is None or ng.get("store") != store:
+        where = st.radio(
+            "run the server",
+            ["as a SLURM job (6 h)", "on the login node"],
+            horizontal=True,
+            key="ng_where",
+            help="It reads the store while you browse: a job keeps that off "
+            "the login node. Stop it when done.",
+        )
+        if st.button("View in Neuroglancer", icon=":material/3d_rotation:"):
+            in_job = where.startswith("as a SLURM")
+            log = f"{wf_dir}/{core.LOG_DIR}/serve_{int(time.time())}.log"
+            run(get_client(), f"mkdir -p {shlex.quote(wf_dir)}/{core.LOG_DIR}")
+            _, out, err = run(
+                get_client(),
+                core.serve_command(
+                    wf_dir, setup_cmd, store, log, in_job=in_job
+                ),
+                timeout=60,
+            )
+            started = re.search(r"(JOB|PID):(\d+)", out)
+            if not started:
+                st.error(
+                    "the server did not start: "
+                    + core.explain_remote_error(err or out)
+                )
+                return
+            kind, ident = started.groups()
+            st.session_state["neuroglancer"] = {
+                "store": store,
+                "log": log,
+                "job" if kind == "JOB" else "pid": ident,
+            }
+            st.rerun()
+        return
+    info = core.parse_serve(read_remote(get_client(), ng["log"]) or "")
+    c1, c2 = st.columns([3, 1])
+    if c2.button("Stop", icon=":material/stop_circle:", key="ng_stop"):
+        _stop_neuroglancer(ng)
+        st.rerun()
+    if info is None:
+        c1.info(
+            "Starting the server"
+            + (
+                f" (SLURM job {ng['job']}: waiting for a node)"
+                if ng.get("job")
+                else ""
+            )
+            + "… refresh in a moment.",
+            icon=":material/hourglass_top:",
+        )
+        c1.button("Refresh", key="ng_refresh")
+        return
+    host = info["host"] if ng.get("job") else "127.0.0.1"
+    tunnel = _tunnels().get(ng["log"])
+    if tunnel is None:
+        tunnel = _tunnels()[ng["log"]] = _open_tunnel(
+            get_client(), host, int(info["port"])
+        )
+    local = tunnel.server_address[1]
+    link = core.neuroglancer_link(info["state"], int(info["port"]), local)
+    c1.link_button(
+        "Open Neuroglancer", link, icon=":material/open_in_new:", type="primary"
+    )
+    st.caption(
+        f"Served from {info['host']}:{info['port']}, tunnelled to "
+        f"localhost:{local} on the computer this launcher runs on (the "
+        "browser must be there too). Each channel is a layer, the first "
+        "shown; the label images are segmentation layers: tick them."
+    )
+
+
 def job_results(status: dict) -> None:
     """What the run made: objects, seams, relations, how to look at it."""
     done = [s for s in status["segmentations"] if s["stage"] == "done"]
@@ -2933,6 +3085,7 @@ def job_results(status: dict) -> None:
             ),
             language="bash",
         )
+        neuroglancer_view(store)
 
 
 MAX_DOWNLOAD = 200 * 1024**2

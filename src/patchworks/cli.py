@@ -344,6 +344,13 @@ def _cmd_filter(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_serve(args: argparse.Namespace) -> int:
+    from ._serve import serve
+
+    serve(args.store, port=args.port, host=args.host)
+    return 0
+
+
 def _cmd_view(args: argparse.Namespace) -> int:
     from .plugins.napari import view_in_napari
 
@@ -680,6 +687,20 @@ def build_parser() -> argparse.ArgumentParser:
         "--out", help="new label image's name (default NAME_filtered)"
     )
     p.set_defaults(func=_cmd_filter)
+
+    p = sub.add_parser(
+        "serve",
+        help="serve a store for Neuroglancer in the browser, through an SSH "
+        "tunnel (prints the tunnel and the link)",
+    )
+    p.add_argument("store", help="an image.zarr (not a .zip bundle)")
+    p.add_argument("--port", type=int, default=0, help="default: a free one")
+    p.add_argument(
+        "--host",
+        help="address to listen on (default 127.0.0.1; in a SLURM job the "
+        "node's, for the tunnel through the login node)",
+    )
+    p.set_defaults(func=_cmd_serve)
 
     p = sub.add_parser("view", help="open in napari")
     p.add_argument("image")

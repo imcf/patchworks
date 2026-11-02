@@ -29,6 +29,9 @@ patchworks sizes scan.zarr cilia_labels
 # on a cluster): by volume (µm³) and/or length along the main axis (µm)
 patchworks filter scan.zarr cilia_labels --min-length 1
 
+# In Neuroglancer, through an SSH tunnel (prints the tunnel and the link)
+patchworks serve scan.zarr
+
 # Look at the likely mistakes one by one and fix them (napari)
 patchworks review scan.zarr --expect cells:nuclei=1
 
