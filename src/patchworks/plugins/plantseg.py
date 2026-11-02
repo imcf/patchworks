@@ -102,7 +102,18 @@ def available_models() -> list[str]:
 
 
 def model_resolution(model: str) -> tuple[float, ...] | None:
-    """The voxel size (z, y, x) in micrometres a zoo model was trained at."""
+    """The voxel size (z, y, x) in micrometres a zoo model was trained at.
+
+    Parameters
+    ----------
+    model : str
+        A PlantSeg zoo model's name.
+
+    Returns
+    -------
+    tuple of float or None
+        None when PlantSeg or the zoo does not know it.
+    """
     try:
         from plantseg.core.zoo import model_zoo
 
@@ -113,7 +124,17 @@ def model_resolution(model: str) -> tuple[float, ...] | None:
 
 
 def model_patch_size(model: str | None) -> tuple[int, ...] | None:
-    """The patch shape (z, y, x) PlantSeg's zoo recommends for *model*."""
+    """The patch shape (z, y, x) PlantSeg's zoo recommends for *model*.
+
+    Parameters
+    ----------
+    model : str or None
+        A PlantSeg zoo model's name; None for none.
+
+    Returns
+    -------
+    tuple of int or None
+    """
     if not model:
         return None
     try:
@@ -141,6 +162,15 @@ def _is_gpu_oom(exc: BaseException) -> bool:
     PlantSeg runs one forward pass before predicting and, when that fails,
     raises its own "OOM error will happen. Please reduce the patch
     size/halo." -- which says nothing torch-like about memory.
+
+    Parameters
+    ----------
+    exc : BaseException
+        The error caught.
+
+    Returns
+    -------
+    bool
     """
     text = str(exc)
     return (
@@ -213,13 +243,26 @@ def _gpu_memory() -> str:
 def start_patch(
     shape: tuple[int, ...], patch: tuple[int, ...] | None, model: str | None
 ) -> tuple[int, int, int]:
-    """The (z, y, x) patch to predict a (possibly padded) tile of *shape*
-    with: the configured one, else the zoo's recommendation for *model*,
-    no larger than the tile.
+    """The (z, y, x) patch to predict a (possibly padded) tile of *shape* with.
 
-    PlantSeg's own search for the largest patch the GPU holds is not used:
-    it probes cubes up to 416 voxels a side, and on a cluster GPU it came
-    down to 24, under its own 64-pixel minimum, and failed the tile.
+    The configured one, else the zoo's recommendation for *model*, no
+    larger than the tile. PlantSeg's own search for the largest patch the
+    GPU holds is not used: it probes cubes up to 416 voxels a side, and on a
+    cluster GPU it came down to 24, under its own 64-pixel minimum, and
+    failed the tile.
+
+    Parameters
+    ----------
+    shape : tuple of int
+        The tile's shape, 2-D or 3-D.
+    patch : tuple of int or None
+        The configured patch; None for the zoo's.
+    model : str or None
+        The zoo model, for its recommendation; :data:`DEFAULT_PATCH` without.
+
+    Returns
+    -------
+    tuple of int
 
     Examples
     --------
@@ -239,9 +282,19 @@ def start_patch(
 
 
 def smaller_patch(patch: tuple[int, int, int]) -> tuple[int, int, int] | None:
-    """The next patch to try after a GPU out-of-memory: y and x shrink by a
-    quarter down to PlantSeg's 64-pixel minimum, then z. None when nothing
-    can shrink any more.
+    """The next patch to try after a GPU out-of-memory.
+
+    y and x shrink by a quarter down to PlantSeg's 64-pixel minimum, then z.
+
+    Parameters
+    ----------
+    patch : tuple of int
+        The (z, y, x) patch that ran out of memory.
+
+    Returns
+    -------
+    tuple of int or None
+        None when nothing can shrink any more.
 
     Examples
     --------
@@ -269,6 +322,11 @@ def fetch_model(model: str = "generic_confocal_3D_unet") -> None:
 
     Compute nodes often have no internet access; the segment jobs then load
     the copy fetched here.
+
+    Parameters
+    ----------
+    model : str, optional
+        The zoo model's name (default `"generic_confocal_3D_unet"`).
     """
     _require_plantseg()
     from plantseg.core.zoo import model_zoo
@@ -283,7 +341,19 @@ def rescale_factors(
 ) -> tuple[float, ...] | None:
     """Zoom per axis taking the image to the model's training resolution.
 
-    `None` when either is unknown or every factor is within 10 % of 1.
+    Parameters
+    ----------
+    voxel_size : dict of str to float or None
+        The image's µm per voxel by axis.
+    resolution : tuple of float or None
+        The model's training voxel size, (z, y, x) µm.
+    ndim : int
+        The tile's spatial axes.
+
+    Returns
+    -------
+    tuple of float or None
+        None when either is unknown or every factor is within 10 % of 1.
 
     Examples
     --------
@@ -336,57 +406,74 @@ def plantseg_fn(
 
     Parameters
     ----------
-    model :
+    model : str, optional
         PlantSeg zoo model (`available_models()`), e.g.
         `"generic_confocal_3D_unet"` or `"generic_light_sheet_3D_unet"`.
-    model_id :
+    model_id : str, optional
         Or a BioImage.IO model zoo id instead of *model*.
-    config_path, weights_path :
+    config_path, weights_path : str, optional
         Or your own trained U-Net (PlantSeg's training config and weights).
-    segmentation :
+    segmentation : str, optional
         One of :data:`SEGMENTATIONS`. `"gasp"` (default), `"mutex_ws"`
         and `"multicut"` agglomerate watershed supervoxels;
         `"dt_watershed"` stops at the supervoxels; `"lifted_multicut"`
         and `"nuclei_watershed"` also use the nuclear channel.
-    beta :
+    beta : float, optional
         Agglomeration bias: lower merges more (under-segments), higher
         splits more. PlantSeg's GUI default is 0.6.
-    post_minsize :
+    post_minsize : int, optional
         Cells smaller than this many voxels are merged into a neighbour.
-    ws_threshold, ws_sigma_seeds, ws_min_size, ws_stacked :
-        The supervoxel watershed (PlantSeg's `dt_watershed`); *ws_stacked*
-        runs it plane by plane, for a coarse z.
-    nuclei_sigma, nuclei_threshold, nuclei_min_size :
-        How nuclei are found in the nuclear channel, see
-        :func:`patchworks.plugins.watershed.nuclei_seeds`.
-    foreground, foreground_sigma, max_radius_um :
-        Background masking, see
-        :func:`patchworks.plugins.watershed.foreground_mask`: a boundary
-        U-Net puts cells everywhere, empty space included.
-    boundary_channel :
+    ws_threshold : float, optional
+        The supervoxel watershed's (PlantSeg's `dt_watershed`) boundary
+        threshold on the prediction.
+    ws_sigma_seeds : float, optional
+        Its smoothing of the distance transform before seeding.
+    ws_min_size : int, optional
+        Its smallest supervoxel, in voxels.
+    ws_stacked : bool, optional
+        Run it plane by plane, for a coarse z.
+    nuclei_sigma : float or sequence of float, optional
+        Smoothing of the nuclear channel before finding nuclei (see
+        :func:`patchworks.plugins.watershed.nuclei_seeds`).
+    nuclei_threshold : float, optional
+        Intensity of the nuclear channel that counts as nucleus; None picks
+        it by Otsu.
+    nuclei_min_size : int, optional
+        Smallest nucleus, in voxels.
+    foreground : str or float, optional
+        Background masking (see
+        :func:`patchworks.plugins.watershed.foreground_mask`): a boundary
+        U-Net puts cells everywhere, empty space included. `"otsu"`, an
+        intensity, or None for no mask.
+    foreground_sigma : float or sequence of float, optional
+        Smoothing before the foreground threshold.
+    max_radius_um : float, optional
+        Furthest a cell reaches from its nucleus, in micrometres (needs
+        *voxel_size*); None: no limit.
+    boundary_channel : int, optional
         Output channel holding the boundaries (0 for the boundary models).
-    rescale :
+    rescale : bool, optional
         Resample each tile to the model's training voxel size before
         predicting (and the prediction back), from *voxel_size*. The single
         biggest factor in a pretrained U-Net's quality.
-    patch :
+    patch : tuple of int, optional
         U-Net patch shape (z, y, x). `None`: the zoo's recommendation for
         *model* (80, 160, 160 for the generic ones), no larger than the
         tile; it shrinks by itself on a GPU out-of-memory, down to
         PlantSeg's 64-pixel minimum in y and x.
-    device :
+    device : str, optional
         `"cuda"` or `"cpu"`.
-    n_threads :
+    n_threads : int, optional
         Threads for the watershed and agglomeration.
-    seeds :
+    seeds : str, optional
         For the modes using nuclei: `"channel"` (default) finds them in
         the tile's nuclear channel (`nuclei_*` options); `"labels"`
         takes them as given, one object per seed -- the workflow's
         `seed_labels`, e.g. Cellpose's nuclei, which sets this itself.
-    voxel_size :
+    voxel_size : dict of str to float, optional
         `{"z": .., "y": .., "x": ..}` in micrometres; the workflow passes
         the image's own calibration.
-    intensity_stats :
+    intensity_stats : tuple of float, optional
         `(mean, std)` of the membrane channel over the whole image, used
         to standardize every tile. PlantSeg otherwise standardizes each input
         with its own mean and std, so every tile gets its own contrast and
@@ -470,7 +557,16 @@ def plantseg_fn(
 
 @contextlib.contextmanager
 def _fixed_standardization(stats):
-    """Make PlantSeg standardize with *stats* instead of each input's own."""
+    """Make PlantSeg standardize with *stats* instead of each input's own.
+
+    Per tile, each tile's own mean and std give neighbouring tiles different
+    contrast.
+
+    Parameters
+    ----------
+    stats : tuple of float or None
+        The image-wide `(mean, std)`; None leaves PlantSeg's own.
+    """
     if stats is None:
         yield
         return
@@ -493,7 +589,21 @@ def _fixed_standardization(stats):
 
 
 def _zoom_to(img: np.ndarray, shape: tuple[int, ...], order: int = 1):
-    """Resample *img* to exactly *shape* (linear by default)."""
+    """Resample *img* to exactly *shape*.
+
+    Parameters
+    ----------
+    img : np.ndarray
+        The image.
+    shape : tuple of int
+        The shape wanted.
+    order : int, optional
+        The spline order (default 1: linear; 0 for labels).
+
+    Returns
+    -------
+    np.ndarray
+    """
     from scipy import ndimage as ndi
 
     if img.shape == tuple(shape):
@@ -510,7 +620,24 @@ def _zoom_to(img: np.ndarray, shape: tuple[int, ...], order: int = 1):
 
 
 def predict_boundaries(membrane: np.ndarray, cfg: dict[str, Any]) -> np.ndarray:
-    """The U-Net's boundary probability map for *membrane*, same shape."""
+    """The U-Net's boundary probability map for *membrane*, same shape.
+
+    Rescaled to the model's resolution and padded to PlantSeg's minimum
+    first, and back after; on a GPU out-of-memory the patch shrinks and the
+    prediction is retried.
+
+    Parameters
+    ----------
+    membrane : np.ndarray
+        The membrane channel.
+    cfg : dict
+        The settings :func:`plantseg_fn` built.
+
+    Returns
+    -------
+    np.ndarray
+        float32 boundary probabilities.
+    """
     import gc
 
     from plantseg.functionals.prediction import unet_prediction
@@ -544,6 +671,13 @@ def predict_boundaries(membrane: np.ndarray, cfg: dict[str, Any]) -> np.ndarray:
         patch = tuple(min(p, f) for p, f in zip(patch, _fitting_patch[fit_key]))
 
     def _predict():
+        """Predict, shrinking the patch after each GPU out-of-memory.
+
+        Returns
+        -------
+        np.ndarray
+            The prediction.
+        """
         nonlocal patch
         while True:
             oom = None
@@ -613,7 +747,20 @@ def predict_boundaries(membrane: np.ndarray, cfg: dict[str, Any]) -> np.ndarray:
 
 
 def _pixel_pitch(voxel_size, ndim: int):
-    """Relative voxel spacing for the distance transform, or None."""
+    """Relative voxel spacing for the distance transform, or None.
+
+    Parameters
+    ----------
+    voxel_size : dict or None
+        µm per voxel by axis.
+    ndim : int
+        The tile's spatial axes.
+
+    Returns
+    -------
+    tuple of float or None
+        Spacing relative to the smallest; None when isotropic or unknown.
+    """
     if not voxel_size:
         return None
     axes = "zyx"[-ndim:]
@@ -633,9 +780,22 @@ def partition(
 ) -> np.ndarray:
     """Cells from a boundary map, by the configured `segmentation`.
 
-    *mask* (where cells may be) bounds the flooding of
-    `"nuclei_watershed"`; the other modes cover the whole tile and are
-    masked afterwards.
+    Parameters
+    ----------
+    pmaps : np.ndarray
+        The boundary probabilities.
+    cfg : dict
+        The settings :func:`plantseg_fn` built.
+    seeds : np.ndarray, optional
+        Seed labels, for `"nuclei_watershed"`.
+    mask : np.ndarray of bool, optional
+        Where cells may be: bounds the flooding of `"nuclei_watershed"`;
+        the other modes cover the whole tile and are masked afterwards.
+
+    Returns
+    -------
+    np.ndarray
+        int32 cells.
     """
     mode = cfg["segmentation"]
     if mode == "nuclei_watershed":
@@ -701,6 +861,17 @@ def _split(tile: np.ndarray, cfg: dict[str, Any]):
     A (2, y, x) tile is a [membrane, nuclei] pair only for a mode that uses
     nuclei; otherwise it is a 3-D tile two planes deep (the last z-tile of a
     stack can be), which split_channels' shape rule took for a pair.
+
+    Parameters
+    ----------
+    tile : np.ndarray
+        The tile.
+    cfg : dict
+        The settings :func:`plantseg_fn` built.
+
+    Returns
+    -------
+    tuple
     """
     tile = np.asarray(tile)
     if tile.ndim == 4:
@@ -723,7 +894,28 @@ MIN_DEPTH = 16
 
 
 def _run(tile: np.ndarray, cfg: dict[str, Any]) -> np.ndarray:
-    """Predict boundaries, then partition them, for one tile."""
+    """Predict boundaries, then partition them, for one tile.
+
+    A tile shallower than :data:`MIN_DEPTH` is padded in z first and cut
+    back after.
+
+    Parameters
+    ----------
+    tile : np.ndarray
+        The tile, with a nuclear channel for the seeded modes.
+    cfg : dict
+        The settings :func:`plantseg_fn` built.
+
+    Returns
+    -------
+    np.ndarray
+        int32 cells.
+
+    Raises
+    ------
+    ValueError
+        When a seeded mode gets no second channel.
+    """
     membrane, nuclei = _split(tile, cfg)
     if membrane.ndim == 3 and membrane.shape[0] < MIN_DEPTH:
         depth = membrane.shape[0]
@@ -772,7 +964,20 @@ def _run(tile: np.ndarray, cfg: dict[str, Any]) -> np.ndarray:
 
 def segment(tile: np.ndarray, **kwargs: Any) -> np.ndarray:
     """:func:`plantseg_fn` as a direct call, for the workflow's
-    `method: "custom"` (`function: "segment"`)."""
+    `method: "custom"` (`function: "segment"`).
+
+    Parameters
+    ----------
+    tile : np.ndarray
+        The tile.
+    **kwargs
+        :func:`plantseg_fn`'s keyword arguments.
+
+    Returns
+    -------
+    np.ndarray
+        int32 cells.
+    """
     return plantseg_fn(**kwargs)(tile)
 
 

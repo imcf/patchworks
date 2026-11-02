@@ -141,6 +141,13 @@ def track(
 def dask_progress(label: str, enabled: bool = True):
     """Progress context manager for a dask computation.
 
+    Parameters
+    ----------
+    label : str
+        What is being computed, named in the log lines.
+    enabled : bool, optional
+        False gives a context manager that does nothing (default True).
+
     Returns
     -------
     contextmanager
@@ -162,6 +169,15 @@ def dask_progress(label: str, enabled: bool = True):
         """Count finished dask tasks and log every PROGRESS_INTERVAL_S."""
 
         def _start_state(self, dsk, state):
+            """Count the graph's tasks when the computation starts.
+
+            Parameters
+            ----------
+            dsk : dict
+                The task graph (unused).
+            state : dict
+                dask's scheduler state, whose task lists give the total.
+            """
             self._total = sum(
                 len(state[k])
                 for k in ("ready", "waiting", "running", "finished")
@@ -171,6 +187,13 @@ def dask_progress(label: str, enabled: bool = True):
             self._last = self._t0
 
         def _posttask(self, key, result, dsk, state, worker_id):
+            """Count a finished task; log at most every `PROGRESS_INTERVAL_S`.
+
+            Parameters
+            ----------
+            key, result, dsk, state, worker_id
+                dask's callback arguments (unused).
+            """
             self._done += 1
             now = time.monotonic()
             if now - self._last >= PROGRESS_INTERVAL_S:
@@ -178,6 +201,15 @@ def dask_progress(label: str, enabled: bool = True):
                 log_progress(label, self._done, self._total, self._t0)
 
         def _finish(self, dsk, state, errored):
+            """Log 100 % when the computation ends without an error.
+
+            Parameters
+            ----------
+            dsk, state
+                dask's callback arguments (unused).
+            errored : bool
+                Whether the computation failed: then nothing is logged.
+            """
             if not errored:
                 log_progress(label, self._total, self._total, self._t0)
 

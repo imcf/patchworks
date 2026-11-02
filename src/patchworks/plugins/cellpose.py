@@ -32,9 +32,20 @@ def _parse_version(raw: str) -> tuple[int, ...]:
     """Leading numeric components of a version string.
 
     `int(x)` over the raw segments blows up on any suffixed release
-    (`"4.0rc1"`, `"4.0.1.dev0"`) — and at *import* time, where only
+    (`"4.0rc1"`, `"4.0.1.dev0"`) -- and at *import* time, where only
     ImportError was being caught, so the package became unimportable rather
     than degrading.
+
+    Parameters
+    ----------
+    raw : str
+        The version, e.g. `"4.0.1.dev0"`.
+
+    Returns
+    -------
+    tuple of int
+        The major and minor numbers, as far as they are numeric; `(0,)`
+        when none are.
     """
     parts = []
     for segment in raw.split(".")[:2]:
@@ -131,22 +142,22 @@ def cellpose_fn(
 
     Parameters
     ----------
-    model:
+    model : str, optional
         Cellpose model type: `"cyto3"`, `"cyto2"`, `"nuclei"`, etc.
-    gpu:
+    gpu : bool, optional
         Use GPU for inference.
-    diameter:
+    diameter : float, optional
         Expected cell diameter in pixels. `None` → Cellpose auto-estimates.
-    do_3D:
+    do_3D : bool, optional
         Run in 3-D mode. Each tile must contain the full z-stack — use
         `auto_tile_shape_cellpose(do_3D=True)` for appropriate tile shapes.
-    channels:
+    channels : list[int], optional
         *Cellpose 3 only.* `[cytoplasm_channel, nucleus_channel]` (1-based,
         0 = greyscale). `[0, 0]` → greyscale. `[1, 2]` → cyto=ch1, nuc=ch2.
-    channel_axis:
+    channel_axis : int, optional
         *Cellpose 4 only.* Index of the channel axis in the input array.
         `None` → greyscale input.
-    voxel_size:
+    voxel_size : dict[str, float], optional
         Physical voxel size as `{"z": .., "y": .., "x": ..}`. When
         `do_3D` is set and `anisotropy` is not already in
         `cellpose_kwargs`, it is derived from this via
@@ -155,14 +166,14 @@ def cellpose_fn(
         automatically; from the API,
         :func:`patchworks.plugins.ome_zarr.read_pixel_size` reads it from a
         store.
-    intensity_range:
+    intensity_range : list or tuple, optional
         `(low, high)`, or one per channel, mapped to 0 and 1 in every
         tile before Cellpose sees it, with Cellpose's own per-input
         normalisation turned off. Without it, each tile is stretched from
         its own percentiles, so neighbouring tiles get different contrast
         and cells are cut at the seams. Measure it once with
         :func:`patchworks.intensity_range`; the workflow does by default.
-    fragments:
+    fragments : float or str, optional
         Merge objects smaller than this fraction of a cell of *diameter*
         (30 px if not given) into the neighbour they touch most, and drop
         those touching nothing
@@ -173,7 +184,7 @@ def cellpose_fn(
         `None` turns it off. 3-D runs also smooth
         the flows (`flow3D_smooth=1`) unless told otherwise, Cellpose's own
         remedy for fragmentation along z.
-    **cellpose_kwargs:
+    **cellpose_kwargs
         Extra kwargs forwarded to `model.eval()`
         (e.g. `flow_threshold`, `cellprob_threshold`, `anisotropy`).
 
@@ -241,16 +252,40 @@ def cellpose_fn(
 
 
 def applied_defaults(do_3D: bool, settings: dict[str, Any]) -> dict[str, Any]:
-    """What :func:`cellpose_fn` fills in that *settings* left open; see
-    :func:`patchworks.plugins._cellpose_defaults.applied_defaults`, which
-    the workflow uses to record it without importing Cellpose."""
+    """What :func:`cellpose_fn` fills in that *settings* left open.
+
+    See :func:`patchworks.plugins._cellpose_defaults.applied_defaults`,
+    which the workflow uses to record it without importing Cellpose.
+
+    Parameters
+    ----------
+    do_3D : bool
+        Whether Cellpose runs in 3-D.
+    settings : dict
+        The Cellpose settings given.
+
+    Returns
+    -------
+    dict
+        The settings added.
+    """
     return _applied_defaults(
         do_3D, settings, takes_smooth=_accepts("flow3D_smooth")
     )
 
 
 def _accepts(name: str) -> bool:
-    """Whether the installed Cellpose's `eval` takes *name*."""
+    """Whether the installed Cellpose's `eval` takes *name*.
+
+    Parameters
+    ----------
+    name : str
+        A keyword argument, e.g. `"flow3D_smooth"`.
+
+    Returns
+    -------
+    bool
+    """
     import inspect
 
     cls = getattr(_cellpose_models, "CellposeModel", None)
@@ -533,8 +568,23 @@ def _run(block: np.ndarray, cellpose_dict: dict[str, Any]) -> np.ndarray:
 
 
 def cell_voxels(cellpose_dict: dict[str, Any], ndim: int) -> float:
-    """Voxels in one cell of the configured diameter (Cellpose's 30 px if
-    none), z shortened by the anisotropy: the same for every tile."""
+    """Voxels in one cell of the configured diameter.
+
+    Cellpose's 30 px if none, z shortened by the anisotropy: the same for
+    every tile.
+
+    Parameters
+    ----------
+    cellpose_dict : dict
+        The Cellpose settings (the workflow config's `cellpose` section):
+        `diameter`, `fragments`, `cellpose_kwargs`...
+    ndim : int
+        2 for a disc, 3 for a ball.
+
+    Returns
+    -------
+    float
+    """
     diameter = float(cellpose_dict.get("diameter") or 30.0)
     if ndim < 3:
         return float(np.pi / 4 * diameter**2)
@@ -548,6 +598,19 @@ def _clean(masks: np.ndarray, cellpose_dict: dict[str, Any]) -> np.ndarray:
     The size limit comes from the diameter, not from what each tile holds:
     measured per tile, a tile of texture without cells kept all its
     fragments while its neighbours were cleaned.
+
+    Parameters
+    ----------
+    masks : np.ndarray
+        Cellpose's labels for one tile.
+    cellpose_dict : dict
+        The Cellpose settings (the workflow config's `cellpose` section):
+        `diameter`, `fragments`, `cellpose_kwargs`...
+        Without `fragments`, *masks* is returned as is.
+
+    Returns
+    -------
+    np.ndarray
     """
     fraction = cellpose_dict.get("fragments")
     if not fraction:

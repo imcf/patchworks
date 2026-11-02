@@ -18,7 +18,18 @@ _model = StarDist2D.from_pretrained("2D_versatile_fluo")
 
 
 def stardist_fn(tile: np.ndarray) -> np.ndarray:
-    """Normalise + segment one 2-D tile with StarDist."""
+    """Normalise and segment one 2-D tile with StarDist.
+
+    Parameters
+    ----------
+    tile : np.ndarray
+        A `(y, x)` tile, or a `(1, y, x)` one from a 3-D store of planes.
+
+    Returns
+    -------
+    np.ndarray
+        int32 labels of the same shape.
+    """
     if tile.ndim == 3 and tile.shape[0] == 1:
         img = tile[0]
         squeeze = True

@@ -28,8 +28,22 @@ logger = logging.getLogger(__name__)
 
 
 def _orphans(a: np.ndarray, b: np.ndarray, min_voxels: int) -> tuple[int, int]:
-    """Labels on slice *a* (with >= *min_voxels* voxels there) and how many
-    of them have no non-zero voxel of *b* over their footprint."""
+    """Labels on slice *a* and how many of them have no partner on *b*.
+
+    Parameters
+    ----------
+    a, b : np.ndarray
+        The two planes either side of a seam, of the same shape.
+    min_voxels : int
+        The voxels a label needs on *a* to be counted: smaller ones are
+        slivers whose missing partner says nothing.
+
+    Returns
+    -------
+    tuple of int
+        `(labels, orphans)`: the labels counted on *a*, and how many of
+        them have no non-zero voxel of *b* over their footprint.
+    """
     ids, counts = np.unique(a[a > 0], return_counts=True)
     ids = ids[counts >= min_voxels]
     if ids.size == 0:
@@ -117,6 +131,21 @@ def seam_report(
             faces = [faces[i] for i in pick]
 
         def slab(pos: int, col: tuple[int, ...]) -> np.ndarray:
+            """The two planes either side of one seam, for one column of tiles.
+
+            Parameters
+            ----------
+            pos : int
+                The seam's position along the axis being checked.
+            col : tuple of int
+                The tile's start on each of the other axes.
+
+            Returns
+            -------
+            np.ndarray
+                    Shape `(2, ...)`: the plane before the seam, then the plane
+                after.
+            """
             sl: list[slice] = [slice(None)] * len(shape)
             sl[ax] = slice(pos - 1, pos + 1)
             for a, off in zip(other, col):

@@ -33,8 +33,19 @@ from status import converted  # noqa: E402
 
 
 def load(path: Path) -> tuple[list[Path], list[dict], bool]:
-    """The segmentation configs of *path* (defaults applied), their files,
-    and whether *path* is a multi config."""
+    """The segmentation configs of *path*, defaults applied.
+
+    Parameters
+    ----------
+    path : Path
+        A run config, or a multi config listing several.
+
+    Returns
+    -------
+    tuple
+        `(paths, configs, multi)`: each config's file, the configs, and
+        whether *path* is a multi config.
+    """
     from _pw import with_defaults
 
     cfg = _load_yaml(path)
@@ -51,6 +62,24 @@ def load(path: Path) -> tuple[list[Path], list[dict], bool]:
 def check(
     path: Path, sample: int = 0, preview: str | Path | None = None
 ) -> dict:
+    """Validate a run's configs and plan each segmentation, without running.
+
+    Parameters
+    ----------
+    path : Path
+        A run config, or a multi config.
+    sample : int, optional
+        Time the method on this many real tiles (default 0: none).
+    preview : str or Path, optional
+        With *sample*, a directory for a PNG per segmentation: one tile with
+        its objects outlined.
+
+    Returns
+    -------
+    dict
+        `shared_problems`, `converted`, and per segmentation its
+        `problems` and `plan`.
+    """
     from _pw import plan_run, validate_config
 
     paths, cfgs, multi = load(path)
@@ -95,10 +124,32 @@ def check(
 
 
 def _gib(n) -> str:
+    """Bytes as GiB, for the report.
+
+    Parameters
+    ----------
+    n : int or float
+        Bytes.
+
+    Returns
+    -------
+    str
+    """
     return f"{n / 1024**3:.2f} GiB"
 
 
 def format_report(report: dict) -> str:
+    """The report from :func:`check` as text for the terminal.
+
+    Parameters
+    ----------
+    report : dict
+        What :func:`check` returned.
+
+    Returns
+    -------
+    str
+    """
     lines = []
     for problem in report["shared_problems"]:
         lines.append(f"PROBLEM (all configs): {problem}")
@@ -158,6 +209,7 @@ def format_report(report: dict) -> str:
 
 
 def main() -> None:
+    """Check a run's configs from the command line (see `--help`)."""
     parser = argparse.ArgumentParser(
         description=__doc__.split("\n\n")[0],
         formatter_class=argparse.RawDescriptionHelpFormatter,

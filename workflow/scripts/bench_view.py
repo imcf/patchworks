@@ -43,7 +43,18 @@ SCREEN = 2048  # pixels across one view
 
 
 def _drive(path: str) -> str:
-    """Where the store lives: local disk, network, or unknown."""
+    """Where the store lives: local disk, network, or unknown.
+
+    Parameters
+    ----------
+    path : str
+        A file or directory.
+
+    Returns
+    -------
+    str
+        E.g. `"network drive"`, `"local (ext4)"`.
+    """
     if os.name == "nt":
         import ctypes
 
@@ -70,7 +81,18 @@ def _drive(path: str) -> str:
 
 
 def _levels(group_path: str) -> tuple[list, list[str]]:
-    """The pyramid's zarr arrays, finest first, and the axis names."""
+    """The pyramid's zarr arrays, finest first, and the axis names.
+
+    Parameters
+    ----------
+    group_path : str
+        An image or label group (or a path into a bundle).
+
+    Returns
+    -------
+    tuple
+        `(arrays, axes)`.
+    """
     root = open_group_any(group_path)
     ms = read_ngff_attr(root.attrs, "multiscales")[0]
     axes = [a["name"] if isinstance(a, dict) else a for a in ms["axes"]]
@@ -78,6 +100,18 @@ def _levels(group_path: str) -> tuple[list, list[str]]:
 
 
 def _describe(name: str, arrays: list, axes: list[str]) -> None:
+    """Print each level's shape, chunks and shards, and how many planes a
+    chunk makes zarr decompress to show one.
+
+    Parameters
+    ----------
+    name : str
+        The image or label image, for the heading.
+    arrays : list of zarr.Array
+        The pyramid's levels, finest first.
+    axes : list of str
+        Their axis names.
+    """
     print(f"\n{name}: axes {''.join(axes)}, {len(arrays)} level(s)")
     for i, arr in enumerate(arrays):
         shards = getattr(arr, "shards", None)
@@ -96,7 +130,22 @@ def _describe(name: str, arrays: list, axes: list[str]) -> None:
 
 
 def _view(arr, axes: list[str], level: int) -> tuple:
-    """One screen: the middle plane (channel 0), SCREEN pixels across."""
+    """One screen: the middle plane (channel 0), `SCREEN` pixels across.
+
+    Parameters
+    ----------
+    arr : zarr.Array
+        One level.
+    axes : list of str
+        Its axis names.
+    level : int
+        The level (unused: the view is the same size at every level).
+
+    Returns
+    -------
+    tuple
+        The index of the view.
+    """
     sl = []
     for ax, n in zip(axes, arr.shape):
         if ax in ("c", "t"):
@@ -111,6 +160,19 @@ def _view(arr, axes: list[str], level: int) -> tuple:
 
 
 def _chunks_touched(arr, sl: tuple) -> int:
+    """How many chunks reading *sl* of *arr* decompresses.
+
+    Parameters
+    ----------
+    arr : zarr.Array
+        The array.
+    sl : tuple
+        The view's index: ints and slices.
+
+    Returns
+    -------
+    int
+    """
     n = 1
     for s, c, size in zip(sl, arr.chunks, arr.shape):
         if isinstance(s, int):
@@ -120,12 +182,38 @@ def _chunks_touched(arr, sl: tuple) -> int:
 
 
 def _timed(fn) -> tuple[float, object]:
+    """Call *fn* and time it.
+
+    Parameters
+    ----------
+    fn : callable
+        Takes no argument.
+
+    Returns
+    -------
+    tuple
+        `(seconds, fn's result)`.
+    """
     t = time.perf_counter()
     out = fn()
     return time.perf_counter() - t, out
 
 
 def _bench(name: str, arrays: list, axes: list[str], open_dask) -> None:
+    """Time one view read straight with zarr, again, and as the viewer reads
+    it, at full resolution and two levels down; print the results.
+
+    Parameters
+    ----------
+    name : str
+        The image or label image, for the lines.
+    arrays : list of zarr.Array
+        The pyramid's levels, finest first.
+    axes : list of str
+        Their axis names.
+    open_dask : callable
+        Opens the pyramid as the viewer does (dask arrays); timed too.
+    """
     opened, dask_levels = _timed(open_dask)
     print(f"  {name}: opened as the viewer does in {opened:.2f} s")
     for level in sorted({0, min(2, len(arrays) - 1)}):
@@ -157,7 +245,18 @@ def _bench(name: str, arrays: list, axes: list[str], open_dask) -> None:
 
 
 def _latency(arr) -> float:
-    """The best of 5 reads of one voxel in different chunks."""
+    """The best of 5 reads of one voxel in different chunks.
+
+    Parameters
+    ----------
+    arr : zarr.Array
+        The array.
+
+    Returns
+    -------
+    float
+        Seconds.
+    """
     best = float("inf")
     for k in range(5):
         idx = tuple(
@@ -170,6 +269,15 @@ def _latency(arr) -> float:
 
 
 def _render(arrays: list, axes: list[str]) -> None:
+    """Time napari adding and redrawing one label plane.
+
+    Parameters
+    ----------
+    arrays : list of zarr.Array
+        The pyramid's levels, finest first.
+    axes : list of str
+        Their axis names.
+    """
     try:
         import napari
     except ImportError:
@@ -192,6 +300,7 @@ def _render(arrays: list, axes: list[str]) -> None:
 
 
 def main() -> None:
+    """Time what the viewer does with a store (see `--help`); print it all."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("store", help="image.zarr, or an image.zarr.zip bundle")
     parser.add_argument(
@@ -252,6 +361,17 @@ def main() -> None:
         # The label image with the most objects in view: drawing an empty
         # plane measures nothing.
         def filled(entry):
+            """How many labelled voxels the middle view of a label image holds.
+
+            Parameters
+            ----------
+            entry : tuple
+                `(name, arrays, axes)`.
+
+            Returns
+            -------
+            int
+            """
             arr = entry[1][0]
             return int(np.count_nonzero(arr[_view(arr, entry[2], 0)]))
 

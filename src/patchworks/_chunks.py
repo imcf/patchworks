@@ -64,13 +64,13 @@ def auto_overlap(
 
     Parameters
     ----------
-    diameter:
+    diameter : float
         Expected cell diameter in **lateral** pixels (same unit as your
         image's x/y).
-    safety:
+    safety : float, optional
         Multiplier on top of diameter. Default 1.0 (= one cell width).
         Use 1.5–2.0 for elongated or irregularly-shaped cells.
-    voxel_size:
+    voxel_size : Sequence[float], optional
         Physical size per axis, in any single unit (e.g. `(2.0, 0.1, 0.1)`
         for a 2 µm z-step and 100 nm pixels). `None` → one isotropic
         number, as before.
@@ -195,6 +195,19 @@ def _cgroup_dirs(controller: str) -> list[Path]:
 
 
 def _read_int(path: Path) -> "int | None":
+    """An integer read from a one-line file (a cgroup limit).
+
+    Parameters
+    ----------
+    path : Path
+        The file, e.g. `memory.max`.
+
+    Returns
+    -------
+    int or None
+        Its value; None when the file is missing or holds no integer
+        (`"max"`: no limit).
+    """
     try:
         raw = path.read_text().strip()
     except OSError:
@@ -241,6 +254,19 @@ def _cgroup_anon_bytes(d: Path, key: str) -> int:
     which reading a large store fills up to the limit and which the kernel
     drops on demand -- counting it would leave a job that has just staged
     its tiles believing it has no room for a second merge worker.
+
+    Parameters
+    ----------
+    d : Path
+        The cgroup's directory under `/sys/fs/cgroup`.
+    key : str
+        The line of `memory.stat` to read: `"anon"` (cgroup v2) or
+        `"total_rss"` (v1).
+
+    Returns
+    -------
+    int
+        The bytes, or 0 when the file or the line is missing.
     """
     try:
         for line in (d / "memory.stat").read_text().splitlines():
@@ -439,29 +465,29 @@ def auto_tile_shape(
 
     Parameters
     ----------
-    shape:
+    shape : tuple[int, ...]
         Full array shape, e.g. `(z, y, x)` or `(t, c, z, y, x)`.
-    dtype:
+    dtype : dtype-like
         Array dtype.
-    target_bytes:
+    target_bytes : int, optional
         Memory ceiling per tile. Default 64 MiB.
-    use_gpu:
+    use_gpu : bool, optional
         Size tiles against GPU VRAM rather than host RAM. Still capped by
         host RAM too -- see `available_memory`.
-    gpu_memory:
+    gpu_memory : int, optional
         Available GPU VRAM in bytes; auto-queried when None.
-    available_memory:
+    available_memory : int, optional
         Available host RAM in bytes; auto-queried when None. Consulted even
         when `use_gpu` is set: the tile has to be loaded into host memory
         before (and often after) it reaches the GPU, so it must fit both
         budgets, not just VRAM.
-    n_workers:
+    n_workers : int, optional
         Number of parallel workers (divides the RAM budget).
-    n_channels:
+    n_channels : int, optional
         Channels each tile carries (default 1). Above 1 the per-voxel cost
         scales with it, so the tile shrinks accordingly -- e.g. the workflow's
         `nuclei_channel` hands Cellpose a cyto+nuclei pair.
-    verbose:
+    verbose : bool, optional
         Log the chosen shape and estimated tile size.
 
     Returns
@@ -559,44 +585,44 @@ def auto_tile_shape_cellpose(
 
     Parameters
     ----------
-    shape:
+    shape : tuple[int, ...]
         Spatial shape, e.g. `(z, y, x)`.
-    dtype:
+    dtype : dtype-like
         Array dtype.
-    diameter:
+    diameter : float, optional
         Expected cell diameter in pixels. Tile will be at least `4 × diameter`.
-    do_3D:
+    do_3D : bool, optional
         Whether Cellpose will run in 3-D mode.
-    use_gpu:
+    use_gpu : bool, optional
         Size tiles for GPU VRAM. Still capped by host RAM too -- see
         `available_memory`.
-    gpu_memory, available_memory, n_workers:
+    gpu_memory, available_memory, n_workers : int, optional
         Memory parameters (auto-queried when None). `available_memory` is
         consulted even when `use_gpu` is set: Cellpose's `do_3D`
         preprocessing (orthogonal-view flows, mask assembly) copies the tile
         through host memory, so VRAM headroom alone doesn't guarantee the
         job's own host allocation can hold it.
-    model_memory_bytes:
+    model_memory_bytes : int, optional
         Memory consumed by the Cellpose model weights (default 2 GiB).
-    cellpose_memory_factor:
+    cellpose_memory_factor : int, optional
         Cellpose allocates roughly this multiple of raw input bytes (default
         20×). Applied against whichever of VRAM/host RAM is tighter --
         `ponytail:` this reuses one factor for both budgets as an
         approximation; if it proves off in practice, calibrate a separate
         host-side factor from a SLURM job's peak RSS (`seff`/
         `/usr/bin/time -v`) and pass it alongside this one.
-    n_channels:
+    n_channels : int, optional
         Channels each tile carries (default 1). Above 1 the per-voxel cost
         scales with it, so the tile shrinks accordingly -- e.g. the workflow's
         `nuclei_channel` hands Cellpose a cyto+nuclei pair.
-    anisotropy:
+    anisotropy : float, optional
         The `anisotropy` Cellpose will be given (`do_3D` only). It is not
         merely a hint to the model: Cellpose resizes the tile to
         `z * anisotropy` planes before the net runs, so a 2.2x anisotropy
         costs 2.2x the z it was handed. Budgeting against the unscaled `z`
         under-counts by exactly that factor. `None` (the default) assumes
         isotropic, i.e. no resize.
-    verbose:
+    verbose : bool, optional
         Log the chosen shape and memory estimates.
 
     Returns

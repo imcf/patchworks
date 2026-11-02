@@ -65,10 +65,25 @@ RULES_KEY = "patchworks_review_rules"
 
 
 def write_rules(store: Union[str, Path], rules: Mapping[str, Any]) -> None:
-    """Store review rules for *store* (`expect`, `min_overlap`,
-    `position`), read by
-    :class:`Review` when none are passed. The workflow writes the multi
-    config's `review:` block here."""
+    """Store review rules for *store*, read by :class:`Review` when none are
+    passed.
+
+    The workflow writes the multi config's `review:` block here. Unchanged
+    rules are not rewritten.
+
+    Parameters
+    ----------
+    store : str or Path
+        The OME-Zarr image; the rules go in its `labels` group's attrs.
+    rules : mapping
+        Any of `expect`, `min_overlap` and `position`, as
+        :class:`Review` takes them; None values are left out.
+
+    Raises
+    ------
+    ValueError
+        For any other key.
+    """
     unknown = set(rules) - {"expect", "min_overlap", "position"}
     if unknown:
         raise ValueError(
@@ -87,6 +102,18 @@ def write_rules(store: Union[str, Path], rules: Mapping[str, Any]) -> None:
 
 
 def read_rules(store: Union[str, Path]) -> dict[str, Any]:
+    """The review rules stored for *store* by :func:`write_rules`.
+
+    Parameters
+    ----------
+    store : str or Path
+        The OME-Zarr image (or a path into a bundle).
+
+    Returns
+    -------
+    dict
+        Empty when there are none or the store cannot be read.
+    """
     from ._io import open_group_any
 
     try:
@@ -97,8 +124,20 @@ def read_rules(store: Union[str, Path]) -> dict[str, Any]:
 
 
 def review_updated(store: Union[str, Path], name: str) -> float | None:
-    """When the review decisions about `labels/<name>` last changed
-    (seconds since the epoch), or None if never."""
+    """When the review decisions about `labels/<name>` last changed.
+
+    Parameters
+    ----------
+    store : str or Path
+        The OME-Zarr image.
+    name : str
+        The label image.
+
+    Returns
+    -------
+    float or None
+        Seconds since the epoch, or None if never.
+    """
     from ._io import open_group_any
 
     try:
@@ -111,8 +150,19 @@ def review_updated(store: Union[str, Path], name: str) -> float | None:
 
 
 def table_names(store: Union[str, Path]) -> list[str]:
-    """Label images of *store* that carry a table: the registered ones in
-    their registered order, then any other label group found."""
+    """Label images of *store* that carry a table.
+
+    Parameters
+    ----------
+    store : str or Path
+        The OME-Zarr image.
+
+    Returns
+    -------
+    list of str
+        The registered ones in their registered order, then any other label
+        group found.
+    """
     from ._io import open_group_any
     from .plugins.napari import _inner_label_names
 
@@ -129,6 +179,20 @@ def wilson_interval(
     errors: int, n: int, z: float = 1.96
 ) -> tuple[float, float]:
     """95% Wilson score interval for a proportion *errors* / *n*.
+
+    Parameters
+    ----------
+    errors : int
+        The errors found.
+    n : int
+        The objects reviewed.
+    z : float, optional
+        The normal quantile (default 1.96: 95 %).
+
+    Returns
+    -------
+    tuple of float
+        `(low, high)`; `(0, 1)` when nothing was reviewed.
 
     Examples
     --------
@@ -199,6 +263,9 @@ class Review:
         names: Iterable[str] | None = None,
         position: Mapping[str, Mapping[str, Any]] | None = None,
     ) -> None:
+        """Load the tables, the rules and the decisions; see the class docstring
+        for the parameters.
+        """
         self.store = str(store).rstrip("/")
         self.seam_tolerance = int(seam_tolerance)
         self.names: list[str] = []
@@ -286,6 +353,19 @@ class Review:
     # -- decisions ---------------------------------------------------------
 
     def _table_group(self, name: str, mode: str = "r"):
+        """The table group of label image *name*.
+
+        Parameters
+        ----------
+        name : str
+            The label image.
+        mode : str, optional
+            zarr's mode (default `"r"`).
+
+        Returns
+        -------
+        zarr.Group
+        """
         from ._io import open_group_any
 
         return open_group_any(
@@ -293,6 +373,13 @@ class Review:
         )
 
     def _load_decisions(self, name: str) -> None:
+        """Load the decisions saved for *name*, unless made on other labels.
+
+        Parameters
+        ----------
+        name : str
+            The label image.
+        """
         log = dict(self._table_group(name).attrs.get(REVIEW_KEY) or {})
         fingerprint = label_fingerprint(
             open_group_any(_label_group(self.store, name))
@@ -309,6 +396,18 @@ class Review:
         self.seed[name] = int(log.get("seed", 0))
 
     def _save(self, name: str) -> None:
+        """Save the decisions about *name* into its table's attrs.
+
+        Parameters
+        ----------
+        name : str
+            The label image.
+
+        Raises
+        ------
+        PermissionError
+            When the store cannot be written (read-only, or a .zip bundle).
+        """
         try:
             group = self._table_group(name, mode="r+")
         except Exception as exc:
@@ -346,15 +445,36 @@ class Review:
 
         Parameters
         ----------
-        action : {"ok", "wrong", "parent", "merge"}
+        name : str
+            The label image.
+        label : int
+            The object.
+        action : {"ok", "wrong", "parent", "merge", "position"}
             `ok`: correct as it is. `wrong`: not a real object (dropped
             from the corrected tables). `parent`: belongs to *parent_id*
             of label image *parent* (0 = to none). `merge`: the same
             object as *into*. `position`: its position class is
             *position* (one of :data:`POSITIONS`), whatever was computed.
-        queue : str
+        parent : str, optional
+            The parent label image, for `parent`.
+        parent_id : int, optional
+            The parent object it belongs to, for `parent` (0: none).
+        into : int, optional
+            The object it is merged into, for `merge`.
+        position : str, optional
+            Its position class, for `position`.
+        queue : str, optional
             The queue it was reviewed from; `"random"` decisions feed the
             error estimate.
+        reviewer : str, optional
+            Who decided, recorded with the decision.
+
+        Raises
+        ------
+        KeyError
+            When *name* has no table or no such object.
+        ValueError
+            For an unknown action, or one missing its argument.
         """
         if name not in self.tables:
             raise KeyError(f"no table for labels/{name}")
@@ -406,16 +526,35 @@ class Review:
         return [(c, p) for c in self.names for p in self.parents[c]]
 
     def undo(self, name: str, label: int) -> None:
-        """Forget the decision about *label* (it goes back to unreviewed)."""
+        """Forget the decision about *label* (it goes back to unreviewed).
+
+        Parameters
+        ----------
+        name : str
+            The label image.
+        label : int
+            The object.
+        """
         if self.decisions[name].pop(int(label), None) is not None:
             self._save(name)
 
     # -- the corrected view --------------------------------------------------
 
     def roots(self, name: str) -> dict[int, int]:
-        """Where each decided object ends up: 0 if rejected, the object it
-        was merged into (followed to the end) otherwise. Undecided objects
-        are absent (they map to themselves)."""
+        """Where each decided object ends up.
+
+        Parameters
+        ----------
+        name : str
+            The label image.
+
+        Returns
+        -------
+        dict of int to int
+                0 if rejected, the object it was merged into (followed to the
+            end)
+            otherwise. Undecided objects are absent (they map to themselves).
+        """
         dec = self.decisions[name]
         out: dict[int, int] = {}
         for label in dec:
@@ -437,9 +576,20 @@ class Review:
         return out
 
     def _corrected(self, name: str) -> "pd.DataFrame":
-        """*name*'s rows with the decisions applied, before derived columns
-        (counts, shape, position) -- which need other tables' rows, never
-        their derived columns, so nothing here recurses."""
+        """*name*'s rows with the decisions applied, before derived columns.
+
+        Derived columns (counts, shape, position) need other tables' rows,
+        never their derived columns, so nothing here recurses.
+
+        Parameters
+        ----------
+        name : str
+            The label image.
+
+        Returns
+        -------
+        pandas.DataFrame
+        """
         key = ("rows", name)
         if key in self._cache:
             return self._cache[key]
@@ -482,8 +632,19 @@ class Review:
         return df
 
     def hover_features(self, name: str) -> "pd.DataFrame":
-        """Per-label features for napari's status bar: each object's
-        parent(s), number of children, position and review status."""
+        """Per-label features for napari's status bar.
+
+        Parameters
+        ----------
+        name : str
+            The label image.
+
+        Returns
+        -------
+        pandas.DataFrame
+            Each object's parent(s), number of children, position and review
+            status, with an `index` column of labels.
+        """
         eff = self.effective(name)
         cols = [f"{p}_id" for p in self.parents[name]]
         cols += [f"n_{c}" for c in self.children[name]]
@@ -506,6 +667,16 @@ class Review:
         :func:`~patchworks._tables.shape_columns`) and, for label images
         with a position rule, `position` and its measures (see
         :meth:`positions`).
+
+        Parameters
+        ----------
+        name : str
+            The label image.
+
+        Returns
+        -------
+        pandas.DataFrame
+            Indexed by label; cached until the next decision.
         """
         if name in self._cache:
             return self._cache[name]
@@ -568,12 +739,22 @@ class Review:
         from its moments (an equivalent cylinder), so this is a
         classification, not a surface distance.
 
-        Returns columns `position` (the class; `outside` with no
-        parent; `unknown` when the axis cannot be told, e.g. no nucleus),
-        `position_axial` (-1 basal .. +1 apical, in half-heights of the
-        parent along its axis), `position_radial` (0 on the axis .. 1 at
-        the side) and `angle_to_axis_deg` (0: along the apical axis, 90:
-        across it). A reviewer's `position` decision overrides the class.
+        Parameters
+        ----------
+        name : str
+            A label image with a position rule.
+        df : pandas.DataFrame, optional
+            Its rows, when already corrected (default: :meth:`_corrected`).
+
+        Returns
+        -------
+        dict
+            Columns `position` (the class; `outside` with no
+            parent; `unknown` when the axis cannot be told, e.g. no nucleus),
+            `position_axial` (-1 basal .. +1 apical, in half-heights of the
+            parent along its axis), `position_radial` (0 on the axis .. 1 at
+            the side) and `angle_to_axis_deg` (0: along the apical axis, 90:
+            across it). A reviewer's `position` decision overrides the class.
         """
         from ._tables import physical_centroids, physical_cov
 
@@ -660,7 +841,26 @@ class Review:
         return out
 
     def _apical_axes(self, name, rule, pe, axes, size) -> np.ndarray:
-        """Unit apical direction per parent object (NaN: undetermined)."""
+        """Unit apical direction per parent object.
+
+        Parameters
+        ----------
+        name : str
+            The child label image, named in messages.
+        rule : mapping
+            Its position rule: `parent` and `apical`.
+        pe : pandas.DataFrame
+            The parent's corrected rows.
+        axes : str
+            The spatial axes' names.
+        size : mapping or None
+            µm per voxel by axis.
+
+        Returns
+        -------
+        np.ndarray
+            `(n_parents, ndim)`; NaN rows where the direction cannot be told.
+        """
         from ._tables import physical_centroids, physical_cov
 
         spec = str(rule.get("apical", ""))
@@ -712,6 +912,19 @@ class Review:
     # -- flags and queues ----------------------------------------------------
 
     def min_overlap(self, child: str, parent: str) -> float:
+        """The overlap below which a child is flagged as outside its parent.
+
+        The rule given, else the one recorded with the store, else 0.5.
+
+        Parameters
+        ----------
+        child, parent : str
+            The two label images.
+
+        Returns
+        -------
+        float
+        """
         for rule in (self._min_overlap, self._recorded_overlap):
             if isinstance(rule, Mapping):
                 value = (rule.get(child) or {}).get(parent)
@@ -722,12 +935,21 @@ class Review:
         return 0.5
 
     def flag_table(self, name: str) -> "pd.DataFrame":
-        """Flagged objects of *name*: `score` and `partner` (-1: none),
-        indexed by label, most suspicious first.
+        """Flagged objects of *name*, most suspicious first.
 
         Cached until the next decision: the panel asks several times per
         key press, and a poor segmentation can flag a large share of
         hundreds of thousands of objects.
+
+        Parameters
+        ----------
+        name : str
+            The label image.
+
+        Returns
+        -------
+        pandas.DataFrame
+            `score` and `partner` (-1: none), indexed by label.
         """
         if name not in self._flag_cache:
             rows = self._flag_rows(name)
@@ -741,14 +963,37 @@ class Review:
         return self._flag_cache[name][0]
 
     def reasons(self, name: str, label: int) -> list[str]:
-        """Why object *label* of *name* is flagged (empty if it isn't)."""
+        """Why object *label* of *name* is flagged (empty if it isn't).
+
+        Parameters
+        ----------
+        name : str
+            The label image.
+        label : int
+            The object.
+
+        Returns
+        -------
+        list of str
+        """
         self.flag_table(name)
         rows = self._flag_cache[name][1]
         return rows.loc[rows["label"] == int(label), "reason"].tolist()
 
     def flags(self, name: str) -> list[Flag]:
-        """Every flagged object of *name* with its reasons, most suspicious
-        first. See :meth:`flag_table` for the fast form."""
+        """Every flagged object of *name*, its reasons, most suspicious first.
+
+        See :meth:`flag_table` for the fast form.
+
+        Parameters
+        ----------
+        name : str
+            The label image.
+
+        Returns
+        -------
+        list of Flag
+        """
         table = self.flag_table(name)
         rows = self._flag_cache[name][1]
         by_label = rows.groupby("label")["reason"].apply(list)
@@ -763,7 +1008,18 @@ class Review:
         ]
 
     def _flag_rows(self, name: str) -> "pd.DataFrame":
-        """One row per (object, reason): label, reason, score, partner."""
+        """One row per (object, reason) of *name*.
+
+        Parameters
+        ----------
+        name : str
+            The label image.
+
+        Returns
+        -------
+        pandas.DataFrame
+            Columns `label`, `reason`, `score`, `partner`.
+        """
         import pandas as pd
 
         eff = self.effective(name)
@@ -771,6 +1027,20 @@ class Review:
         parts = []
 
         def rule_(mask, reasons, scores, partners=None):
+            """Add a flag row for each object *mask* selects.
+
+            Parameters
+            ----------
+            mask : np.ndarray of bool
+                The objects flagged, over the effective table's rows.
+            reasons : iterable of str
+                One reason per flagged object.
+            scores : float or array
+                How suspicious, one value or one per flagged object.
+            partners : array, optional
+                    The other object involved, per flagged object (default
+                none: -1).
+            """
             labels = ids[mask]
             if labels.size:
                 parts.append(
@@ -909,6 +1179,18 @@ class Review:
         whose footprints across the seam coincide: either two neighbours
         pressed together, or one object the tiling cut in two. Worth a look
         either way; from bounding boxes alone, so no voxels are read.
+
+        Parameters
+        ----------
+        name : str
+            The label image.
+        eff : pandas.DataFrame
+            Its effective table.
+
+        Returns
+        -------
+        list of tuple of int
+            `(a, b)` labels.
         """
         from scipy.spatial import cKDTree
 
@@ -948,6 +1230,19 @@ class Review:
                     continue
 
                 def box(idx):
+                    """The bounding boxes of objects *idx* on the seam's face
+                    axes.
+
+                    Parameters
+                    ----------
+                    idx : np.ndarray
+                        Row indices.
+
+                    Returns
+                    -------
+                    tuple of np.ndarray
+                        `(starts, stops)`, float.
+                    """
                     b0 = np.stack([lo[a][idx] for a in others], 1).astype(float)
                     b1 = np.stack([hi[a][idx] for a in others], 1).astype(float)
                     return b0, b1
@@ -986,9 +1281,23 @@ class Review:
     def queue(self, name: str, mode: str = "flagged") -> list[int]:
         """Objects still to review, in review order.
 
-        `flagged`: flagged objects, most suspicious first. `random`: a
-        fixed random order over every object (the error estimate). `all`:
-        every object by id.
+        Parameters
+        ----------
+        name : str
+            The label image.
+        mode : str, optional
+            `flagged` (default): flagged objects, most suspicious first.
+            `random`: a fixed random order over every object (the error
+            estimate). `all`: every object by id.
+
+        Returns
+        -------
+        list of int
+
+        Raises
+        ------
+        ValueError
+            For another mode.
         """
         done = self.decisions[name]
         if mode == "flagged":
@@ -1002,6 +1311,17 @@ class Review:
         raise ValueError(f"queue must be one of {QUEUES}, got {mode!r}")
 
     def random_order(self, name: str) -> list[int]:
+        """Every object of *name* in a fixed random order (the review's seed).
+
+        Parameters
+        ----------
+        name : str
+            The label image.
+
+        Returns
+        -------
+        list of int
+        """
         ids = self.tables[name].index.to_numpy()
         rng = np.random.default_rng(self.seed[name])
         return [int(x) for x in ids[rng.permutation(ids.size)]]
@@ -1012,6 +1332,15 @@ class Review:
         The estimate uses the longest run of the random order that has been
         fully reviewed (from any queue: a decision is the truth about that
         object however it came up), so it stays unbiased.
+
+        Parameters
+        ----------
+        name : str
+            The label image.
+
+        Returns
+        -------
+        dict
         """
         dec = self.decisions[name]
         # A segmentation error: rejected, joined or re-parented. A position
@@ -1054,9 +1383,19 @@ class Review:
     def export(self, out_dir: Union[str, Path], fmt: str = "csv") -> list[Path]:
         """Write every corrected table to *out_dir*, one file per label image.
 
-        `csv` files load straight into napari-chunked-regionprops
-        ("Reload previous results"). `xlsx` falls back to csv for a table
-        longer than Excel allows. `parquet` needs pyarrow.
+        Parameters
+        ----------
+        out_dir : str or Path
+            The directory (created if missing).
+        fmt : str, optional
+            `csv` (default) loads straight into napari-chunked-regionprops
+            ("Reload previous results"). `xlsx` falls back to csv for a table
+            longer than Excel allows. `parquet` needs pyarrow.
+
+        Returns
+        -------
+        list of Path
+            The files written.
         """
         out = Path(out_dir)
         out.mkdir(parents=True, exist_ok=True)
@@ -1095,6 +1434,18 @@ class Review:
         Sheet *parent*: each parent object and how many children it holds.
         Written as two csv files (`<stem>_<name>.csv`) when a sheet would
         exceed Excel's row limit.
+
+        Parameters
+        ----------
+        child, parent : str
+            The two label images, the child related to the parent.
+        path : str or Path
+            The `.xlsx` file.
+
+        Returns
+        -------
+        Path
+            The file written (the first csv when split).
         """
         path = Path(path)
         ce = self.effective(child)
@@ -1154,12 +1505,25 @@ class Review:
     def write_reviewed_labels(
         self, name: str, *, suffix: str = "_reviewed"
     ) -> str:
-        """Write `labels/<name><suffix>`: the labels with the decisions
-        applied to the voxels (rejected objects erased, merged objects one
-        id), plus its corrected table.
+        """Write the labels with the decisions applied to the voxels.
 
-        The corrected tables and workbooks never need this; it is for figures
-        and for tools that read label images only.
+        Rejected objects are erased and merged objects get one id; the
+        corrected table goes with them. The corrected tables and workbooks
+        never need this; it is for figures and for tools that read label images
+        only.
+
+        Parameters
+        ----------
+        name : str
+            The label image.
+        suffix : str, optional
+            Appended to *name* for the new label image (default
+            `"_reviewed"`).
+
+        Returns
+        -------
+        str
+            The new label image's name.
         """
         import dask.array as da
 
@@ -1209,7 +1573,19 @@ class Review:
 
 
 def _remap(values: np.ndarray, mapping: Mapping[int, int]) -> np.ndarray:
-    """*values* with every key of *mapping* replaced by its value."""
+    """*values* with every key of *mapping* replaced by its value.
+
+    Parameters
+    ----------
+    values : np.ndarray
+        int64 ids.
+    mapping : mapping of int to int
+        Old id to new id; ids not in it are kept.
+
+    Returns
+    -------
+    np.ndarray
+    """
     keys = np.fromiter(mapping, np.int64, len(mapping))
     new = np.fromiter(mapping.values(), np.int64, len(mapping))
     order = np.argsort(keys)
@@ -1222,6 +1598,17 @@ def _remap(values: np.ndarray, mapping: Mapping[int, int]) -> np.ndarray:
 
 
 def _range(rng: Any) -> tuple[int, int]:
+    """A count rule as `(min, max)`.
+
+    Parameters
+    ----------
+    rng : int or pair of int
+        One count, or a range.
+
+    Returns
+    -------
+    tuple of int
+    """
     if isinstance(rng, (int, np.integer)):
         return int(rng), int(rng)
     lo, hi = list(rng)
@@ -1229,12 +1616,38 @@ def _range(rng: Any) -> tuple[int, int]:
 
 
 def _nice(name: str) -> str:
-    """`cyto_labels` -> `cyto` for messages."""
+    """`cyto_labels` -> `cyto`, for messages.
+
+    Parameters
+    ----------
+    name : str
+        A label image's name.
+
+    Returns
+    -------
+    str
+    """
     return name[: -len("_labels")] if name.endswith("_labels") else name
 
 
 def _combine(df: "pd.DataFrame", target: "pd.Series") -> "pd.DataFrame":
-    """Collapse rows sharing a *target* id into one, exactly where possible."""
+    """Collapse rows sharing a *target* id into one, exactly where possible.
+
+    Sizes add, centroids and intensities are size-weighted, spreads combine
+    by the parallel-axis theorem, boxes join.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        The rows, indexed by label.
+    target : pandas.Series
+        The id each row ends up with.
+
+    Returns
+    -------
+    pandas.DataFrame
+        One row per target id.
+    """
     import pandas as pd
 
     n = df["area_voxels"].astype(float)

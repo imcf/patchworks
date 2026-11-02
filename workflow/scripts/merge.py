@@ -59,8 +59,19 @@ in_place = bool(manifest.get("in_place", False))
 
 
 def _finished(group: str) -> bool:
-    """Whether the label group is a finished label image (its pyramid
-    registered: the merge got that far)."""
+    """Whether the label group is a finished label image.
+
+    Its pyramid registered: the merge got that far.
+
+    Parameters
+    ----------
+    group : str
+        The label group.
+
+    Returns
+    -------
+    bool
+    """
     try:
         attrs = zarr.open_group(group, mode="r").attrs.asdict()
     except Exception:  # noqa: BLE001 - absent or unreadable: not finished
@@ -71,6 +82,17 @@ def _finished(group: str) -> bool:
 
 
 def write_seam_report(group, record=None) -> None:
+    """Write the seam report (do the tiling's seams show?) next to the labels,
+    and print its summary.
+
+    Parameters
+    ----------
+    group : str
+        The label group.
+    record : dict, optional
+        The provenance record: the seam rates are added and it is written
+        again.
+    """
     # Did the tiling leave marks? Objects ending on seams vs inside tiles.
     if cfg.get("seam_report", True):
         from patchworks import seam_report
@@ -101,6 +123,18 @@ def write_seam_report(group, record=None) -> None:
 
 
 def write_object_table(group, objects: dict) -> None:
+    """Write the label image's object table.
+
+    From the tiles' sums when no intensities are asked for, else measured.
+    Written after the labels are registered, so relate finds it current.
+
+    Parameters
+    ----------
+    group : str
+        The label group.
+    objects : dict
+        The merge's combined per-tile sums; empty to measure instead.
+    """
     # The object table, written after the labels are registered so relate
     # finds it current. Intensities need the image, so they are measured.
     if cfg.get("object_table", True):
@@ -123,8 +157,20 @@ def write_object_table(group, objects: dict) -> None:
 
 
 def finish(group, record=None, objects=None) -> None:
-    """Everything after the labels are registered; the scratch store is
-    removed last, so a merge stopped before the end can simply be rerun."""
+    """Everything after the labels are registered.
+
+    The scratch store is removed last, so a merge stopped before the end can
+    simply be rerun.
+
+    Parameters
+    ----------
+    group : str
+        The label group.
+    record : dict, optional
+        The provenance record, for the seam report.
+    objects : dict, optional
+        The merge's combined per-tile sums, for the object table.
+    """
     write_seam_report(group, record)
     write_object_table(group, objects or {})
     shutil.rmtree(parts_path(work_dir, label_name), ignore_errors=True)

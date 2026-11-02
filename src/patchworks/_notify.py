@@ -30,7 +30,21 @@ LOG_TAIL_LINES = 40
 
 
 def log_tail(path: Union[str, Path], lines: int = LOG_TAIL_LINES) -> str:
-    """Return the last *lines* of a log file, or a note if unreadable."""
+    """The last lines of a log file, or a note if it cannot be read.
+
+    Parameters
+    ----------
+    path : str or Path
+        The log file.
+    lines : int, optional
+        How many lines to keep from its end (default `LOG_TAIL_LINES`).
+
+    Returns
+    -------
+    str
+        The lines, joined; a note in parentheses when the file is missing,
+        unreadable or empty.
+    """
     try:
         content = Path(path).read_text(errors="replace").splitlines()
     except OSError as exc:
@@ -131,10 +145,20 @@ def done_message(
     ----------
     targets : iterable of str
         The targets Snakemake was given (empty: the default, the labels).
-    work, image, occupancy : str
-        work_dir, the converted image and the occupancy map's level.
+    work : str
+        The work_dir, named in the mail.
+    image : str
+        The converted image (`image.zarr`): a target inside it means the
+        run converted the image.
+    occupancy : str
+        The occupancy map's level: a target there means the run made it.
     label_name : str
         The segmentation's label name.
+
+    Returns
+    -------
+    tuple of str
+        `(subject, body)`.
 
     Examples
     --------
@@ -209,11 +233,13 @@ def slurm_mail_extra(
     events : sequence of str, optional
         Any of `"start"`, `"finish"`, `"error"`. Defaults to finish and
         error -- a BEGIN mail per job is rarely worth the inbox.
-    attempt, retries : int, optional
-        Which attempt this job is, and how many retries Snakemake makes
-        after a failure (the profile's `retries`). Each attempt is a new
-        SLURM job: "start" mails only for the first, "error" only for the
-        last, so a failure Snakemake retries mails nothing.
+    attempt : int, optional
+        Which attempt this job is (Snakemake's `attempt`, from 1). Each
+        attempt is a new SLURM job: "start" mails only for the first.
+    retries : int, optional
+        How many retries Snakemake makes after a failure (the profile's
+        `retries`): "error" mails only for the last attempt, so a failure
+        Snakemake retries mails nothing.
 
     Returns
     -------

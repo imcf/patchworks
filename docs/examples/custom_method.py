@@ -14,7 +14,18 @@ from patchworks import tile_process
 
 
 def my_fn(tile: np.ndarray) -> np.ndarray:
-    """Gaussian blur → Otsu → connected components → remove small objects."""
+    """Gaussian blur, Otsu, connected components, small objects removed.
+
+    Parameters
+    ----------
+    tile : np.ndarray
+        One tile of the image, as `tile_process` hands it over.
+
+    Returns
+    -------
+    np.ndarray
+        int32 labels of the same shape, 0 for background.
+    """
     # Work on float32 to avoid overflow in gaussian_filter
     img = tile.astype("float32")
 

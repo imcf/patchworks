@@ -26,6 +26,20 @@ def object_f1(a: np.ndarray, b: np.ndarray, iou: float = 0.5) -> float:
     Two objects match when their IoU exceeds *iou* (above 0.5 a match is
     necessarily one-to-one). 1.0 means every object in one has its
     counterpart in the other; background-only images agree perfectly.
+
+    Parameters
+    ----------
+    a, b : np.ndarray
+        The two label images, of the same shape (0 is background). Which is
+        the reference does not matter: the score is symmetric.
+    iou : float, optional
+        The IoU two objects must exceed to count as the same object
+        (default 0.5).
+
+    Returns
+    -------
+    float
+        `2 * matches / (objects in a + objects in b)`, from 0 to 1.
     """
     from ._merge import _pair_stats
 
@@ -45,7 +59,22 @@ def _centre_crop(
     shape: tuple[int, ...], tile: tuple[int, ...], tiles: int
 ) -> tuple[slice, ...]:
     """A crop *tiles* tiles wide per axis (where the image has room), centred
-    on a tile corner so it contains seams on every tiled axis."""
+    on a tile corner so it contains seams on every tiled axis.
+
+    Parameters
+    ----------
+    shape : tuple of int
+        The image's shape.
+    tile : tuple of int
+        The tile shape, one entry per axis of *shape*.
+    tiles : int
+        Tiles per axis the crop spans; fewer where the image is smaller.
+
+    Returns
+    -------
+    tuple of slice
+        The crop, aligned to the tile grid.
+    """
     crop = []
     for n, t in zip(shape, tile):
         want = min(n, tiles * t)

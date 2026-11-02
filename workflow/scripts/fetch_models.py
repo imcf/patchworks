@@ -21,6 +21,11 @@ from run_multi import _config_bases, _resolve  # noqa: E402
 
 
 def main() -> None:
+    """Download the models every config of a run needs, before the jobs start.
+
+    Reads the config's path from the command line; exits non-zero when a
+    model could not be fetched.
+    """
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("config", help="a run config, or a multi config")
     args = parser.parse_args()

@@ -18,7 +18,22 @@ logger = logging.getLogger(__name__)
 
 
 def _crop(region: Sequence[slice], shape: Sequence[int], size: Sequence[int]):
-    """A crop of at most *size* centred in *region*."""
+    """A crop of at most *size* centred in *region*.
+
+    Parameters
+    ----------
+    region : sequence of slice
+        Where to centre it (a tile); open ends run to the image's edge.
+    shape : sequence of int
+        The image's shape.
+    size : sequence of int
+        The crop's largest shape; smaller where *region* is.
+
+    Returns
+    -------
+    tuple of slice
+        The crop.
+    """
     out = []
     for sl, n, s in zip(region, shape, size):
         start, stop = sl.start or 0, n if sl.stop is None else min(sl.stop, n)
@@ -40,11 +55,31 @@ def sample_crops(
 ) -> list[np.ndarray]:
     """Full-resolution crops of one channel, for image-wide statistics.
 
-    *n_samples* crops of *sample_shape* at *level* (the level the tiles are
-    read at: a coarser one averages thin bright structures away), centred in
-    a random subset of *regions* -- e.g. the tiles that will be segmented,
-    so background does not dominate -- or placed at random. The same *seed*
-    gives the same crops, for every channel and every rerun.
+    Parameters
+    ----------
+    store : str or Path
+        The OME-Zarr image.
+    channel : int or None, optional
+        The channel to read (default 0); None for a single-channel image.
+    level : int, optional
+        The pyramid level the tiles are read at (default 0): a coarser one
+        averages thin bright structures away.
+    regions : sequence of sequence of slice, optional
+        Where crops may go -- e.g. the tiles that will be segmented, so
+        background does not dominate. A random subset of them is used, one
+        crop centred in each. None places the crops at random.
+    n_samples : int, optional
+        How many crops (default 48).
+    sample_shape : sequence of int, optional
+        Each crop's shape, for the last axes (default `(16, 256, 256)`).
+    seed : int, optional
+        The random seed: the same one gives the same crops, for every
+        channel and every rerun.
+
+    Returns
+    -------
+    list of np.ndarray
+        The crops.
     """
     from ._io import load_ome_zarr
 
@@ -71,7 +106,18 @@ def sample_crops(
 
 
 def _acquired(crops: Sequence[np.ndarray]) -> np.ndarray:
-    """All voxels of *crops*, without exact zeros (unacquired padding)."""
+    """All voxels of *crops*, without exact zeros (unacquired padding).
+
+    Parameters
+    ----------
+    crops : sequence of np.ndarray
+        The crops from :func:`sample_crops`.
+
+    Returns
+    -------
+    np.ndarray
+        The non-zero values, flattened.
+    """
     values = np.concatenate([np.ravel(c) for c in crops])
     return values[values != 0]
 
@@ -127,8 +173,26 @@ def intensity_range(
 def intensity_stats(
     store: Union[str, Path], channel: Union[int, None] = 0, **sampling
 ) -> tuple[float, float]:
-    """Image-wide mean and standard deviation of one channel, from
-    full-resolution crops (:func:`sample_crops`), exact zeros left out."""
+    """Image-wide mean and standard deviation of one channel.
+
+    From full-resolution crops (:func:`sample_crops`), exact zeros left out.
+
+    Parameters
+    ----------
+    store : str or Path
+        The OME-Zarr image.
+    channel : int or None, optional
+        The channel (default 0); None for a single-channel image.
+    **sampling
+        Passed to :func:`sample_crops`: `level`, `regions`, `n_samples`,
+        `sample_shape`, `seed`.
+
+    Returns
+    -------
+    tuple of float
+        `(mean, std)`; `(0, 1)` when the crops hold nothing, and a std of
+        1 rather than 0.
+    """
     values = _acquired(sample_crops(store, channel, **sampling)).astype(
         "float64"
     )
@@ -150,8 +214,25 @@ def otsu_threshold(
 
     Per tile, Otsu moves with each tile's content -- a tile full of bright
     membrane gets a high cutoff, a dim one a low cutoff -- so a mask made
-    with it changes at every seam. Each crop is smoothed by *sigma* (pixels)
-    first, as the plugins smooth before thresholding.
+    with it changes at every seam.
+
+    Parameters
+    ----------
+    store : str or Path
+        The OME-Zarr image.
+    channel : int or None, optional
+        The channel (default 0); None for a single-channel image.
+    sigma : float or sequence of float, optional
+        Gaussian smoothing of each crop first, in pixels, as the plugins
+        smooth before thresholding (default 0: none).
+    **sampling
+        Passed to :func:`sample_crops`: `level`, `regions`, `n_samples`,
+        `sample_shape`, `seed`.
+
+    Returns
+    -------
+    float
+        The threshold; infinity when the crops hold a single value.
     """
     from scipy import ndimage as ndi
     from skimage.filters import threshold_otsu
@@ -176,6 +257,21 @@ def scale_intensity(
 
     Values outside the range are kept (not clipped), as Cellpose's own
     normalisation does.
+
+    Parameters
+    ----------
+    block : np.ndarray
+        The tile.
+    ranges : sequence of (float, float)
+        `(low, high)` per channel; only the first is used without a
+        channel axis.
+    channel_axis : int or None, optional
+        The axis of *block* holding channels; None for one channel.
+
+    Returns
+    -------
+    np.ndarray
+        The scaled tile, float32, of the same shape.
     """
     out = np.asarray(block, dtype=np.float32)
     if channel_axis is None:

@@ -314,6 +314,16 @@ def _group_zarr_format(group_or_path) -> int:
     groups in particular are written by a later call (the merge's
     `register_labels`) than the image was. `ngff_version` therefore
     decides the format only when there is no store yet.
+
+    Parameters
+    ----------
+    group_or_path : zarr.Group, str or Path
+        The store's group, or its path; it may not exist yet.
+
+    Returns
+    -------
+    int
+        2 or 3.
     """
     try:
         if isinstance(group_or_path, (str, Path)):
@@ -333,6 +343,16 @@ def _ngff_version_for(group_or_path) -> str:
     Writing one store's arrays in v2 and its metadata in the 0.5 layout would
     describe a store that does not exist, so both follow the same source of
     truth -- the store -- and the requested version only decides a new one.
+
+    Parameters
+    ----------
+    group_or_path : zarr.Group, str or Path
+        The store's group, or its path; it may not exist yet.
+
+    Returns
+    -------
+    str
+        `"0.4"` or `"0.5"`.
     """
     fmt = _group_zarr_format(group_or_path)
     requested = ngff_version()
@@ -348,6 +368,17 @@ def _open_group(path, mode: str = "a") -> "zarr.Group":
     existing store keeps its own format, which is what re-opening one for
     `labels/` has to do. Passing it unconditionally would make zarr refuse
     to reopen a v2 store on a 0.5 write, so it is passed only on creation.
+
+    Parameters
+    ----------
+    path : str or Path
+        The group.
+    mode : str, optional
+        zarr's mode (default `"a"`).
+
+    Returns
+    -------
+    zarr.Group
     """
     path = str(path)
     kwargs = {}
@@ -361,6 +392,15 @@ def _store_exists(path: str) -> bool:
 
     A local check on a URL always says no, which would re-open an existing
     remote NGFF 0.4 (zarr v2) store as v3.
+
+    Parameters
+    ----------
+    path : str
+        A local path or a URL.
+
+    Returns
+    -------
+    bool
     """
     if not is_remote(path):
         # The metadata file, not the directory, which Snakemake creates empty.
@@ -387,6 +427,16 @@ def _writing_ngff(requested: Union[str, None]):
     into register_labels into add_pyramid -- each with its own `"auto"`
     default, and without inheritance the inner call would silently drag the
     store back to 0.5 halfway through a 0.4 write.
+
+    Parameters
+    ----------
+    requested : str or None
+        `"0.4"`, `"0.5"`, or `"auto"`/None.
+
+    Yields
+    ------
+    str
+        The version in force.
     """
     current = _ngff_target.get()
     if requested in (None, "auto") and current is not None:
@@ -431,6 +481,13 @@ def write_ngff_attrs(group, **entries) -> None:
     they go to the top level (0.4). Merging matters because several keys are
     written at different times onto the same group -- `multiscales` by the
     pyramid, then `image-label` when the labels are registered.
+
+    Parameters
+    ----------
+    group : zarr.Group
+        The group to write to.
+    **entries
+        The NGFF keys and their values, e.g. `multiscales=[...]`.
     """
     version = _ngff_version_for(group)
     if _NGFF_ZARR_FORMAT[version] == 2:
@@ -449,8 +506,18 @@ _CHANNEL_COLORS = ("00FF00", "FF00FF", "00FFFF", "FFFF00", "FFFFFF", "FF0000")
 
 
 def channel_names(store: Union[str, Path]) -> "list[str] | None":
-    """The channels' names, from the store's `omero` metadata; None when
-    it has none."""
+    """The channels' names, from the store's `omero` metadata.
+
+    Parameters
+    ----------
+    store : str or Path
+        The OME-Zarr image (or a path into a bundle).
+
+    Returns
+    -------
+    list of str or None
+        None when it has none, or some are unnamed.
+    """
     from .._io import open_group_any
 
     try:
@@ -467,8 +534,22 @@ def write_channel_names(
     """Name the image's channels (NGFF `omero` metadata), in place.
 
     napari, Fiji/MoBIE and other OME-Zarr readers show these names instead
-    of channel numbers. Raises ValueError when *names* does not match the
-    channel axis.
+    of channel numbers.
+
+    Parameters
+    ----------
+    store : str or Path
+        The OME-Zarr image, writable.
+    names : list of str
+        One name per channel, in order.
+    colors : list of str, optional
+        One hex colour per channel (`"00FF00"`); default the colour
+        already recorded, else a fixed palette.
+
+    Raises
+    ------
+    ValueError
+        When *names* does not match the channel axis.
     """
     group = _open_group(str(store), mode="r+")
     meta = read_ngff_attr(group.attrs, "multiscales")[0]
@@ -508,8 +589,22 @@ def write_channel_names(
 def source_channel_names(
     source: Union[str, Path], scene: int = 0
 ) -> "list[str] | None":
-    """The channels' names in an image file (CZI, LIF, ND2, OME-TIFF, ...
-    through bioio; Imaris; OME-Zarr), or None when it gives none."""
+    """The channels' names in an image file.
+
+    CZI, LIF, ND2, OME-TIFF, ... through bioio; Imaris; OME-Zarr.
+
+    Parameters
+    ----------
+    source : str or Path
+        The image file.
+    scene : int, optional
+        The scene (series) of a multi-scene file (default 0).
+
+    Returns
+    -------
+    list of str or None
+        None when it gives none.
+    """
     path = str(source)
     try:
         if path.endswith(".zarr") or ".zarr.zip" in path:
@@ -542,7 +637,18 @@ def source_channel_names(
 
 
 def _ome_channel_names(xml: str) -> "list[str]":
-    """The Channel names of an OME-XML document's first Image."""
+    """The Channel names of an OME-XML document's first Image.
+
+    Parameters
+    ----------
+    xml : str
+        The OME-XML.
+
+    Returns
+    -------
+    list of str
+        Empty when it cannot be parsed; `""` for an unnamed channel.
+    """
     import xml.etree.ElementTree as ET
 
     try:
@@ -558,8 +664,19 @@ def _ome_channel_names(xml: str) -> "list[str]":
 
 
 def _tiff_channel_name(path: str) -> "str | None":
-    """One single-channel TIFF's channel name: OME-XML, ImageJ's Labels,
-    or Micro-Manager's metadata."""
+    """One single-channel TIFF's channel name.
+
+    From its OME-XML, ImageJ's Labels, or Micro-Manager's metadata.
+
+    Parameters
+    ----------
+    path : str
+        The TIFF file.
+
+    Returns
+    -------
+    str or None
+    """
     import tifffile
 
     with tifffile.TiffFile(path) as tif:
@@ -587,7 +704,19 @@ def tiff_sequence_channel_names(
     From a companion OME-XML in the folder (`*.ome.xml`,
     `*.companion.ome`) naming every channel, else from each channel's
     first file (its OME-XML, ImageJ `Labels` or Micro-Manager metadata).
-    None when the files do not name every channel.
+
+    Parameters
+    ----------
+    pattern : str
+        A glob matching the files, e.g. `"folder/*.tif"`.
+    sequence_pattern : str
+        The regular expression that reads each file's indices from its name;
+        it must have a `(?P<C>...)` group for the channel.
+
+    Returns
+    -------
+    list of str or None
+        None when the files do not name every channel.
     """
     import glob
     import re
@@ -639,7 +768,19 @@ def _name_channels_from(
     scene: int = 0,
     sequence_pattern: "str | None" = None,
 ) -> None:
-    """Carry the source file's channel names into the new store."""
+    """Carry the source file's channel names into the new store.
+
+    Parameters
+    ----------
+    source : str, Path or array
+        What was converted; an array has no names.
+    out : str
+        The new store.
+    scene : int, optional
+        The scene converted (default 0).
+    sequence_pattern : str, optional
+        For a folder of TIFFs, the pattern reading each file's indices.
+    """
     if not isinstance(source, (str, Path)):
         return
     names = (
@@ -782,9 +923,24 @@ def _level_chunks(
     with nothing shared between tasks.
 
     The floor can override that at deep levels, where `ceil(src / stride)`
-    falls below it — an output chunk then covers a few source chunks instead
+    falls below it -- an output chunk then covers a few source chunks instead
     of one. Still bounded by a small constant, which is the property that
     matters; those levels are a fraction of the volume anyway.
+
+    Parameters
+    ----------
+    src_chunks : tuple of int
+        The level below's chunks.
+    strides : tuple of int
+        Per-axis downsampling factor.
+    axes : str
+        One letter per axis: the floor applies to y and x.
+    level_shape : tuple of int
+        The new level's shape, which bounds its chunks.
+
+    Returns
+    -------
+    tuple of int
     """
     out = []
     for c, st, a, s in zip(src_chunks, strides, axes, level_shape):
@@ -802,7 +958,25 @@ def _create_level_array(
     chunks: tuple[int, ...],
     dtype,
 ) -> "zarr.Array":
-    """Create (replacing any existing) a pyramid level array in *group*."""
+    """Create (replacing any existing) a pyramid level array in *group*.
+
+    Parameters
+    ----------
+    group : zarr.Group
+        The image or label group.
+    name : str
+        The level's path, e.g. `"1"`.
+    shape : tuple of int
+        Its shape.
+    chunks : tuple of int
+        Its chunks.
+    dtype : dtype-like
+        Its dtype.
+
+    Returns
+    -------
+    zarr.Array
+    """
     if name in group:
         del group[name]
     kwargs = zarr_compressor_kwargs(_group_zarr_format(group))
@@ -816,11 +990,38 @@ _DOWNSAMPLE_METHODS = ("mean", "mode", "nearest")
 
 
 def _compression_scope(spec: Union[str, None]):
-    """`compression(spec)`, or a no-op for None (keep the active codec)."""
+    """`compression(spec)`, or a no-op for None (keep the active codec).
+
+    Parameters
+    ----------
+    spec : str or None
+        A codec, as :func:`patchworks.compression` takes it.
+
+    Returns
+    -------
+    contextmanager
+    """
     return _nullcontext() if spec is None else _compression(spec)
 
 
 def _check_downsample(method: str) -> str:
+    """Validate a downsampling method.
+
+    Parameters
+    ----------
+    method : str
+        `"mean"`, `"mode"` or `"nearest"`.
+
+    Returns
+    -------
+    str
+        *method*.
+
+    Raises
+    ------
+    ValueError
+        For anything else.
+    """
     if method not in _DOWNSAMPLE_METHODS:
         raise ValueError(
             f"downsample must be one of {_DOWNSAMPLE_METHODS}, got {method!r}"
@@ -886,6 +1087,17 @@ def _block_views(region: np.ndarray, strides: tuple[int, ...]) -> list:
     `views[k][i]` is the k-th voxel of output voxel i's block. Plain
     slicing, no copy: summing or comparing these is far cheaper than
     reducing over the small block axes of a reshaped array.
+
+    Parameters
+    ----------
+    region : np.ndarray
+        The source region.
+    strides : tuple of int
+        The block shape.
+
+    Returns
+    -------
+    list of np.ndarray
     """
     return [
         region[tuple(slice(o, None, st) for o, st in zip(offs, strides))]
@@ -901,6 +1113,18 @@ def _block_mean_whole(
     The common case -- every chunk but the image's last. Integers are summed
     exactly and rounded half-to-even, as `np.rint` of the float mean
     would; a power-of-two block (2x2) divides by shifting.
+
+    Parameters
+    ----------
+    region : np.ndarray
+        The source region, a whole number of blocks on every axis.
+    strides : tuple of int
+        The block shape.
+
+    Returns
+    -------
+    np.ndarray
+        The means, in *region*'s dtype.
     """
     views = _block_views(region, strides)
     count = len(views)
@@ -931,6 +1155,17 @@ def _block_mode(region: np.ndarray, strides: tuple[int, ...]) -> np.ndarray:
 
     Ties go to the first voxel in block order, so the result is
     deterministic. Edge blocks are padded with background, which never wins.
+
+    Parameters
+    ----------
+    region : np.ndarray
+        The source labels.
+    strides : tuple of int
+        The block shape.
+
+    Returns
+    -------
+    np.ndarray
     """
     pads = [(0, (-n) % st) for n, st in zip(region.shape, strides)]
     padded = np.pad(region, pads) if any(p for _, p in pads) else region
@@ -985,10 +1220,21 @@ def _stream_strided_level(
     n_workers : int
         Threads used for the copy. zarr's codecs release the GIL, so threads
         are enough and avoid pickling a worker payload.
+    label : str, optional
+        What is written, named in the progress lines.
+    progress : bool, optional
+        Log progress (default True).
     """
     grid = [-(-s // c) for s, c in zip(dst.shape, dst.chunks)]
 
     def _one(idx: tuple[int, ...]) -> None:
+        """Downsample and write one output chunk.
+
+        Parameters
+        ----------
+        idx : tuple of int
+            The output chunk's index on each axis.
+        """
         out_sl = tuple(
             slice(i * c, min((i + 1) * c, s))
             for i, c, s in zip(idx, dst.chunks, dst.shape)
@@ -1005,6 +1251,13 @@ def _stream_strided_level(
     last = started
 
     def _tick(done: int) -> None:
+        """Log progress at most every `_PROGRESS_INTERVAL_S`.
+
+        Parameters
+        ----------
+        done : int
+            Chunks written so far.
+        """
         nonlocal last
         now = _time.monotonic()
         if progress and now - last >= _PROGRESS_INTERVAL_S:
@@ -1045,6 +1298,21 @@ def _stream_sharded_level(
     0, which is also what downsampling zeros gives. Neither decimation nor
     a block mean or mode needs a halo, and every region starts on a stride
     boundary, so the result is that of downsampling the whole level at once.
+
+    Parameters
+    ----------
+    src : zarr.Array
+        The level below.
+    dst : zarr.Array
+        The level to write, already created.
+    strides : tuple of int
+        Per-axis downsampling factor.
+    label : str, optional
+        What is written, named in the progress lines.
+    progress : bool, optional
+        Log progress (default True).
+    method : str, optional
+        `"nearest"`, `"mean"` or `"mode"`; see :func:`_downsample`.
     """
     from concurrent.futures import Future
 
@@ -1068,6 +1336,18 @@ def _stream_sharded_level(
     )
 
     def _chunk(out_sl: tuple[slice, ...]) -> "np.ndarray | None":
+        """One output chunk, downsampled from its source region.
+
+        Parameters
+        ----------
+        out_sl : tuple of slice
+            The chunk's region in *dst*.
+
+        Returns
+        -------
+        np.ndarray or None
+            None when the source region is all zero.
+        """
         src_sl = tuple(
             slice(o.start * st, min(o.stop * st, s))
             for o, st, s in zip(out_sl, strides, src.shape)
@@ -1156,6 +1436,15 @@ def _warn_if_many_chunks(
     and fine chunks mean many files. Sharding packs them into far fewer
     without changing the chunking, so the fix is cheap -- but only if someone
     notices before the store is written.
+
+    Parameters
+    ----------
+    shape : tuple of int
+        The level's shape.
+    chunks : tuple of int
+        Its chunks.
+    shard : bool or tuple of int
+        The sharding asked for: with any, nothing is said.
     """
     if shard:
         return
@@ -1179,11 +1468,19 @@ def _bounded_scheduler(arr: da.Array):
     peak memory tracks the *input* granularity, not the output's. A folder of
     stitched TIFFs gives one chunk per file -- gigabytes each -- and the
     default worker count is the machine's core count, so 32 threads x a 3.6 GB
-    plane is over 100 GB before anything is written.
+    plane is over 100 GB before anything is written. Sizing from the source
+    chunk against the job's real budget keeps that bounded.
 
-    Sizing from the source chunk against the job's real budget keeps that
-    bounded. Returns a context manager; a no-op when a distributed client is
-    driving, since it schedules with its own memory awareness.
+    Parameters
+    ----------
+    arr : dask.array.Array
+        The array about to be written.
+
+    Returns
+    -------
+    contextmanager
+        A no-op when a distributed client is driving, since it schedules
+        with its own memory awareness.
     """
     import dask
 
@@ -1206,7 +1503,19 @@ def _bounded_scheduler(arr: da.Array):
 
 
 def _progress_ctx(progress: bool, label: str):
-    """Progress context for a long dask write; see patchworks._progress."""
+    """Progress context for a long dask write; see `patchworks._progress`.
+
+    Parameters
+    ----------
+    progress : bool
+        False gives a no-op.
+    label : str
+        What is written, named in the log.
+
+    Returns
+    -------
+    contextmanager
+    """
     return dask_progress(label, progress)
 
 
@@ -1224,8 +1533,25 @@ def _slab_starts(
     """Where each slab starts along the leading (non-y/x) axes.
 
     A slab is whole write blocks deep (no two slabs touch one chunk or
-    shard), and holds as many source chunks as fit in the job's memory,
-    counting *copies* of each (default :data:`_SOURCE_COPIES`).
+    shard), and holds as many source chunks as fit in the job's memory.
+
+    Parameters
+    ----------
+    arr : dask.array.Array
+        The source.
+    block : tuple
+        The write block (a chunk, or a shard): slabs are whole blocks deep.
+    source_nbytes : int
+        One source chunk's memory.
+    copies : int, optional
+        How many copies of each source chunk to count (default
+        :data:`_SOURCE_COPIES`).
+
+    Returns
+    -------
+    tuple
+        `(starts, step)`: each slab's start on every leading axis, and the
+        slab's depth on each.
     """
     from .._chunks import _get_available_memory
 
@@ -1257,6 +1583,21 @@ def _store_in_slabs(
     stitched plane per chunk (3.6 GB), the planes in flight -- not the
     worker count -- set the peak, and a 64 or 128 GB job was OOM-killed.
     Writing slab by slab bounds them by what fits in memory.
+
+    Parameters
+    ----------
+    arr : dask.array.Array
+        The source.
+    target : zarr.Array
+        The level to write, already created.
+    block : tuple
+        Its write block (a chunk, or a shard).
+    source_nbytes : int
+        One source chunk's memory.
+    label : str
+        What is written, named in the progress lines.
+    progress : bool
+        Log progress.
     """
     starts, step = _slab_starts(arr, block, source_nbytes)
     lead = arr.ndim - 2
@@ -1553,6 +1894,23 @@ def _level_translation(
     first `f` voxels (`f = stride**level`), so its centre is `(f - 1) / 2`
     base voxels further in; without that offset, labels segmented at an
     averaged level would sit up to half a coarse voxel off the image.
+
+    Parameters
+    ----------
+    base_scale : list of float
+        Level 0's physical voxel size per axis.
+    base_translation : list of float or None
+        Level 0's physical offset per axis (None: 0).
+    strides : tuple of int
+        Per-level downsampling factor per axis.
+    level : int
+        The level.
+    downsample : str
+        `"nearest"`, `"mean"` or `"mode"`.
+
+    Returns
+    -------
+    list of float
     """
     base_t = list(base_translation or [0.0] * len(base_scale))
     if downsample == "nearest":
@@ -1566,7 +1924,21 @@ def _level_translation(
 def _level_shapes(
     shape: tuple[int, ...], strides: tuple[int, ...], n_levels: int
 ) -> list[tuple[int, ...]]:
-    """Each level's shape, stopping where :func:`_write_pyramid` does."""
+    """Each level's shape, stopping where :func:`_write_pyramid` does.
+
+    Parameters
+    ----------
+    shape : tuple of int
+        Level 0's shape.
+    strides : tuple of int
+        Per-level downsampling factor per axis.
+    n_levels : int
+        The most levels, level 0 included.
+
+    Returns
+    -------
+    list of tuple of int
+    """
     shapes = [tuple(shape)]
     for i in range(1, n_levels):
         nxt = tuple(-(-s // st) for s, st in zip(shapes[-1], strides))
@@ -1585,6 +1957,21 @@ def _downsample_bands(
     Only y and x are strided, and a band starts on a stride boundary, so
     each output voxel comes from the same input block as in one call: the
     result is identical, computed on every core.
+
+    Parameters
+    ----------
+    region : np.ndarray
+        The source region.
+    strides : tuple of int
+        Per-axis downsampling factor.
+    method : str
+        `"nearest"`, `"mean"` or `"mode"`.
+    workers : int
+        Threads; the region is cut into about four bands per thread.
+
+    Returns
+    -------
+    np.ndarray
     """
     ax = region.ndim - 2
     st = strides[ax]
@@ -1595,6 +1982,17 @@ def _downsample_bands(
         return _downsample(region, strides, method)
 
     def one(start: int) -> np.ndarray:
+        """Downsample one band.
+
+        Parameters
+        ----------
+        start : int
+            The band's first row (y).
+
+        Returns
+        -------
+        np.ndarray
+        """
         sl = [slice(None)] * region.ndim
         sl[ax] = slice(start, start + band)
         return _downsample(region[tuple(sl)], strides, method)
@@ -1613,7 +2011,28 @@ def _write_slab(
     workers: int,
     lead: int,
 ) -> None:
-    """Write one slab into every level, each downsampled from the last."""
+    """Write one slab into every level, each downsampled from the last.
+
+    Parameters
+    ----------
+    data : np.ndarray
+        The slab at full resolution.
+    region : tuple of slice
+        Where it sits in level 0 (the same leading-axis region in every
+        level).
+    targets : list of zarr.Array
+        The levels, finest first.
+    blocks : list of tuple
+        Each level's write block.
+    strides : tuple of int
+        Per-level downsampling factor per axis.
+    downsample : str
+        `"nearest"`, `"mean"` or `"mode"`.
+    workers : int
+        Threads for the downsampling.
+    lead : int
+        How many leading (non-y/x) axes there are.
+    """
     for k, (target, block) in enumerate(zip(targets, blocks)):
         if k:
             data = _downsample_bands(data, strides, downsample, workers)
@@ -1638,8 +2057,7 @@ def _write_pyramid_one_pass(
     downsample: str,
     base_translation: "list[float] | None",
 ) -> Union[list[dict], None]:
-    """Every level from one read of the source, slab by slab; or `None`
-    where that does not apply (the levels are then written one by one).
+    """Every level from one read of the source, slab by slab.
 
     For a source of huge chunks (a stitched plane per TIFF): each level is
     otherwise made by reading the one below back from disk -- level 1
@@ -1651,6 +2069,41 @@ def _write_pyramid_one_pass(
 
     Every level is chunked (or sharded) one block deep along the leading
     axes, as level 0 is, so that each slab writes whole chunks.
+
+    Parameters
+    ----------
+    arr : dask.array.Array
+        Full-resolution array.
+    axes : str
+        One letter per axis.
+    group_path : str
+        Path of the zarr group to write into.
+    base_chunks : tuple of int
+        The source's chunks: one pass applies only to large ones.
+    n_levels : int
+        Maximum number of levels including full resolution.
+    strides : tuple of int
+        Per-level downsampling factor per axis (y and x only).
+    chunks : tuple of int or None
+        Chunk shape, or a bounded default.
+    base_scale : list of float
+        Level-0 physical scale per axis.
+    base_name : str
+        Component name of level 0.
+    shard : bool or tuple of int
+        Sharding request (see :func:`_shard_for`).
+    progress : bool
+        Log progress.
+    downsample : str
+        `"mean"` (images) or `"nearest"`/`"mode"` (labels).
+    base_translation : list of float or None
+        Level-0 physical offset per axis, carried to every level.
+
+    Returns
+    -------
+    list of dict or None
+        One NGFF dataset entry per written level; None where one pass does
+        not apply (the levels are then written one by one).
     """
     source_nbytes = int(np.prod(arr.chunksize)) * arr.dtype.itemsize
     lead = arr.ndim - 2
@@ -1726,6 +2179,17 @@ def _write_pyramid_one_pass(
     started = _time.monotonic()
 
     def _region(start) -> tuple:
+        """A slab's region in level 0.
+
+        Parameters
+        ----------
+        start : tuple of int
+            The slab's start on each leading axis.
+
+        Returns
+        -------
+        tuple of slice
+        """
         return (
             tuple(
                 slice(s, min(s + st, arr.shape[i]))
@@ -1735,6 +2199,17 @@ def _write_pyramid_one_pass(
         )
 
     def _read(start) -> np.ndarray:
+        """Read one slab of the source.
+
+        Parameters
+        ----------
+        start : tuple of int
+            The slab's start on each leading axis.
+
+        Returns
+        -------
+        np.ndarray
+        """
         return np.asarray(arr[_region(start)].compute())
 
     if read_ahead:
@@ -2046,6 +2521,20 @@ def _set_dimension_names(group, paths, axes: str) -> None:
     (validators reject a store without them). Set here, where the axes are
     written, rather than at each array's creation: a label image's level 0
     is created by the segment jobs or the merge, which know nothing of axes.
+
+    Parameters
+    ----------
+    group : zarr.Group
+        The image or label group.
+    paths : iterable of str
+        Its level arrays.
+    axes : str
+        One letter per axis.
+
+    Raises
+    ------
+    ValueError
+        When an array's number of axes is not the metadata's.
     """
     import dataclasses
 
@@ -2140,6 +2629,18 @@ def read_translation(store: Union[str, Path], level: int = 0) -> PixelSize:
 
 
 def _multiscale_meta(store: Union[str, Path]) -> "dict | None":
+    """The first `multiscales` entry of a store.
+
+    Parameters
+    ----------
+    store : str or Path
+        An image or label group (or a path into a bundle).
+
+    Returns
+    -------
+    dict or None
+        None without one.
+    """
     try:
         # open_group_any, not zarr.open_group: the store may be a .zip
         # bundle, possibly with a group path after it.
@@ -2935,12 +3436,12 @@ def add_pyramid(
     translation : dict, optional
         Physical offset `{axis: offset}` of the base level's first voxel.
         `None` keeps whatever the store already records (zero if nothing).
-
     compression : str, optional
         Codec for the arrays written (`"zstd"`, `"zstd:3"`, `"blosc"`,
         `"blosc:lz4"`, `"none"`, ...; see
         :func:`patchworks.compression`). `None` (default) uses the active
         setting, zstd level 1 unless changed.
+
     Returns
     -------
     str
@@ -3018,8 +3519,21 @@ def _label_level_count(
 
     "the JSON array associated with the datasets key MUST have the same
     number of entries (scale levels) as the original unlabeled image" (the
-    OME-Zarr spec, image-label section). *requested* only applies when the
-    image has no multiscales to follow.
+    OME-Zarr spec, image-label section).
+
+    Parameters
+    ----------
+    store : str
+        The OME-Zarr image.
+    name : str
+        The label image.
+    requested : int or None
+        The count asked for; it only applies when the image has no
+        multiscales to follow (default then 5).
+
+    Returns
+    -------
+    int
     """
     try:
         multiscales = read_ngff_attr(
@@ -3056,6 +3570,11 @@ def fix_ngff_metadata(store: Union[str, Path]) -> list[str]:
       One with fewer is reported, not changed: that needs levels computed
       (re-register it with :func:`register_labels`).
 
+    Parameters
+    ----------
+    store : str or Path
+        The OME-Zarr image, writable.
+
     Returns
     -------
     list of str
@@ -3066,6 +3585,20 @@ def fix_ngff_metadata(store: Union[str, Path]) -> list[str]:
     done: list[str] = []
 
     def fix(group, where: str) -> int:
+        """Set the missing `dimension_names` of one group's levels.
+
+        Parameters
+        ----------
+        group : zarr.Group
+            The image or a label group.
+        where : str
+            Its name in the report.
+
+        Returns
+        -------
+        int
+            Its number of levels; 0 without multiscales.
+        """
         ms = read_ngff_attr(group.attrs, "multiscales") or []
         if not ms:
             return 0

@@ -25,7 +25,24 @@ REPEATS = 3
 
 
 def _blob_labels(shape, n, seed=0, r=4):
-    """Many small blobs, labelled per tile as a stage store holds them."""
+    """Many small blobs, labelled as one image.
+
+    Parameters
+    ----------
+    shape : tuple of int
+        The image's shape.
+    n : int
+        How many blobs (overlapping ones merge).
+    seed : int, optional
+        The random seed (default 0).
+    r : int, optional
+        Each blob's half-width, in voxels (default 4), less on a thin axis.
+
+    Returns
+    -------
+    np.ndarray
+        int32 labels.
+    """
     from scipy import ndimage as ndi
 
     rng = np.random.default_rng(seed)
@@ -38,7 +55,24 @@ def _blob_labels(shape, n, seed=0, r=4):
 
 
 def _staged(tmp, shape=(8, 1024, 1024), tile=(8, 256, 256), n=4000):
-    """A stage store: dense 1..n ids per tile, plus each tile's count."""
+    """A stage store: dense 1..n ids per tile, plus each tile's count.
+
+    Parameters
+    ----------
+    tmp : Path
+        The directory to write it in.
+    shape : tuple of int, optional
+        The image's shape.
+    tile : tuple of int, optional
+        The tile shape (the store's chunks).
+    n : int, optional
+        How many blobs.
+
+    Returns
+    -------
+    tuple
+        `(path, counts)`: the store, and each tile's label count.
+    """
     lab = _blob_labels(shape, n)
     path = str(tmp / "stage.zarr")
     arr = zarr.open_group(path, mode="w").create_array(
@@ -62,6 +96,18 @@ def _staged(tmp, shape=(8, 1024, 1024), tile=(8, 256, 256), n=4000):
 
 
 def case_merge_touch(tmp):
+    """The merge of touching labels, with per-tile counts.
+
+    Parameters
+    ----------
+    tmp : Path
+        An empty temporary directory for the case's stores.
+
+    Returns
+    -------
+    float
+        The seconds the timed step took.
+    """
     from patchworks._merge import zarr_native_merge
 
     path, counts = _staged(tmp)
@@ -78,7 +124,18 @@ def case_merge_touch(tmp):
 
 
 def case_merge_renumber(tmp):
-    """The merge without per-tile counts: includes the renumber pass."""
+    """The merge without per-tile counts: includes the renumber pass.
+
+    Parameters
+    ----------
+    tmp : Path
+        An empty temporary directory for the case's stores.
+
+    Returns
+    -------
+    float
+        The seconds the timed step took.
+    """
     from patchworks._merge import zarr_native_merge
 
     path, _ = _staged(tmp)
@@ -90,6 +147,18 @@ def case_merge_renumber(tmp):
 
 
 def case_image_pyramid(tmp):
+    """Converting a 16 x 1024 x 1024 image with a 5-level pyramid.
+
+    Parameters
+    ----------
+    tmp : Path
+        An empty temporary directory for the case's stores.
+
+    Returns
+    -------
+    float
+        The seconds the timed step took.
+    """
     from patchworks.plugins.ome_zarr import to_ome_zarr
 
     img = np.random.default_rng(0).integers(0, 4000, (16, 1024, 1024))
@@ -100,6 +169,18 @@ def case_image_pyramid(tmp):
 
 
 def case_label_pyramid(tmp):
+    """A 5-level label pyramid (mode downsampling).
+
+    Parameters
+    ----------
+    tmp : Path
+        An empty temporary directory for the case's stores.
+
+    Returns
+    -------
+    float
+        The seconds the timed step took.
+    """
     from patchworks.plugins.ome_zarr import (
         add_pyramid,
         to_ome_zarr,
@@ -121,6 +202,18 @@ def case_label_pyramid(tmp):
 
 
 def case_filter_by_size(tmp):
+    """Dropping objects under 50 voxels from a label image.
+
+    Parameters
+    ----------
+    tmp : Path
+        An empty temporary directory for the case's stores.
+
+    Returns
+    -------
+    float
+        The seconds the timed step took.
+    """
     from patchworks import filter_labels_by_size
 
     lab = _blob_labels((16, 1024, 1024), 6000)
@@ -135,6 +228,18 @@ def case_filter_by_size(tmp):
 
 
 def case_tile_process(tmp):
+    """A small `tile_process` run with a threshold.
+
+    Parameters
+    ----------
+    tmp : Path
+        An empty temporary directory for the case's stores.
+
+    Returns
+    -------
+    float
+        The seconds the timed step took.
+    """
     import dask.array as da
     from scipy import ndimage as ndi
 
@@ -161,6 +266,13 @@ CASES = {
 
 
 def run() -> dict[str, float | None]:
+    """Run every case `REPEATS` times and keep its best time.
+
+    Returns
+    -------
+    dict
+        `{case: seconds}`; None for a case this version cannot run.
+    """
     results: dict[str, float | None] = {}
     for name, fn in CASES.items():
         times = []

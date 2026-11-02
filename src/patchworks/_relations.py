@@ -24,6 +24,13 @@ def _chunk_pairs(
 ) -> tuple[np.ndarray, np.ndarray]:
     """Overlap rows and *a*-label sizes for one chunk pair.
 
+    Parameters
+    ----------
+    a_block : np.ndarray
+        One chunk of the child labels (*a*).
+    b_block : np.ndarray
+        The same chunk of the parent labels (*b*), of the same shape.
+
     Returns
     -------
     tuple of np.ndarray
@@ -54,10 +61,21 @@ def _chunk_pairs(
 
 def _stored_chunks(arr) -> "set[tuple[int, ...]] | None":
     """Chunk coordinates *arr* has actually written, from one listing of its
-    store; `None` when that cannot be told (a dask array, a sharded one).
+    store.
 
     A chunk never written holds only background, so a child's unwritten
     chunks need neither its read nor its parent's.
+
+    Parameters
+    ----------
+    arr : zarr.Array or dask.array.Array
+        The child labels.
+
+    Returns
+    -------
+    set of tuple of int or None
+        The written chunks' indices; None when that cannot be told (a dask
+        array, a sharded one, an exotic store).
     """
     if not isinstance(arr, zarr.Array) or getattr(arr, "shards", None):
         return None
@@ -67,6 +85,7 @@ def _stored_chunks(arr) -> "set[tuple[int, ...]] | None":
         prefix = f"{arr.path}/" if arr.path else ""
 
         async def _keys():
+            """Every key in the store below the array's path."""
             return {k async for k in arr.store.list_prefix(prefix)}
 
         keys = sync(_keys())
@@ -81,7 +100,19 @@ def _stored_chunks(arr) -> "set[tuple[int, ...]] | None":
 
 
 def _as_source(source, component: str):
-    """A zarr array when *source* is one (or a path to one), else dask."""
+    """A zarr array when *source* is one (or a path to one), else dask.
+
+    Parameters
+    ----------
+    source : str, Path or array
+        A store's path, or an array already open.
+    component : str
+        The array inside the store (a pyramid level), for a path.
+
+    Returns
+    -------
+    zarr.Array or dask.array.Array
+    """
     if isinstance(source, (str, Path)):
         try:
             return zarr.open_array(str(source), path=component, mode="r")
@@ -91,17 +122,53 @@ def _as_source(source, component: str):
 
 
 def _chunk_grid(arr) -> tuple:
+    """The chunking of *arr* in the form its reader takes.
+
+    Parameters
+    ----------
+    arr : zarr.Array or dask.array.Array
+        The array to read chunk by chunk.
+
+    Returns
+    -------
+    tuple
+        A zarr array's chunk shape, or a dask array's chunk sizes per axis.
+    """
     if isinstance(arr, zarr.Array):
         return tuple(int(c) for c in arr.chunks)
     return tuple(tuple(int(x) for x in c) for c in arr.chunks)
 
 
 def _reader(arr, grid):
-    """`read(idx)` returning chunk *idx* of *arr* as numpy."""
+    """A function reading chunk *idx* of *arr* as numpy.
+
+    Parameters
+    ----------
+    arr : zarr.Array or dask.array.Array
+        The array to read.
+    grid : tuple
+        Its chunking, from :func:`_chunk_grid`.
+
+    Returns
+    -------
+    callable
+        `read(idx)`, *idx* a chunk index per axis.
+    """
     if isinstance(arr, zarr.Array):
         shape = arr.shape
 
         def read(idx):
+            """Read zarr chunk *idx*.
+
+            Parameters
+            ----------
+            idx : tuple of int
+                The chunk's index on each axis.
+
+            Returns
+            -------
+            np.ndarray
+            """
             return np.asarray(
                 arr[
                     tuple(
@@ -114,6 +181,17 @@ def _reader(arr, grid):
         return read
 
     def read_block(idx):
+        """Read dask block *idx*.
+
+        Parameters
+        ----------
+        idx : tuple of int
+            The block's index on each axis.
+
+        Returns
+        -------
+        np.ndarray
+        """
         return np.asarray(arr.blocks[idx])
 
     return read_block
@@ -192,6 +270,22 @@ def label_relations_many(
     )
 
     def _one(idx):
+        """The pair counts of every child label image in one chunk.
+
+        The parent's chunk is read once, and only when a child has labels
+        there.
+
+        Parameters
+        ----------
+        idx : tuple of int
+            The chunk's index on each axis.
+
+        Returns
+        -------
+        dict
+            `{child name: (pairs, sizes)}` from :func:`_chunk_pairs`, for
+            the children with labels in this chunk.
+        """
         out = {}
         b_block = None
         for name, read in readers.items():
@@ -245,7 +339,20 @@ def label_relations_many(
 
 
 def _summarise(parts) -> dict[int, dict[str, float]]:
-    """One best match per child label from the chunks' pair counts."""
+    """One best match per child label from the chunks' pair counts.
+
+    Parameters
+    ----------
+    parts : iterable of tuple of np.ndarray
+        `(pairs, sizes)` per chunk, from :func:`_chunk_pairs`.
+
+    Returns
+    -------
+    dict
+        `{a_label: {"match": b_label, "overlap_voxels": int,
+        "overlap_fraction": float}}`: the parent covering most of each
+        child label, ties to the lowest id.
+    """
     rows = [p for p, _ in parts if p.size]
     if not rows:
         return {}

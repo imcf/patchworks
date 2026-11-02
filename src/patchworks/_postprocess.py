@@ -137,6 +137,19 @@ def fill_holes(
 
 
 def _fill_label_holes(labels: np.ndarray) -> np.ndarray:
+    """Fill background enclosed by objects from the nearest object.
+
+    Parameters
+    ----------
+    labels : np.ndarray
+        A label image, 2-D or 3-D. Background touching its edge is outside,
+        not a hole, and stays.
+
+    Returns
+    -------
+    np.ndarray
+        The filled labels; *labels* itself when there is nothing to fill.
+    """
     from scipy import ndimage as ndi
 
     background = labels == 0
@@ -169,6 +182,22 @@ def _run_fill_holes(
     fn: Callable[[np.ndarray], np.ndarray],
     per_plane: bool,
 ) -> np.ndarray:
+    """Run *fn* on a tile, then fill the holes in its labels.
+
+    Parameters
+    ----------
+    block : np.ndarray
+        The tile.
+    fn : callable
+        The segmentation function.
+    per_plane : bool
+        Fill each z plane of a 3-D result on its own, rather than in 3-D.
+
+    Returns
+    -------
+    np.ndarray
+        The labels without enclosed holes.
+    """
     labels = np.asarray(fn(block))
     if per_plane and labels.ndim == 3:
         return np.stack([_fill_label_holes(plane) for plane in labels])
@@ -208,6 +237,23 @@ def open_labels(
 def _run_open(
     block: np.ndarray, fn: Callable[[np.ndarray], np.ndarray], radius: int
 ) -> np.ndarray:
+    """Run *fn* on a tile, then open each object on its own.
+
+    Parameters
+    ----------
+    block : np.ndarray
+        The tile.
+    fn : callable
+        The segmentation function.
+    radius : int
+        The opening's radius in voxels: protrusions thinner than about
+        twice that are cut off. A one-voxel-thick axis gets none.
+
+    Returns
+    -------
+    np.ndarray
+        The opened labels, with the same ids.
+    """
     from scipy import ndimage as ndi
 
     labels = np.asarray(fn(block))
@@ -237,6 +283,16 @@ def typical_volume(labels: np.ndarray) -> float:
 
     A voxel-weighted median: many small fragments barely move it, unlike
     the plain median object size, so it stays the size of a whole object.
+
+    Parameters
+    ----------
+    labels : np.ndarray
+        A label image of non-negative ids.
+
+    Returns
+    -------
+    float
+        The volume in voxels; 0 without objects.
     """
     sizes = np.bincount(np.asarray(labels).ravel())[1:]
     sizes = np.sort(sizes[sizes > 0])
@@ -247,7 +303,19 @@ def typical_volume(labels: np.ndarray) -> float:
 
 
 def _contacts(labels: np.ndarray) -> np.ndarray:
-    """`(a, b, n)` rows: labels a != b, both non-zero, sharing n faces."""
+    """Which labels touch, and over how many voxel faces.
+
+    Parameters
+    ----------
+    labels : np.ndarray
+        A label image.
+
+    Returns
+    -------
+    np.ndarray
+        `(a, b, n)` rows: labels a != b, both non-zero, sharing n faces;
+        each pair appears both ways round.
+    """
     pairs = []
     for ax in range(labels.ndim):
         lo = [slice(None)] * labels.ndim
@@ -275,15 +343,33 @@ def absorb_fragments(
     """Merge small fragments into the object they touch most; drop the rest.
 
     3-D segmentation often breaks a cell into one large piece and slivers
-    beside it, or leaves specks in dim regions. An object smaller than
-    *min_voxels* -- by default *fraction* of :func:`typical_volume` -- joins
-    the neighbour it shares the most surface with (a larger one when it has
+    beside it, or leaves specks in dim regions. A small object joins the
+    neighbour it shares the most surface with (a larger one when it has
     any), so the cell keeps its full volume; one touching nothing is
-    removed. Repeated up to *rounds* times, for fragments touching only
-    other fragments; any small object left after that is removed. Objects
-    touching the array's border are left alone: they may be cells cut by
-    the tile edge, whose size is unknown here.
+    removed. Objects touching the array's border are left alone: they may
+    be cells cut by the tile edge, whose size is unknown here.
 
+    Parameters
+    ----------
+    labels : np.ndarray
+        A label image (one tile).
+    min_voxels : float, optional
+        Objects smaller than this are fragments. Default: *fraction* of
+        :func:`typical_volume`.
+    fraction : float, optional
+        The fragment size as a fraction of the typical object's, when
+        *min_voxels* is not given (default 0.1).
+    rounds : int, optional
+        How many times to merge, for fragments touching only other
+        fragments (default 3); any small object left after that is removed.
+
+    Returns
+    -------
+    np.ndarray
+        The labels, fragments merged or removed.
+
+    Examples
+    --------
     A sliver (2) beside cell 1, a speck (4) between it and cell 3, one
     alone (5), and a small object on the border (6), which is kept:
 
@@ -338,10 +424,23 @@ def absorb_fragments(
 
 
 def fill_enclosed_holes(labels: np.ndarray) -> np.ndarray:
-    """Fill background enclosed by objects, in 3-D and then plane by plane,
-    from the nearest object: holes a voxel-wise mask punched into cells.
-    Background reaching the array's edge stays.
+    """Fill background enclosed by objects, from the nearest object.
 
+    In 3-D and then plane by plane: holes a voxel-wise mask punched into
+    cells. Background reaching the array's edge stays.
+
+    Parameters
+    ----------
+    labels : np.ndarray
+        A label image, 2-D or 3-D.
+
+    Returns
+    -------
+    np.ndarray
+        The filled labels.
+
+    Examples
+    --------
     >>> lab = np.ones((5, 5), int); lab[2, 2] = 0
     >>> int(fill_enclosed_holes(lab)[2, 2])
     1

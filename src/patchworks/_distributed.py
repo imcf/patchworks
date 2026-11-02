@@ -272,9 +272,31 @@ def read_tile(
     overlap: Overlap = 0,
     channel_axis: int | None = None,
 ) -> TileRead:
-    """Read tile *index* of *image* with its halo: the first part of
-    :func:`stage_tile`, separate so a job can read the next tile while the
-    GPU works on this one. Arguments as for :func:`stage_tile`."""
+    """Read tile *index* of *image* with its halo.
+
+    The first part of :func:`stage_tile`, separate so a job can read the
+    next tile while the GPU works on this one.
+
+    Parameters
+    ----------
+    image : array-like
+        The full image (dask/zarr/NumPy), indexable by slices.
+    index : int
+        Tile index into :func:`spatial_tiles`.
+    tile_shape : tuple of int
+        Tile shape (spatial axes only).
+    overlap : int or sequence of int, optional
+        Halo read on every side of the tile: a scalar for every axis, or one
+        width per axis (see :func:`normalize_overlap`).
+    channel_axis : int or None, optional
+        Axis of *image* holding channels: read whole, not tiled. None (the
+        default) means *image* is single-channel.
+
+    Returns
+    -------
+    TileRead
+        The block read and where it sits, for :func:`finish_tile`.
+    """
     shape = tuple(image.shape)
     # The channel axis is carried, not tiled: geometry (tiles, halo, the stage
     # store) stays spatial, so nothing downstream of fn learns about channels.
@@ -308,10 +330,37 @@ def finish_tile(
     parts_dir: Union[str, Path, None] = None,
     fn_name: str = "fn",
 ) -> int:
-    """Trim, renumber and stage what the segmentation returned for *tile*:
-    the last part of :func:`stage_tile` (which see), separate so a job can
-    write one tile while the GPU works on the next. Returns the tile's
-    label count."""
+    """Trim, renumber and stage what the segmentation returned for *tile*.
+
+    The last part of :func:`stage_tile` (which see), separate so a job can
+    write one tile while the GPU works on the next.
+
+    Parameters
+    ----------
+    tile : TileRead
+        The tile as :func:`read_tile` read it.
+    out : array-like
+        The segmentation function's labels for `tile.block`: one per voxel
+        of the tile plus its halo, no channel axis.
+    stage_path : str or Path
+        Stage store created by :func:`create_stage`.
+    component : str, optional
+        Array name inside the stage store.
+    halo_dir : str or Path, optional
+        Also keep the labels in the halo, for IoU stitching (as in
+        :func:`stage_tile`). None keeps nothing.
+    parts_dir : str or Path, optional
+        Also write the tile's per-object sums there, for the object table
+        (as in :func:`stage_tile`). None writes none.
+    fn_name : str, optional
+        The segmentation function's name, for the error when *out* has the
+        wrong shape.
+
+    Returns
+    -------
+    int
+        The tile's label count.
+    """
     index, sl, trims = tile.index, tile.sl, tile.trims
     # What fn owes us back: one label per voxel, channel axis consumed.
     block_spatial = tuple(e.stop - e.start for e in tile.expanded)
@@ -347,6 +396,18 @@ def _save_partial(trimmed, sl, parts_dir, index) -> None:
 
     Through a temporary name and a rename, so a job killed mid-write leaves
     no truncated file for the merge to trust.
+
+    Parameters
+    ----------
+    trimmed : np.ndarray
+        The tile's labels without the halo, numbered `1..n`.
+    sl : tuple of slice
+        The tile's region in the image: the sums' centroids and bounding
+        boxes are in image coordinates.
+    parts_dir : str or Path
+        Where the files go (created if missing).
+    index : int
+        The tile's index, the file's name.
     """
     from ._tables import tile_partial
 
@@ -361,8 +422,20 @@ def _save_partial(trimmed, sl, parts_dir, index) -> None:
 
 
 def _core_lut(core: np.ndarray, max_id: int) -> np.ndarray:
-    """LUT renumbering *core*'s ids to `1..n` (as `relabel_sequential`);
-    ids absent from the core map to 0."""
+    """LUT renumbering *core*'s ids to `1..n` (as `relabel_sequential`).
+
+    Parameters
+    ----------
+    core : np.ndarray
+        The tile's labels without the halo.
+    max_id : int
+        The highest id in the tile plus its halo: the LUT's size.
+
+    Returns
+    -------
+    np.ndarray
+        `lut[old] = new`; ids absent from the core map to 0.
+    """
     ids = np.unique(core)
     ids = ids[ids > 0]
     lut = np.zeros(max(int(max_id), 0) + 1, dtype=np.int64)
@@ -383,6 +456,20 @@ def _save_halo(
     others (corners are left out: a corner neighbour is reached through an
     edge neighbour anyway). Ids follow the core's `1..n` numbering, so the
     merge can offset them exactly like the staged tile.
+
+    Parameters
+    ----------
+    out : np.ndarray
+        The prediction for the tile plus its halo.
+    sel : tuple of slice
+        The tile's core within *out*.
+    trims : list of tuple of int
+        The halo's width `(before, after)` on each axis; a side without
+        one gets no strip.
+    halo_dir : str or Path
+        Where the file goes (created if missing).
+    index : int
+        The tile's index, the file's name.
     """
     out = np.asarray(out)
     if out.size and out.min() < 0:

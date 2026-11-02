@@ -17,6 +17,18 @@ PROVENANCE_KEY = "patchworks"
 
 
 def _version(dist: str) -> str | None:
+    """The installed version of a distribution.
+
+    Parameters
+    ----------
+    dist : str
+        The distribution's name, as pip knows it (`scikit-image`).
+
+    Returns
+    -------
+    str or None
+        Its version, or None when it is not installed.
+    """
     from importlib.metadata import PackageNotFoundError, version
 
     try:
@@ -30,6 +42,17 @@ def provenance(**settings: Any) -> dict[str, Any]:
 
     Anything not JSON-serialisable (a function, a path object) is stored as
     its string form, so the record can always be written as zarr attrs.
+
+    Parameters
+    ----------
+    **settings
+        The run's settings, stored as given under `"settings"`.
+
+    Returns
+    -------
+    dict
+        `{"created", "versions", "python", "settings"}`; `versions`
+        lists only the packages installed.
 
     Examples
     --------
@@ -70,7 +93,15 @@ def provenance(**settings: Any) -> dict[str, Any]:
 
 
 def write_provenance(target: Any, record: dict[str, Any] | None) -> None:
-    """Store *record* in *target*'s attrs (a zarr group or array)."""
+    """Store *record* in *target*'s attrs.
+
+    Parameters
+    ----------
+    target : zarr group or array
+        Where to write it, under `PROVENANCE_KEY`.
+    record : dict or None
+        The record from :func:`provenance`; None or empty writes nothing.
+    """
     if record:
         target.attrs[PROVENANCE_KEY] = record
 

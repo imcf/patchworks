@@ -30,9 +30,12 @@ _BLOSC_CNAMES = ("zstd", "lz4", "lz4hc", "zlib", "blosclz")
 def parse_compression(spec: str) -> tuple[str, str | None, int | None]:
     """Validate a compression spec and split it into its parts.
 
-    Accepted: `"zstd"` / `"zstd:<level>"` (default level 1),
-    `"blosc"` / `"blosc:<cname>"` / `"blosc:<cname>:<level>"` (default
-    `zstd` at level 5, byte-shuffled), and `"none"`.
+    Parameters
+    ----------
+    spec : str
+        `"zstd"` / `"zstd:<level>"` (default level 1), `"blosc"` /
+        `"blosc:<cname>"` / `"blosc:<cname>:<level>"` (default `zstd`
+        at level 5, byte-shuffled), or `"none"`. Case does not matter.
 
     Returns
     -------
@@ -71,7 +74,12 @@ def compression(spec: str):
 
     Covers everything patchworks writes -- stage stores, merged labels,
     pyramid levels -- which is how a whole `tile_process` or merge picks a
-    codec. See :func:`parse_compression` for the accepted specs.
+    codec.
+
+    Parameters
+    ----------
+    spec : str
+        The codec, as :func:`parse_compression` accepts it.
 
     Examples
     --------
@@ -92,6 +100,11 @@ def set_compression(spec: str) -> None:
 
     Prefer :func:`compression` to scope it; this suits a script that writes
     everything with one codec.
+
+    Parameters
+    ----------
+    spec : str
+        The codec, as :func:`parse_compression` accepts it.
     """
     parse_compression(spec)
     _COMPRESSION.set(spec)
@@ -159,7 +172,16 @@ def is_remote(path: Union[str, Path, None]) -> bool:
     input (and as the labels' destination). What must never happen is
     deriving a *local* scratch directory from one with `os.path`: that
     turns `s3://bucket/x.zarr` into a folder called `s3:` in the working
-    directory. `file://` counts as local.
+    directory.
+
+    Parameters
+    ----------
+    path : str, Path or None
+        The path to check; `file://` counts as local, None as not remote.
+
+    Returns
+    -------
+    bool
     """
     text = str(path) if path is not None else ""
     return bool(_URL.match(text)) and not text.startswith("file://")
@@ -173,7 +195,16 @@ _ZIP_PART = re.compile(r"^(.*?\.zip)(?=$|[/\\])(.*)$", re.IGNORECASE)
 def split_zip_path(path: Union[str, Path]) -> "tuple[str, str] | None":
     """Split `bundle.zip/inner/group` into `(archive, inner)`.
 
-    Returns None when no path component ends in `.zip`.
+    Parameters
+    ----------
+    path : str or Path
+        A path that may run into a `.zip` bundle; either slash works.
+
+    Returns
+    -------
+    tuple of str or None
+        The archive and the path inside it (with `/`), or None when no
+        path component ends in `.zip`.
     """
     m = _ZIP_PART.match(str(path))
     if m is None:
@@ -231,9 +262,30 @@ def open_zarr_source(
 
 @functools.lru_cache(maxsize=8)
 def _zip_top(archive_path: str, mtime_ns: int, size: int) -> str:
-    """The name of the one store in a bundle (and version of it): reading
-    the archive's whole index for it again for every level was a second
-    index read each time, on top of the store's own."""
+    """The name of the one store in a bundle.
+
+    Cached by the archive's version: reading the archive's whole index for
+    it again for every level was a second index read each time, on top of
+    the store's own.
+
+    Parameters
+    ----------
+    archive_path : str
+        The `.zip` bundle.
+    mtime_ns, size : int
+        The archive's modification time and size: part of the cache key
+        only, so a rewritten bundle is read again.
+
+    Returns
+    -------
+    str
+        The top-level directory's name (`image.zarr`).
+
+    Raises
+    ------
+    ValueError
+        When the bundle holds no store, or several.
+    """
     import zipfile
 
     with zipfile.ZipFile(archive_path) as archive:
@@ -256,13 +308,36 @@ def open_group_any(path: Union[str, Path], mode: str = "r"):
     which a bundle breaks: the archive is a file, not a directory. Split on
     the `.zip` instead, so `bundle.zip/labels/cells` resolves to the
     right group inside it.
+
+    Parameters
+    ----------
+    path : str or Path
+        The group: a directory, a URL, or a path into a bundle.
+    mode : str, optional
+        zarr's mode (default `"r"`); a bundle is read-only.
+
+    Returns
+    -------
+    zarr.Group
     """
     source, prefix = open_zarr_source(path)
     return zarr.open_group(source, path=prefix, mode=mode)
 
 
 def from_zarr_any(path: Union[str, Path], component: str | None = None):
-    """`dask.array.from_zarr` that also accepts a .zip bundle."""
+    """`dask.array.from_zarr` that also accepts a .zip bundle.
+
+    Parameters
+    ----------
+    path : str or Path
+        The store or array: a directory, a URL, or a path into a bundle.
+    component : str, optional
+        The array inside *path* (a pyramid level, `"0"`).
+
+    Returns
+    -------
+    dask.array.Array
+    """
     import dask.array as _da
 
     source, prefix = open_zarr_source(path)
@@ -275,7 +350,19 @@ def from_zarr_any(path: Union[str, Path], component: str | None = None):
 
 
 def _component(prefix: str, name: str) -> str:
-    """Join a bundle prefix and a component, tolerating an empty prefix."""
+    """Join a bundle prefix and a component, tolerating an empty prefix.
+
+    Parameters
+    ----------
+    prefix : str
+        The path inside the bundle; empty for its root.
+    name : str
+        The component below it.
+
+    Returns
+    -------
+    str
+    """
     return f"{prefix}/{name}" if prefix else name
 
 
@@ -289,13 +376,13 @@ def load_ome_zarr(
 
     Parameters
     ----------
-    store_path:
+    store_path : str or Path
         Path to the OME-ZARR store (.zarr directory).
-    channel:
+    channel : int, optional
         Channel index to select (axis is dropped). Pass `None` to keep it.
-    level:
+    level : int, optional
         Resolution pyramid level (0 = full resolution).
-    chunks:
+    chunks : tuple[int, ...], optional
         Target chunk shape for the returned dask array.
 
     Returns
@@ -504,15 +591,15 @@ def estimate_empty_tiles(
 
     Parameters
     ----------
-    image:
+    image : da.Array or str or Path
         Dask array or OME-ZARR path.
-    tile_shape:
+    tile_shape : tuple[int, ...]
         Tile shape you plan to use, e.g. `(120, 697, 697)`.
-    threshold:
+    threshold : float, optional
         Empty cutoff (signal <= threshold → empty). None → Otsu on samples.
-    channel, level:
+    channel, level : int, optional
         Used only when *image* is a path.
-    sample_window:
+    sample_window : tuple[int, ...], optional
         Size of the centred window read per tile.
 
     Returns

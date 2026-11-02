@@ -27,7 +27,18 @@ from run_multi import (  # noqa: E402
 
 
 def _configs(path: Path) -> tuple[list[dict], dict | None]:
-    """The segmentation configs of *path*, and the multi config if it is one."""
+    """The segmentation configs of *path*, and the multi config if it is one.
+
+    Parameters
+    ----------
+    path : Path
+        A run config, or a multi config.
+
+    Returns
+    -------
+    tuple
+        `(configs, multi)`; *multi* is None for a run config.
+    """
     cfg = _load_yaml(path)
     if "segmentations" not in cfg:
         return [cfg], None
@@ -41,7 +52,18 @@ def _configs(path: Path) -> tuple[list[dict], dict | None]:
 
 
 def _attrs(path: Path) -> dict:
-    """Attributes of a zarr group or array (v3 zarr.json, or v2 .zattrs)."""
+    """Attributes of a zarr group or array (v3 zarr.json, or v2 .zattrs).
+
+    Parameters
+    ----------
+    path : Path
+        The group or array directory.
+
+    Returns
+    -------
+    dict
+        Empty when neither file can be read.
+    """
     for name, inner in (("zarr.json", "attributes"), (".zattrs", None)):
         try:
             data = json.loads((path / name).read_text())
@@ -56,6 +78,15 @@ def converted(store: Path) -> bool:
 
     Not just its root `zarr.json` (or `.zgroup`): that is written when
     the conversion starts; the `multiscales` metadata only at its end.
+
+    Parameters
+    ----------
+    store : Path
+        The run's `image.zarr`.
+
+    Returns
+    -------
+    bool
     """
     attrs = _attrs(store)
     return bool(
@@ -115,8 +146,19 @@ _ERROR = re.compile(
 
 
 def _without_warnings(text: str) -> str:
-    """*text* without Python warnings: the warning line and the source
-    line Python prints under it."""
+    """*text* without Python warnings.
+
+    The warning line and the source line Python prints under it.
+
+    Parameters
+    ----------
+    text : str
+        A log's text.
+
+    Returns
+    -------
+    str
+    """
     out, skip = [], False
     for line in text.splitlines():
         if re.search(r"\b\w*Warning: ", line):
@@ -130,7 +172,20 @@ def _without_warnings(text: str) -> str:
 
 
 def explain(text: str) -> tuple[str, str | None]:
-    """The line of a log that says what went wrong, and a fix if known."""
+    """The line of a log that says what went wrong, and a fix if known.
+
+    Parameters
+    ----------
+    text : str
+        The log's text.
+
+    Returns
+    -------
+    tuple
+        `(line, hint)`: the line matching a known error (`HINTS`), else
+        the last error-looking line, else the last line; *hint* None when
+        the error is not a known one.
+    """
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     for pattern, hint in HINTS:
         for line in reversed(lines):
@@ -155,7 +210,20 @@ def _since() -> float:
 
 
 def _failure(step: str, log: Path) -> dict | None:
-    """A failure record for *log*, if it says something went wrong."""
+    """A failure record for *log*, if it says something went wrong.
+
+    Parameters
+    ----------
+    step : str
+        The step the log belongs to, e.g. `"merge"`.
+    log : Path
+        The log file; one older than this run is ignored.
+
+    Returns
+    -------
+    dict or None
+        `{"step", "log", "error", "hint"}`.
+    """
     try:
         if log.stat().st_mtime < _since():
             return None
@@ -170,7 +238,18 @@ def _failure(step: str, log: Path) -> dict | None:
 
 
 def _slurm_logs(dirs: list[Path]) -> list[Path]:
-    """The SLURM executor's job logs (`.snakemake/slurm_logs`) there."""
+    """The SLURM executor's job logs (`.snakemake/slurm_logs`) there.
+
+    Parameters
+    ----------
+    dirs : list of Path
+        The folders Snakemake ran in.
+
+    Returns
+    -------
+    list of Path
+        Oldest first.
+    """
     logs = []
     for d in dirs:
         root = d / ".snakemake" / "slurm_logs"
@@ -180,7 +259,17 @@ def _slurm_logs(dirs: list[Path]) -> list[Path]:
 
 
 def _killed(log: Path) -> bool:
-    """A SLURM log of a job SLURM itself ended (time, memory)."""
+    """A SLURM log of a job SLURM itself ended (time, memory).
+
+    Parameters
+    ----------
+    log : Path
+        The SLURM job log.
+
+    Returns
+    -------
+    bool
+    """
     try:
         text = log.read_text(errors="replace")[-20_000:]
     except OSError:
@@ -197,6 +286,19 @@ def failures(cfg: dict, workflow_dir: Path | None = None) -> list[dict]:
 
     From each step's own log (a traceback), and the SLURM executor's job
     logs (a job SLURM ended: time limit, out of memory), with what to do.
+
+    Parameters
+    ----------
+    cfg : dict
+        One segmentation's config (`work_dir`, `label_name`...).
+    workflow_dir : Path, optional
+        Where a single run's Snakemake ran, for its SLURM logs (a multi
+        run's Snakemake runs in the segmentation's own folder).
+
+    Returns
+    -------
+    list of dict
+        As :func:`_failure` makes them.
     """
     work = Path(cfg["work_dir"])
     label = cfg.get("label_name", "labels")
@@ -255,7 +357,18 @@ def failures(cfg: dict, workflow_dir: Path | None = None) -> list[dict]:
 
 
 def shared_failures(cfg: dict) -> list[dict]:
-    """The conversion steps, shared by every segmentation of a work_dir."""
+    """The conversion steps that failed, shared by every segmentation of a
+    work_dir.
+
+    Parameters
+    ----------
+    cfg : dict
+        One segmentation's config (`work_dir`, `label_name`...).
+
+    Returns
+    -------
+    list of dict
+    """
     work = Path(cfg["work_dir"])
     level = int(cfg.get("level", 0))
     store = work / "image.zarr"
@@ -279,9 +392,24 @@ def shared_failures(cfg: dict) -> list[dict]:
 
 
 def _tiles_done(manifest: dict, seg: Path) -> tuple[int, int]:
-    """Tiles in all, and segmented so far: every tile of a finished batch,
-    and of a running one those in its checkpoint (segment_tile.py writes it
-    after each tile, whatever the method)."""
+    """Tiles in all, and segmented so far.
+
+    Every tile of a finished batch, and of a running one those in its
+    checkpoint (segment_tile.py writes it after each tile, whatever the
+    method).
+
+    Parameters
+    ----------
+    manifest : dict
+        The segmentation's `tiles.json`.
+    seg : Path
+        The folder of its batches' `.done` markers.
+
+    Returns
+    -------
+    tuple of int
+        `(total, done)`.
+    """
     batches = manifest.get("batches") or []
     total = sum(len(b) for b in batches)
     done = 0
@@ -303,7 +431,20 @@ def _tiles_done(manifest: dict, seg: Path) -> tuple[int, int]:
 
 
 def _last_lines(path: Path, n: int = 5) -> list[str]:
-    """The last *n* non-blank lines of *path*, read from its end only."""
+    """The last *n* non-blank lines of *path*, read from its end only.
+
+    Parameters
+    ----------
+    path : Path
+        A text file.
+    n : int, optional
+        How many lines (default 5).
+
+    Returns
+    -------
+    list of str
+        Empty when it cannot be read.
+    """
     try:
         with open(path, "rb") as f:
             f.seek(0, 2)
@@ -319,8 +460,20 @@ _SIGNALS = {9: "SIGKILL", 15: "SIGTERM", 2: "SIGINT", 1: "SIGHUP", 6: "SIGABRT"}
 
 def snakemake_state(run: Path) -> dict | None:
     """How a multi run's Snakemake for *run* is doing, as run_multi recorded
-    it: `state` (running, ok, failed), `exit`, and its last output lines.
-    None when there is no record, or it is from before this run."""
+    it.
+
+    Parameters
+    ----------
+    run : Path
+        The segmentation's folder in work_dir.
+
+    Returns
+    -------
+    dict or None
+        `state` (running, ok, failed), `exit`, its last output lines,
+        and for a killed one `error` and `hint`. None when there is no
+        record, or it is from before this run.
+    """
     try:
         state = json.loads((run / RUN_STATE).read_text())
     except (OSError, ValueError):
@@ -348,7 +501,20 @@ def snakemake_state(run: Path) -> dict | None:
 
 
 def segmentation_status(cfg: dict) -> dict:
-    """Where one segmentation stands, from its markers in work_dir."""
+    """Where one segmentation stands, from its markers in work_dir.
+
+    Parameters
+    ----------
+    cfg : dict
+        One segmentation's config (`work_dir`, `label_name`...).
+
+    Returns
+    -------
+    dict
+        `label_name`, `converted`, `batches`, `batches_done`,
+        `tiles`, `tiles_done`, `merged`, `objects`, `seams`,
+        `snakemake` and its `stage`.
+    """
     work = Path(cfg["work_dir"])
     label = cfg.get("label_name", "labels")
     run = work / label
@@ -422,7 +588,19 @@ def segmentation_status(cfg: dict) -> dict:
 
 
 def run_status(cfgs: list[dict], multi: dict | None) -> dict:
-    """Every segmentation, and for a multi run its relations and bundle."""
+    """Every segmentation, and for a multi run its relations and bundle.
+
+    Parameters
+    ----------
+    cfgs : list of dict
+        The segmentation configs.
+    multi : dict or None
+        The multi config, or None for a single run.
+
+    Returns
+    -------
+    dict
+    """
     workflow_dir = Path(__file__).resolve().parent.parent
     status = {
         "work_dir": str(cfgs[0]["work_dir"]),
@@ -444,6 +622,18 @@ def run_status(cfgs: list[dict], multi: dict | None) -> dict:
     work = Path(cfgs[0]["work_dir"])
 
     def merged_at(name):
+        """When segmentation *name* was merged.
+
+        Parameters
+        ----------
+        name : str
+            The label image.
+
+        Returns
+        -------
+        float or None
+            Its `labels.done` marker's mtime; None when not merged.
+        """
         marker = work / name / "labels.done"
         return marker.stat().st_mtime if marker.exists() else None
 
@@ -491,6 +681,17 @@ def run_status(cfgs: list[dict], multi: dict | None) -> dict:
 
 
 def format_status(status: dict) -> str:
+    """The status from :func:`run_status` as text for the terminal.
+
+    Parameters
+    ----------
+    status : dict
+        What :func:`run_status` returned.
+
+    Returns
+    -------
+    str
+    """
     lines = [f"work_dir: {status['work_dir']}"]
     for s in status["segmentations"]:
         if s["batches"] is not None:
@@ -539,6 +740,7 @@ def format_status(status: dict) -> str:
 
 
 def main() -> None:
+    """Print a run's status (see `--help`)."""
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("config", help="a run config, or a multi config")
     parser.add_argument("--json", action="store_true", help="print JSON")

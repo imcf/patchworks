@@ -188,7 +188,18 @@ def _pyramid_translate(
 ) -> "list[float] | None":
     """Level-0 physical offset, e.g. of labels segmented at a coarser level.
 
-    Returns None when there is none, leaving napari's default of 0.
+    Parameters
+    ----------
+    path : str or Path
+        The image or label group.
+    ndim : int
+        The array's number of axes.
+
+    Returns
+    -------
+    list of float or None
+        One offset per axis, or None when there is none, leaving napari's
+        default of 0.
     """
     from .ome_zarr import read_translation
 
@@ -199,8 +210,21 @@ def _pyramid_translate(
 
 
 def _store_axes(path: Union[str, Path], ndim: int) -> str:
-    """The store's own axis names (its multiscales metadata), or the usual
-    trailing ones when it records none."""
+    """The store's own axis names, or the usual trailing ones.
+
+    Parameters
+    ----------
+    path : str or Path
+        The image or label group.
+    ndim : int
+        The array's number of axes.
+
+    Returns
+    -------
+    str
+        E.g. `"czyx"`, from the multiscales metadata, or the last *ndim*
+        of `tczyx` when it records none.
+    """
     from .ome_zarr import _DEFAULT_ORDER, _multiscale_meta
 
     meta = _multiscale_meta(str(path)) or {}
@@ -372,14 +396,31 @@ GLASBEY_256 = (
 
 @contextmanager
 def _timed(what: str):
-    """Log how long *what* took: opening a large store, the slow part shows."""
+    """Log how long *what* took: opening a large store, the slow part shows.
+
+    Parameters
+    ----------
+    what : str
+        The step, named in the log.
+    """
     start = time.perf_counter()
     yield
     logger.info("%s: %.1f s", what, time.perf_counter() - start)
 
 
 def _label_levels(path: Union[str, Path]) -> list:
-    """A label pyramid for napari, as int32 dask arrays."""
+    """A label pyramid for napari, as int32 dask arrays.
+
+    Parameters
+    ----------
+    path : str or Path
+        The label group.
+
+    Returns
+    -------
+    list of dask.array.Array
+        Finest level first.
+    """
     return [lvl.astype("int32") for lvl in _multiscale_levels(path, None)]
 
 
@@ -396,10 +437,31 @@ def image_layers(
     Lazy dask arrays: napari cuts the region on screen out of every axis
     not displayed before it picks the plane, which is free on dask but
     reads every channel and plane of it from a zarr array (8 minutes for a
-    whole slide). Each channel is a layer of its own, so several can be
-    shown at once; only those in *shown* (default: the first) are visible,
-    and napari reads a hidden layer only once it is switched on.
-    *split_channels* False puts them all on one layer's channel slider.
+    whole slide).
+
+    Parameters
+    ----------
+    image : str, Path or array
+        The OME-Zarr image (or a path into a bundle), or an array.
+    channel : int or None
+        Show only this channel; None for all of them.
+    image_name : str, optional
+        The layer's name when the channels are not split (default
+        `"image"`).
+    extra : mapping, optional
+        More `add_image` keyword arguments.
+    split_channels : bool, optional
+        Each channel a layer of its own, named after it, so several can be
+        shown at once (default). False puts them all on one layer's channel
+        slider.
+    shown : sequence of int, optional
+        The channels visible at first (default: the first). napari reads a
+        hidden layer only once it is switched on.
+
+    Returns
+    -------
+    list of tuple
+        `(data, name, kwargs)` per layer.
     """
     extra = dict(extra or {})
     img = _resolve_image(image, channel)
@@ -632,8 +694,16 @@ AXIS_NAMES = {"t": "time", "c": "channel", "z": "z", "y": "y", "x": "x"}
 
 
 def _name_axes(viewer: Any, image: Any) -> None:
-    """The sliders named after the store's axes (channel, z) rather than
-    napari's bare -3, -4."""
+    """Name the sliders after the store's axes (channel, z) rather than
+    napari's bare -3, -4.
+
+    Parameters
+    ----------
+    viewer : napari.Viewer
+        The viewer.
+    image : str, Path or array
+        The image shown; nothing is named for an array.
+    """
     if not _is_zarr(image):
         return
     try:
@@ -651,14 +721,36 @@ def _name_axes(viewer: Any, image: Any) -> None:
 
 
 def _multiscale_meta_axes(image: Any) -> list:
+    """The axes recorded in an image's multiscales metadata.
+
+    Parameters
+    ----------
+    image : str or Path
+        The OME-Zarr image.
+
+    Returns
+    -------
+    list
+        Empty without metadata.
+    """
     from .ome_zarr import _multiscale_meta
 
     return list((_multiscale_meta(str(image)) or {}).get("axes") or [])
 
 
 def _hover_tables(store: Any) -> dict:
-    """Each label image's hover features (its parents and children), from
-    the store's object tables; {} without tables."""
+    """Each label image's hover features (its parents and children).
+
+    Parameters
+    ----------
+    store : str or Path
+        The OME-Zarr image, with object tables.
+
+    Returns
+    -------
+    dict
+        `{name: features}`; {} without tables.
+    """
     try:
         from .._review import Review
 
@@ -676,6 +768,16 @@ def _hover_tables(store: Any) -> dict:
 
 
 def _apply_hover_tables(viewer: Any, tables: dict) -> None:
+    """Hand each label layer its hover features.
+
+    Parameters
+    ----------
+    viewer : napari.Viewer
+        The viewer.
+    tables : dict
+        `{name: features}` from :func:`_hover_tables`; a name without a
+        layer is skipped.
+    """
     for name, features in tables.items():
         if name in viewer.layers:
             try:
@@ -687,20 +789,45 @@ def _apply_hover_tables(viewer: Any, tables: dict) -> None:
 
 
 def _show_relations(viewer: Any, store: Any) -> None:
-    """Hovering an object shows its parent and children in the status bar,
-    from the store's object tables (when it has them)."""
+    """Hovering an object shows its parent and children in the status bar.
+
+    From the store's object tables, when it has them.
+
+    Parameters
+    ----------
+    viewer : napari.Viewer
+        The viewer.
+    store : str or Path
+        The OME-Zarr image.
+    """
     _apply_hover_tables(viewer, _hover_tables(store))
 
 
 def _show_relations_later(viewer: Any, store: Any) -> None:
-    """:func:`_show_relations`, the tables read in a background thread and
-    handed to the layers once read (on napari's own thread)."""
+    """:func:`_show_relations`, the tables read in a background thread.
+
+    They are handed to the layers once read, on napari's own thread.
+
+    Parameters
+    ----------
+    viewer : napari.Viewer
+        The viewer.
+    store : str or Path
+        The OME-Zarr image.
+    """
     from napari.qt.threading import thread_worker
 
     start = time.perf_counter()
     logger.info("reading the object tables for hovering, in the background")
 
     def done(tables):
+        """Apply the tables read, and log how long they took.
+
+        Parameters
+        ----------
+        tables : dict
+            From :func:`_hover_tables`.
+        """
         _apply_hover_tables(viewer, tables)
         logger.info(
             "object tables, for hovering: %.1f s", time.perf_counter() - start

@@ -76,6 +76,17 @@ fn_name = getattr(fn, "__name__", type(fn).__name__)
 
 
 def _read(index):
+    """Read one tile of the job's image with its halo.
+
+    Parameters
+    ----------
+    index : int
+        The tile.
+
+    Returns
+    -------
+    TileRead
+    """
     return read_tile(
         image,
         index,
@@ -86,6 +97,20 @@ def _read(index):
 
 
 def _finish(tile, out):
+    """Stage what the segmentation returned for one tile.
+
+    Parameters
+    ----------
+    tile : TileRead
+        The tile as read.
+    out : np.ndarray
+        The segmentation's labels.
+
+    Returns
+    -------
+    int
+        The tile's label count.
+    """
     return finish_tile(
         tile,
         out,
@@ -98,7 +123,19 @@ def _finish(tile, out):
 
 
 def _done(n, index, started, future):
-    """Record a staged tile, in order: the progress file resumes from it."""
+    """Record a staged tile, in order: the progress file resumes from it.
+
+    Parameters
+    ----------
+    n : int
+        The tile's place in this job's list, for the log.
+    index : int
+        The tile.
+    started : float
+        When it was started, `time.monotonic()`.
+    future : concurrent.futures.Future
+        The staging, finished: its result is the tile's label count.
+    """
     counts[index] = future.result()
     save_segment_progress(progress_file, indices, tile_shape, counts)
     print(

@@ -105,6 +105,15 @@ def review_in_napari(
 
 
 def _widgets():
+    """The Qt widget classes the panel uses, imported only when it is built.
+
+    Returns
+    -------
+    tuple
+        `QCheckBox`, `QComboBox`, `QFileDialog`, `QGridLayout`,
+        `QGroupBox`, `QHBoxLayout`, `QLabel`, `QLineEdit`,
+        `QMessageBox`, `QPushButton`, `QVBoxLayout`, `QWidget`.
+    """
     from qtpy.QtWidgets import (
         QCheckBox,
         QComboBox,
@@ -146,6 +155,20 @@ def _full_resolution_value(layer, event, reach: int = 2) -> int:
     object one voxel wide (a cilium) has vanished. In 2-D, read level 0
     around the clicked voxel instead, and take the nearest object within
     *reach* voxels in the displayed plane, so a thin object is easy to hit.
+
+    Parameters
+    ----------
+    layer : napari.layers.Labels
+        The label layer.
+    event : napari mouse event
+        The click: its position and displayed dimensions.
+    reach : int, optional
+        How far from the clicked voxel to look, in voxels (default 2).
+
+    Returns
+    -------
+    int
+        The label, 0 for background.
     """
     if len(event.dims_displayed) != 2:
         value = layer.get_value(
@@ -179,6 +202,18 @@ def _full_resolution_value(layer, event, reach: int = 2) -> int:
 
 
 def _hex_rgba(colour: str) -> np.ndarray:
+    """A `#rrggbb` colour as an RGBA float array, opaque.
+
+    Parameters
+    ----------
+    colour : str
+        E.g. `"#ff8800"`.
+
+    Returns
+    -------
+    np.ndarray
+        float32, 4 values from 0 to 1.
+    """
     return np.array(
         [int(colour[i : i + 2], 16) / 255 for i in (1, 3, 5)] + [1.0],
         dtype=np.float32,
@@ -186,7 +221,17 @@ def _hex_rgba(colour: str) -> np.ndarray:
 
 
 def _camera(viewer):
-    """napari >= 0.9 moved the camera to `viewer.scene.camera`."""
+    """The viewer's camera; napari >= 0.9 moved it to `viewer.scene.camera`.
+
+    Parameters
+    ----------
+    viewer : napari.Viewer
+        The viewer.
+
+    Returns
+    -------
+    napari camera
+    """
     scene = getattr(viewer, "scene", None)
     return getattr(scene, "camera", None) or viewer.camera
 
@@ -195,6 +240,17 @@ def ReviewWidget(viewer: Any, review: Review):
     """The review dock widget (a QWidget) for *review*, driving *viewer*.
 
     A factory rather than a class so that importing this module needs no Qt.
+
+    Parameters
+    ----------
+    viewer : napari.Viewer
+        The viewer showing the store's image and label layers.
+    review : Review
+        The review: tables, flags and decisions.
+
+    Returns
+    -------
+    QWidget
     """
     global _CLASS
     if _CLASS is None:
@@ -209,6 +265,15 @@ class _ReviewPanel:
     See the module docstring for the keys."""
 
     def __init__(self, viewer: Any, review: Review) -> None:
+        """Build the panel and hook it to the viewer.
+
+        Parameters
+        ----------
+        viewer : napari.Viewer
+            The viewer showing the store's image and label layers.
+        review : Review
+            The review: tables, flags and decisions.
+        """
         (
             QCheckBox,
             QComboBox,
@@ -391,6 +456,13 @@ class _ReviewPanel:
     # -- state -----------------------------------------------------------------
 
     def _set_name(self, name: str) -> None:
+        """Switch to reviewing label image *name*.
+
+        Parameters
+        ----------
+        name : str
+            The label image.
+        """
         self._restore()
         self._remove_by_parent()
         self.name = name
@@ -416,12 +488,20 @@ class _ReviewPanel:
         self.next(record=False)
 
     def _set_mode(self, mode: str) -> None:
+        """Switch to another queue and show its first object.
+
+        Parameters
+        ----------
+        mode : str
+            `"flagged"`, `"random"` or `"all"`.
+        """
         self.mode = mode
         self.current = None
         self._refresh_queue()
         self.next(record=False)
 
     def _refresh_queue(self) -> None:
+        """Recompute the flags and the queue after a decision or a switch."""
         self._flags = self.rv.flag_table(self.name)
         self.queue = self.rv.queue(self.name, self.mode)
         self._update_points()
@@ -430,8 +510,16 @@ class _ReviewPanel:
     # -- navigation ------------------------------------------------------------
 
     def next(self, record: bool = True) -> None:
-        """Go to the next object of the queue still to review; a skipped
-        object moves to the end, so N cycles through the queue."""
+        """Go to the next object of the queue still to review.
+
+        A skipped object moves to the end, so N cycles through the queue.
+
+        Parameters
+        ----------
+        record : bool, optional
+                Keep the current object in the history, for `back` (default
+            True).
+        """
         self.pending = None
         if record and self.current is not None:
             self.history.append(self.current)
@@ -442,12 +530,19 @@ class _ReviewPanel:
         self.go(upcoming[0] if upcoming else None)
 
     def back(self) -> None:
+        """Go back to the object shown before."""
         self.pending = None
         if self.history:
             self.go(self.history.pop())
 
     def go(self, label: int | None) -> None:
-        """Show object *label* (None: the queue is done)."""
+        """Show object *label*.
+
+        Parameters
+        ----------
+        label : int or None
+            The object; None when the queue is done.
+        """
         self.current = label
         self.prompt.setText("")
         if label is None:
@@ -464,6 +559,9 @@ class _ReviewPanel:
         self._show()
 
     def _describe(self) -> None:
+        """Fill the panel's text for the current object: its reasons, sizes,
+        parent and children, and its decision.
+        """
         label = self.current
         eff = self.rv.effective(self.name)
         decided = self.rv.decisions[self.name].get(label)
@@ -521,6 +619,16 @@ class _ReviewPanel:
     # -- decisions -------------------------------------------------------------
 
     def _record(self, action: str, **kw) -> None:
+        """Record a decision about the current object, then go on.
+
+        Parameters
+        ----------
+        action : str
+            As :meth:`Review.decide` takes it.
+        **kw
+            The decision's other arguments: `parent`, `parent_id`, `into`,
+            `position`.
+        """
         if self.current is None:
             return
         try:
@@ -545,11 +653,25 @@ class _ReviewPanel:
         self.go(upcoming[0] if upcoming else None)
 
     def decide(self, action: str) -> None:
-        """`ok` or `wrong` for the current object."""
+        """`ok` or `wrong` for the current object.
+
+        Parameters
+        ----------
+        action : str
+            `"ok"` or `"wrong"`.
+        """
         self._record(action)
 
     def start(self, what: str) -> None:
-        """Wait for a click: the right parent, or the object to join."""
+        """Wait for a click: the right parent, or the object to join.
+
+        Pressing the same key again cancels.
+
+        Parameters
+        ----------
+        what : str
+            `"parent"` or `"merge"`.
+        """
         if self.current is None:
             return
         if what == "parent" and not self.rv.parents[self.name]:
@@ -571,13 +693,26 @@ class _ReviewPanel:
         )
 
     def _partner(self, label: int | None) -> int | None:
-        """The object a seam flag suggests joining *label* with."""
+        """The object a seam flag suggests joining *label* with.
+
+        Parameters
+        ----------
+        label : int or None
+            The object.
+
+        Returns
+        -------
+        int or None
+        """
         if label is None or label not in self._flags.index:
             return None
         partner = int(self._flags.at[label, "partner"])
         return partner if partner > 0 else None
 
     def join(self) -> None:
+        """Join the current object with its seam partner, or wait for a click on
+        the object to join it with.
+        """
         partner = self._partner(self.current)
         if partner:
             self._record("merge", into=partner)
@@ -585,6 +720,7 @@ class _ReviewPanel:
             self.start("merge")
 
     def undo(self) -> None:
+        """Forget the decision about the current object."""
         if self.current is None:
             return
         self.rv.undo(self.name, self.current)
@@ -596,8 +732,20 @@ class _ReviewPanel:
         self._show()
 
     def _on_click(self, viewer, event):
-        """A click (not a drag): picks the object a pending decision waits
-        for, or else (inspect mode) shows the object under the cursor."""
+        """A click (not a drag): picks the object a pending decision waits for,
+        or else (inspect mode) shows the object under the cursor.
+
+        A napari mouse-drag callback, a generator: it yields until the button
+        is
+        released.
+
+        Parameters
+        ----------
+        viewer : napari.Viewer
+            The viewer.
+        event : napari mouse event
+            The mouse event.
+        """
         if self.pending is None and not self.inspect_box.isChecked():
             return
         dragged = False
@@ -630,8 +778,22 @@ class _ReviewPanel:
         )
 
     def _object_at(self, viewer, event) -> tuple[str, int] | None:
-        """The topmost reviewed object under the cursor: a cilium over its
-        cell, a nucleus over its cell, else the cell."""
+        """The topmost reviewed object under the cursor.
+
+        A cilium over its cell, a nucleus over its cell, else the cell.
+
+        Parameters
+        ----------
+        viewer : napari.Viewer
+            The viewer.
+        event : napari mouse event
+            The mouse event.
+
+        Returns
+        -------
+        tuple or None
+            `(label image, label)`, or None over background.
+        """
         for layer in reversed(list(viewer.layers)):
             if layer.name not in self.rv.tables or not layer.visible:
                 continue
@@ -641,8 +803,17 @@ class _ReviewPanel:
         return None
 
     def inspect(self, name: str, label: int) -> None:
-        """Show object *label* of *name*, with its parent and children --
-        whether or not it is in the queue."""
+        """Show object *label* of *name*, with its parent and children.
+
+        Whether or not it is in the queue.
+
+        Parameters
+        ----------
+        name : str
+            The label image.
+        label : int
+            The object.
+        """
         if name != self.name:
             self.name_box.blockSignals(True)
             self.name_box.setCurrentText(name)
@@ -653,6 +824,7 @@ class _ReviewPanel:
         self.go(label)
 
     def _goto(self) -> None:
+        """Show the object whose id was typed in the "go to" box."""
         text = self.goto_box.text().strip().lstrip("#")
         if text.isdigit() and int(text) in self.rv.tables[self.name].index:
             self.inspect(self.name, int(text))
@@ -665,7 +837,13 @@ class _ReviewPanel:
         self._record("position", position=cls)
 
     def pick(self, value: Any) -> None:
-        """Apply the pending decision with the object id *value* clicked."""
+        """Apply the pending decision with the object id *value* clicked.
+
+        Parameters
+        ----------
+        value : int or tuple
+            The clicked label, or `(level, label)` from a multiscale layer.
+        """
         if isinstance(value, tuple):  # multiscale: (level, value)
             value = value[1]
         value = int(value or 0)
@@ -684,9 +862,27 @@ class _ReviewPanel:
     # -- the view --------------------------------------------------------------
 
     def _layer(self, name: str):
+        """The viewer's layer called *name*.
+
+        Parameters
+        ----------
+        name : str
+            The layer's name.
+
+        Returns
+        -------
+        napari layer or None
+        """
         return self.viewer.layers[name] if name in self.viewer.layers else None
 
     def _save_layer(self, layer) -> None:
+        """Remember a layer's colours, outline and visibility, to restore later.
+
+        Parameters
+        ----------
+        layer : napari.layers.Labels
+            The layer.
+        """
         if layer.name not in self._saved:
             self._saved[layer.name] = (
                 layer.colormap,
@@ -695,6 +891,7 @@ class _ReviewPanel:
             )
 
     def _restore(self) -> None:
+        """Put back every layer's colours, outline and visibility."""
         for name, (cmap, contour, visible) in self._saved.items():
             layer = self._layer(name)
             if layer is not None:
@@ -704,6 +901,17 @@ class _ReviewPanel:
         self._saved.clear()
 
     def _only(self, layer, ids, *, outline: bool = False) -> None:
+        """Show only objects *ids* of *layer*, in their own colours.
+
+        Parameters
+        ----------
+        layer : napari.layers.Labels
+            The label layer.
+        ids : iterable of int
+            The objects to show; 0 is ignored.
+        outline : bool, optional
+            Draw them as outlines (default False: filled).
+        """
         from napari.utils.colormaps import DirectLabelColormap
 
         self._save_layer(layer)
@@ -769,7 +977,17 @@ class _ReviewPanel:
             by.visible = False
 
     def _frame(self, layer, centre, lo, hi) -> None:
-        """Put the slice through *centre*, and fit the box *lo*..*hi* in view."""
+        """Put the slice through *centre*, and fit the box *lo*..*hi* in view.
+
+        Parameters
+        ----------
+        layer : napari.layers.Labels
+            The layer the coordinates are in.
+        centre : np.ndarray
+            The object's centroid, data coordinates.
+        lo, hi : np.ndarray
+            Its bounding box, data coordinates (*hi* exclusive).
+        """
         world = np.asarray(layer.data_to_world(centre), float)
         middle = np.asarray(layer.data_to_world((lo + hi - 1) / 2), float)
         dims = self.viewer.dims
@@ -831,6 +1049,9 @@ class _ReviewPanel:
         self.viewer.layers.selection.active = layer
 
     def _update_progress(self) -> None:
+        """Update the progress line: flags still open, decisions and the error
+        estimate.
+        """
         s = self.rv.summary(self.name)
         text = (
             f"{s['flagged_open']} of {s['flagged']} flagged still open · "
@@ -856,6 +1077,13 @@ class _ReviewPanel:
     # -- colour by parent --------------------------------------------------------
 
     def _lut(self) -> np.ndarray:
+        """Each object's parent id (in the chosen parent label image), as a LUT.
+
+        Returns
+        -------
+        np.ndarray
+            int32, indexed by label.
+        """
         parent = self.parent_box.currentText()
         table = self.rv.tables[self.name]
         eff = self.rv.effective(self.name)
@@ -868,6 +1096,7 @@ class _ReviewPanel:
         return lut
 
     def _colour_by_parent(self) -> None:
+        """Add (or remove) a layer colouring each object by its parent."""
         if not self.by_parent_box.isChecked():
             self._remove_by_parent()
             return
@@ -879,6 +1108,18 @@ class _ReviewPanel:
         levels = layer.data if layer.multiscale else [layer.data]
 
         def mapped(level):
+            """A pyramid level with each object's id replaced through the LUT.
+
+            Parameters
+            ----------
+            level : array
+                One level of the label layer.
+
+            Returns
+            -------
+            dask.array.Array
+                int32.
+            """
             import dask.array as da
 
             arr = da.asarray(level)
@@ -901,18 +1142,26 @@ class _ReviewPanel:
         self._by_parent[self.name] = by
 
     def _update_by_parent(self) -> None:
+        """Refresh the colour-by-parent layer after a decision."""
         by = self._by_parent.get(self.name)
         if by is not None and by.name in self.viewer.layers:
             by.metadata["lut"][...] = self._lut()
             by.refresh()
 
     def _remove_by_parent(self) -> None:
+        """Remove the colour-by-parent layer."""
         by = self._by_parent.pop(self.name, None)
         if by is not None and by.name in self.viewer.layers:
             self.viewer.layers.remove(by)
 
     def _side_view(self, on: bool) -> None:
-        """Show z against x through the object (z up), or the usual y/x."""
+        """Show z against x through the object (z up), or the usual y/x.
+
+        Parameters
+        ----------
+        on : bool
+            True for the side view.
+        """
         dims = self.viewer.dims
         n = dims.ndim
         if n < 3:
@@ -930,6 +1179,13 @@ class _ReviewPanel:
     # -- colour by position, hover -------------------------------------------
 
     def _position_lut(self) -> np.ndarray:
+        """Each object's position class, as a LUT of codes.
+
+        Returns
+        -------
+        np.ndarray
+            int32, indexed by label (0: none).
+        """
         table = self.rv.tables[self.name]
         eff = self.rv.effective(self.name)
         roots = self.rv.roots(self.name)
@@ -942,6 +1198,7 @@ class _ReviewPanel:
         return lut
 
     def _colour_by_position(self) -> None:
+        """Add (or remove) a layer colouring objects by position class."""
         from napari.utils.colormaps import DirectLabelColormap
 
         if not self.by_position_box.isChecked():
@@ -954,6 +1211,18 @@ class _ReviewPanel:
         levels = layer.data if layer.multiscale else [layer.data]
 
         def mapped(level):
+            """A pyramid level with each object's id replaced through the LUT.
+
+            Parameters
+            ----------
+            level : array
+                One level of the label layer.
+
+            Returns
+            -------
+            dask.array.Array
+                int32.
+            """
             import dask.array as da
 
             return da.asarray(level).map_blocks(
@@ -985,12 +1254,14 @@ class _ReviewPanel:
         self._by_position[self.name] = by
 
     def _update_by_position(self) -> None:
+        """Refresh the colour-by-position layer after a decision."""
         by = self._by_position.get(self.name)
         if by is not None and by.name in self.viewer.layers:
             by.metadata["lut"][...] = self._position_lut()
             by.refresh()
 
     def _remove_by_position(self) -> None:
+        """Remove the colour-by-position layer."""
         by = self._by_position.pop(self.name, None)
         if by is not None and by.name in self.viewer.layers:
             self.viewer.layers.remove(by)
@@ -1013,6 +1284,7 @@ class _ReviewPanel:
     # -- results ---------------------------------------------------------------
 
     def _export(self) -> None:
+        """Ask for a folder and export the corrected tables there."""
         folder = self._QFileDialog.getExistingDirectory(
             self, "Export corrected tables to"
         )
@@ -1021,6 +1293,7 @@ class _ReviewPanel:
             self.prompt.setText(f"Wrote {len(paths)} table(s) to {folder}")
 
     def _write_labels(self) -> None:
+        """Write the reviewed label image, in a background thread."""
         from napari.qt.threading import thread_worker
 
         name = self.name
@@ -1029,6 +1302,13 @@ class _ReviewPanel:
 
         @thread_worker
         def work():
+            """Write it.
+
+            Returns
+            -------
+            str
+                The new label image's name.
+            """
             return self.rv.write_reviewed_labels(name)
 
         worker = work()

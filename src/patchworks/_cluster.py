@@ -71,13 +71,13 @@ def make_local_cluster(
 
     Parameters
     ----------
-    use_gpu:
+    use_gpu : bool, optional
         Single-worker cluster for GPU. When False, use multiple CPU workers.
-    n_workers:
+    n_workers : int, optional
         Override the worker count. Defaults to 1 for GPU, min(8, cpu_count).
-    threads_per_worker:
+    threads_per_worker : int, optional
         Keep at 1 so a GIL-holding tile function doesn't block heartbeats.
-    memory_limit:
+    memory_limit : str or int, optional
         Per-worker memory cap (e.g. `"8GB"`). `"auto"` (default) splits
         the memory this job may use (SLURM, cgroup and free RAM, see
         `safe_worker_count`) evenly across the workers. A limit is what
@@ -85,7 +85,7 @@ def make_local_cluster(
         whole job; `None` disables it and all of that with it. (Not
         distributed's own `"auto"`, which scales by threads per core: one
         single-threaded GPU worker on a 32-core node would get 1/32 of it.)
-    **cluster_kwargs:
+    **cluster_kwargs
         Extra arguments forwarded to `dask.distributed.LocalCluster`.
 
     Returns
