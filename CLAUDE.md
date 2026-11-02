@@ -18,3 +18,12 @@
   messages, docs and messages to the user alike. The API docs
   (mkdocstrings) render docstrings as Markdown, so single backticks
   show as code there too.
+
+## Docstrings
+
+- Every function and method gets a numpy-style docstring: a one-line
+  summary, then a Parameters section explaining what each input is and
+  does (`name : type`, its description indented below), and Returns,
+  Raises or Yields where they apply. `_autotune.suggest_overlap` is the
+  model. A class documents its `__init__` parameters in its own
+  docstring.
