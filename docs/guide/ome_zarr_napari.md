@@ -89,6 +89,24 @@ If zooming or panning is slow, `pixi run bench <image.zarr>` (in
 network, or drawing. A `.zip` on a network drive is read over the network
 one chunk at a time: copy it to your computer and unzip it.
 
+## View in Neuroglancer, from the cluster
+
+[Neuroglancer](https://github.com/google/neuroglancer) runs in the browser
+and reads the store chunk by chunk, so nothing is copied: the store stays on
+the cluster and an SSH tunnel brings it to your browser. In a job (it reads
+the store as you browse):
+
+```bash
+srun --time 8:00:00 --mem 4G --cpus-per-task 4 pixi run serve <work_dir>/image.zarr
+```
+
+It prints the tunnel to open on your computer (`ssh -N -L ...`) and a link
+that opens Neuroglancer with each channel as a layer (named, coloured, the
+first shown) and every label image as a segmentation layer: click an object
+for its id, show only the ones selected. Every URL holds a random token, and
+only the store is served, read-only. Serve the unzipped `image.zarr`, not
+the bundle. No 3-D meshes: objects are shown in cross-section.
+
 ## Remote stores
 
 Any fsspec URL works where a path does, for reading and for writing labels
