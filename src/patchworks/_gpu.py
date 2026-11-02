@@ -22,9 +22,9 @@ OOM_BACKOFF_SECONDS = 30
 def is_oom(exc: BaseException) -> bool:
     """Return whether *exc* is an out-of-memory error from any GPU stack.
 
-    Matching only ``RuntimeError`` missed cupy entirely:
-    ``cupy.cuda.memory.OutOfMemoryError`` derives from ``Exception``, not
-    ``RuntimeError``, so the DoG plugin and ``dilate_labels(use_gpu=True)``
+    Matching only `RuntimeError` missed cupy entirely:
+    `cupy.cuda.memory.OutOfMemoryError` derives from `Exception`, not
+    `RuntimeError`, so the DoG plugin and `dilate_labels(use_gpu=True)`
     got no retry at all. Class name is checked first because cupy's message
     reads "Out of memory allocating ..." while torch's reads "CUDA out of
     memory", and a future backend may word it differently again.
@@ -131,7 +131,7 @@ def retry_on_oom(
 def visible_device_index() -> int:
     """NVML index of the device this process is actually allowed to use.
 
-    ``CUDA_VISIBLE_DEVICES`` remaps indices for the CUDA runtime but not for
+    `CUDA_VISIBLE_DEVICES` remaps indices for the CUDA runtime but not for
     NVML, which always enumerates every GPU on the node. Querying NVML index 0
     unconditionally therefore reads a *different* GPU's free memory whenever
     SLURM granted anything other than the first one -- and tile sizing was
@@ -157,7 +157,7 @@ def visible_device_index() -> int:
 
 
 def visible_device_uuid() -> "str | None":
-    """UUID of the allowed device, when ``CUDA_VISIBLE_DEVICES`` uses one."""
+    """UUID of the allowed device, when `CUDA_VISIBLE_DEVICES` uses one."""
     visible = os.environ.get("CUDA_VISIBLE_DEVICES", "").strip()
     first = visible.split(",")[0].strip() if visible else ""
     return first if first.startswith(("GPU-", "MIG-")) else None

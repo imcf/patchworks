@@ -1,12 +1,12 @@
 """Per-tile building blocks for distributed processing.
 
-``tile_process`` runs every tile and merges in one process. To spread tiles
+`tile_process` runs every tile and merges in one process. To spread tiles
 across separate jobs (e.g. one SLURM GPU job per tile) you need to process a
 *single* tile independently and merge later. These helpers expose exactly that:
 :func:`spatial_tiles` enumerates the tiles, :func:`create_stage` makes the
-shared output store, and :func:`stage_tile` runs ``fn`` on one tile and writes
+shared output store, and :func:`stage_tile` runs `fn` on one tile and writes
 it into that store. Stitch the result with
-:func:`patchworks.merge_tile_labels` (or ``zarr_native_merge``).
+:func:`patchworks.merge_tile_labels` (or `zarr_native_merge`).
 """
 
 from __future__ import annotations
@@ -37,14 +37,14 @@ def normalize_overlap(
 
     A scalar applies the same halo to every axis (the historical behaviour).
     A sequence gives the halo per axis, which matters for anisotropic tiles:
-    a ``(16, 1024, 1024)`` tile with a scalar overlap of 30 reads
-    ``76 x 1084 x 1084`` to keep ``16 x 1024 x 1024`` -- 5.3x more voxels than
+    a `(16, 1024, 1024)` tile with a scalar overlap of 30 reads
+    `76 x 1084 x 1084` to keep `16 x 1024 x 1024` -- 5.3x more voxels than
     it uses, nearly all of it in z.
 
     With *tile_shape*, an axis only one voxel thick gets **no** halo. There is
     no context to gather along an axis the tile does not span, and a 2-D
     method handed the extra planes would read them as channels. This is the
-    ``tile_shape: "auto"`` + ``do_3D: false`` case, where tiles come out one
+    `tile_shape: "auto"` + `do_3D: false` case, where tiles come out one
     plane thick: a z-overlap of 4 would otherwise read 9 planes per tile to
     keep 1.
 
@@ -105,8 +105,8 @@ def spatial_tiles(
     Returns
     -------
     list of tuple of slice
-        One slice tuple per tile (the same order ``estimate_empty_tiles``'s
-        ``occupancy`` grid uses when ravelled).
+        One slice tuple per tile (the same order `estimate_empty_tiles`'s
+        `occupancy` grid uses when ravelled).
     """
     grids = [range(0, s, t) for s, t in zip(shape, tile_shape)]
     return [
@@ -132,19 +132,19 @@ def create_stage(
     Parameters
     ----------
     stage_path : str or Path
-        Destination ``.zarr`` store.
+        Destination `.zarr` store.
     shape : tuple of int
         Full (spatial) array shape.
     tile_shape : tuple of int
         Chunk = tile shape (one chunk per tile, so jobs write disjoint files).
     component : str, optional
-        Array name inside the store (default ``"staged"``).
+        Array name inside the store (default `"staged"`).
     dtype : data-type, optional
-        Label dtype (default ``int32``). Tiles write local labels; the merge's
+        Label dtype (default `int32`). Tiles write local labels; the merge's
         first pass renumbers them to a compact global range that fits int32.
     zarr_format : int, optional
         2 or 3. Give the image store's own format when staging straight into
-        its ``labels/<name>`` group: a v3 group inside a v2 (OME-Zarr 0.4)
+        its `labels/<name>` group: a v3 group inside a v2 (OME-Zarr 0.4)
         store is something no reader can open. Default: zarr's.
 
     Returns
@@ -184,7 +184,7 @@ def stage_tile(
 
     Reads the tile (expanded by *overlap* on every side for boundary context),
     runs *fn*, trims the halo back off, and writes the result to the tile's
-    disjoint chunk of ``stage_path/component`` — so many of these can run
+    disjoint chunk of `stage_path/component` — so many of these can run
     concurrently (one per job) without conflicts.
 
     Parameters
@@ -192,7 +192,7 @@ def stage_tile(
     image : array-like
         The full image (dask/zarr/NumPy), indexable by slices.
     fn : callable
-        ``(ndarray) -> ndarray`` returning integer labels of the same shape.
+        `(ndarray) -> ndarray` returning integer labels of the same shape.
     stage_path : str or Path
         Stage store created by :func:`create_stage`.
     index : int
@@ -207,31 +207,31 @@ def stage_tile(
         Array name inside the stage store.
     channel_axis : int or None, optional
         Axis of *image* holding channels, which is **not** tiled: it is read
-        whole and handed to *fn* alongside the tile's voxels. ``tile_shape``,
-        ``overlap`` and the stage store stay purely spatial, so *fn* still
+        whole and handed to *fn* alongside the tile's voxels. `tile_shape`,
+        `overlap` and the stage store stay purely spatial, so *fn* still
         returns one label per voxel with no channel axis (e.g. Cellpose fed a
-        cytoplasm + nuclei pair returns a single label volume). ``None`` (the
+        cytoplasm + nuclei pair returns a single label volume). `None` (the
         default) means *image* is already single-channel.
     halo_dir : str or Path, optional
         Also keep what *fn* predicted in the halo, for IoU stitching
-        (``merge_tile_labels(..., halo_dir=...)``): one ``<index>.npz`` per
+        (`merge_tile_labels(..., halo_dir=...)`): one `<index>.npz` per
         tile holding, for each face with a halo, the strip beyond the tile
-        (keys ``"<axis>+"``/``"<axis>-"``), labelled with the same ``1..n``
+        (keys `"<axis>+"`/`"<axis>-"`), labelled with the same `1..n`
         ids as the staged core. An object seen only in the halo is 0 there:
-        it has no id in this tile. ``None`` (default) keeps nothing.
+        it has no id in this tile. `None` (default) keeps nothing.
     parts_dir : str or Path, optional
         Also measure the tile's objects as written (size, centroid, spread,
         bounding box; :func:`patchworks._tables.tile_partial`) into
-        ``<parts_dir>/<index>.npz``, keyed by the staged ``1..n`` ids. The
+        `<parts_dir>/<index>.npz`, keyed by the staged `1..n` ids. The
         merge combines them into the object table without reading the
-        labels again (``merge_tile_labels(..., parts_dir=...)``). A tile
+        labels again (`merge_tile_labels(..., parts_dir=...)`). A tile
         without labels writes none.
 
     Returns
     -------
     int
-        Number of labels this tile wrote, i.e. its ids are exactly ``1..n``.
-        Record it (the workflow puts it in the tile's ``.done`` marker): with
+        Number of labels this tile wrote, i.e. its ids are exactly `1..n`.
+        Record it (the workflow puts it in the tile's `.done` marker): with
         one count per tile the merge can derive every tile's global id range
         by a cumulative sum, instead of rewriting the whole store to make the
         ids unique.
@@ -343,7 +343,7 @@ def finish_tile(
 
 
 def _save_partial(trimmed, sl, parts_dir, index) -> None:
-    """Write one tile's per-object sums to ``<parts_dir>/<index>.npz``.
+    """Write one tile's per-object sums to `<parts_dir>/<index>.npz`.
 
     Through a temporary name and a rename, so a job killed mid-write leaves
     no truncated file for the merge to trust.
@@ -361,7 +361,7 @@ def _save_partial(trimmed, sl, parts_dir, index) -> None:
 
 
 def _core_lut(core: np.ndarray, max_id: int) -> np.ndarray:
-    """LUT renumbering *core*'s ids to ``1..n`` (as ``relabel_sequential``);
+    """LUT renumbering *core*'s ids to `1..n` (as `relabel_sequential`);
     ids absent from the core map to 0."""
     ids = np.unique(core)
     ids = ids[ids > 0]
@@ -377,11 +377,11 @@ def _save_halo(
     halo_dir: Union[str, Path],
     index: int,
 ) -> None:
-    """Write the halo strips of one tile's prediction to ``<index>.npz``.
+    """Write the halo strips of one tile's prediction to `<index>.npz`.
 
     Each strip spans the halo along its axis and the tile's *core* along the
     others (corners are left out: a corner neighbour is reached through an
-    edge neighbour anyway). Ids follow the core's ``1..n`` numbering, so the
+    edge neighbour anyway). Ids follow the core's `1..n` numbering, so the
     merge can offset them exactly like the staged tile.
     """
     out = np.asarray(out)

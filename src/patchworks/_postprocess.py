@@ -1,7 +1,7 @@
 """Generic post-segmentation wrappers for patchworks.
 
-These wrap any ``fn(tile) -> labels`` callable (a plugin, a custom function,
-whatever ``method`` in the Snakemake workflow builds) so the same
+These wrap any `fn(tile) -> labels` callable (a plugin, a custom function,
+whatever `method` in the Snakemake workflow builds) so the same
 post-processing applies regardless of which segmentation method produced the
 labels.
 
@@ -32,8 +32,8 @@ def dilate_labels(
 ) -> Callable[[np.ndarray], np.ndarray]:
     """Wrap a segmentation callable to grow its labels after each tile.
 
-    Applies a single-pass grey dilation to whatever ``fn`` returns, before
-    ``tile_process``/``stage_tile`` trim the overlap halo and merge across
+    Applies a single-pass grey dilation to whatever `fn` returns, before
+    `tile_process`/`stage_tile` trim the overlap halo and merge across
     tile boundaries — so dilated labels still stitch correctly at tile
     edges. Labels only grow into background: a voxel that already belongs
     to an object keeps it, so touching objects do not eat into each other
@@ -44,21 +44,21 @@ def dilate_labels(
     Parameters
     ----------
     fn : Callable[[np.ndarray], np.ndarray]
-        Any segmentation function with the ``tile_process``/``stage_tile``
+        Any segmentation function with the `tile_process`/`stage_tile`
         contract (one tile in, integer label array out).
     iterations : int, optional
         Pixels to grow each label by (grey-dilation footprint size
-        ``2 * iterations + 1``, single pass). Default 1. Values ``<= 0``
-        disable dilation — ``fn`` is returned unwrapped.
+        `2 * iterations + 1`, single pass). Default 1. Values `<= 0`
+        disable dilation — `fn` is returned unwrapped.
     use_gpu : bool, optional
         Dilate via cupyx instead of scipy. Independent of whatever backend
-        ``fn`` itself uses internally.
+        `fn` itself uses internally.
 
     Returns
     -------
     Callable[[np.ndarray], np.ndarray]
-        Picklable function ready for ``tile_process``/``stage_tile``. If
-        ``iterations <= 0``, this is ``fn`` itself.
+        Picklable function ready for `tile_process`/`stage_tile`. If
+        `iterations <= 0`, this is `fn` itself.
     """
     if iterations <= 0:
         return fn
@@ -71,7 +71,7 @@ def _run(
     iterations: int,
     use_gpu: bool,
 ) -> np.ndarray:
-    """Run ``fn`` on ``block``, then grow the resulting labels.
+    """Run `fn` on `block`, then grow the resulting labels.
 
     Parameters
     ----------
@@ -87,7 +87,7 @@ def _run(
     Returns
     -------
     np.ndarray
-        Dilated integer label array, same shape as ``fn``'s output.
+        Dilated integer label array, same shape as `fn`'s output.
     """
     labels = fn(block)
     size = 2 * iterations + 1
@@ -121,17 +121,17 @@ def fill_holes(
     Parameters
     ----------
     fn : Callable[[np.ndarray], np.ndarray]
-        Any segmentation function with the ``tile_process`` contract.
+        Any segmentation function with the `tile_process` contract.
     per_plane : bool, optional
         Fill each z-plane of a 3-D tile separately (the usual meaning of
         "holes" in a stack). A thin z-tile leaves little room for a 3-D
         hole to be enclosed at all, since its top and bottom planes are
-        border. Default ``False`` (3-D holes).
+        border. Default `False` (3-D holes).
 
     Returns
     -------
     Callable[[np.ndarray], np.ndarray]
-        Picklable function ready for ``tile_process``/``stage_tile``.
+        Picklable function ready for `tile_process`/`stage_tile`.
     """
     return partial(_run_fill_holes, fn=fn, per_plane=per_plane)
 
@@ -182,7 +182,7 @@ def open_labels(
 
     A morphological opening applied to each object on its own, so touching
     objects never erode into or grow into each other: protrusions and
-    bridges thinner than about ``2 * radius + 1`` voxels are cut, and an
+    bridges thinner than about `2 * radius + 1` voxels are cut, and an
     object thinner than that everywhere disappears. **Not for thin
     structures** -- on cilia or filaments this removes the objects
     themselves; use it for blob-like cells and nuclei.
@@ -190,15 +190,15 @@ def open_labels(
     Parameters
     ----------
     fn : Callable[[np.ndarray], np.ndarray]
-        Any segmentation function with the ``tile_process`` contract.
+        Any segmentation function with the `tile_process` contract.
     radius : int, optional
-        Structuring-element radius in voxels (a ``2r+1`` cube). ``<= 0``
+        Structuring-element radius in voxels (a `2r+1` cube). `<= 0`
         returns *fn* unwrapped.
 
     Returns
     -------
     Callable[[np.ndarray], np.ndarray]
-        Picklable function ready for ``tile_process``/``stage_tile``.
+        Picklable function ready for `tile_process`/`stage_tile`.
     """
     if radius <= 0:
         return fn
@@ -247,7 +247,7 @@ def typical_volume(labels: np.ndarray) -> float:
 
 
 def _contacts(labels: np.ndarray) -> np.ndarray:
-    """``(a, b, n)`` rows: labels a != b, both non-zero, sharing n faces."""
+    """`(a, b, n)` rows: labels a != b, both non-zero, sharing n faces."""
     pairs = []
     for ax in range(labels.ndim):
         lo = [slice(None)] * labels.ndim

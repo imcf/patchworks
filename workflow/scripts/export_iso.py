@@ -11,9 +11,9 @@ The image is ISO-9660 **level 3** with both Rock Ridge and Joliet, and
 deep-directory relocation disabled. That combination is what a zarr store
 needs: level 3 stores a file larger than 4 GB as multiple extents (a shard
 can get there), Joliet is the view Windows reads and carries the long
-names, Rock Ridge is the one Linux/macOS read, and without ``-D`` the
-deep nesting of ``labels/<name>/0/c/0/0/0`` would be relocated into a
-flattened ``RR_MOVED`` directory that only Rock Ridge readers can undo --
+names, Rock Ridge is the one Linux/macOS read, and without `-D` the
+deep nesting of `labels/<name>/0/c/0/0/0` would be relocated into a
+flattened `RR_MOVED` directory that only Rock Ridge readers can undo --
 leaving Windows with a scrambled tree.
 
 UDF would be the tidier choice, but many xorriso builds ship without it;
@@ -112,7 +112,7 @@ _BUILDERS = (
 
 
 def find_builder() -> tuple[str, list[str]]:
-    """The first available ISO builder, as ``(executable, leading args)``.
+    """The first available ISO builder, as `(executable, leading args)`.
 
     Raises
     ------
@@ -176,7 +176,7 @@ def build_command(store: Path, output: Path) -> list[str]:
 def write_zip(store: Path, output: Path, progress: bool = True) -> None:
     """Pack *store* into a single uncompressed .zip.
 
-    ``ZIP_STORED``, not deflate: every chunk is already zstd-compressed, so
+    `ZIP_STORED`, not deflate: every chunk is already zstd-compressed, so
     re-compressing costs a full pass over the data to save almost nothing.
 
     Written entry by entry, so memory stays flat however many files the

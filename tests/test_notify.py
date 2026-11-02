@@ -116,7 +116,7 @@ def test_failing_step_reads_the_rule_from_snakemakes_log(tmp_path):
 def test_failing_step_accepts_snakemakes_list_log(tmp_path):
     """Snakemake 8+ passes `log` as a list, not a bare path.
 
-    ``LoggerManager.get_logfile()`` returns ``List[str]``, and that's what
+    `LoggerManager.get_logfile()` returns `List[str]`, and that's what
     the `log` variable inside `onerror:` actually is. `Path(a_list)` raises
     `TypeError`, which the old code caught and turned into `(None, None)` --
     so this path was *always* silently falling back to the mtime guess it

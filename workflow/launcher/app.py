@@ -210,7 +210,7 @@ def connect(
     use_keys=False,
 ):
     """Open the SSH connection: with the password typed, or (*use_keys*)
-    with the keys and agent ``ssh`` itself would use -- *password* is then
+    with the keys and agent `ssh` itself would use -- *password* is then
     the key's passphrase, if any."""
     client = paramiko.SSHClient()
     client.load_system_host_keys()
@@ -386,7 +386,7 @@ def remote_is_dir(path: str) -> bool:
 
 
 def list_remote(path: str) -> list[tuple[str, bool]]:
-    """``(name, is_dir)`` for each entry of a remote folder."""
+    """`(name, is_dir)` for each entry of a remote folder."""
     sftp = get_sftp()
     entries = []
     for attr in sftp.listdir_attr(path):
@@ -630,7 +630,7 @@ def section(title: str, caption: str | None = None):
     return box
 
 
-# A segmentation's fields have short keys (``s0_cpm``): what they explain.
+# A segmentation's fields have short keys (`s0_cpm`): what they explain.
 SHORT_KEYS = {
     "lbl": "label_name",
     "ch": "channel",
@@ -687,7 +687,7 @@ def help_for(key: str | None) -> str | None:
 
 
 def _init(key: str, help: str | None = None, **default) -> dict:
-    """``key=``, its explanation (``help=``, the question mark beside the
+    """`key=`, its explanation (`help=`, the question mark beside the
     field) and the widget's default, unless the key already holds a value
     (one a past run's config put there): a widget given both warns."""
     out = {"key": key, "help": help or help_for(key)}
@@ -758,7 +758,7 @@ def image_form() -> dict:
 
 def _channel_pictures(work_dir: str, region=None) -> dict:
     """Run scripts/channels.py on the cluster (the whole image, or a
-    *region*), as JSON; ``{"error": ...}`` if it could not."""
+    *region*), as JSON; `{"error": ...}` if it could not."""
     # Any config of this work_dir will do: the script reads only its
     # work_dir. Written here, so this works before Configure is complete.
     probe = f"{wf_dir}/config/launcher_channels_probe.yaml"
@@ -1629,7 +1629,7 @@ def run_config_path(files: dict) -> str:
 
 
 def check_on_cluster(client, wf_dir, setup, files) -> dict:
-    """Upload the configs and run ``scripts/check.py`` on them there.
+    """Upload the configs and run `scripts/check.py` on them there.
 
     On the cluster, in the run's environment: the installed Cellpose
     models, the plugins and the converted image are all there to check
@@ -1809,8 +1809,8 @@ def launch(
 ):
     """Upload *files* (remote path -> config dict) and start the run.
 
-    A single config runs ``snakemake``; a multi run (whose files include a
-    ``multi.yaml``) runs ``scripts/run_multi.py``, which segments, relates
+    A single config runs `snakemake`; a multi run (whose files include a
+    `multi.yaml`) runs `scripts/run_multi.py`, which segments, relates
     and bundles. With *convert_only*, only the conversion runs (from the
     first segmentation's config), as run_multi's first phase would.
     """
@@ -2748,7 +2748,7 @@ def steps_view(steps: list[dict], queue: list[dict]) -> None:
 
 def _relation_progress(rel: dict, steps: list[dict]) -> dict | None:
     """The progress of one relation, from its relate job's log: each logs a
-    line per relation (``nuclei -> cells: 4,839/12,000 (40%) ...``)."""
+    line per relation (`nuclei -> cells: 4,839/12,000 (40%) ...`)."""
     parent = re.sub(r"[^A-Za-z0-9_-]", "-", rel["b"])
     for step in reversed(steps):
         if (
@@ -2894,7 +2894,7 @@ def _tunnels() -> dict:
 def _open_tunnel(client, host: str, port: int):
     """Forward a local port (the same, if free) to *host*:*port* as the
     cluster sees it, over the launcher's own SSH connection -- the
-    ``ssh -L`` the user would otherwise run."""
+    `ssh -L` the user would otherwise run."""
     import select
     import socketserver
     import threading
@@ -2960,7 +2960,7 @@ def _stop_neuroglancer(ng: dict) -> None:
 
 
 def neuroglancer_view(store: str) -> None:
-    """Start ``patchworks serve`` on the cluster, tunnel it here, and link
+    """Start `patchworks serve` on the cluster, tunnel it here, and link
     Neuroglancer to it: the store viewed in the browser, nothing copied."""
     st.markdown("**In Neuroglancer** (in the browser, nothing copied)")
     ng = st.session_state.get("neuroglancer")

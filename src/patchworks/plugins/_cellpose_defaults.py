@@ -1,6 +1,6 @@
 """What the Cellpose plugin fills in, decidable without importing Cellpose.
 
-Importing ``cellpose.models`` pulls in torch: seconds to a minute from a
+Importing `cellpose.models` pulls in torch: seconds to a minute from a
 shared filesystem, which the merge step paid only to record these values
 in the labels' provenance.
 """
@@ -10,7 +10,7 @@ from __future__ import annotations
 import importlib.metadata
 from typing import Any
 
-# The first Cellpose whose ``eval`` takes flow3D_smooth (checked against the
+# The first Cellpose whose `eval` takes flow3D_smooth (checked against the
 # release wheels: absent in 3.1.0, present from 3.1.1 through 4.x).
 _FLOW3D_SMOOTH_SINCE = (3, 1, 1)
 
@@ -35,7 +35,7 @@ def _installed_version() -> tuple[int, ...] | None:
 
 
 def takes_flow3d_smooth() -> bool:
-    """Whether the installed Cellpose's ``eval`` takes ``flow3D_smooth``.
+    """Whether the installed Cellpose's `eval` takes `flow3D_smooth`.
 
     Examples
     --------
@@ -52,9 +52,9 @@ def applied_defaults(
     """What :func:`patchworks.plugins.cellpose.cellpose_fn` fills in that
     *settings* left open.
 
-    ``fragments`` (``"auto"`` or absent: 0.1 in 3-D with a ``diameter``,
+    `fragments` (`"auto"` or absent: 0.1 in 3-D with a `diameter`,
     else off: without one, a cell's size is a guess) and, in 3-D where the
-    installed Cellpose takes it, ``flow3D_smooth=1``. *takes_smooth*
+    installed Cellpose takes it, `flow3D_smooth=1`. *takes_smooth*
     defaults to :func:`takes_flow3d_smooth`.
 
     Examples

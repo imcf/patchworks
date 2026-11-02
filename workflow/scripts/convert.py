@@ -1,10 +1,10 @@
 """Snakemake script: convert the input to a pyramidal OME-ZARR.
 
-The rule's output is a marker file inside the store (``image.zarr/zarr.json``,
-or ``.zgroup`` under ``ngff_version: "0.4"``),
+The rule's output is a marker file inside the store (`image.zarr/zarr.json`,
+or `.zgroup` under `ngff_version: "0.4"`),
 so Snakemake skips this step entirely when the store already exists — the
-conversion is not redone. To force a fresh conversion, delete ``image.zarr``
-(or run ``snakemake --forcerun convert``).
+conversion is not redone. To force a fresh conversion, delete `image.zarr`
+(or run `snakemake --forcerun convert`).
 """
 
 import dask

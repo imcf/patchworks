@@ -3,7 +3,7 @@
 Neuroglancer runs in the browser and reads the store chunk by chunk over
 HTTP: the server must allow requests from its page (CORS) and serve byte
 ranges (a chunk inside a shard is a range of the shard's file), which
-Python's own ``http.server`` does not. Every URL starts with a random token,
+Python's own `http.server` does not. Every URL starts with a random token,
 so other users of the cluster cannot browse the store by guessing a port.
 """
 
@@ -24,8 +24,8 @@ from typing import Any, Union
 
 NEUROGLANCER = "https://neuroglancer-demo.appspot.com/"
 
-#: The line ``serve`` prints for a program (the web launcher) to read:
-#: ``PATCHWORKS_SERVE {"host", "port", "base", "state"}``.
+#: The line `serve` prints for a program (the web launcher) to read:
+#: `PATCHWORKS_SERVE {"host", "port", "base", "state"}`.
 SERVE_TAG = "PATCHWORKS_SERVE"
 
 # Each channel's colour in Neuroglancer when several are shown.

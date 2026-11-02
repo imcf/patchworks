@@ -1,7 +1,7 @@
 """Launcher logic without the UI: config, commands, host keys, job records.
 
 Kept free of Streamlit (and of paramiko at import time) so it can be tested
-on its own and reused by other front ends. ``app.py`` is the UI on top.
+on its own and reused by other front ends. `app.py` is the UI on top.
 """
 
 from __future__ import annotations
@@ -62,7 +62,7 @@ SETTINGS_KEYS = ("preset", "host", "port", "username", "auth", "wf_dir")
 
 
 def settings_path() -> Path:
-    """``~/.config/patchworks/launcher.yaml`` (``$PATCHWORKS_LAUNCHER_SETTINGS``
+    """`~/.config/patchworks/launcher.yaml` (`$PATCHWORKS_LAUNCHER_SETTINGS`
     to put it elsewhere)."""
     import os
 
@@ -102,8 +102,8 @@ def save_settings(changes: dict[str, Any], path: Path | None = None) -> None:
 def load_clusters(path: str | Path) -> dict[str, dict[str, Any]]:
     """Cluster presets, with fingerprints normalised to a list.
 
-    ``host_key_fingerprints`` (a list, one per key type the server may
-    offer) is the field; the older single ``host_key_fingerprint`` string is
+    `host_key_fingerprints` (a list, one per key type the server may
+    offer) is the field; the older single `host_key_fingerprint` string is
     still accepted.
     """
     path = Path(path)
@@ -123,7 +123,7 @@ def load_clusters(path: str | Path) -> dict[str, dict[str, Any]]:
 
 
 def fingerprint(key_bytes: bytes) -> str:
-    """OpenSSH-style ``SHA256:...`` fingerprint of a public key blob."""
+    """OpenSSH-style `SHA256:...` fingerprint of a public key blob."""
     digest = hashlib.sha256(key_bytes).digest()
     return "SHA256:" + base64.b64encode(digest).decode().rstrip("=")
 
@@ -197,7 +197,7 @@ def build_config(v: dict[str, Any]) -> dict[str, Any]:
     """The complete run config for the form values *v*.
 
     Complete on purpose: Snakemake overlays this file on the cluster copy's
-    ``config/config.yaml``, so any key left out here would silently take
+    `config/config.yaml`, so any key left out here would silently take
     whatever that file holds.
     """
     cfg: dict[str, Any] = {
@@ -321,7 +321,7 @@ def build_config(v: dict[str, Any]) -> dict[str, Any]:
 def missing_fields(cfg: dict[str, Any]) -> list[str]:
     """Settings a run cannot do without that the form left empty.
 
-    An empty ``work_dir`` would put the converted image at ``/image.zarr``
+    An empty `work_dir` would put the converted image at `/image.zarr`
     (and every result next to it), so it is refused before anything runs.
     """
     missing = []
@@ -337,7 +337,7 @@ def missing_fields(cfg: dict[str, Any]) -> list[str]:
 
 
 # Methods giving every voxel to some cell (their function says so with
-# ``patchworks_stitch = "iou"``): cells touch at every tile seam.
+# `patchworks_stitch = "iou"`): cells touch at every tile seam.
 FILLS_SPACE = ("patchworks.plugins.plantseg", "patchworks.plugins.watershed")
 
 
@@ -421,7 +421,7 @@ def is_glob(path: str) -> bool:
 
 
 def tiff_names(entries: list[tuple[str, bool]]) -> list[str]:
-    """The TIFF files of a folder listing (``(name, is_dir)`` pairs)."""
+    """The TIFF files of a folder listing (`(name, is_dir)` pairs)."""
     return sorted(
         name
         for name, is_dir in entries
@@ -443,11 +443,11 @@ def tiff_glob(folder: str, names: list[str]) -> str:
 
 
 def guess_sequence_pattern(names: list[str]) -> str | None:
-    """A ``sequence_pattern`` for file names such as ``x_Z012_C1.tif``.
+    """A `sequence_pattern` for file names such as `x_Z012_C1.tif`.
 
     Looks for an axis letter (T, Z or C, either case) followed by digits,
     not preceded by another letter, that is in every name and changes
-    between them -- a constant one (``T0``) is no axis. None if no z or
+    between them -- a constant one (`T0`) is no axis. None if no z or
     channel index is found, or the names do not agree.
     """
     import re
@@ -509,7 +509,7 @@ ENVIRONMENTS = {
 def needed_packages(cfg: dict[str, Any]) -> dict[str, str]:
     """Optional packages a config needs, each with why.
 
-    Mirrors the workflow's own check (``_pw.environment_problems``), which
+    Mirrors the workflow's own check (`_pw.environment_problems`), which
     runs on the cluster and refuses to start without them.
     """
     needs: dict[str, str] = {}
@@ -527,7 +527,7 @@ def needed_packages(cfg: dict[str, Any]) -> dict[str, str]:
 
 
 def pixi_environments(toml_text: str | None) -> list[str]:
-    """The environments a workflow ``pixi.toml`` defines, default first."""
+    """The environments a workflow `pixi.toml` defines, default first."""
     import tomllib
 
     try:
@@ -562,7 +562,7 @@ def suggest_environment(
 def setup_with_environment(setup_cmd: str, env: str) -> str | None:
     """*setup_cmd* activating pixi environment *env*.
 
-    None when the line does not use ``pixi shell-hook``, so the environment
+    None when the line does not use `pixi shell-hook`, so the environment
     cannot be swapped in.
     """
     import re
@@ -587,12 +587,12 @@ def setup_with_environment(setup_cmd: str, env: str) -> str | None:
 
 
 def jobname_prefix(label: str) -> str:
-    """What the run's SLURM jobs are named after: ``pw-<label>_<run id>``.
+    """What the run's SLURM jobs are named after: `pw-<label>_<run id>`.
 
     The SLURM executor names every job of a run after the run's id and
-    refuses a ``--job-name``; a prefix is what can make them recognisable
+    refuses a `--job-name`; a prefix is what can make them recognisable
     (in squeue and in SLURM's mails). As run_multi's
-    ``slurm_jobname_prefix``: alphanumerics, ``_`` and ``-``, 50 at most.
+    `slurm_jobname_prefix`: alphanumerics, `_` and `-`, 50 at most.
 
     >>> jobname_prefix("nuclei_labels_cpsam")
     'pw-nuclei_labels_cpsam'
@@ -633,7 +633,7 @@ def convert_command(
     workflow_dir: str,
     profile: str = "profile/slurm",
 ) -> str:
-    """Snakemake for the conversion alone, as ``run_multi.py`` runs it.
+    """Snakemake for the conversion alone, as `run_multi.py` runs it.
 
     The same targets and state directory as run_multi's first phase, so a
     later run -- one segmentation or several -- finds the image converted
@@ -674,7 +674,7 @@ def convert_command(
 def multi_command(
     multi_path: str, mode: str, *, profile: str = "profile/slurm"
 ) -> str:
-    """``run_multi.py`` for a multi-segmentation run."""
+    """`run_multi.py` for a multi-segmentation run."""
     args = ["python", "scripts/run_multi.py", "--config", multi_path]
     args += ["-n"] if mode == DRY_RUN else ["--profile", profile]
     return " ".join(shlex.quote(a) for a in args)
@@ -700,9 +700,9 @@ def build_multi(
     """The files of a multi-segmentation run, keyed by their remote path.
 
     One complete config per segmentation (shared form values overlaid with
-    that segmentation's own), and the ``multi.yaml`` listing them and the
-    relations, for ``scripts/run_multi.py``. Each segmentation config is
-    complete rather than split into a ``common:`` file: nothing then depends
+    that segmentation's own), and the `multi.yaml` listing them and the
+    relations, for `scripts/run_multi.py`. Each segmentation config is
+    complete rather than split into a `common:` file: nothing then depends
     on what the cluster copy's config files happen to contain.
     """
     files: dict[str, dict[str, Any]] = {}
@@ -797,7 +797,7 @@ def multi_problems(files: dict[str, dict[str, Any]]) -> list[str]:
 
 
 def inner_command(workflow_dir: str, setup_cmd: str, snakemake: str) -> str:
-    """``cd`` + environment setup + snakemake, as one shell line."""
+    """`cd` + environment setup + snakemake, as one shell line."""
     parts = [f"cd {shlex.quote(workflow_dir)}"]
     if setup_cmd.strip():
         # The user's own shell snippet (module load, pixi shell-hook ...),
@@ -820,7 +820,7 @@ def controller_job_script(
 ) -> str:
     """An sbatch script running the Snakemake *controller* as a small job.
 
-    (Or, with *gres*, a short GPU job: ``check --sample`` timing tiles where
+    (Or, with *gres*, a short GPU job: `check --sample` timing tiles where
     the segment jobs run.)
 
     The controller only submits and watches the real jobs, so it needs one
@@ -829,7 +829,7 @@ def controller_job_script(
     are not meant for multi-day processes at all.
 
     The job name and log path go on the sbatch command line
-    (:func:`sbatch_command`), where shell quoting applies: ``#SBATCH``
+    (:func:`sbatch_command`), where shell quoting applies: `#SBATCH`
     lines are not shell-parsed, so a quoted path there would be taken
     literally.
     """
@@ -867,7 +867,7 @@ def controller_job_script(
 
 
 def sbatch_command(script: str, *, name: str, log: str) -> str:
-    """``sbatch --parsable`` for *script*, logging to *log*."""
+    """`sbatch --parsable` for *script*, logging to *log*."""
     return " ".join(
         shlex.quote(a)
         for a in (
@@ -881,7 +881,7 @@ def sbatch_command(script: str, *, name: str, log: str) -> str:
 
 
 def detached_command(inner: str, log: str) -> str:
-    """Run *inner* detached from the SSH session; prints ``PID:<pid>``."""
+    """Run *inner* detached from the SSH session; prints `PID:<pid>`."""
     return (
         f"setsid nohup bash -lc {shlex.quote(inner)} "
         f"> {shlex.quote(log)} 2>&1 < /dev/null & echo PID:$!"
@@ -889,7 +889,7 @@ def detached_command(inner: str, log: str) -> str:
 
 
 def parse_tag(output: str, tag: str) -> str | None:
-    """Value after ``TAG:`` in command output (``PID:123``), if any."""
+    """Value after `TAG:` in command output (`PID:123`), if any."""
     for line in output.splitlines():
         if line.startswith(f"{tag}:"):
             return line.split(":", 1)[1].strip() or None
@@ -897,7 +897,7 @@ def parse_tag(output: str, tag: str) -> str | None:
 
 
 def parse_sbatch(output: str) -> str | None:
-    """Job id from ``sbatch --parsable`` (``123`` or ``123;cluster``)."""
+    """Job id from `sbatch --parsable` (`123` or `123;cluster`)."""
     for line in output.strip().splitlines()[::-1]:
         head = line.split(";")[0].strip()
         if head.isdigit():
@@ -944,7 +944,7 @@ def run_jobs_in_queue(
 
 
 def cancel_command(ids: list[str]) -> str:
-    """``scancel`` for *ids* (job numbers only)."""
+    """`scancel` for *ids* (job numbers only)."""
     clean = [i for i in ids if str(i).isdigit()]
     return "scancel " + " ".join(clean) if clean else "true"
 
@@ -979,7 +979,7 @@ def unlock_command(job: dict[str, Any], workflow_dir: str) -> str | None:
 def check_command(
     config: str, *, sample: int = 0, preview: str | None = None
 ) -> str:
-    """``scripts/check.py`` on a run's config (or multi config), as JSON;
+    """`scripts/check.py` on a run's config (or multi config), as JSON;
     with *preview*, a picture of one segmented tile per segmentation."""
     # -u: its progress reaches the log as it goes, not at the end.
     args = ["python", "-u", "scripts/check.py", config, "--json"]
@@ -991,15 +991,15 @@ def check_command(
 
 
 def fetch_command(config: str) -> str:
-    """``scripts/fetch_models.py``: the run's models, downloaded now."""
+    """`scripts/fetch_models.py`: the run's models, downloaded now."""
     return " ".join(
         shlex.quote(a) for a in ("python", "scripts/fetch_models.py", config)
     )
 
 
 def channels_command(config: str, region=None) -> str:
-    """``scripts/channels.py``: a picture per channel of the converted image;
-    with *region* ``(y0, y1, x0, x1)`` (fractions), of that region only."""
+    """`scripts/channels.py`: a picture per channel of the converted image;
+    with *region* `(y0, y1, x0, x1)` (fractions), of that region only."""
     args = ["python", "scripts/channels.py", config, "--json"]
     if region is not None:
         args += ["--region", ",".join(f"{f:.4f}" for f in region)]
@@ -1007,7 +1007,7 @@ def channels_command(config: str, region=None) -> str:
 
 
 def zoom_region(zoom: int, x_pct: float, y_pct: float) -> tuple:
-    """The region ``(y0, y1, x0, x1)``, in fractions, that a *zoom* centred
+    """The region `(y0, y1, x0, x1)`, in fractions, that a *zoom* centred
     at (*x_pct*, *y_pct*) percent shows -- kept inside the image."""
     side = 1.0 / max(1, zoom)
 
@@ -1041,7 +1041,7 @@ def parse_models(output: str) -> list[str]:
 
 
 def run_status_command(config: str, since: float | None = None) -> str:
-    """``scripts/status.py`` on a run's config (or multi config), as JSON.
+    """`scripts/status.py` on a run's config (or multi config), as JSON.
 
     *since* (seconds since the epoch): only failures logged after it --
     the run's own, not an earlier run's (an environment variable, which
@@ -1055,7 +1055,7 @@ def run_status_command(config: str, since: float | None = None) -> str:
 
 
 def started_epoch(job: dict[str, Any]) -> float | None:
-    """When the job was launched (its ``started`` stamp, this computer's
+    """When the job was launched (its `started` stamp, this computer's
     local time), as seconds since the epoch; None if unknown."""
     import datetime as _dt
 
@@ -1107,7 +1107,7 @@ def profile_resources(text: str | None) -> dict[str, dict[str, Any]]:
 
 
 def first_attempt(value: Any) -> int | None:
-    """A profile memory or time for the first attempt (``"attempt * 64000"``)."""
+    """A profile memory or time for the first attempt (`"attempt * 64000"`)."""
     import re
 
     if value is None or isinstance(value, bool):
@@ -1121,11 +1121,11 @@ def first_attempt(value: Any) -> int | None:
 def profile_with_overrides(
     text: str, overrides: dict[str, dict[str, Any]]
 ) -> str:
-    """The profile *text* with *overrides* (``{rule: {key: value}}``).
+    """The profile *text* with *overrides* (`{rule: {key: value}}`).
 
-    A memory set for ``segment`` grows with each attempt like the profile's
-    own (``attempt * N``), and goes to ``prepare`` too: prepare sizes
-    ``tile_shape: "auto"`` from its own allocation, standing in for the
+    A memory set for `segment` grows with each attempt like the profile's
+    own (`attempt * N`), and goes to `prepare` too: prepare sizes
+    `tile_shape: "auto"` from its own allocation, standing in for the
     segment job's.
     """
     profile = yaml.safe_load(text or "") or {}
@@ -1149,7 +1149,7 @@ def profile_with_overrides(
 
 
 def slurm_minutes(text: str) -> int | None:
-    """SLURM's ``[D-]HH:MM:SS`` (or ``MM:SS``, ``MM``) as minutes."""
+    """SLURM's `[D-]HH:MM:SS` (or `MM:SS`, `MM`) as minutes."""
     text = (text or "").strip()
     if not text or text.upper() in ("UNLIMITED", "INFINITE"):
         return None
@@ -1185,7 +1185,7 @@ CLUSTER_INFO_COMMAND = (
 
 
 def _gres_options(gres: str) -> set[str]:
-    """What a job may ask for of a node's ``%G`` (``gpu:rtx4090:8(S:0-1)``):
+    """What a job may ask for of a node's `%G` (`gpu:rtx4090:8(S:0-1)`):
     one GPU, of any type and of this type."""
     options = set()
     for item in gres.split(","):
@@ -1414,7 +1414,7 @@ def gpu_memory_gb(
 ) -> tuple[int | None, str]:
     """The segment GPU's memory, from its gres or its partition's GPUs.
 
-    Returns ``(GB, which GPU)``; ``(None, why)`` when not known. With
+    Returns `(GB, which GPU)`; `(None, why)` when not known. With
     several types on the partition, the smallest: the job may land on any.
     """
     gres = str(resources.get("gres") or "")
@@ -1443,9 +1443,9 @@ def gpu_memory_gb(
 
 
 def needs_gpu_memory(cfg: dict[str, Any]) -> bool:
-    """Cellpose on the GPU with ``tile_shape: "auto"`` and no
-    ``gpu_memory_gb``: prepare would size its tiles for an 8 GB GPU (the
-    workflow's ``_pw.sized_for_fallback_gpu``)."""
+    """Cellpose on the GPU with `tile_shape: "auto"` and no
+    `gpu_memory_gb`: prepare would size its tiles for an 8 GB GPU (the
+    workflow's `_pw.sized_for_fallback_gpu`)."""
     return (
         cfg.get("tile_shape", "auto") == "auto"
         and not cfg.get("gpu_memory_gb")
@@ -1455,7 +1455,7 @@ def needs_gpu_memory(cfg: dict[str, Any]) -> bool:
 
 
 def with_gpu_memory(files: dict[str, dict], gb: int) -> dict[str, dict]:
-    """*files* with ``gpu_memory_gb`` set where tiles would be sized for
+    """*files* with `gpu_memory_gb` set where tiles would be sized for
     the 8 GB fallback."""
     return {
         path: {**cfg, "gpu_memory_gb": gb}
@@ -1740,10 +1740,10 @@ _FINISHED = re.compile(r"Finished job(?:id:)? (\d+)")
 def parse_steps(text: str) -> list[dict[str, Any]]:
     """The steps Snakemake ran, from its log, the latest attempt of each.
 
-    Each: ``rule``, ``wildcards``, ``log`` (the step's own log),
-    ``slurm_job`` and ``slurm_log`` (when submitted to SLURM), ``mem_mb``,
-    ``attempt``, ``state`` ("submitted", "failed" or "done") and
-    ``earlier``: the attempts before, each with its SLURM job, log and
+    Each: `rule`, `wildcards`, `log` (the step's own log),
+    `slurm_job` and `slurm_log` (when submitted to SLURM), `mem_mb`,
+    `attempt`, `state` ("submitted", "failed" or "done") and
+    `earlier`: the attempts before, each with its SLURM job, log and
     memory.
     """
     # Keyed by job id, rule and log: run_multi's Snakemake processes share
@@ -1993,7 +1993,7 @@ def tails_command(lines: int) -> str:
 
 
 def parse_tails(output: str, paths: list[str]) -> dict[str, str]:
-    """:func:`tails_command`'s output for *paths*, back to ``{path: text}``."""
+    """:func:`tails_command`'s output for *paths*, back to `{path: text}`."""
     found: dict[str, list[str]] = {p: [] for p in paths}
     i = -1
     for line in output.splitlines():
@@ -2005,8 +2005,8 @@ def parse_tails(output: str, paths: list[str]) -> dict[str, str]:
 
 
 def last_progress(text: str, label: str | None = None) -> dict[str, Any] | None:
-    """The last progress line a step logged (``patchworks._progress``):
-    ``label``, ``fraction``, ``elapsed``, ``left``; with *label*, the last
+    """The last progress line a step logged (`patchworks._progress`):
+    `label`, `fraction`, `elapsed`, `left`; with *label*, the last
     one of that label (a relate job logs one per relation)."""
     for line in reversed(text.splitlines()):
         m = _PROGRESS.search(line)
@@ -2028,9 +2028,9 @@ def last_progress(text: str, label: str | None = None) -> dict[str, Any] | None:
 
 def status_command(job: dict[str, Any]) -> str:
     """Shell line printing RUNNING/PENDING/DONE for a registered job, or
-    ``UNKNOWN <why>`` when SLURM did not answer -- never DONE for that.
+    `UNKNOWN <why>` when SLURM did not answer -- never DONE for that.
 
-    All your jobs, not ``-j <id>``: squeue errors out for an id it has
+    All your jobs, not `-j <id>`: squeue errors out for an id it has
     already forgotten, which is a finished job, not a failure.
     """
     if job.get("slurm_job"):
@@ -2048,7 +2048,7 @@ def status_command(job: dict[str, Any]) -> str:
 
 
 def plan_row(label: str, plan: dict[str, Any]) -> dict[str, Any]:
-    """One readable table row for a plan (``_pw.plan_run``)."""
+    """One readable table row for a plan (`_pw.plan_run`)."""
 
     def axes(value: Any) -> str:
         if isinstance(value, (list, tuple)):
@@ -2116,11 +2116,11 @@ def is_store(name: str) -> bool:
 def browse_entries(
     entries: list[tuple[str, bool]], *, dirs_only: bool = False
 ) -> list[tuple[str, str]]:
-    """``(name, kind)`` for a remote listing, in the order to show them.
+    """`(name, kind)` for a remote listing, in the order to show them.
 
-    *entries* are ``(name, is_dir)``. Kinds: ``"dir"`` (a folder to open),
-    ``"store"`` (a ``.zarr`` folder, picked like a file), ``"image"`` (a
-    file with an image suffix) and ``"file"``. Hidden entries are left out;
+    *entries* are `(name, is_dir)`. Kinds: `"dir"` (a folder to open),
+    `"store"` (a `.zarr` folder, picked like a file), `"image"` (a
+    file with an image suffix) and `"file"`. Hidden entries are left out;
     folders come first, then stores, images and other files, each by name.
     With *dirs_only*, only folders (and stores, which are folders too).
     """
@@ -2140,7 +2140,7 @@ def browse_entries(
 
 
 def parent_dir(path: str) -> str:
-    """The folder above *path* (``/`` stays ``/``)."""
+    """The folder above *path* (`/` stays `/`)."""
     path = path.rstrip("/")
     if not path:
         return "/"
@@ -2229,7 +2229,7 @@ RUN_KINDS = ("One segmentation", "Several segmentations + relations")
 
 
 def _flow(value: Any) -> str:
-    """*value* as the one-line YAML a text field holds (``[4, 30, 30]``)."""
+    """*value* as the one-line YAML a text field holds (`[4, 30, 30]`)."""
     if value is None:
         return ""
     if isinstance(value, (list, tuple, dict)):
@@ -2364,7 +2364,7 @@ def form_state(
     """Every form value for these configs, and the settings it cannot hold.
 
     The form holds what :func:`build_config` writes; a config written by
-    hand may hold more (``seed_labels``, ``denoise:`` ...), which would be
+    hand may hold more (`seed_labels`, `denoise:` ...), which would be
     lost: those keys are returned, to be said.
     """
     state = shared_state(seg_cfgs[0])
@@ -2454,8 +2454,8 @@ def template_files(
 ) -> dict[str, dict]:
     """The run's files as a template named *name* in *directory*.
 
-    One config is ``<name>.yaml``; a multi run a folder ``<name>/`` with
-    its ``multi.yaml`` naming the segmentations next to it (relative, so
+    One config is `<name>.yaml`; a multi run a folder `<name>/` with
+    its `multi.yaml` naming the segmentations next to it (relative, so
     the folder can be copied or shared). Without *with_image*, input and
     work_dir are left out: loading the template keeps the form's.
     """
@@ -2512,7 +2512,7 @@ REQUIRED_SCRIPTS = (
 
 
 def update_command(workflow_dir: str) -> str:
-    """``git pull`` the cluster's clone, fast-forward only (never a merge)."""
+    """`git pull` the cluster's clone, fast-forward only (never a merge)."""
     return f"cd {shlex.quote(workflow_dir)} && git pull --ff-only 2>&1"
 
 
@@ -2553,9 +2553,9 @@ def serve_command(
     qos: str = "",
     account: str = "",
 ) -> str:
-    """Start ``pixi run serve <store>`` in the background, its output in
-    *log*: as a small SLURM job (it prints ``JOB:<id>``), or on the login
-    node (``PID:<pid>``)."""
+    """Start `pixi run serve <store>` in the background, its output in
+    *log*: as a small SLURM job (it prints `JOB:<id>`), or on the login
+    node (`PID:<pid>`)."""
     inner = inner_command(
         workflow_dir, setup_cmd, f"pixi run serve {shlex.quote(store)}"
     )
@@ -2585,7 +2585,7 @@ def serve_command(
 
 
 def parse_serve(text: str) -> dict[str, Any] | None:
-    """Where ``patchworks serve`` listens and its Neuroglancer state, from
+    """Where `patchworks serve` listens and its Neuroglancer state, from
     the line it prints for programs; None until it has."""
     for line in reversed(text.splitlines()):
         if line.startswith(SERVE_TAG + " "):

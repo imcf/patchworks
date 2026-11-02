@@ -9,8 +9,8 @@ join), which is where a generalist model such as Cellpose struggles on a
 faint or broken membrane.
 
 Needs only scipy and scikit-image. The tile must carry both channels: set
-``nuclei_channel`` in the workflow config, which stacks ``[channel,
-nuclei_channel]`` on the tile's first axis.
+`nuclei_channel` in the workflow config, which stacks `[channel,
+nuclei_channel]` on the tile's first axis.
 
 Usage
 -----
@@ -25,7 +25,7 @@ From the API:
 >>> tile_process(two_channel_image, fn, channel_axis=0, ...)  # doctest: +SKIP
 
 The same seeded flooding runs on a U-Net boundary map in
-:mod:`patchworks.plugins.plantseg` (``segmentation: "nuclei_watershed"``),
+:mod:`patchworks.plugins.plantseg` (`segmentation: "nuclei_watershed"`),
 which is the better boundary image when the membrane stain is uneven.
 """
 
@@ -39,15 +39,15 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-#: Accepted ``foreground`` modes besides a number.
+#: Accepted `foreground` modes besides a number.
 FOREGROUND_MODES = (None, "otsu")
 #: Where the seeds come from: found in a nuclear intensity channel, or
-#: given as a label image (the workflow's ``seed_labels``).
+#: given as a label image (the workflow's `seed_labels`).
 SEED_MODES = ("channel", "labels")
 
 
 def _sigma(sigma: Any, ndim: int, voxel_size: dict | None, units: str):
-    """Per-axis pixel sigma for an ``ndim`` image from a scalar or tuple."""
+    """Per-axis pixel sigma for an `ndim` image from a scalar or tuple."""
     axes = "zyx"[-ndim:]
     values = (
         (float(sigma),) * ndim
@@ -113,7 +113,7 @@ def nuclei_seeds(
 
 
 def seeds_from_labels(labels: np.ndarray) -> np.ndarray:
-    """A label image's objects as seeds, renumbered ``1..n`` (int32).
+    """A label image's objects as seeds, renumbered `1..n` (int32).
 
     The labels arrive with their global ids -- possibly millions, and
     promoted to the image's dtype when stacked with it -- so they are
@@ -133,7 +133,7 @@ def seeds_from_labels(labels: np.ndarray) -> np.ndarray:
 def tile_seeds(
     second: np.ndarray, cfg: dict[str, Any], ndim: int, units: str = "px"
 ) -> np.ndarray:
-    """The seeds for one tile from its second channel, per ``cfg["seeds"]``:
+    """The seeds for one tile from its second channel, per `cfg["seeds"]`:
     the given labels, or nuclei found in the intensities."""
     if cfg.get("seeds", "channel") == "labels":
         return seeds_from_labels(second)
@@ -193,9 +193,9 @@ def foreground_mask(
     sigma: Any = 2.0,
     max_radius: tuple[float, ...] | None = None,
 ) -> np.ndarray | None:
-    """Where cells may grow: tissue and/or near a seed. ``None``: anywhere.
+    """Where cells may grow: tissue and/or near a seed. `None`: anywhere.
 
-    *foreground* ``"otsu"`` (or an intensity) keeps what the smoothed
+    *foreground* `"otsu"` (or an intensity) keeps what the smoothed
     membrane signal covers, holes filled -- the cell interiors are dark in a
     membrane stain but enclosed by it. *max_radius* (pixels per axis) keeps
     what lies within that distance of a nucleus, so a cell on the tissue's
@@ -275,10 +275,10 @@ def _drop_small(labels: np.ndarray, min_size: int) -> np.ndarray:
 
 
 def split_channels(tile: np.ndarray, spatial_ndim: int | None = None):
-    """``(membrane, nuclei)`` from a ``(2, ...)`` tile; nuclei None if 1-ch.
+    """`(membrane, nuclei)` from a `(2, ...)` tile; nuclei None if 1-ch.
 
-    The workflow stacks ``[channel, nuclei_channel]`` on axis 0 when
-    ``nuclei_channel`` is set; otherwise the tile is the bare image.
+    The workflow stacks `[channel, nuclei_channel]` on axis 0 when
+    `nuclei_channel` is set; otherwise the tile is the bare image.
     """
     tile = np.asarray(tile)
     if spatial_ndim is not None and tile.ndim == spatial_ndim:
@@ -307,7 +307,7 @@ def watershed_fn(
     seeds: str = "channel",
     voxel_size: dict[str, float] | None = None,
 ) -> Callable[[np.ndarray], np.ndarray]:
-    """Return a nuclei-seeded watershed for ``tile_process``.
+    """Return a nuclei-seeded watershed for `tile_process`.
 
     Parameters
     ----------
@@ -315,34 +315,34 @@ def watershed_fn(
         Smoothing of the membrane channel before flooding it.
     nuclei_sigma, nuclei_threshold, nuclei_min_size :
         How the nuclei are found: see :func:`nuclei_seeds`. The threshold is
-        an intensity of the nuclear channel; ``None`` picks it by Otsu, per
+        an intensity of the nuclear channel; `None` picks it by Otsu, per
         tile.
     foreground, foreground_sigma :
-        Tissue mask from the membrane channel: ``"otsu"`` (default), an
-        intensity, or ``None`` to let cells fill the whole tile.
+        Tissue mask from the membrane channel: `"otsu"` (default), an
+        intensity, or `None` to let cells fill the whole tile.
     max_radius_um :
         Furthest a cell reaches from its nucleus, in micrometres (needs
-        *voxel_size*; the workflow passes it). ``None``: no limit.
+        *voxel_size*; the workflow passes it). `None`: no limit.
     compactness :
         > 0 favours round cells where a wall is missing (skimage's
-        ``watershed``). Small values (0.001--0.01) are typical.
+        `watershed`). Small values (0.001--0.01) are typical.
     min_size :
         Drop cells smaller than this many voxels.
     sigma_units :
-        ``"px"`` (default) or ``"um"`` for every sigma above.
+        `"px"` (default) or `"um"` for every sigma above.
     seeds :
-        ``"channel"`` (default): the tile's second channel is a nuclear
-        stain, and the nuclei are found in it (the ``nuclei_*`` options).
-        ``"labels"``: it is a label image -- the workflow's ``seed_labels``,
+        `"channel"` (default): the tile's second channel is a nuclear
+        stain, and the nuclei are found in it (the `nuclei_*` options).
+        `"labels"`: it is a label image -- the workflow's `seed_labels`,
         e.g. Cellpose's nuclei -- and each of its objects seeds one cell, as
-        it is. The workflow sets this itself when ``seed_labels`` is used.
+        it is. The workflow sets this itself when `seed_labels` is used.
     voxel_size :
-        ``{"z": .., "y": .., "x": ..}`` in micrometres.
+        `{"z": .., "y": .., "x": ..}` in micrometres.
 
     Returns
     -------
     Callable[[ndarray], ndarray]
-        Picklable ``(2, [z,] y, x) -> ([z,] y, x)`` labeller.
+        Picklable `(2, [z,] y, x) -> ([z,] y, x)` labeller.
     """
     if sigma_units not in ("px", "um"):
         raise ValueError(
@@ -380,7 +380,7 @@ def watershed_fn(
 
 
 def max_radius_px(radius_um: float, ndim: int, voxel_size: dict) -> tuple:
-    """A physical radius as pixels per axis (``zyx`` order, last *ndim*)."""
+    """A physical radius as pixels per axis (`zyx` order, last *ndim*)."""
     axes = "zyx"[-ndim:]
     return tuple(radius_um / float(voxel_size.get(a) or 1.0) for a in axes)
 
@@ -428,7 +428,7 @@ def _run(tile: np.ndarray, cfg: dict[str, Any]) -> np.ndarray:
 
 def segment(tile: np.ndarray, **kwargs: Any) -> np.ndarray:
     """:func:`watershed_fn` as a direct call, for the workflow's
-    ``method: "custom"`` (``function: "segment"``)."""
+    `method: "custom"` (`function: "segment"`)."""
     return watershed_fn(**kwargs)(tile)
 
 

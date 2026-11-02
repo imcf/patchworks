@@ -1,4 +1,4 @@
-"""Choose ``overlap`` from the data instead of guessing it.
+"""Choose `overlap` from the data instead of guessing it.
 
 The halo exists so that tiling does not change the result. That is directly
 testable: segment a crop spanning a few tiles once without tiling (the
@@ -69,8 +69,8 @@ def suggest_overlap(
 ) -> dict[str, Any]:
     """Smallest overlap whose tiled result matches an untiled one.
 
-    Segments a crop spanning ``crop_tiles`` tiles per axis once without
-    tiling, then with ``tile_process`` at each candidate overlap, scoring
+    Segments a crop spanning `crop_tiles` tiles per axis once without
+    tiling, then with `tile_process` at each candidate overlap, scoring
     each by :func:`object_f1` against the untiled reference. Candidates are
     tried in increasing order and the search stops at the first that reaches
     *target*.
@@ -78,10 +78,10 @@ def suggest_overlap(
     Parameters
     ----------
     image : dask or NumPy array
-        The image as ``tile_process`` would see it (channel already chosen).
+        The image as `tile_process` would see it (channel already chosen).
     fn : callable
         The segmentation function. It is run on the crop in one piece, so the
-        crop must fit it (``crop_tiles=2`` means a 2x2(x2) block of tiles).
+        crop must fit it (`crop_tiles=2` means a 2x2(x2) block of tiles).
     tile_shape : sequence of int
         The tile shape the real run will use.
     candidates : sequence of int, optional
@@ -94,13 +94,13 @@ def suggest_overlap(
     target : float, optional
         F1 counted as "tiling makes no difference" (default 0.99).
     stitch : str, optional
-        Stitching mode of the real run (``"touch"`` or ``"iou"``).
+        Stitching mode of the real run (`"touch"` or `"iou"`).
 
     Returns
     -------
     dict
-        ``{"overlap": chosen or None, "scores": {overlap: f1}, "region":
-        crop, "reference_objects": n}``. ``overlap`` is None when no
+        `{"overlap": chosen or None, "scores": {overlap: f1}, "region":
+        crop, "reference_objects": n}`. `overlap` is None when no
         candidate reached *target* (raise the candidates, or the crop has
         objects larger than any of them).
 

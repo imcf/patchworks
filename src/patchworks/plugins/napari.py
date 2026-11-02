@@ -9,7 +9,7 @@ multi-scale list (napari fetches only the resolution/region on screen), so even
 terabyte stores open instantly.
 
 napari is an optional, GUI-heavy dependency. Install it with
-``pip install "patchworks[napari]"``.
+`pip install "patchworks[napari]"`.
 
 Usage
 -----
@@ -47,8 +47,8 @@ def short_numba_cache() -> None:
     deep on a network share (a pixi environment inside a project on a
     mapped drive, say), that cache path passes Windows' 260-character limit
     and every Labels layer fails to draw with a FileNotFoundError on a
-    ``.nbc.tmp`` file. A short local directory avoids it, and costs nothing
-    elsewhere. An explicit ``NUMBA_CACHE_DIR`` is kept; numba reads it once,
+    `.nbc.tmp` file. A short local directory avoids it, and costs nothing
+    elsewhere. An explicit `NUMBA_CACHE_DIR` is kept; numba reads it once,
     at import, so this must run before napari (or numba) is imported.
     """
     import os
@@ -66,7 +66,7 @@ def _require_napari():
     Returns
     -------
     module
-        The imported ``napari`` module.
+        The imported `napari` module.
     """
     short_numba_cache()
     try:
@@ -80,11 +80,11 @@ def _require_napari():
 
 
 def _is_zarr(src: Any) -> bool:
-    """Whether *src* names a zarr store, directory or ``.zip`` bundle.
+    """Whether *src* names a zarr store, directory or `.zip` bundle.
 
-    The ``.zip`` case matters: everything downstream reads a bundle fine,
+    The `.zip` case matters: everything downstream reads a bundle fine,
     but this is the gate that decides whether to go there at all. Matching
-    only ``.zarr`` sent a bundle to bioio, which reported a missing
+    only `.zarr` sent a bundle to bioio, which reported a missing
     optional dependency -- a confusing way to say "this is not an image
     file", about a store patchworks had just written.
 
@@ -96,7 +96,7 @@ def _is_zarr(src: Any) -> bool:
     Returns
     -------
     bool
-        True for a str/Path ending in ``.zarr``, or naming a ``.zip``
+        True for a str/Path ending in `.zarr`, or naming a `.zip`
         bundle (optionally with a group path after it).
     """
     if not isinstance(src, (str, Path)):
@@ -108,7 +108,7 @@ def _is_zarr(src: Any) -> bool:
 
 
 def _has_multiscales(path: Union[str, Path]) -> bool:
-    """Whether a zarr group carries NGFF ``multiscales`` metadata.
+    """Whether a zarr group carries NGFF `multiscales` metadata.
 
     Parameters
     ----------
@@ -118,7 +118,7 @@ def _has_multiscales(path: Union[str, Path]) -> bool:
     Returns
     -------
     bool
-        True if the group has a ``multiscales`` attribute.
+        True if the group has a `multiscales` attribute.
     """
     root = open_group_any(path)
     return read_ngff_attr(root.attrs, "multiscales") is not None
@@ -134,7 +134,7 @@ def _multiscale_levels(
     path : str or Path
         OME-ZARR group path.
     channel : int or None
-        Channel to select, or ``None`` to keep all channels.
+        Channel to select, or `None` to keep all channels.
 
     Returns
     -------
@@ -159,7 +159,7 @@ def _resolve_image(
     source : da.Array, str or Path
         OME-ZARR store, other image file, or an in-memory array.
     channel : int or None
-        Channel to display, or ``None`` to keep all channels.
+        Channel to display, or `None` to keep all channels.
 
     Returns
     -------
@@ -226,7 +226,7 @@ def _pyramid_calibration(
     ----------
     path : str or Path
         OME-ZARR store path (image or label group) — each carries its own
-        ``multiscales`` metadata, so image and label stores are read
+        `multiscales` metadata, so image and label stores are read
         independently.
     ndim : int
         Number of spatial dimensions of the loaded array (2 -> "yx", 3 ->
@@ -235,8 +235,8 @@ def _pyramid_calibration(
     Returns
     -------
     tuple
-        ``(scale, units)`` — physical size and unit name per axis — or
-        ``(None, None)`` if the store carries no calibration (napari then
+        `(scale, units)` — physical size and unit name per axis — or
+        `(None, None)` if the store carries no calibration (napari then
         falls back to its uncalibrated pixel default).
     """
     from .ome_zarr import _base_scale, _read_zarr_calibration
@@ -253,26 +253,26 @@ def _pyramid_calibration(
 def _label_hint(path: Union[str, Path]) -> dict[str, Any]:
     """Read the known-object-count hint from a label group's zarr attrs.
 
-    ``write_labels(..., n_objects=...)`` persists this when the labels were
-    renumbered to a contiguous ``1..N`` range (``sequential_labels=True``
-    during the merge) — the exact id set is then ``range(1, n_objects +
-    1)`` by construction, with no scan needed. Passed through as a Labels
-    layer's ``metadata`` so a downstream consumer (e.g.
+    `write_labels(..., n_objects=...)` persists this when the labels were
+    renumbered to a contiguous `1..N` range (`sequential_labels=True`
+    during the merge) — the exact id set is then `range(1, n_objects +
+    1)` by construction, with no scan needed. Passed through as a Labels
+    layer's `metadata` so a downstream consumer (e.g.
     napari-chunked-regionprops, https://github.com/imcf/napari-chunked-regionprops)
     can use it instead of re-deriving the id set from the array itself.
 
     Parameters
     ----------
     path : str or Path
-        Label group path (e.g. ``f"{image}/labels/{name}"``).
+        Label group path (e.g. `f"{image}/labels/{name}"`).
 
     Returns
     -------
     dict
-        ``{"patchworks_labels": path}`` (the label group, where its object
-        table lives), plus ``{"n_objects": int, "sequential_labels": True}``
-        if the group has the hint; ``{}`` if the group cannot be opened —
-        safe to splat straight into ``metadata=``/merge into a bigger dict
+        `{"patchworks_labels": path}` (the label group, where its object
+        table lives), plus `{"n_objects": int, "sequential_labels": True}`
+        if the group has the hint; `{}` if the group cannot be opened —
+        safe to splat straight into `metadata=`/merge into a bigger dict
         either way.
     """
     try:
@@ -289,7 +289,7 @@ def _label_hint(path: Union[str, Path]) -> dict[str, Any]:
 
 
 def _inner_label_names(store: Union[str, Path]) -> list[str]:
-    """List label images registered under an OME-ZARR's ``labels/`` group.
+    """List label images registered under an OME-ZARR's `labels/` group.
 
     Parameters
     ----------
@@ -323,7 +323,7 @@ def _resolve_labels(
     Returns
     -------
     da.Array or list of da.Array
-        Integer (``int32``) labels; a list for a multi-scale store.
+        Integer (`int32`) labels; a list for a multi-scale store.
     """
     if _is_zarr(source):
         if _has_multiscales(source):
@@ -391,7 +391,7 @@ def image_layers(
     split_channels: bool = True,
     shown: "Sequence[int] | None" = None,
 ) -> list[tuple[Any, Any, dict]]:
-    """The image layers for napari: ``(data, name, add_image kwargs)``.
+    """The image layers for napari: `(data, name, add_image kwargs)`.
 
     Lazy dask arrays: napari cuts the region on screen out of every axis
     not displayed before it picks the plane, which is free on dask but
@@ -454,31 +454,31 @@ def view_in_napari(
         OME-ZARR store (multi-scale aware), any bioio-readable file, or an
         in-memory array.
     labels : da.Array, str, Path or None
-        Label array to overlay. A plain ``.zarr`` store written by
-        ``tile_process`` is read from its ``labels_component``; an OME-ZARR
-        pyramid is shown multi-scale. ``None`` (default) **auto-loads** every
-        label image stored inside the OME-ZARR under ``labels/<name>/`` — the
-        place ``tile_process`` writes them by default — each as its own Labels
+        Label array to overlay. A plain `.zarr` store written by
+        `tile_process` is read from its `labels_component`; an OME-ZARR
+        pyramid is shown multi-scale. `None` (default) **auto-loads** every
+        label image stored inside the OME-ZARR under `labels/<name>/` — the
+        place `tile_process` writes them by default — each as its own Labels
         layer. (Falls back to image-only if there are none.)
     channel : int or None, optional
-        Channel to display from the image. ``None`` (default) shows every
+        Channel to display from the image. `None` (default) shows every
         channel — the segmentation channel doesn't need to match what you
         view. Pass an int to show just that one.
     labels_component : str, optional
-        Array name inside a plain-zarr label store (default ``"labels"``,
-        matching ``tile_process``'s ``output_component``).
+        Array name inside a plain-zarr label store (default `"labels"`,
+        matching `tile_process`'s `output_component`).
     image_name, labels_name : str, optional
         Layer names shown in napari.
     glasbey : bool, optional
         Colour the labels with a glasbey palette (many distinct, high-contrast
         colours, tuned to read on the dark canvas) instead of napari's default.
-        Default ``True``.
+        Default `True`.
     show : bool, optional
-        Start the napari event loop (blocking). Set ``False`` in scripts/tests
+        Start the napari event loop (blocking). Set `False` in scripts/tests
         that manage the loop themselves.
     split_channels : bool, optional
         Each channel its own layer (default), so several can be shown
-        together, each in its own colour; ``False``: one layer with a
+        together, each in its own colour; `False`: one layer with a
         channel slider.
     shown : sequence of int, optional
         The channels visible at first (default: the first). A hidden
@@ -488,20 +488,20 @@ def view_in_napari(
         object tables, read in the background once the window is up (for a
         whole slide, minutes of reading the network shares with zooming).
     **add_image_kwargs
-        Extra keyword arguments forwarded to ``viewer.add_image``
-        (e.g. ``colormap``, ``contrast_limits``).
+        Extra keyword arguments forwarded to `viewer.add_image`
+        (e.g. `colormap`, `contrast_limits`).
 
     Returns
     -------
     napari.Viewer
-        The viewer instance (useful when ``show=False``).
+        The viewer instance (useful when `show=False`).
 
     Notes
     -----
-    In 3-D view (the cube icon, or ``viewer.dims.ndisplay = 3``), napari
+    In 3-D view (the cube icon, or `viewer.dims.ndisplay = 3`), napari
     always shows the **coarsest** pyramid level — there is no automatic
     zoom-based switching in 3-D, only in 2-D. To pin a specific resolution
-    (needs ``napari>=0.7.1``)::
+    (needs `napari>=0.7.1`)::
 
         viewer.layers["labels"].locked_data_level = 0   # full resolution
         viewer.layers["labels"].locked_data_level = None  # back to coarsest

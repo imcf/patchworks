@@ -2,7 +2,7 @@
 
 Every long step in the workflow runs unattended in a batch job, where the
 output is read hours later out of a file. A redrawing bar (dask's
-``ProgressBar``, ``tqdm``) collapses into one enormous unreadable line there,
+`ProgressBar`, `tqdm`) collapses into one enormous unreadable line there,
 so the default here is periodic log records instead -- and a bar only when
 someone is actually watching a terminal.
 
@@ -45,7 +45,7 @@ def format_eta(done: int, total: int, elapsed: float) -> str:
     Returns
     -------
     str
-        A short human-readable duration, or ``"?"`` when it cannot be
+        A short human-readable duration, or `"?"` when it cannot be
         estimated yet.
     """
     if done <= 0 or done >= total:
@@ -64,11 +64,11 @@ def log_progress(label: str, done: int, total: int, started: float) -> None:
     Parameters
     ----------
     label : str
-        What is being worked on, e.g. ``"image.zarr/0"``.
+        What is being worked on, e.g. `"image.zarr/0"`.
     done, total : int
         Units finished and expected.
     started : float
-        ``time.monotonic()`` when the work began.
+        `time.monotonic()` when the work began.
     """
     elapsed = time.monotonic() - started
     logger.info(
@@ -91,20 +91,20 @@ def track(
 ) -> Iterator[T]:
     """Yield from *iterable*, reporting progress as it goes.
 
-    Uses ``tqdm`` when attached to a terminal and periodic log lines
+    Uses `tqdm` when attached to a terminal and periodic log lines
     otherwise, so the same call is right in a notebook and in a SLURM job.
 
     Parameters
     ----------
     iterable : iterable
         The work to iterate. Consumed lazily, so this is safe over
-        ``imap_unordered``.
+        `imap_unordered`.
     label : str
         Description of the work.
     total : int
         Expected number of items, used for the percentage and the ETA.
     enabled : bool, optional
-        Set ``False`` to pass items straight through. Default ``True``.
+        Set `False` to pass items straight through. Default `True`.
 
     Yields
     ------
@@ -144,7 +144,7 @@ def dask_progress(label: str, enabled: bool = True):
     Returns
     -------
     contextmanager
-        ``ProgressBar`` on a terminal, a periodically-logging callback
+        `ProgressBar` on a terminal, a periodically-logging callback
         otherwise, or a no-op when *enabled* is false.
     """
     if not enabled:

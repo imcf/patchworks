@@ -13,7 +13,7 @@ Two steps:
 
        patchworks denoise-train image.zarr --channel 0 --out n2v_membrane.ckpt
 
-   (:func:`train_n2v`; with ``nuclei_channel``, train a second model on
+   (:func:`train_n2v`; with `nuclei_channel`, train a second model on
    that channel.)
 
 2. Denoise before segmenting -- in the workflow config::
@@ -24,9 +24,9 @@ Two steps:
 
    or from the API, :func:`denoise_fn` wraps any per-tile function.
 
-Needs ``careamics>=0.3`` (``pip install patchworks[careamics]``), which
-brings PyTorch. Any CAREamics model works: a checkpoint (``.ckpt``) or a
-BioImage.IO archive (``.zip``), Noise2Void, CARE or Noise2Noise.
+Needs `careamics>=0.3` (`pip install patchworks[careamics]`), which
+brings PyTorch. Any CAREamics model works: a checkpoint (`.ckpt`) or a
+BioImage.IO archive (`.zip`), Noise2Void, CARE or Noise2Noise.
 """
 
 from __future__ import annotations
@@ -109,7 +109,7 @@ def denoise_image(
     tile_overlap: Sequence[int] | None = None,
     batch_size: int = 1,
 ) -> np.ndarray:
-    """Denoise one single-channel ``(z, y, x)`` or ``(y, x)`` image.
+    """Denoise one single-channel `(z, y, x)` or `(y, x)` image.
 
     Returns a float32 array of the same shape.
     """
@@ -147,10 +147,10 @@ def denoise_image(
 
 
 def denoise_tile(tile: np.ndarray, cfg: dict[str, Any]) -> np.ndarray:
-    """Denoise a tile: ``[membrane, nuclei]`` each with its own model.
+    """Denoise a tile: `[membrane, nuclei]` each with its own model.
 
-    The first (segmented) channel uses ``model``; a nuclear channel, when
-    the tile carries one, uses ``nuclei_model`` or stays as it is.
+    The first (segmented) channel uses `model`; a nuclear channel, when
+    the tile carries one, uses `nuclei_model` or stays as it is.
     """
     kw = dict(
         tile_size=cfg.get("tile_size"),
@@ -182,10 +182,10 @@ def denoise_fn(
     fn :
         Any per-tile segmentation function.
     model :
-        CAREamics model for the segmented channel: a checkpoint (``.ckpt``,
-        e.g. from :func:`train_n2v`) or a BioImage.IO ``.zip``.
+        CAREamics model for the segmented channel: a checkpoint (`.ckpt`,
+        e.g. from :func:`train_n2v`) or a BioImage.IO `.zip`.
     nuclei_model :
-        Model for the nuclear channel (``nuclei_channel``), which keeps its
+        Model for the nuclear channel (`nuclei_channel`), which keeps its
         raw intensities without one.
     tile_size, tile_overlap :
         CAREamics' own tiling inside a patchworks tile (VRAM). Defaults:
@@ -197,7 +197,7 @@ def denoise_fn(
     Returns
     -------
     Callable[[ndarray], ndarray]
-        Picklable ``tile -> labels``.
+        Picklable `tile -> labels`.
     """
     _require_careamics()
     for path in (model, nuclei_model):
@@ -301,10 +301,10 @@ def train_n2v(
     Parameters
     ----------
     store :
-        OME-Zarr image (the workflow's ``<work_dir>/image.zarr``).
+        OME-Zarr image (the workflow's `<work_dir>/image.zarr`).
     out :
-        Where to write the trained checkpoint (``.ckpt``), which
-        ``denoise: {model: ...}`` then loads.
+        Where to write the trained checkpoint (`.ckpt`), which
+        `denoise: {model: ...}` then loads.
     channel, level :
         Channel and pyramid level -- the ones the segmentation reads.
     crop_shape, n_crops :
@@ -312,8 +312,8 @@ def train_n2v(
         (:func:`training_crops`). A few hundred million voxels is plenty;
         Noise2Void learns the noise, not the objects.
     patch_size :
-        Training patch, ``(z, y, x)`` or ``(y, x)``; each side a multiple of
-        8 and at least 8. Default ``(16, 64, 64)`` / ``(64, 64)``.
+        Training patch, `(z, y, x)` or `(y, x)`; each side a multiple of
+        8 and at least 8. Default `(16, 64, 64)` / `(64, 64)`.
     batch_size, epochs :
         Training length. 30 epochs takes minutes to an hour on one GPU.
     n2v2 :

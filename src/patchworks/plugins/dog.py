@@ -13,7 +13,7 @@ Usage
 >>> result = tile_process("image.zarr", fn, tile_shape=(1, 2048, 2048),  # doctest: +SKIP
 ...                       overlap=8, write_to="labels.zarr", progress=True)
 
-With deconvolution first (widen ``overlap`` to cover the PSF support):
+With deconvolution first (widen `overlap` to cover the PSF support):
 
 >>> fn = dog_label_fn(  # doctest: +SKIP
 ...     low_sigma=1.0, high_sigma=3.0, threshold=0.02,
@@ -24,7 +24,7 @@ With deconvolution first (widen ``overlap`` to cover the PSF support):
 ... )
 >>> result = tile_process("image.zarr", fn, tile_shape=(1, 2048, 2048), overlap=32)  # doctest: +SKIP
 
-For the Snakemake workflow's ``method: "custom"`` (see
+For the Snakemake workflow's `method: "custom"` (see
 docs/guide/custom_segmentation.md), use the
 :func:`segment` adapter instead of the factory directly:
 
@@ -85,8 +85,8 @@ def decon_voxel_kwargs(
 ) -> dict[str, float]:
     """pycudadecon's voxel-size arguments, derived from a calibration.
 
-    ``dxdata``/``dzdata`` describe the **image**, so they come straight from
-    its calibration. ``dxpsf``/``dzpsf`` describe the **PSF file**, which is
+    `dxdata`/`dzdata` describe the **image**, so they come straight from
+    its calibration. `dxpsf`/`dzpsf` describe the **PSF file**, which is
     only the same when the PSF was acquired on the same system at the same
     sampling -- pass *psf_voxel_size* when it was not.
 
@@ -97,15 +97,15 @@ def decon_voxel_kwargs(
     ----------
     voxel_size : dict
         Image calibration, e.g. from
-        :func:`patchworks.plugins.ome_zarr.read_pixel_size`. Needs ``x`` (or
-        ``y``) for the lateral size and ``z`` for the axial one.
+        :func:`patchworks.plugins.ome_zarr.read_pixel_size`. Needs `x` (or
+        `y`) for the lateral size and `z` for the axial one.
     psf_voxel_size : dict, optional
         The PSF's own calibration. Defaults to *voxel_size*.
 
     Returns
     -------
     dict
-        ``dxdata``/``dzdata``/``dxpsf``/``dzpsf``, omitting any the
+        `dxdata`/`dzdata`/`dxpsf`/`dzpsf`, omitting any the
         calibration cannot supply.
 
     Examples
@@ -150,43 +150,43 @@ def dog_label_fn(
     connectivity: int = 1,
     intensity_range: "tuple[float, float] | None" = None,
 ) -> Callable[[np.ndarray], np.ndarray]:
-    """Return a ready-to-use DoG labeler for ``tile_process``.
+    """Return a ready-to-use DoG labeler for `tile_process`.
 
     Parameters
     ----------
     low_sigma, high_sigma:
         Gaussian sigmas for the narrow/wide blur, one number or one per axis.
-        ``dog = blur(low_sigma) - blur(high_sigma)``. In pixels by default,
+        `dog = blur(low_sigma) - blur(high_sigma)`. In pixels by default,
         which on an anisotropic stack blurs z far further (physically) than
         x/y; see *sigma_units*.
     threshold:
-        Binary threshold applied to the DoG image (``dog > threshold``):
+        Binary threshold applied to the DoG image (`dog > threshold`):
         in the image's intensity units, or, with *intensity_range*, as a
         fraction of that range.
     use_gpu:
         Run gaussian_filter + label on GPU via cupy/cupyx instead of scipy.
-        Independent of ``decon_kwargs`` — pycudadecon always needs a CUDA
+        Independent of `decon_kwargs` — pycudadecon always needs a CUDA
         GPU regardless of this flag (it takes/returns plain NumPy), and this
         flag only picks the backend for the blur/label steps that follow.
     decon_kwargs:
         If given, each tile is first deconvolved via
-        ``pycudadecon.decon(block, **decon_kwargs)`` before the DoG step.
-        ``None`` (default) skips deconvolution. pycudadecon is CUDA-only, so
+        `pycudadecon.decon(block, **decon_kwargs)` before the DoG step.
+        `None` (default) skips deconvolution. pycudadecon is CUDA-only, so
         a SLURM job running this needs a GPU allocated regardless of
-        ``use_gpu`` above. Widen ``tile_process``'s ``overlap`` to cover the
+        `use_gpu` above. Widen `tile_process`'s `overlap` to cover the
         PSF support when deconvolving, so edge tiles don't get truncated
         context.
 
-        ``dxdata``/``dzdata``/``dxpsf``/``dzpsf`` are filled in from
+        `dxdata`/`dzdata`/`dxpsf`/`dzpsf` are filled in from
         *voxel_size* when you leave them out, so the voxel sizes cannot drift
         away from the image they describe. Anything you set explicitly wins.
     voxel_size:
-        Physical voxel size as ``{"z": .., "y": .., "x": ..}``. The Snakemake
+        Physical voxel size as `{"z": .., "y": .., "x": ..}`. The Snakemake
         workflow passes the image's own calibration automatically; from the
         API, :func:`patchworks.plugins.ome_zarr.read_pixel_size` reads it from
         a store.
     sigma_units:
-        ``"px"`` (default) or ``"um"``. With ``"um"`` the sigmas are
+        `"px"` (default) or `"um"`. With `"um"` the sigmas are
         physical distances, converted per axis with *voxel_size* -- so a
         cilium is blurred by the same distance along z as across it, however
         coarse the z-step.
@@ -196,12 +196,12 @@ def dog_label_fn(
         26-neighbours). A thin oblique cilium is a staircase of voxels that
         touch along edges or corners, and breaks into fragments at 1. The
         merge must join tiles with the same value: the workflow passes it on
-        by itself; from the API, give ``merge_tile_labels(connectivity=)``.
+        by itself; from the API, give `merge_tile_labels(connectivity=)`.
 
     intensity_range:
-        ``(low, high)`` of the whole image's channel, from
+        `(low, high)` of the whole image's channel, from
         :func:`patchworks.intensity_range`; the workflow measures it (1st
-        and 99.9th percentiles). The DoG is divided by ``high - low``, so
+        and 99.9th percentiles). The DoG is divided by `high - low`, so
         *threshold* means the same on an 8-bit or a 16-bit image, and on
         every tile. Without it a threshold such as 0.02 is in raw counts,
         which on a 16-bit image keeps nearly every voxel brighter than its
@@ -210,7 +210,7 @@ def dog_label_fn(
     Returns
     -------
     Callable[[ndarray], ndarray]
-        Picklable function ready for ``tile_process``.
+        Picklable function ready for `tile_process`.
     """
     if connectivity not in (1, 2, 3):
         raise ValueError(
@@ -343,7 +343,7 @@ def _decon_ints(kwargs: dict[str, Any]) -> dict[str, Any]:
 
 
 def _cached_decon(img: np.ndarray, kwargs: dict[str, Any]) -> np.ndarray:
-    """``pycudadecon.decon(img, **kwargs)``, with its setup cached per process.
+    """`pycudadecon.decon(img, **kwargs)`, with its setup cached per process.
 
     The OTF is generated once per PSF + OTF settings, and cudaDecon is
     initialised once per tile shape (edge tiles differ, and re-initialise).
@@ -389,7 +389,7 @@ def _cached_decon(img: np.ndarray, kwargs: dict[str, Any]) -> np.ndarray:
 
 
 def _axial_fwhm_um(wavelength_nm: float, na: float, n: float) -> float:
-    """Widefield axial FWHM, ``0.88 lambda / (n - sqrt(n^2 - NA^2))``."""
+    """Widefield axial FWHM, `0.88 lambda / (n - sqrt(n^2 - NA^2))`."""
     na = min(na, n * 0.999)
     return 0.88 * (wavelength_nm / 1000) / (n - (n * n - na * na) ** 0.5)
 
@@ -397,11 +397,11 @@ def _axial_fwhm_um(wavelength_nm: float, na: float, n: float) -> float:
 def _resolve_dup_rev_z(
     kwargs: dict[str, Any], shape: tuple[int, ...]
 ) -> dict[str, Any]:
-    """Decide ``dup_rev_z: "auto"`` for a tile of *shape*.
+    """Decide `dup_rev_z: "auto"` for a tile of *shape*.
 
     cudaDecon's FFTs wrap around in z, so on a tile only a few PSF lengths
     deep, light from its top planes bleeds into its bottom ones (and back):
-    faint ghost copies of objects near either face. ``dup_rev_z`` mirrors
+    faint ghost copies of objects near either face. `dup_rev_z` mirrors
     the stack in z first, which removes the wrap at twice the z-work. "auto"
     turns it on when the tile is shallower than 4 axial FWHMs of the PSF
     (estimated from wavelength, NA and immersion index -- the same values
@@ -468,7 +468,7 @@ def _run(block: np.ndarray, dog_dict: dict[str, Any]) -> np.ndarray:
     Returns
     -------
     np.ndarray
-        Integer (``int32``) label array of the same shape.
+        Integer (`int32`) label array of the same shape.
     """
     use_gpu = dog_dict["use_gpu"]
     # Deconvolution is CUDA whatever use_gpu says: retry device OOMs.
@@ -520,7 +520,7 @@ def _pad_for_decon(img: np.ndarray) -> tuple[np.ndarray, tuple[slice, ...]]:
     neighbouring tiles overlap and are stitched: seams orphaned labels at
     several times the rate inside tiles. Mirroring by at least
     :data:`DECON_MARGIN` on each side, up to a length cudaDecon keeps whole,
-    moves both effects out of the tile. z is left alone: ``dup_rev_z``
+    moves both effects out of the tile. z is left alone: `dup_rev_z`
     covers its wrap, and its depth decides that.
 
     Examples
@@ -550,7 +550,7 @@ def _restore_shape(arr: np.ndarray, shape: tuple[int, ...]) -> np.ndarray:
     axis down to an FFT-efficient length (e.g. 1084 -> 1080, since
     1080 = 2**3 * 3**3 * 5 while 1084 = 4 * 271) and trims the excess off the
     high end, leaving voxel (0, 0, 0) where it was. Re-centring content that
-    was never centred shifts every voxel by ``excess // 2`` -- measured at 2
+    was never centred shifts every voxel by `excess // 2` -- measured at 2
     px in y and x on a real (32, 1084, 1084) tile, in the same direction on
     every tile. That is invisible on a cell tens of voxels across and glaring
     on a cilium a few voxels across, which is exactly how it was found.
@@ -680,13 +680,13 @@ def _warn_if_dense(mask) -> None:
 
 
 def segment(tile: np.ndarray, **kwargs: Any) -> np.ndarray:
-    """``dog_label_fn`` as a direct-call function for ``method: "custom"``.
+    """`dog_label_fn` as a direct-call function for `method: "custom"`.
 
-    Snakemake's ``custom`` method (see docs/guide/snakemake.md) calls
-    ``segment(tile, **kwargs)`` directly rather than building a factory
+    Snakemake's `custom` method (see docs/guide/snakemake.md) calls
+    `segment(tile, **kwargs)` directly rather than building a factory
     first. This adapts :func:`dog_label_fn` to that contract, so this
-    plugin needs no dedicated wiring in the workflow's ``build_fn`` —
-    ``method: "custom"`` with ``module: "patchworks.plugins.dog"`` already
+    plugin needs no dedicated wiring in the workflow's `build_fn` —
+    `method: "custom"` with `module: "patchworks.plugins.dog"` already
     covers it.
 
     Parameters
@@ -694,18 +694,18 @@ def segment(tile: np.ndarray, **kwargs: Any) -> np.ndarray:
     tile : np.ndarray
         One image tile.
     **kwargs : Any
-        Forwarded to :func:`dog_label_fn` (``low_sigma``, ``high_sigma``,
-        ``threshold``, ``use_gpu``, ``decon_kwargs``, ...).
+        Forwarded to :func:`dog_label_fn` (`low_sigma`, `high_sigma`,
+        `threshold`, `use_gpu`, `decon_kwargs`, ...).
 
     Returns
     -------
     np.ndarray
-        Integer (``int32``) label array of the same shape.
+        Integer (`int32`) label array of the same shape.
     """
     return dog_label_fn(**kwargs)(tile)
 
 
-# ``segment`` takes **kwargs, so its own signature accepts anything. Point at
+# `segment` takes **kwargs, so its own signature accepts anything. Point at
 # the function that really validates them so the workflow can reject a typo'd
 # key in `prepare` instead of on a GPU node hours later.
 setattr(segment, "patchworks_kwargs_target", dog_label_fn)
@@ -717,7 +717,7 @@ _CUPY_HINT = (
 
 
 def _requires(kwargs: dict) -> dict[str, str]:
-    """Modules these ``kwargs`` need (the workflow checks them up front)."""
+    """Modules these `kwargs` need (the workflow checks them up front)."""
     # pycudadecon (decon_kwargs) is not listed: every workflow environment
     # has it, and checking for it refused the launcher's configs on a
     # machine that only writes them.

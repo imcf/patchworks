@@ -1,12 +1,12 @@
 """Snakemake script: build the max-pooled occupancy map for one level.
 
-Its own rule, rather than work done inside ``run_multi``, because it streams
+Its own rule, rather than work done inside `run_multi`, because it streams
 the entire image: doing that in the driver process runs it on the **login
 node**, where a multi-terabyte read is killed without a traceback. As a rule
 it is submitted like any other job and gets a real allocation.
 
 Built once per image and shared by every config that segments it -- otherwise
-the concurrently-running ``prepare`` steps would each stream the whole volume
+the concurrently-running `prepare` steps would each stream the whole volume
 and all but one would throw the result away.
 """
 

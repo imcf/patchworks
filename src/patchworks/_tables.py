@@ -122,7 +122,7 @@ def _pairs(ndim: int) -> list[tuple[int, int]]:
 
 
 def _ids_inverse(values: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """``np.unique(values, return_inverse=True)``, by counting rather than
+    """`np.unique(values, return_inverse=True)`, by counting rather than
     sorting when the ids span a range not much larger than *values*.
 
     A block's ids are a few hundred of a narrow range, and sorting millions
@@ -253,7 +253,7 @@ def tile_partial(
     Measured in slabs of at most *block_voxels* along the first axis and
     combined, so memory stays bounded by the slab, not the tile. *offset* is
     the tile's position in the full image: centroids and bounding boxes come
-    out in its coordinates. ``None`` for a tile without labels.
+    out in its coordinates. `None` for a tile without labels.
     """
     return _slab_partial(np.asarray(labels), offset, [], block_voxels)
 
@@ -286,7 +286,7 @@ def _slab_partial(
 
 
 def _as_partial(m: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
-    """A :func:`_merge` result back in partial form (``ids`` for ``label``)."""
+    """A :func:`_merge` result back in partial form (`ids` for `label`)."""
     out = dict(m)
     out["ids"] = out.pop("label")
     return out
@@ -295,9 +295,9 @@ def _as_partial(m: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
 def combine_partials(
     parts: Sequence[dict[str, np.ndarray]],
 ) -> "dict[str, np.ndarray] | None":
-    """One row per object from partial sums whose ``ids`` are already global
-    (pieces of one object carry the same id): ``label``, ``count``, ``mean``,
-    ``m2``, ``lo``, ``hi``, as :func:`_merge`. ``None`` when there are none."""
+    """One row per object from partial sums whose `ids` are already global
+    (pieces of one object carry the same id): `label`, `count`, `mean`,
+    `m2`, `lo`, `hi`, as :func:`_merge`. `None` when there are none."""
     parts = [p for p in parts if p is not None and len(p["ids"])]
     if not parts:
         return None
@@ -426,7 +426,7 @@ def _measure_worker_init() -> None:
 def _measure_block(
     key: int, sl: tuple[slice, ...]
 ) -> "dict[str, np.ndarray] | None":
-    """The partial sums of one block of the arrays ``_MEASURING[key]``."""
+    """The partial sums of one block of the arrays `_MEASURING[key]`."""
     labels, images = _MEASURING[key]
     lab = np.asarray(labels[sl])
     if not lab.any():
@@ -458,22 +458,22 @@ def measure_objects(
         Integer labels, 0 = background.
     images : mapping of str to array-like, optional
         Intensity images of the same shape, by name. Each adds
-        ``mean_intensity_<name>`` and ``std_intensity_<name>`` columns --
+        `mean_intensity_<name>` and `std_intensity_<name>` columns --
         and one more full read of that image, so only ask for what you use.
     axes : str, optional
-        One letter per axis of *labels* (default ``"zyx"``-style by ndim).
+        One letter per axis of *labels* (default `"zyx"`-style by ndim).
     pixel_size : mapping, optional
-        Micrometres per voxel by axis letter. Adds ``area_um3`` (or
-        ``area_um2``) and ``centroid_<axis>_um`` columns.
+        Micrometres per voxel by axis letter. Adds `area_um3` (or
+        `area_um2`) and `centroid_<axis>_um` columns.
     n_workers : int, optional
         Blocks read in parallel (default: the CPUs this job was given).
 
     Returns
     -------
     dict of str to np.ndarray
-        Columns, all aligned: ``label``, ``area_voxels``,
-        ``centroid_<axis>``, ``bbox_min_<axis>``, ``bbox_max_<axis>``
-        (inclusive, voxel indices), ``cov_<a><b>`` (the spread of the
+        Columns, all aligned: `label`, `area_voxels`,
+        `centroid_<axis>`, `bbox_min_<axis>`, `bbox_max_<axis>`
+        (inclusive, voxel indices), `cov_<a><b>` (the spread of the
         object's voxels, in voxels squared: its size and orientation, see
         :func:`shape_columns`), plus the optional ones above. Column
         names follow napari-chunked-regionprops, so either can read the
@@ -602,9 +602,9 @@ def write_table(
     Parameters
     ----------
     group : str, Path or zarr.Group
-        The label group (e.g. ``"scan.zarr/labels/cells"``).
+        The label group (e.g. `"scan.zarr/labels/cells"`).
     columns : mapping of str to np.ndarray
-        Equal-length 1-D columns; must include ``label``.
+        Equal-length 1-D columns; must include `label`.
     attrs : mapping, optional
         Extra table metadata (merged over the fingerprint and axes).
     """
@@ -704,7 +704,7 @@ def read_columns(
 def read_table(
     group: Union[str, Path], *, check: bool = True
 ) -> "pd.DataFrame":
-    """The table of label group *group* as a DataFrame indexed by ``label``.
+    """The table of label group *group* as a DataFrame indexed by `label`.
 
     Examples
     --------
@@ -754,12 +754,12 @@ def compute_table(
     channels: Sequence[int] | None = None,
     n_workers: int | None = None,
 ) -> dict[str, np.ndarray]:
-    """Measure ``labels/<name>`` of *store* and store the result as its table.
+    """Measure `labels/<name>` of *store* and store the result as its table.
 
     Parameters
     ----------
     store : str or Path
-        OME-ZARR image store holding ``labels/<name>``.
+        OME-ZARR image store holding `labels/<name>`.
     name : str
         Label image name.
     channels : sequence of int, optional
@@ -816,8 +816,8 @@ def compute_table(
 def write_table_from_sums(
     store: Union[str, Path], name: str, sums: dict[str, np.ndarray]
 ) -> dict[str, np.ndarray]:
-    """Store ``labels/<name>``'s table from combined per-tile sums (the
-    merge's ``objects_out``), as :func:`compute_table` would from the labels.
+    """Store `labels/<name>`'s table from combined per-tile sums (the
+    merge's `objects_out`), as :func:`compute_table` would from the labels.
 
     Call it once the label group is registered: the table records the
     labels' fingerprint, which the registration completes.
@@ -856,13 +856,13 @@ def relate_tables(
 ) -> dict[int, dict[str, float]]:
     """Add *child*'s parent columns: which *parent* object each one is in.
 
-    Adds ``<parent>_id`` (0 = in none), ``<parent>_overlap`` (fraction of
-    the child inside it) and ``<parent>_overlap_voxels`` to the child's
+    Adds `<parent>_id` (0 = in none), `<parent>_overlap` (fraction of
+    the child inside it) and `<parent>_overlap_voxels` to the child's
     table, computing the child's table first if it has none.
 
     With *max_distance_um*, a child touching no parent gets the **nearest**
     one within that distance instead (a cilium beside its cell rather than
-    on it), and a ``<parent>_distance_um`` column: 0 when overlapping, the
+    on it), and a `<parent>_distance_um` column: 0 when overlapping, the
     gap for those assigned by distance, NaN for none within reach.
 
     Parameters
@@ -870,7 +870,7 @@ def relate_tables(
     store : str or Path
         OME-ZARR store holding both label images.
     child, parent : str
-        Label image names, e.g. ``"cilia_labels"`` in ``"cyto_labels"``.
+        Label image names, e.g. `"cilia_labels"` in `"cyto_labels"`.
     matches : mapping, optional
         :func:`~patchworks.label_relations` output for this pair, when
         already computed -- otherwise it is computed here (a read of both).
@@ -941,7 +941,7 @@ def relate_tables(
     return dict(matches)
 
 
-#: Attrs key on a ``<parent>_id`` column: the parent labels it was made from.
+#: Attrs key on a `<parent>_id` column: the parent labels it was made from.
 RELATION_KEY = "patchworks_relation"
 
 
@@ -952,7 +952,7 @@ def relation_current(
     max_distance_um: float | None = None,
 ) -> bool:
     """Whether *child*'s table holds its relation to *parent*'s current
-    labels: both tables current, and the ``<parent>_id`` column computed
+    labels: both tables current, and the `<parent>_id` column computed
     from the parent labels there now (and the same *max_distance_um*).
 
     False for columns from before this was recorded: unknown, not current.
@@ -987,7 +987,7 @@ def nearest_parents(
     n_workers: int | None = None,
 ) -> dict[int, tuple[int, float]]:
     """The nearest *parent* object to each of *labels* (objects of *child*),
-    within *max_distance_um*: ``{label: (parent_id, distance_um)}``.
+    within *max_distance_um*: `{label: (parent_id, distance_um)}`.
 
     Exact surface-to-surface distance in µm (anisotropic voxels included),
     from the voxels around each object only: its bounding box grown by
@@ -1038,7 +1038,7 @@ def physical_cov(
     df: "pd.DataFrame", axes: str, pixel_size: Mapping[str, float] | None
 ) -> np.ndarray:
     """Each object's spread as an (n, ndim, ndim) matrix in µm² (voxels²
-    when uncalibrated), from its ``cov_<a><b>`` columns."""
+    when uncalibrated), from its `cov_<a><b>` columns."""
     ndim = len(axes)
     size = np.array([float((pixel_size or {}).get(ax, 1.0)) for ax in axes])
     cov = np.zeros((len(df), ndim, ndim))
@@ -1063,10 +1063,10 @@ def shape_columns(
 ) -> dict[str, np.ndarray]:
     """Length, elongation and main axis of each object, from its moments.
 
-    ``length`` is the extent along the main axis of a uniform rod with the
-    same spread (``sqrt(12 * largest variance)``): exact for a straight
-    rod, shorter than the path of a curved one. ``elongation`` is the ratio
-    of the two largest spreads (1: round, large: rod-like). ``axis_<a>``
+    `length` is the extent along the main axis of a uniform rod with the
+    same spread (`sqrt(12 * largest variance)`): exact for a straight
+    rod, shorter than the path of a curved one. `elongation` is the ratio
+    of the two largest spreads (1: round, large: rod-like). `axis_<a>`
     is the main axis as a unit vector (sign fixed so its first non-zero
     component is positive). In µm when *pixel_size* is known.
 

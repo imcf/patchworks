@@ -65,10 +65,10 @@ RULES_KEY = "patchworks_review_rules"
 
 
 def write_rules(store: Union[str, Path], rules: Mapping[str, Any]) -> None:
-    """Store review rules for *store* (``expect``, ``min_overlap``,
-    ``position``), read by
+    """Store review rules for *store* (`expect`, `min_overlap`,
+    `position`), read by
     :class:`Review` when none are passed. The workflow writes the multi
-    config's ``review:`` block here."""
+    config's `review:` block here."""
     unknown = set(rules) - {"expect", "min_overlap", "position"}
     if unknown:
         raise ValueError(
@@ -97,7 +97,7 @@ def read_rules(store: Union[str, Path]) -> dict[str, Any]:
 
 
 def review_updated(store: Union[str, Path], name: str) -> float | None:
-    """When the review decisions about ``labels/<name>`` last changed
+    """When the review decisions about `labels/<name>` last changed
     (seconds since the epoch), or None if never."""
     from ._io import open_group_any
 
@@ -165,20 +165,20 @@ class Review:
         OME-ZARR image store whose label images carry tables.
     expect : mapping, optional
         Expected child counts per parent object:
-        ``{"cyto_labels": {"nuclei_labels": (1, 1), "cilia_labels": (0, 2)}}``
+        `{"cyto_labels": {"nuclei_labels": (1, 1), "cilia_labels": (0, 2)}}`
         -- a cell with no nucleus or 3 cilia is then flagged. Falls back to
-        what the tables' metadata recorded (the workflow's ``review:``).
+        what the tables' metadata recorded (the workflow's `review:`).
     min_overlap : float or mapping, optional
         A child less than this fraction inside its parent is flagged
-        (default 0.5; per ``{child: {parent: value}}`` if a mapping).
+        (default 0.5; per `{child: {parent: value}}` if a mapping).
     seam_tolerance : int, optional
         Voxels of slack when matching two objects meeting at a tile seam.
     names : iterable of str, optional
         Only these label images (default: every one with a table).
     position : mapping, optional
         Classify objects by where they sit in their parent:
-        ``{"cilia_labels": {"parent": "cyto_labels", "apical":
-        "nuclei_labels"}}`` -- see :meth:`positions`. Falls back to the
+        `{"cilia_labels": {"parent": "cyto_labels", "apical":
+        "nuclei_labels"}}` -- see :meth:`positions`. Falls back to the
         store's recorded rules.
 
     Examples
@@ -347,13 +347,13 @@ class Review:
         Parameters
         ----------
         action : {"ok", "wrong", "parent", "merge"}
-            ``ok``: correct as it is. ``wrong``: not a real object (dropped
-            from the corrected tables). ``parent``: belongs to *parent_id*
-            of label image *parent* (0 = to none). ``merge``: the same
-            object as *into*. ``position``: its position class is
+            `ok`: correct as it is. `wrong`: not a real object (dropped
+            from the corrected tables). `parent`: belongs to *parent_id*
+            of label image *parent* (0 = to none). `merge`: the same
+            object as *into*. `position`: its position class is
             *position* (one of :data:`POSITIONS`), whatever was computed.
         queue : str
-            The queue it was reviewed from; ``"random"`` decisions feed the
+            The queue it was reviewed from; `"random"` decisions feed the
             error estimate.
         """
         if name not in self.tables:
@@ -500,11 +500,11 @@ class Review:
         Rejected objects are dropped; merged objects become one row (sizes
         added, centroids, spreads and intensities combined exactly, boxes
         joined); parent columns follow reassignments and the parents' own
-        merges; ``qc`` says ``ok``, ``fixed`` or ``""`` (not reviewed).
-        Derived columns: ``n_<child>`` (children counted), ``length_um``,
-        ``elongation``, ``axis_<a>`` (shape, see
+        merges; `qc` says `ok`, `fixed` or `""` (not reviewed).
+        Derived columns: `n_<child>` (children counted), `length_um`,
+        `elongation`, `axis_<a>` (shape, see
         :func:`~patchworks._tables.shape_columns`) and, for label images
-        with a position rule, ``position`` and its measures (see
+        with a position rule, `position` and its measures (see
         :meth:`positions`).
         """
         if name in self._cache:
@@ -553,27 +553,27 @@ class Review:
     ) -> dict[str, Any]:
         """Where each object of *name* sits in its parent.
 
-        Per parent object, an apical axis: a fixed direction (``"+z"``:
+        Per parent object, an apical axis: a fixed direction (`"+z"`:
         apical is up the z axis), or pointing away from the parent's
-        children of another label image (``"nuclei_labels"``: away from
+        children of another label image (`"nuclei_labels"`: away from
         the nucleus, for epithelia whose nuclei sit basally), or towards
-        them (``"towards:<name>"``). Each object's **base** is its end
+        them (`"towards:<name>"`). Each object's **base** is its end
         nearer the parent's centre (a cilium grows out from its base).
 
         The class is the parent surface the base is nearest to -- top
-        (``apical``), bottom (``basal``) or side wall (``lateral``) --
+        (`apical`), bottom (`basal`) or side wall (`lateral`) --
         each depth measured relative to the parent's size in that
-        direction; ``central`` when deeper than ``central_depth`` (default
+        direction; `central` when deeper than `central_depth` (default
         0.5, i.e. half-way) from all three. The parent's shape is taken
         from its moments (an equivalent cylinder), so this is a
         classification, not a surface distance.
 
-        Returns columns ``position`` (the class; ``outside`` with no
-        parent; ``unknown`` when the axis cannot be told, e.g. no nucleus),
-        ``position_axial`` (-1 basal .. +1 apical, in half-heights of the
-        parent along its axis), ``position_radial`` (0 on the axis .. 1 at
-        the side) and ``angle_to_axis_deg`` (0: along the apical axis, 90:
-        across it). A reviewer's ``position`` decision overrides the class.
+        Returns columns `position` (the class; `outside` with no
+        parent; `unknown` when the axis cannot be told, e.g. no nucleus),
+        `position_axial` (-1 basal .. +1 apical, in half-heights of the
+        parent along its axis), `position_radial` (0 on the axis .. 1 at
+        the side) and `angle_to_axis_deg` (0: along the apical axis, 90:
+        across it). A reviewer's `position` decision overrides the class.
         """
         from ._tables import physical_centroids, physical_cov
 
@@ -722,7 +722,7 @@ class Review:
         return 0.5
 
     def flag_table(self, name: str) -> "pd.DataFrame":
-        """Flagged objects of *name*: ``score`` and ``partner`` (-1: none),
+        """Flagged objects of *name*: `score` and `partner` (-1: none),
         indexed by label, most suspicious first.
 
         Cached until the next decision: the panel asks several times per
@@ -986,8 +986,8 @@ class Review:
     def queue(self, name: str, mode: str = "flagged") -> list[int]:
         """Objects still to review, in review order.
 
-        ``flagged``: flagged objects, most suspicious first. ``random``: a
-        fixed random order over every object (the error estimate). ``all``:
+        `flagged`: flagged objects, most suspicious first. `random`: a
+        fixed random order over every object (the error estimate). `all`:
         every object by id.
         """
         done = self.decisions[name]
@@ -1054,9 +1054,9 @@ class Review:
     def export(self, out_dir: Union[str, Path], fmt: str = "csv") -> list[Path]:
         """Write every corrected table to *out_dir*, one file per label image.
 
-        ``csv`` files load straight into napari-chunked-regionprops
-        ("Reload previous results"). ``xlsx`` falls back to csv for a table
-        longer than Excel allows. ``parquet`` needs pyarrow.
+        `csv` files load straight into napari-chunked-regionprops
+        ("Reload previous results"). `xlsx` falls back to csv for a table
+        longer than Excel allows. `parquet` needs pyarrow.
         """
         out = Path(out_dir)
         out.mkdir(parents=True, exist_ok=True)
@@ -1093,7 +1093,7 @@ class Review:
 
         Sheet *child*: each object, its parent, overlap and review status.
         Sheet *parent*: each parent object and how many children it holds.
-        Written as two csv files (``<stem>_<name>.csv``) when a sheet would
+        Written as two csv files (`<stem>_<name>.csv`) when a sheet would
         exceed Excel's row limit.
         """
         path = Path(path)
@@ -1154,7 +1154,7 @@ class Review:
     def write_reviewed_labels(
         self, name: str, *, suffix: str = "_reviewed"
     ) -> str:
-        """Write ``labels/<name><suffix>``: the labels with the decisions
+        """Write `labels/<name><suffix>`: the labels with the decisions
         applied to the voxels (rejected objects erased, merged objects one
         id), plus its corrected table.
 
@@ -1229,7 +1229,7 @@ def _range(rng: Any) -> tuple[int, int]:
 
 
 def _nice(name: str) -> str:
-    """``cyto_labels`` -> ``cyto`` for messages."""
+    """`cyto_labels` -> `cyto` for messages."""
     return name[: -len("_labels")] if name.endswith("_labels") else name
 
 

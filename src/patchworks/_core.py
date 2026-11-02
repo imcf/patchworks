@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 
 def _attach_log_file(path: str) -> None:
-    """Tee the ``patchworks`` INFO log to *path* (replacing a prior auto file).
+    """Tee the `patchworks` INFO log to *path* (replacing a prior auto file).
 
     A previous auto-attached handler is removed first so repeated calls do not
     stack handlers. The package logger level is raised to INFO if needed so the
@@ -60,7 +60,7 @@ def _attach_log_file(path: str) -> None:
 
 
 def _resolve_tile_shape(tile_shape, shape, dtype, use_gpu):
-    """Turn a ``tile_shape`` argument into a tuple (or None to keep chunks).
+    """Turn a `tile_shape` argument into a tuple (or None to keep chunks).
 
     Parameters
     ----------
@@ -71,7 +71,7 @@ def _resolve_tile_shape(tile_shape, shape, dtype, use_gpu):
     dtype : data-type
         Image dtype.
     use_gpu : bool
-        Size ``"auto"`` tiles against GPU VRAM instead of RAM.
+        Size `"auto"` tiles against GPU VRAM instead of RAM.
 
     Returns
     -------
@@ -95,7 +95,7 @@ def _resolve_tile_shape(tile_shape, shape, dtype, use_gpu):
 
 
 def _is_zarr_path(path: str) -> bool:
-    """Whether *path* names a ``.zarr`` store (tolerating a trailing slash)."""
+    """Whether *path* names a `.zarr` store (tolerating a trailing slash)."""
     return path.rstrip("/\\").endswith(".zarr")
 
 
@@ -108,7 +108,7 @@ def _start_dashboard_cluster() -> tuple[Any, Any]:
     Returns
     -------
     tuple
-        ``(cluster, client)``, or ``(None, None)`` when ``distributed`` (or
+        `(cluster, client)`, or `(None, None)` when `distributed` (or
         its dashboard) is unavailable -- the threaded scheduler is used then.
     """
     try:
@@ -183,8 +183,8 @@ def _stage_tiles(
 ) -> dict[int, int]:
     """Run *fn* tile by tile into a stage store, via :func:`stage_tile`.
 
-    The engine behind ``stitch="iou"`` (it keeps each tile's halo, which the
-    fused dask pass trims away) and ``resume=True`` (it records each
+    The engine behind `stitch="iou"` (it keeps each tile's halo, which the
+    fused dask pass trims away) and `resume=True` (it records each
     finished tile, so a rerun skips it). Returns every tile's label count,
     which also spares the merge its renumbering pass.
 
@@ -270,7 +270,7 @@ _gpu_job: dict[str, Any] = {}
 def _gpu_worker_init(device_queue: Any) -> None:
     """Pin this worker process to one GPU before anything touches CUDA.
 
-    ``CUDA_VISIBLE_DEVICES`` is read when CUDA initialises, which happens on
+    `CUDA_VISIBLE_DEVICES` is read when CUDA initialises, which happens on
     a worker's first GPU call -- after this -- so torch, cupy or anything
     else in *fn* sees exactly one device, as device 0.
     """
@@ -311,8 +311,8 @@ def _stage_on_gpus(
     Processes, not threads: a CUDA device choice is per-process for most
     frameworks, and a model cached per process (Cellpose's) would otherwise
     be shared across devices. Forked (Linux), so *fn* may be any callable,
-    closures included, and needs no ``__main__`` guard. Yields
-    ``(index, label_count)`` as tiles finish, in any order.
+    closures included, and needs no `__main__` guard. Yields
+    `(index, label_count)` as tiles finish, in any order.
     """
     import multiprocessing as mp
     import sys
@@ -349,10 +349,10 @@ def _stage_on_gpus(
 
 
 def _resolve_gpus(gpus: Any) -> list[str] | None:
-    """Device ids to use for ``gpus=``: an int (the first N visible) or ids.
+    """Device ids to use for `gpus=`: an int (the first N visible) or ids.
 
-    Ids are what ``CUDA_VISIBLE_DEVICES`` holds (indices or ``GPU-``/``MIG-``
-    UUIDs); with it set, ``gpus=2`` means its first two entries.
+    Ids are what `CUDA_VISIBLE_DEVICES` holds (indices or `GPU-`/`MIG-`
+    UUIDs); with it set, `gpus=2` means its first two entries.
     """
     if gpus is None:
         return None
@@ -401,7 +401,7 @@ def _plan(
 ) -> dict[str, Any]:
     """What a run would do, and roughly what it would cost, without it.
 
-    Counts tiles (and, with ``skip_empty``, which hold signal, from the
+    Counts tiles (and, with `skip_empty`, which hold signal, from the
     fast centre-window preview), sizes a tile's memory and the worker pool
     exactly as the run would, and -- with *sample* > 0 -- times *fn* on that
     many real tiles to extrapolate a duration. The first sampled tile also
@@ -551,7 +551,7 @@ def _read_amplification(
     Returns
     -------
     float
-        Read-amplification factor (``bytes_read / bytes_used``).
+        Read-amplification factor (`bytes_read / bytes_used`).
     """
     import math
 
@@ -568,7 +568,7 @@ def _read_amplification(
 def _stage_to_zarr(
     arr: da.Array, path: str, component: str, show_progress: bool
 ) -> None:
-    """Write *arr* to zarr ``path/component``, never loading it into RAM.
+    """Write *arr* to zarr `path/component`, never loading it into RAM.
 
     Parameters
     ----------
@@ -639,7 +639,7 @@ def tile_process(
 ) -> Any:
     """Apply *fn* to every tile of *image* and merge labels globally.
 
-    The core workhorse of patchworks. ``fn`` can be any callable that takes a
+    The core workhorse of patchworks. `fn` can be any callable that takes a
     NumPy array and returns an integer label array of the same shape — Cellpose,
     StarDist, Otsu threshold, your own model, anything.
 
@@ -648,17 +648,17 @@ def tile_process(
     image:
         Dask array *or* path to an OME-ZARR store.
     fn:
-        ``(ndarray) -> ndarray`` returning integer labels of the same shape.
+        `(ndarray) -> ndarray` returning integer labels of the same shape.
         Must be picklable when using distributed schedulers.
     tile_shape:
         Controls tiling before calling *fn*. Accepted values:
 
-        - ``None`` : keep existing dask chunks.
-        - ``tuple`` : use this exact tile shape.
-        - ``"auto"`` : call ``auto_tile_shape`` based on shape and dtype.
-        - ``Callable[[shape, dtype], tuple]`` : called with the image's shape
+        - `None` : keep existing dask chunks.
+        - `tuple` : use this exact tile shape.
+        - `"auto"` : call `auto_tile_shape` based on shape and dtype.
+        - `Callable[[shape, dtype], tuple]` : called with the image's shape
           and dtype; the return value is used. Use this with
-          ``auto_tile_shape_cellpose``:
+          `auto_tile_shape_cellpose`:
 
           .. code-block:: python
 
@@ -671,9 +671,9 @@ def tile_process(
         Voxels of overlap (halo) added to each tile before *fn* is called, so
         objects near tile boundaries have enough spatial context to be
         segmented correctly (Cellpose, StarDist, …). The halo is trimmed off
-        before merging — the output has the original shape. Defaults to ``16``;
-        set it to roughly one object diameter (see ``auto_overlap``) for best
-        results, or ``0`` to disable.
+        before merging — the output has the original shape. Defaults to `16`;
+        set it to roughly one object diameter (see `auto_overlap`) for best
+        results, or `0` to disable.
 
         Merging is always **touching-label** based: after the halo is trimmed,
         labels that touch across a tile boundary are merged into one object.
@@ -682,109 +682,109 @@ def tile_process(
     level:
         Pyramid level when *image* is a path (0 = full resolution).
     use_gpu:
-        When ``tile_shape="auto"``, size tiles against GPU VRAM instead of RAM.
+        When `tile_shape="auto"`, size tiles against GPU VRAM instead of RAM.
         Also forces staging to one tile at a time (no VRAM contention).
     max_workers:
-        Cap the worker threads/processes used for staging and merging. ``None``
+        Cap the worker threads/processes used for staging and merging. `None`
         (default) auto-sizes to the machine: bounded by available RAM (tile
         size) and CPU (leaves one core free) so a run can neither OOM nor pin
         every core. Ignored when a distributed client is active (it manages its
         own concurrency).
     progress:
         Show progress bars for staging, the label write and the pyramid
-        (default ``True``). Set ``False`` to silence them.
+        (default `True`). Set `False` to silence them.
     write_to:
         Explicit output zarr store path. Overrides the default behaviour: the
         merged labels are written here as a single-resolution array named
-        ``output_component`` (no pyramid). When None (default) and *image* is a
-        ``.zarr`` store, labels are written back into that store under the NGFF
-        ``labels/<output_component>/`` group with an auto pyramid, so the image
+        `output_component` (no pyramid). When None (default) and *image* is a
+        `.zarr` store, labels are written back into that store under the NGFF
+        `labels/<output_component>/` group with an auto pyramid, so the image
         and its segmentation live in one file. When None and *image* is an
         array, an auto-temp store is used. Every array written uses the
         active :func:`patchworks.compression` codec (zstd level 1 unless
-        changed); wrap the call in ``with compression("blosc"):`` to pick
+        changed); wrap the call in `with compression("blosc"):` to pick
         another.
     output_component:
-        Label name. The array inside ``write_to``, or the NGFF label image name
-        under ``labels/`` when writing into the input store. Default
-        ``"labels"``.
+        Label name. The array inside `write_to`, or the NGFF label image name
+        under `labels/` when writing into the input store. Default
+        `"labels"`.
     pyramid_levels:
         Number of resolution levels for the in-store label pyramid (only when
-        writing into the input ``.zarr``). Default 5.
+        writing into the input `.zarr`). Default 5.
     pyramid_downscale:
         Per-level X/Y downsampling factor for that pyramid (Z is kept at full
         resolution). Default 2.
     sequential_labels:
-        Renumber merged labels to a contiguous ``1..N`` range. Default False —
+        Renumber merged labels to a contiguous `1..N` range. Default False —
         labels stay globally unique but gappy (block-encoded), which is fine for
         counting/measurement. Uses a cheap linear post-pass (O(voxels)), not the
         O(n_chunks²) dask built-in.
     skip_empty:
         Skip *fn* on background tiles. A tile whose max signal is <=
-        ``empty_threshold`` returns all-zeros immediately. Biggest speed-up for
-        sparse/mostly-background volumes. Use ``estimate_empty_tiles()`` first
+        `empty_threshold` returns all-zeros immediately. Biggest speed-up for
+        sparse/mostly-background volumes. Use `estimate_empty_tiles()` first
         to pick a threshold.
     empty_threshold:
-        Intensity at or below which a tile is empty (``skip_empty=True`` only).
+        Intensity at or below which a tile is empty (`skip_empty=True` only).
         None → auto-derive via Otsu on a bounded sample.
     stage_dir:
-        Where to put the temporary stage store. ``fn`` is always run once per
+        Where to put the temporary stage store. `fn` is always run once per
         tile to this store, then the merge reads it back from disk (running
-        ``fn`` again is never needed). Default → next to ``write_to``, else next
+        `fn` again is never needed). Default → next to `write_to`, else next
         to the input store, else a system temp directory. The store gets a
-        unique ``_pws_stage_<id>.zarr`` name, so concurrent runs sharing a
+        unique `_pws_stage_<id>.zarr` name, so concurrent runs sharing a
         directory never overwrite each other's tiles.
     keep_stage:
         Keep the temp stage store after merging (default: delete it, also
         when the run fails). Its path is logged. Useful for debugging.
     log_file:
-        Where to tee the ``patchworks`` INFO log (including a per-tile
-        ``tile k done`` counter and ETA). ``None``/``False`` (default) writes
-        no file -- configure :mod:`logging` as usual; ``True`` writes
-        ``patchworks.log`` next to the output; a path writes there. Asking
-        for a file also raises the ``patchworks`` logger to INFO.
+        Where to tee the `patchworks` INFO log (including a per-tile
+        `tile k done` counter and ETA). `None`/`False` (default) writes
+        no file -- configure :mod:`logging` as usual; `True` writes
+        `patchworks.log` next to the output; a path writes there. Asking
+        for a file also raises the `patchworks` logger to INFO.
     verbose:
         Log each tile's location and shape as it is processed.
     stitch:
-        How labels are joined across tile boundaries. ``"touch"`` (default)
-        joins any two labels that touch there. ``"iou"`` joins them only when
+        How labels are joined across tile boundaries. `"touch"` (default)
+        joins any two labels that touch there. `"iou"` joins them only when
         both tiles' predictions of the overlap zone agree (IoU >=
-        ``iou_threshold``), so two distinct cells pressed together at a seam
-        stay two; it needs ``overlap > 0`` to have a zone to compare (an axis
+        `iou_threshold`), so two distinct cells pressed together at a seam
+        stay two; it needs `overlap > 0` to have a zone to compare (an axis
         without one falls back to the IoU of the two boundary slices).
     iou_threshold:
-        Minimum IoU for ``stitch="iou"`` (default 0.5).
+        Minimum IoU for `stitch="iou"` (default 0.5).
     resume:
         Make an interrupted run resumable: tiles are staged into a store
-        named after this run's inputs (image, tiling, overlap, ``fn`` and its
+        named after this run's inputs (image, tiling, overlap, `fn` and its
         bound arguments, output), with a record of finished tiles. Rerunning
         the same call skips those tiles; the store is removed once the run
-        succeeds, and kept when it fails. ``stitch="iou"`` and ``resume``
+        succeeds, and kept when it fails. `stitch="iou"` and `resume`
         stage tile by tile in threads rather than through dask, so an
         active distributed client is not used for staging.
     dry_run:
         Only plan: return a dict describing the run -- tile count and grid,
-        tiles with signal (``skip_empty``), workers, memory per tile, output
+        tiles with signal (`skip_empty`), workers, memory per tile, output
         size -- without segmenting or writing anything. Check a tiling
         before a job waits hours in a queue for it.
     plan_sample:
-        With ``dry_run``, also time *fn* on this many real tiles (spread
-        over the image) and extrapolate ``estimated_seconds``.
+        With `dry_run`, also time *fn* on this many real tiles (spread
+        over the image) and extrapolate `estimated_seconds`.
     gpus:
         Segment on several GPUs at once: an int (the first N devices, of
-        ``CUDA_VISIBLE_DEVICES`` if set) or a list of device ids. Each GPU
+        `CUDA_VISIBLE_DEVICES` if set) or a list of device ids. Each GPU
         gets its own worker process, pinned to it before CUDA starts, and
         tiles are handed out as workers free up. Linux only. Stages tile by
-        tile like ``stitch="iou"``; combine freely with it and ``resume``.
+        tile like `stitch="iou"`; combine freely with it and `resume`.
 
     Returns
     -------
     da.Array
         Globally relabeled array (int32) backed by the output zarr (the input
-        store's ``labels/<name>/0`` by default, ``write_to`` when given, else an
+        store's `labels/<name>/0` by default, `write_to` when given, else an
         auto-temp zarr). Never loads the full volume into RAM. Call
-        ``.compute()`` yourself only if the result fits in RAM. With
-        ``dry_run=True``, the plan dict instead.
+        `.compute()` yourself only if the result fits in RAM. With
+        `dry_run=True`, the plan dict instead.
 
     Examples
     --------
@@ -960,7 +960,7 @@ def tile_process(
         )
 
     # Tile counters + timing so the log shows live "tile k/N + ETA". The
-    # threaded scheduler runs tiles concurrently and ``+=`` is not atomic, so
+    # threaded scheduler runs tiles concurrently and `+=` is not atomic, so
     # the counters are updated under a lock.
     _progress = {"done": 0, "seen": 0, "time": 0.0}
     _progress_lock = threading.Lock()

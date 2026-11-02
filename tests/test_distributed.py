@@ -441,8 +441,8 @@ def test_stage_tile_carries_a_channel_axis(tmp_path):
     """A channel axis reaches fn but is never tiled.
 
     Cellpose's cyto+nucleus pair: tile geometry, the halo and the stage store
-    all stay purely spatial, so fn sees ``(2, z, y, x)`` and owes back
-    ``(z, y, x)``. Without this, a second channel would either be tiled like a
+    all stay purely spatial, so fn sees `(2, z, y, x)` and owes back
+    `(z, y, x)`. Without this, a second channel would either be tiled like a
     spatial axis or trip stage_tile's shape check.
     """
     import numpy as np
@@ -493,7 +493,7 @@ def test_cellpose_run_pairs_channels_and_shifts_z(monkeypatch):
 
     With channels stacked on axis 0, z moves to axis 1; leaving z_axis=0 would
     tell Cellpose the channel axis is z. Cellpose 3 also needs the pair named
-    as ``channels=[1, 2]`` (1-based, 0 = grayscale), which Cellpose 4 dropped.
+    as `channels=[1, 2]` (1-based, 0 = grayscale), which Cellpose 4 dropped.
     """
     import numpy as np
 

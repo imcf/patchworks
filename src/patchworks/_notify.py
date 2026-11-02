@@ -2,7 +2,7 @@
 
 Used for the events SLURM cannot report on its own: the end of a whole
 multi-config run, and failures in a local (non-SLURM) run. Per-job
-start/finish mail on a cluster is left to SLURM's own ``--mail-type``, which
+start/finish mail on a cluster is left to SLURM's own `--mail-type`, which
 is delivered by the controller and does not depend on a compute node being
 able to reach an MTA.
 
@@ -49,20 +49,20 @@ def send(
 ) -> bool:
     """Send *body* to *to*, returning whether it went out.
 
-    Tries a local ``sendmail`` first (what a cluster node normally has), then
+    Tries a local `sendmail` first (what a cluster node normally has), then
     an SMTP server on localhost. Never raises.
 
     Parameters
     ----------
     to : str or None
-        Recipient. ``None`` or empty disables the notification entirely, which
+        Recipient. `None` or empty disables the notification entirely, which
         is the default state -- no address configured, no mail, no error.
     subject : str
         Subject line.
     body : str
         Plain-text body.
     sender : str, optional
-        From address. Defaults to ``patchworks@<hostname>``.
+        From address. Defaults to `patchworks@<hostname>`.
 
     Returns
     -------
@@ -195,9 +195,9 @@ def slurm_mail_extra(
     attempt: int = 1,
     retries: int = 0,
 ) -> str:
-    """Build the ``slurm_extra`` fragment for per-job mail.
+    """Build the `slurm_extra` fragment for per-job mail.
 
-    SLURM's own ``--mail-type`` is used rather than sending from inside the
+    SLURM's own `--mail-type` is used rather than sending from inside the
     job: the controller delivers it, so it still arrives when the job is
     killed by the OOM reaper or the scheduler -- exactly the cases worth
     hearing about, and exactly the ones an in-job notification misses.
@@ -207,19 +207,19 @@ def slurm_mail_extra(
     email : str or None
         Recipient; empty/None yields an empty string (no mail configured).
     events : sequence of str, optional
-        Any of ``"start"``, ``"finish"``, ``"error"``. Defaults to finish and
+        Any of `"start"`, `"finish"`, `"error"`. Defaults to finish and
         error -- a BEGIN mail per job is rarely worth the inbox.
     attempt, retries : int, optional
         Which attempt this job is, and how many retries Snakemake makes
-        after a failure (the profile's ``retries``). Each attempt is a new
+        after a failure (the profile's `retries`). Each attempt is a new
         SLURM job: "start" mails only for the first, "error" only for the
         last, so a failure Snakemake retries mails nothing.
 
     Returns
     -------
     str
-        Something like ``--mail-type=END,FAIL --mail-user=me@example.org``,
-        or ``""`` when no address is configured.
+        Something like `--mail-type=END,FAIL --mail-user=me@example.org`,
+        or `""` when no address is configured.
 
     Examples
     --------
@@ -265,16 +265,16 @@ def failing_step(
     Parameters
     ----------
     snakemake_log : str, Path, list, tuple, or None
-        Snakemake's own log (the ``log`` variable inside an ``onerror``
+        Snakemake's own log (the `log` variable inside an `onerror`
         handler). Snakemake 8+ passes this as a list of paths (its
-        ``LoggerManager.get_logfile()`` returns ``List[str]``, even though
+        `LoggerManager.get_logfile()` returns `List[str]`, even though
         there is normally just one) rather than a single string -- take the
         first entry.
 
     Returns
     -------
     tuple
-        ``(rule_name, log_path)``, either of which may be None when the log
+        `(rule_name, log_path)`, either of which may be None when the log
         is unreadable or records no rule error.
     """
     if isinstance(snakemake_log, (list, tuple)):

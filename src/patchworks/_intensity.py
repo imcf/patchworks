@@ -83,7 +83,7 @@ def intensity_range(
     percentiles: tuple[float, float] = (1.0, 99.0),
     **sampling,
 ) -> list[tuple[float, float]]:
-    """Image-wide intensity percentiles, one ``(low, high)`` per channel.
+    """Image-wide intensity percentiles, one `(low, high)` per channel.
 
     Measured on full-resolution crops (:func:`sample_crops`, which takes
     *level*, *regions*, *n_samples*, *sample_shape* and *seed*), leaving
@@ -94,7 +94,7 @@ def intensity_range(
     store : str or Path
         An OME-Zarr image.
     channels : int, sequence of int or None
-        Channel(s) to measure; ``None`` for an image without a channel axis.
+        Channel(s) to measure; `None` for an image without a channel axis.
     percentiles : (float, float)
         Low and high percentiles (Cellpose's own default is 1 and 99).
     **sampling
@@ -172,7 +172,7 @@ def scale_intensity(
     ranges: Sequence[Sequence[float]],
     channel_axis: Union[int, None] = None,
 ) -> np.ndarray:
-    """Map each channel's ``(low, high)`` to ``(0, 1)``, as float32.
+    """Map each channel's `(low, high)` to `(0, 1)`, as float32.
 
     Values outside the range are kept (not clipped), as Cellpose's own
     normalisation does.

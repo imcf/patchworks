@@ -30,14 +30,14 @@ _BLOSC_CNAMES = ("zstd", "lz4", "lz4hc", "zlib", "blosclz")
 def parse_compression(spec: str) -> tuple[str, str | None, int | None]:
     """Validate a compression spec and split it into its parts.
 
-    Accepted: ``"zstd"`` / ``"zstd:<level>"`` (default level 1),
-    ``"blosc"`` / ``"blosc:<cname>"`` / ``"blosc:<cname>:<level>"`` (default
-    ``zstd`` at level 5, byte-shuffled), and ``"none"``.
+    Accepted: `"zstd"` / `"zstd:<level>"` (default level 1),
+    `"blosc"` / `"blosc:<cname>"` / `"blosc:<cname>:<level>"` (default
+    `zstd` at level 5, byte-shuffled), and `"none"`.
 
     Returns
     -------
     tuple
-        ``(kind, cname, level)``.
+        `(kind, cname, level)`.
 
     Raises
     ------
@@ -70,7 +70,7 @@ def compression(spec: str):
     """Write every array created inside the block with *spec*.
 
     Covers everything patchworks writes -- stage stores, merged labels,
-    pyramid levels -- which is how a whole ``tile_process`` or merge picks a
+    pyramid levels -- which is how a whole `tile_process` or merge picks a
     codec. See :func:`parse_compression` for the accepted specs.
 
     Examples
@@ -88,7 +88,7 @@ def compression(spec: str):
 
 
 def set_compression(spec: str) -> None:
-    """Set the codec for every array written from now on (default ``zstd``).
+    """Set the codec for every array written from now on (default `zstd`).
 
     Prefer :func:`compression` to scope it; this suits a script that writes
     everything with one codec.
@@ -107,7 +107,7 @@ def zarr_compressor_kwargs(zarr_format: int = 3) -> dict:
 
     The codec *object* depends on the format of the array being written, not
     on the installed zarr: zarr-python 3 can write a zarr-v2 array (which is
-    what NGFF 0.4 needs), and a v2 array rejects ``zarr.codecs`` codecs --
+    what NGFF 0.4 needs), and a v2 array rejects `zarr.codecs` codecs --
     it wants the numcodecs ones.
 
     Parameters
@@ -118,8 +118,8 @@ def zarr_compressor_kwargs(zarr_format: int = 3) -> dict:
     Returns
     -------
     dict
-        ``compressors=`` holding the codec that format expects (``None``
-        for ``"none"``).
+        `compressors=` holding the codec that format expects (`None`
+        for `"none"`).
     """
     kind, cname, level = parse_compression(_COMPRESSION.get())
     if kind == "none":
@@ -153,13 +153,13 @@ _URL = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*://")
 
 
 def is_remote(path: Union[str, Path, None]) -> bool:
-    """Whether *path* is a URL (``s3://``, ``gs://``, ``https://``, ...).
+    """Whether *path* is a URL (`s3://`, `gs://`, `https://`, ...).
 
     zarr reads and writes those through fsspec, so a remote store works as
     input (and as the labels' destination). What must never happen is
-    deriving a *local* scratch directory from one with ``os.path``: that
-    turns ``s3://bucket/x.zarr`` into a folder called ``s3:`` in the working
-    directory. ``file://`` counts as local.
+    deriving a *local* scratch directory from one with `os.path`: that
+    turns `s3://bucket/x.zarr` into a folder called `s3:` in the working
+    directory. `file://` counts as local.
     """
     text = str(path) if path is not None else ""
     return bool(_URL.match(text)) and not text.startswith("file://")
@@ -171,9 +171,9 @@ _ZIP_PART = re.compile(r"^(.*?\.zip)(?=$|[/\\])(.*)$", re.IGNORECASE)
 
 
 def split_zip_path(path: Union[str, Path]) -> "tuple[str, str] | None":
-    """Split ``bundle.zip/inner/group`` into ``(archive, inner)``.
+    """Split `bundle.zip/inner/group` into `(archive, inner)`.
 
-    Returns None when no path component ends in ``.zip``.
+    Returns None when no path component ends in `.zip`.
     """
     m = _ZIP_PART.match(str(path))
     if m is None:
@@ -185,10 +185,10 @@ def split_zip_path(path: Union[str, Path]) -> "tuple[str, str] | None":
 def open_zarr_source(
     store_path: Union[str, Path],
 ) -> tuple[Union[str, "zarr.storage.StoreLike"], str]:
-    """Resolve a store path, transparently opening a ``.zip`` bundle.
+    """Resolve a store path, transparently opening a `.zip` bundle.
 
-    A store packed by ``pixi run zip`` is one file holding
-    ``<name>.zarr/...``. zarr reads it in place through a ``ZipStore``, so
+    A store packed by `pixi run zip` is one file holding
+    `<name>.zarr/...`. zarr reads it in place through a `ZipStore`, so
     nothing has to be unpacked first -- but a plain path string does not,
     and every reader here takes a path. This returns what zarr and dask
     should actually be handed, plus the prefix to prepend to a component.
@@ -196,19 +196,19 @@ def open_zarr_source(
     Parameters
     ----------
     store_path : str or Path
-        A ``.zarr`` directory, or a ``.zip`` bundle containing one.
+        A `.zarr` directory, or a `.zip` bundle containing one.
 
     Returns
     -------
     tuple
-        ``(source, prefix)``. For a directory, the path and ``""``. For a
-        bundle, an open read-only ``ZipStore`` and the store's name inside
-        it, so a component is addressed as ``f"{prefix}/{component}"``.
+        `(source, prefix)`. For a directory, the path and `""`. For a
+        bundle, an open read-only `ZipStore` and the store's name inside
+        it, so a component is addressed as `f"{prefix}/{component}"`.
 
     Raises
     ------
     ValueError
-        If a ``.zip`` does not hold exactly one top-level store.
+        If a `.zip` does not hold exactly one top-level store.
     """
     split = split_zip_path(store_path)
     if split is None:
@@ -250,11 +250,11 @@ def _zip_top(archive_path: str, mtime_ns: int, size: int) -> str:
 
 
 def open_group_any(path: Union[str, Path], mode: str = "r"):
-    """``zarr.open_group`` that also accepts a path *inside* a .zip bundle.
+    """`zarr.open_group` that also accepts a path *inside* a .zip bundle.
 
-    Callers build group paths by string-joining (``f"{store}/labels"``),
+    Callers build group paths by string-joining (`f"{store}/labels"`),
     which a bundle breaks: the archive is a file, not a directory. Split on
-    the ``.zip`` instead, so ``bundle.zip/labels/cells`` resolves to the
+    the `.zip` instead, so `bundle.zip/labels/cells` resolves to the
     right group inside it.
     """
     source, prefix = open_zarr_source(path)
@@ -262,7 +262,7 @@ def open_group_any(path: Union[str, Path], mode: str = "r"):
 
 
 def from_zarr_any(path: Union[str, Path], component: str | None = None):
-    """``dask.array.from_zarr`` that also accepts a .zip bundle."""
+    """`dask.array.from_zarr` that also accepts a .zip bundle."""
     import dask.array as _da
 
     source, prefix = open_zarr_source(path)
@@ -292,7 +292,7 @@ def load_ome_zarr(
     store_path:
         Path to the OME-ZARR store (.zarr directory).
     channel:
-        Channel index to select (axis is dropped). Pass ``None`` to keep it.
+        Channel index to select (axis is dropped). Pass `None` to keep it.
     level:
         Resolution pyramid level (0 = full resolution).
     chunks:
@@ -301,7 +301,7 @@ def load_ome_zarr(
     Returns
     -------
     da.Array
-        Shape ``(z, y, x)`` when *channel* is an int, or ``(c, z, y, x)``
+        Shape `(z, y, x)` when *channel* is an int, or `(c, z, y, x)`
         when *channel* is None.
 
     Examples
@@ -340,8 +340,8 @@ def load_ome_zarr(
 def _select_channel(arr, channel: int, multiscale: dict, store_path):
     """Index *arr*'s channel axis, or leave it alone when there isn't one.
 
-    ``arr[channel]`` used to be applied unconditionally, so on a
-    single-channel store written as plain ``zyx`` the default ``channel: 0``
+    `arr[channel]` used to be applied unconditionally, so on a
+    single-channel store written as plain `zyx` the default `channel: 0`
     silently sliced away **z** instead. The result stayed a valid array, just
     one dimension short, and surfaced much later as a tile-count mismatch
     against the occupancy grid rather than as anything about channels.
@@ -353,7 +353,7 @@ def _select_channel(arr, channel: int, multiscale: dict, store_path):
     channel : int
         Requested channel index.
     multiscale : dict
-        The store's multiscales entry, read for its ``axes``.
+        The store's multiscales entry, read for its `axes`.
     store_path : str or Path
         Only used in messages.
 
@@ -397,7 +397,7 @@ def _otsu_threshold(sample: np.ndarray) -> float:
     Operates on the full distribution including zeros — zeros are background
     pixels and must be included so Otsu can find the signal/background boundary.
 
-    A NumPy port of ``skimage.filters.threshold_otsu`` (same histogram: one
+    A NumPy port of `skimage.filters.threshold_otsu` (same histogram: one
     bin per integer value for integer data, 256 bins otherwise, and the same
     between-class variance), so the empty-tile threshold does not quietly
     degrade to 0 when scikit-image, which is not a dependency, is missing.
@@ -410,7 +410,7 @@ def _otsu_threshold(sample: np.ndarray) -> float:
     Returns
     -------
     float
-        The Otsu threshold; the single value for a constant sample, ``0.0``
+        The Otsu threshold; the single value for a constant sample, `0.0`
         for an empty one.
     """
     sample = np.asarray(sample).ravel()
@@ -494,11 +494,11 @@ def estimate_empty_tiles(
 ) -> dict[str, Any]:
     """Fast preview of which tiles are background before processing.
 
-    For each tile, reads a small centred window (``sample_window``) and tests
+    For each tile, reads a small centred window (`sample_window`) and tests
     whether its max exceeds *threshold*. Bounded I/O — runs in seconds to
     minutes on terabyte arrays.
 
-    APPROXIMATE: only the tile centre is inspected. The actual ``tile_process``
+    APPROXIMATE: only the tile centre is inspected. The actual `tile_process`
     run always tests the whole tile inline. Use this only to pick a threshold
     and gauge the empty fraction before committing to a full run.
 
@@ -507,7 +507,7 @@ def estimate_empty_tiles(
     image:
         Dask array or OME-ZARR path.
     tile_shape:
-        Tile shape you plan to use, e.g. ``(120, 697, 697)``.
+        Tile shape you plan to use, e.g. `(120, 697, 697)`.
     threshold:
         Empty cutoff (signal <= threshold → empty). None → Otsu on samples.
     channel, level:
@@ -518,8 +518,8 @@ def estimate_empty_tiles(
     Returns
     -------
     dict with keys:
-        ``threshold``, ``n_tiles``, ``n_occupied``, ``empty_fraction``,
-        ``occupancy`` (bool ndarray, one entry per tile in the grid).
+        `threshold`, `n_tiles`, `n_occupied`, `empty_fraction`,
+        `occupancy` (bool ndarray, one entry per tile in the grid).
 
     Examples
     --------

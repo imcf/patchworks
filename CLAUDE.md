@@ -15,5 +15,6 @@
 
 - Code, names, commands and paths in single backticks (`image.zarr`),
   never double ones (``image.zarr``): in docstrings, comments, commit
-  messages, docs and messages to the user alike. Existing docstrings
-  still use double backticks; new or edited text uses single ones.
+  messages, docs and messages to the user alike. The API docs
+  (mkdocstrings) render docstrings as Markdown, so single backticks
+  show as code there too.

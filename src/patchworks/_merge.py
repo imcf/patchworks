@@ -12,7 +12,7 @@ in the staged zarr are clean for this merge.
 
 Public API
 ----------
-``merge_tile_labels(labeled, write_to, ...)`` — standalone merge for labeled
+`merge_tile_labels(labeled, write_to, ...)` — standalone merge for labeled
 dask arrays or pre-staged zarr stores. Use this directly if you already have
 per-tile labels and just need the boundary-stitching step.
 """
@@ -100,7 +100,7 @@ def _relabel_chunk_worker(task: tuple) -> None:
     Parameters
     ----------
     task : tuple
-        ``(chunk_slice, offset)``. *chunk_slice* selects this chunk in both
+        `(chunk_slice, offset)`. *chunk_slice* selects this chunk in both
         stores. *offset* is added to the chunk's non-zero (tile-local) ids
         before the LUT lookup, which is what makes them globally unique; pass
         0 when the store already holds global ids.
@@ -144,7 +144,7 @@ def _boundary_face_specs(
     Returns
     -------
     list of tuple of int
-        ``(axis, position)`` pairs, one per interior chunk boundary.
+        `(axis, position)` pairs, one per interior chunk boundary.
     """
     specs = []
     for ax, (s, cs) in enumerate(zip(shape, chunk_shape)):
@@ -158,8 +158,8 @@ def _boundary_face_specs(
 def _transverse_shifts(n_face_axes: int, connectivity: int) -> list:
     """In-plane offsets to a neighbour across a face, for *connectivity*.
 
-    One step across the face plus ``k`` steps within it is a neighbour when
-    ``1 + k <= connectivity`` (:func:`scipy.ndimage.generate_binary_structure`).
+    One step across the face plus `k` steps within it is a neighbour when
+    `1 + k <= connectivity` (:func:`scipy.ndimage.generate_binary_structure`).
     """
     from itertools import product
 
@@ -224,7 +224,7 @@ def _scan_touching_pairs(
     has_labels : np.ndarray, optional
         Per-chunk boolean: does this chunk hold any label? A boundary next to
         an empty chunk can never produce a touching pair, so those columns are
-        not read at all. On a sparse image (``skip_empty``) that is most of
+        not read at all. On a sparse image (`skip_empty`) that is most of
         them.
     connectivity : int
         Which neighbours touch, as :func:`scipy.ndimage.generate_binary_structure`
@@ -237,7 +237,7 @@ def _scan_touching_pairs(
     Returns
     -------
     np.ndarray
-        ``(N, 2)`` int64 array of unique label pairs touching across a
+        `(N, 2)` int64 array of unique label pairs touching across a
         boundary.
     """
     root = zarr.open_group(zarr_path, mode="r")
@@ -386,10 +386,10 @@ def _scan_touching_pairs(
 
 
 def _pair_stats(a_ids: np.ndarray, b_ids: np.ndarray):
-    """Overlap counts of ``(a, b)`` pairs and each side's voxel counts.
+    """Overlap counts of `(a, b)` pairs and each side's voxel counts.
 
-    Returns ``(pairs, inter, a_area, b_area)`` where *pairs* is ``(N, 2)``
-    and the areas are dicts ``{id: voxels}``, background excluded.
+    Returns `(pairs, inter, a_area, b_area)` where *pairs* is `(N, 2)`
+    and the areas are dicts `{id: voxels}`, background excluded.
     """
     a = np.asarray(a_ids, dtype=np.int64).ravel()
     b = np.asarray(b_ids, dtype=np.int64).ravel()
@@ -435,7 +435,7 @@ def _iou_face_pairs(
     region ends, and that cut version lies inside the whole one. Mutual best
     matches only, so one tile's merged blob cannot glue two cells together.
     *scores*, if given, receives the overlap of every mutual best match;
-    *weak*, the mutual best matches below *threshold*, as ``(a, b, score)``.
+    *weak*, the mutual best matches below *threshold*, as `(a, b, score)`.
     """
     inter: dict[tuple[int, int], int] = {}
     a_area: dict[int, int] = {}
@@ -470,7 +470,7 @@ def _iou_face_pairs(
 
 
 def _load_halo(halo_dir: str, index: int, key: str) -> "np.ndarray | None":
-    """Strip *key* (``"<axis>+"`` / ``"<axis>-"``) of tile *index*'s halo
+    """Strip *key* (`"<axis>+"` / `"<axis>-"`) of tile *index*'s halo
     file, or None. Only that member is decompressed, not every side's."""
     path = os.path.join(halo_dir, f"{int(index)}.npz")
     if not os.path.exists(path):
@@ -503,7 +503,7 @@ def _scan_iou_pairs(
 
     A boundary with no halo on either side (a one-voxel-thick axis, e.g. 2-D
     tiles stacked in z) falls back to the IoU of the two boundary slices,
-    which is Cellpose's own ``stitch_threshold`` rule for 2-D -> 3-D.
+    which is Cellpose's own `stitch_threshold` rule for 2-D -> 3-D.
 
     Parameters
     ----------
@@ -512,8 +512,8 @@ def _scan_iou_pairs(
     chunk_shape : tuple of int
         Chunk (= tile) shape.
     halo_dir : str
-        Directory of ``<index>.npz`` halo files from
-        :func:`patchworks.stage_tile` (``halo_dir=``).
+        Directory of `<index>.npz` halo files from
+        :func:`patchworks.stage_tile` (`halo_dir=`).
     label_offsets : np.ndarray
         Per-tile id offset (row-major), making ids global.
     threshold : float
@@ -530,7 +530,7 @@ def _scan_iou_pairs(
     Returns
     -------
     np.ndarray
-        ``(N, 2)`` int64 array of global label pairs to join.
+        `(N, 2)` int64 array of global label pairs to join.
     """
     arr = zarr.open_group(zarr_path, mode="r")[component]
     shape = arr.shape
@@ -646,7 +646,7 @@ def _build_relabel_lut(pairs: np.ndarray, max_label: int) -> np.ndarray:
     Parameters
     ----------
     pairs : np.ndarray
-        ``(N, 2)`` array of touching label pairs.
+        `(N, 2)` array of touching label pairs.
     max_label : int
         Largest label id present.
 
@@ -705,7 +705,7 @@ def _create_zarr_label_array(
     chunks : tuple
         Chunk shape.
     dtype : data-type, optional
-        Label dtype (default ``int32``). Matched to the staged store so the
+        Label dtype (default `int32`). Matched to the staged store so the
         merge keeps wide (block-encoded) ids intact before they are compacted.
     shards : tuple, optional
         Shard shape (a multiple of *chunks*). Zarr v3 only: a v2 group gets
@@ -746,12 +746,12 @@ def _label_dtype(dtype, max_label: int) -> np.dtype:
 def _make_globally_unique(arr, shape: tuple, chunk_shape: tuple) -> int:
     """Renumber per-chunk local labels to a globally unique, compact range.
 
-    Each tile writes local labels (``1..N``) that repeat across tiles, so the
+    Each tile writes local labels (`1..N`) that repeat across tiles, so the
     same value means different objects in different tiles. This streams the
     chunks in row-major order and remaps every chunk's non-zero labels to a
-    fresh contiguous block ``[base+1, …]``, leaving the store globally unique
-    with ``max_label == total objects`` (compact, so the relabel LUT stays
-    ``O(n_objects)``). Background (0) stays 0. In place, one chunk in RAM.
+    fresh contiguous block `[base+1, …]`, leaving the store globally unique
+    with `max_label == total objects` (compact, so the relabel LUT stays
+    `O(n_objects)`). Background (0) stays 0. In place, one chunk in RAM.
 
     Parameters
     ----------
@@ -804,7 +804,7 @@ def capped_output_chunks(
     cap is used instead.
 
     A tile axis with no useful divisor keeps its own size rather than being
-    shredded: ``auto`` tile sizing produces arbitrary integers (it takes a
+    shredded: `auto` tile sizing produces arbitrary integers (it takes a
     square root), and a prime axis above the cap has no divisor except 1 --
     which would mean one chunk per voxel along that axis.
 
@@ -860,7 +860,7 @@ def _offsets_from_counts(
 ) -> np.ndarray:
     """Exclusive cumulative sum turning per-tile counts into id offsets.
 
-    Each tile writes a dense ``1..n_i``. Adding ``offset[i] = sum(n_0..n_{i-1})``
+    Each tile writes a dense `1..n_i`. Adding `offset[i] = sum(n_0..n_{i-1})`
     makes ids globally unique *and* compact in one step, with no read of the
     volume at all -- the whole job is O(n_tiles).
 
@@ -875,8 +875,8 @@ def _offsets_from_counts(
     Returns
     -------
     np.ndarray
-        ``offset`` of length *n_chunks*; the total object count before
-        boundary merging is ``offset[-1] + counts[-1]``.
+        `offset` of length *n_chunks*; the total object count before
+        boundary merging is `offset[-1] + counts[-1]`.
     """
     per_chunk = np.zeros(n_chunks, dtype=np.int64)
     if isinstance(counts, Mapping):
@@ -903,13 +903,13 @@ def _offsets_from_counts(
 def _pool_context():
     """Multiprocessing context for the relabel pool.
 
-    ``fork`` on Linux, pinned explicitly: Python 3.14 changed the Linux
-    default to ``forkserver``, which (like ``spawn``) re-imports the caller's
+    `fork` on Linux, pinned explicitly: Python 3.14 changed the Linux
+    default to `forkserver`, which (like `spawn`) re-imports the caller's
     main module in every worker. A script without an
-    ``if __name__ == "__main__":`` guard -- the pipeline's own Snakemake
-    ``merge.py``, every example in the docs, most notebooks-turned-scripts --
+    `if __name__ == "__main__":` guard -- the pipeline's own Snakemake
+    `merge.py`, every example in the docs, most notebooks-turned-scripts --
     then re-runs its whole body per worker and the merge dies. The workers
-    only need module-level state set by ``_init_worker``, and the pool is
+    only need module-level state set by `_init_worker`, and the pool is
     started once staging has finished, so forking is safe here. Elsewhere
     (macOS, Windows) the platform default stands: fork is unsafe or absent.
     """
@@ -925,19 +925,19 @@ def _scratch_store(base: Union[str, Path, None], name: str) -> tuple[str, str]:
     runs sharing a directory (two outputs side by side, or two label names
     written into one image) can never overwrite each other's scratch data.
     Without one, a fresh system temp directory holds it, and that directory is
-    what gets removed afterwards so no empty ``mkdtemp`` shells pile up.
+    what gets removed afterwards so no empty `mkdtemp` shells pile up.
 
     Parameters
     ----------
     base : str, Path or None
         Directory to create the store in, or None for a system temp dir.
     name : str
-        Short label for the store (``"stage"``, ``"merge"``).
+        Short label for the store (`"stage"`, `"merge"`).
 
     Returns
     -------
     tuple of str
-        ``(store_path, cleanup_path)`` -- pass *cleanup_path* to
+        `(store_path, cleanup_path)` -- pass *cleanup_path* to
         :func:`_remove_scratch` once the store is no longer needed.
     """
     if base is None:
@@ -960,7 +960,7 @@ def _remove_scratch(cleanup_path: str | None) -> None:
 def _lut_scratch_dir(lut_nbytes: int, fallback: str) -> str:
     """Create a temp directory with room for the merge LUT.
 
-    The system temp dir (``$TMPDIR``, which SLURM usually points at node-local
+    The system temp dir (`$TMPDIR`, which SLURM usually points at node-local
     scratch) is preferred: it is local and fast to memory-map. On HPC nodes it
     is also often small or RAM-backed, and a LUT runs to hundreds of MB, so
     when it cannot hold the LUT with some headroom the directory is created
@@ -1035,7 +1035,7 @@ def _rescue_small_pieces(weak, lut, objects, min_voxels) -> np.ndarray:
 
     Where two tiles disagree on a cell crossing their seam (a mutual best
     match below the IoU threshold), each keeps its own part, and the
-    smaller part -- often a sliver -- fell under ``min_voxels`` and was
+    smaller part -- often a sliver -- fell under `min_voxels` and was
     erased, leaving the cell cut flat at the seam ("orphans": 7 % of the
     labels on the seams, against 0.2 % inside tiles). Joined to its match
     instead, it is part of a cell rather than a hole. Each small object
@@ -1072,7 +1072,7 @@ def _rescue_small_pieces(weak, lut, objects, min_voxels) -> np.ndarray:
 
 
 def _size_filter_lut(lut, objects, min_voxels, max_voxels):
-    """Drop merged objects outside ``[min_voxels, max_voxels]`` from *lut*
+    """Drop merged objects outside `[min_voxels, max_voxels]` from *lut*
     (they become background) and from *objects*."""
     count = objects["count"]
     keep = np.ones(len(count), bool)
@@ -1137,28 +1137,28 @@ def zarr_native_merge(
         Show a progress bar over the relabel chunks.
     label_counts : mapping or sequence of int, optional
         Labels written per chunk, when the producer recorded them (each chunk
-        holding a dense ``1..n_i``). Global ids are then ``offset + local``
-        with ``offset`` an exclusive cumulative sum -- O(n_chunks) arithmetic
+        holding a dense `1..n_i`). Global ids are then `offset + local`
+        with `offset` an exclusive cumulative sum -- O(n_chunks) arithmetic
         instead of reading and rewriting the entire store to renumber it.
-        ``None`` falls back to the streaming renumber pass.
+        `None` falls back to the streaming renumber pass.
 
         A count of 0 also means that chunk holds no labels, so the merge can
         skip it outright -- neither reading it nor writing zeros over it. Zarr
         leaves an unwritten chunk unmaterialised and reads it back as the
         fill value, so on a sparse image this saves both I/O and disk.
     sequential : bool
-        Renumber the merged labels to a contiguous ``1..N``. Free here: the id
-        domain is dense by construction, so the compaction is a ``np.unique``
+        Renumber the merged labels to a contiguous `1..N`. Free here: the id
+        domain is dense by construction, so the compaction is a `np.unique`
         over the LUT (length = object count) and folds into the same lookup,
         costing no extra pass over the volume.
     output_chunks : sequence of int, optional
         Chunking for the merged store. Must divide the staged chunk shape, so
-        each worker's write still covers whole chunks. ``None`` mirrors the
+        each worker's write still covers whole chunks. `None` mirrors the
         staged chunking. Use :func:`capped_output_chunks` to derive it.
     shard_output : bool
         Shards of one staged tile each; see :func:`merge_tile_labels`.
     halo_dir : str or Path, optional
-        Halo strips saved by :func:`patchworks.stage_tile` (``halo_dir=``).
+        Halo strips saved by :func:`patchworks.stage_tile` (`halo_dir=`).
         Given, labels are joined across a boundary only when the two tiles'
         predictions of the overlap zone agree (IoU >= *iou_threshold*),
         instead of whenever they touch. See :func:`_scan_iou_pairs`.
@@ -1170,7 +1170,7 @@ def zarr_native_merge(
         Ignored in IoU mode, which joins by agreement, not by touch.
     parts_dir : str or Path, optional
         Per-tile object sums saved by :func:`patchworks.stage_tile`
-        (``parts_dir=``), one ``<index>.npz`` per tile holding labels. They
+        (`parts_dir=`), one `<index>.npz` per tile holding labels. They
         are combined through the merge's own lookup table into one row per
         merged object -- the object table, without reading the labels again
         -- and put in *objects_out*. Needs *label_counts*.
@@ -1180,14 +1180,14 @@ def zarr_native_merge(
         the one relabel pass writes the filtered labels (no separate filter
         pass over the volume).
     objects_out : dict, optional
-        Filled with the combined sums (``label``, ``count``, ``mean``,
-        ``m2``, ``lo``, ``hi``; see :func:`patchworks._tables.table_columns`),
+        Filled with the combined sums (`label`, `count`, `mean`,
+        `m2`, `lo`, `hi`; see :func:`patchworks._tables.table_columns`),
         under the final ids, when *parts_dir* was used and the merge ran.
 
     Returns
     -------
     int or None
-        The object count when *sequential* is set, else ``None``.
+        The object count when *sequential* is set, else `None`.
     """
     root = zarr.open_group(staged_path, mode="r+")
     arr = root[staged_component]
@@ -1504,8 +1504,8 @@ def merge_tile_labels(
     Accepts either:
 
     - A **dask array** of per-tile integer labels (e.g. output of
-      ``dask.array.map_blocks`` on your own segmentation function).
-    - A **zarr store path** whose ``input_component`` array already contains
+      `dask.array.map_blocks` on your own segmentation function).
+    - A **zarr store path** whose `input_component` array already contains
       per-tile labels written by your own pipeline.
 
     Labels that **touch** across tile boundaries are merged into a single ID.
@@ -1516,8 +1516,8 @@ def merge_tile_labels(
     ----------
     labeled:
         Per-tile label array. Either a dask array or a path to a zarr store
-        that contains per-tile labels in ``input_component``. A store is
-        **modified**: unless ``label_counts`` is given, its per-tile ids are
+        that contains per-tile labels in `input_component`. A store is
+        **modified**: unless `label_counts` is given, its per-tile ids are
         renumbered to a global range in place before the merge (the
         segmentation is unchanged, the ids are not). Copy it first if the
         original ids matter.
@@ -1526,20 +1526,20 @@ def merge_tile_labels(
     input_component:
         Array name inside a zarr *input* store (ignored for dask arrays).
     output_component:
-        Array name inside ``write_to``. Default ``"labels"``.
+        Array name inside `write_to`. Default `"labels"`.
     overlap:
-        If ``labeled`` is a dask array that was computed with ``da.overlap``,
+        If `labeled` is a dask array that was computed with `da.overlap`,
         pass the same depth here to trim the halos before merging.
         Set 0 (default) if the array has no overlap halos.
     sequential_labels:
-        Renumber the merged labels to a contiguous ``1..N`` range. Folded into
+        Renumber the merged labels to a contiguous `1..N` range. Folded into
         the merge's own lookup table, so it costs no extra pass over the
         volume. Default False.
     label_counts:
         Labels written per tile, when the producer recorded them (see
         :func:`patchworks.stage_tile`, which returns the count). Lets the
         merge derive every tile's global id range arithmetically instead of
-        streaming the whole store to renumber it. ``None`` keeps the
+        streaming the whole store to renumber it. `None` keeps the
         renumber pass.
     output_chunks:
         Chunking for the merged store; must divide the staged chunk shape.
@@ -1553,25 +1553,25 @@ def merge_tile_labels(
         pass over it. Ignored when relabeling in place.
     halo_dir:
         IoU stitching: the halo strips :func:`patchworks.stage_tile` saved
-        (its ``halo_dir=``). Labels are then joined across a tile boundary
+        (its `halo_dir=`). Labels are then joined across a tile boundary
         only when both tiles' predictions of the overlap zone agree
-        (IoU >= ``iou_threshold``), so two cells pressed together at a seam
-        stay two. ``None`` (default) joins whatever touches.
+        (IoU >= `iou_threshold`), so two cells pressed together at a seam
+        stay two. `None` (default) joins whatever touches.
     iou_threshold:
         Minimum IoU for that join (default 0.5).
     connectivity:
         Neighbourhood the tiles were labelled with: 1 (default) faces, 2
-        also edges, 3 also corners (``scipy.ndimage.generate_binary_structure``).
+        also edges, 3 also corners (`scipy.ndimage.generate_binary_structure`).
         Labels touching across a tile boundary that way are joined, so the
         result is that of labelling the whole image at once.
     parts_dir, min_voxels, max_voxels, objects_out:
-        Object sums saved per tile by :func:`stage_tile` (``parts_dir=``),
+        Object sums saved per tile by :func:`stage_tile` (`parts_dir=`),
         combined into one row per merged object in *objects_out* -- the
         object table without a second read of the labels -- and an optional
         size filter applied in the same relabel pass. See
         :func:`zarr_native_merge`. Needs *label_counts*.
     n_workers:
-        Parallel workers for the relabel step. Default ``min(4, cpu_count)``.
+        Parallel workers for the relabel step. Default `min(4, cpu_count)`.
     stage_dir:
         Directory for the temp stage zarr when *labeled* is a dask array.
         Default: a system temp directory.
@@ -1580,22 +1580,22 @@ def merge_tile_labels(
     progress:
         Show a progress bar during the relabel step.
     return_count:
-        Also return the exact object count. Only meaningful (non-``None``)
-        when ``sequential_labels=True``, which already computes it for free
-        while renumbering to ``1..N`` — otherwise no step here knows the
+        Also return the exact object count. Only meaningful (non-`None`)
+        when `sequential_labels=True`, which already computes it for free
+        while renumbering to `1..N` — otherwise no step here knows the
         final count without an extra full scan, so the second element is
-        ``None``. Useful to persist alongside the labels (e.g.
-        ``write_labels(..., n_objects=...)``) so a downstream consumer with
+        `None`. Useful to persist alongside the labels (e.g.
+        `write_labels(..., n_objects=...)`) so a downstream consumer with
         the count can skip re-deriving the id set from the array itself.
 
     Returns
     -------
     da.Array
-        Merged label array backed by ``write_to``: the staged dtype (int32
+        Merged label array backed by `write_to`: the staged dtype (int32
         or wider for a dask input), widened if the global object count
         outgrows it. Or, when
-        ``return_count=True``, a ``(labels, n_objects)`` tuple —
-        ``n_objects`` is ``None`` unless ``sequential_labels=True``.
+        `return_count=True`, a `(labels, n_objects)` tuple —
+        `n_objects` is `None` unless `sequential_labels=True`.
 
     Examples
     --------
