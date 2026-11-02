@@ -27,6 +27,14 @@ conventional_commits = true
 filter_unconventional = false
 split_commits = false
 commit_preprocessors = [
+  # Commits written "<gitmoji> scope: description", without a type, read as
+  # the type their gitmoji stands for -- so they are grouped like the rest.
+  { pattern = "^🐛\\s*", replace = "fix: " },
+  { pattern = "^✨\\s*", replace = "feat: " },
+  { pattern = "^⚡\\x{FE0F}?\\s*", replace = "perf: " },
+  { pattern = "^📝\\s*", replace = "docs: " },
+  { pattern = "^♻\\x{FE0F}?\\s*", replace = "refactor: " },
+  { pattern = "^🔊\\s*", replace = "chore: " },
   # Strip leading emoji from the description (after "type(scope): ")
   { pattern = "(\\w+(?:\\([^)]*\\))?!?:\\s+)[^\\w\\s]+\\s*", replace = "$1" },
 ]
