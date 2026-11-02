@@ -53,6 +53,18 @@ DEFAULT_TILE = {3: (16, 256, 256), 2: (512, 512)}
 def default_overlap(tile: Sequence[int]) -> tuple[int, ...]:
     """A quarter of each tile side, even, at least 2.
 
+    Parameters
+    ----------
+    tile : sequence of int
+        CAREamics' tile shape.
+
+    Returns
+    -------
+    tuple of int
+        The overlap per axis.
+
+    Examples
+    --------
     >>> default_overlap((16, 256, 256))
     (4, 64, 64)
     """
@@ -64,6 +76,13 @@ _models: dict[str, Any] = {}
 
 
 def _require_careamics():
+    """Raise a helpful ImportError when CAREamics is not installed.
+
+    Raises
+    ------
+    ImportError
+        Naming the extra and the pixi environment to install.
+    """
     try:
         import careamics  # noqa: F401
     except ImportError as exc:
@@ -76,7 +95,22 @@ def _require_careamics():
 
 
 def _load(path: str) -> Any:
-    """The CAREamist for *path*, cached per process."""
+    """The CAREamist for *path*, cached per process.
+
+    Parameters
+    ----------
+    path : str
+        A checkpoint (`.ckpt`) or a BioImage.IO `.zip`.
+
+    Returns
+    -------
+    careamics.CAREamist
+
+    Raises
+    ------
+    FileNotFoundError
+        When *path* does not exist.
+    """
     if path not in _models:
         from careamics import CAREamist
 
@@ -111,7 +145,24 @@ def denoise_image(
 ) -> np.ndarray:
     """Denoise one single-channel `(z, y, x)` or `(y, x)` image.
 
-    Returns a float32 array of the same shape.
+    Parameters
+    ----------
+    img : np.ndarray
+        The image.
+    model : str
+        The CAREamics model: a checkpoint or a BioImage.IO `.zip`.
+    tile_size : sequence of int, optional
+        CAREamics' own tiling (VRAM); default :data:`DEFAULT_TILE`. An image
+        that fits one tile is predicted whole.
+    tile_overlap : sequence of int, optional
+        The overlap of those tiles; default :func:`default_overlap`.
+    batch_size : int, optional
+        Tiles per forward pass (default 1).
+
+    Returns
+    -------
+    np.ndarray
+        float32, of the same shape.
     """
     img = np.asarray(img, dtype="float32")
     ndim = img.ndim
@@ -126,6 +177,13 @@ def denoise_image(
         tile = overlap = None  # fits in one piece
 
     def _predict():
+        """Run the model on the image.
+
+        Returns
+        -------
+        np.ndarray
+            The prediction.
+        """
         preds, _ = _load(str(model)).predict(
             pred_data=img,
             data_type="array",
@@ -149,8 +207,20 @@ def denoise_image(
 def denoise_tile(tile: np.ndarray, cfg: dict[str, Any]) -> np.ndarray:
     """Denoise a tile: `[membrane, nuclei]` each with its own model.
 
-    The first (segmented) channel uses `model`; a nuclear channel, when
-    the tile carries one, uses `nuclei_model` or stays as it is.
+    Parameters
+    ----------
+    tile : np.ndarray
+        One channel, or the segmented channel and a nuclear one stacked on
+        the first axis.
+    cfg : dict
+        `model` for the first channel, `nuclei_model` for the nuclear one
+        (which stays as it is without one), and `tile_size`,
+        `tile_overlap`, `batch_size` as :func:`denoise_image` takes them.
+
+    Returns
+    -------
+    np.ndarray
+        float32, of the same shape.
     """
     kw = dict(
         tile_size=cfg.get("tile_size"),
@@ -179,19 +249,19 @@ def denoise_fn(
 
     Parameters
     ----------
-    fn :
+    fn : callable
         Any per-tile segmentation function.
-    model :
+    model : str
         CAREamics model for the segmented channel: a checkpoint (`.ckpt`,
         e.g. from :func:`train_n2v`) or a BioImage.IO `.zip`.
-    nuclei_model :
+    nuclei_model : str, optional
         Model for the nuclear channel (`nuclei_channel`), which keeps its
         raw intensities without one.
-    tile_size, tile_overlap :
+    tile_size, tile_overlap : sequence of int, optional
         CAREamics' own tiling inside a patchworks tile (VRAM). Defaults:
         :data:`DEFAULT_TILE`, overlapping by :func:`default_overlap`. Each tile side must
         be divisible by 2**depth of the U-Net (4 for the default N2V).
-    batch_size :
+    batch_size : int, optional
         CAREamics tiles per forward pass.
 
     Returns
@@ -216,12 +286,40 @@ def denoise_fn(
 def _denoised(
     tile: np.ndarray, fn: Callable, cfg: dict[str, Any]
 ) -> np.ndarray:
+    """Segment the denoised tile.
+
+    Parameters
+    ----------
+    tile : np.ndarray
+        The raw tile.
+    fn : callable
+        The segmentation function.
+    cfg : dict
+        The denoising settings, as :func:`denoise_tile` takes them.
+
+    Returns
+    -------
+    np.ndarray
+        *fn*'s labels.
+    """
     return fn(denoise_tile(tile, cfg))
 
 
 def denoise(tile: np.ndarray, **kwargs: Any) -> np.ndarray:
-    """Just the denoised tile (float32), e.g. to look at it before
-    segmenting with it. Takes :func:`denoise_fn`'s keyword arguments."""
+    """Just the denoised tile, e.g. to look at it before segmenting with it.
+
+    Parameters
+    ----------
+    tile : np.ndarray
+        The raw tile.
+    **kwargs
+        :func:`denoise_fn`'s keyword arguments, `model` included.
+
+    Returns
+    -------
+    np.ndarray
+        float32.
+    """
     _require_careamics()
     model = kwargs.pop("model")
     cfg = dict(model=str(model), **kwargs)
@@ -244,6 +342,24 @@ def training_crops(
     Ranked on the store's coarsest pyramid level, so picking them reads
     almost nothing; empty background (nothing to learn the noise of
     *structure* from) is skipped that way too.
+
+    Parameters
+    ----------
+    store : str or Path
+        The OME-Zarr image.
+    channel : int, optional
+        The channel (default 0).
+    level : int, optional
+        The pyramid level the crops are read at (default 0).
+    crop_shape : sequence of int, optional
+        Each crop's shape (default `(32, 512, 512)`), cut to the image.
+    n_crops : int, optional
+        How many crops (default 4).
+
+    Returns
+    -------
+    list of np.ndarray
+        float32 crops.
     """
     from .._io import load_ome_zarr
     from .ome_zarr import _multiscale_meta
@@ -300,25 +416,25 @@ def train_n2v(
 
     Parameters
     ----------
-    store :
+    store : str or Path
         OME-Zarr image (the workflow's `<work_dir>/image.zarr`).
-    out :
+    out : str or Path
         Where to write the trained checkpoint (`.ckpt`), which
         `denoise: {model: ...}` then loads.
-    channel, level :
+    channel, level : int, optional
         Channel and pyramid level -- the ones the segmentation reads.
-    crop_shape, n_crops :
+    crop_shape, n_crops : sequence of int, int, optional
         What to train on: the *n_crops* brightest crops of that shape
         (:func:`training_crops`). A few hundred million voxels is plenty;
         Noise2Void learns the noise, not the objects.
-    patch_size :
+    patch_size : sequence of int, optional
         Training patch, `(z, y, x)` or `(y, x)`; each side a multiple of
         8 and at least 8. Default `(16, 64, 64)` / `(64, 64)`.
-    batch_size, epochs :
+    batch_size, epochs : int, optional
         Training length. 30 epochs takes minutes to an hour on one GPU.
-    n2v2 :
+    n2v2 : bool, optional
         Noise2Void2 (fewer checkerboard artefacts on structured noise).
-    work_dir :
+    work_dir : str or Path, optional
         Where CAREamics keeps its logs and intermediate checkpoints.
 
     Returns
@@ -377,5 +493,15 @@ def train_n2v(
 
 
 def _floor8(n: int) -> int:
-    """Largest multiple of 8 <= n (at least 8)."""
+    """Largest multiple of 8 <= n (at least 8).
+
+    Parameters
+    ----------
+    n : int
+        A patch side.
+
+    Returns
+    -------
+    int
+    """
     return max(8, (int(n) // 8) * 8)

@@ -27,6 +27,22 @@ logger = logging.getLogger("patchworks.cli")
 
 
 def _ints(text: str) -> tuple[int, ...]:
+    """Parse `"16,512,512"` as integers, for argparse.
+
+    Parameters
+    ----------
+    text : str
+        Comma-separated integers.
+
+    Returns
+    -------
+    tuple of int
+
+    Raises
+    ------
+    argparse.ArgumentTypeError
+        For anything else.
+    """
     try:
         return tuple(int(v) for v in text.split(","))
     except ValueError:
@@ -36,6 +52,22 @@ def _ints(text: str) -> tuple[int, ...]:
 
 
 def _floats(text: str) -> tuple[float, ...]:
+    """Parse `"1.5,0.3"` as numbers, for argparse.
+
+    Parameters
+    ----------
+    text : str
+        Comma-separated numbers.
+
+    Returns
+    -------
+    tuple of float
+
+    Raises
+    ------
+    argparse.ArgumentTypeError
+        For anything else.
+    """
     try:
         return tuple(float(v) for v in text.split(","))
     except ValueError:
@@ -45,6 +77,22 @@ def _floats(text: str) -> tuple[float, ...]:
 
 
 def _channel(text: str) -> int | None:
+    """Parse a channel index, or `"none"` for a single-channel image.
+
+    Parameters
+    ----------
+    text : str
+        An integer, or `"none"` in any case.
+
+    Returns
+    -------
+    int or None
+
+    Raises
+    ------
+    argparse.ArgumentTypeError
+        For anything else.
+    """
     if text.lower() == "none":
         return None
     try:
@@ -56,6 +104,17 @@ def _channel(text: str) -> int | None:
 
 
 def _overlap(text: str) -> int | tuple[int, ...] | str:
+    """Parse `--overlap`: one width, one per axis, or `"auto"`.
+
+    Parameters
+    ----------
+    text : str
+        `"auto"`, an integer, or comma-separated integers.
+
+    Returns
+    -------
+    int, tuple of int or str
+    """
     if text == "auto":
         return text
     values = _ints(text)
@@ -63,14 +122,40 @@ def _overlap(text: str) -> int | tuple[int, ...] | str:
 
 
 def _threshold_label(tile: np.ndarray, threshold: float) -> np.ndarray:
-    """Label connected regions above a fixed *threshold*."""
+    """Label connected regions above a fixed *threshold*.
+
+    Parameters
+    ----------
+    tile : np.ndarray
+        The tile.
+    threshold : float
+        Voxels above it are foreground.
+
+    Returns
+    -------
+    np.ndarray
+        int32 labels of the connected foreground regions.
+    """
     from scipy.ndimage import label
 
     return label(tile > threshold)[0].astype("int32")
 
 
 def _build_fn(args: argparse.Namespace, image: Any) -> Callable:
-    """The per-tile segmentation function the flags describe."""
+    """The per-tile segmentation function the flags describe.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        `patchworks segment`'s flags: the method and its settings.
+    image : dask.array.Array
+        The image as it will be tiled, for an automatic threshold.
+
+    Returns
+    -------
+    callable
+        `fn(tile) -> labels`.
+    """
     from .plugins.ome_zarr import read_pixel_size
 
     voxel = read_pixel_size(args.image, level=args.level)
@@ -133,6 +218,19 @@ def _build_fn(args: argparse.Namespace, image: Any) -> Callable:
 
 
 def _cmd_convert(args: argparse.Namespace) -> int:
+    """Run `patchworks convert`: an image to OME-Zarr; prints the store.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+            The parsed flags: input, output, axes, pixel_size,
+        sequence_pattern, levels, shard, overwrite, compression.
+
+    Returns
+    -------
+    int
+        The exit status.
+    """
     from .plugins.ome_zarr import to_ome_zarr
 
     pixel_size = None
@@ -154,6 +252,19 @@ def _cmd_convert(args: argparse.Namespace) -> int:
 
 
 def _cmd_segment(args: argparse.Namespace) -> int:
+    """Run `patchworks segment`: tile, segment and merge an image.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+            The parsed flags: the image, the method and its settings, tiling,
+        stitching and output flags.
+
+    Returns
+    -------
+    int
+        The exit status.
+    """
     from ._core import tile_process
     from ._io import compression, load_ome_zarr
 
@@ -223,6 +334,18 @@ def _cmd_segment(args: argparse.Namespace) -> int:
 
 
 def _cmd_seams(args: argparse.Namespace) -> int:
+    """Run `patchworks seams`: print the seam report as JSON.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        The parsed flags: labels, tile_shape, component, max_faces.
+
+    Returns
+    -------
+    int
+        The exit status.
+    """
     from ._seams import seam_report
 
     report = seam_report(
@@ -236,10 +359,31 @@ def _cmd_seams(args: argparse.Namespace) -> int:
 
 
 def _cmd_info(args: argparse.Namespace) -> int:
+    """Run `patchworks info`: print a store's levels and label images.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        The parsed flags: store.
+
+    Returns
+    -------
+    int
+        The exit status.
+    """
     from ._io import open_group_any
     from .plugins.ome_zarr import read_ngff_attr, read_pixel_size
 
     def describe(path: str, indent: str = "") -> None:
+        """Print a group's axes, calibration and pyramid levels.
+
+        Parameters
+        ----------
+        path : str
+            The image or label group.
+        indent : str, optional
+            Prefix for every line (default none).
+        """
         grp = open_group_any(path)
         ms = read_ngff_attr(grp.attrs, "multiscales") or []
         if not ms:
@@ -278,6 +422,19 @@ def _cmd_info(args: argparse.Namespace) -> int:
 
 
 def _cmd_fix_metadata(args: argparse.Namespace) -> int:
+    """Run `patchworks fix-metadata`: repair NGFF metadata, name channels.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+            The parsed flags: store, channel_names, channels_from,
+        sequence_pattern.
+
+    Returns
+    -------
+    int
+        The exit status.
+    """
     from .plugins.ome_zarr import fix_ngff_metadata
 
     changes = fix_ngff_metadata(args.store)
@@ -313,6 +470,18 @@ def _cmd_fix_metadata(args: argparse.Namespace) -> int:
 
 
 def _cmd_sizes(args: argparse.Namespace) -> int:
+    """Run `patchworks sizes`: print a label image's size report.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        The parsed flags: store, name.
+
+    Returns
+    -------
+    int
+        The exit status.
+    """
     from ._filter import format_size_report, size_report
 
     print(format_size_report(args.name, size_report(args.store, args.name)))
@@ -320,6 +489,19 @@ def _cmd_sizes(args: argparse.Namespace) -> int:
 
 
 def _cmd_filter(args: argparse.Namespace) -> int:
+    """Run `patchworks filter`: drop objects outside a size range.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+            The parsed flags: store, name, min_volume, max_volume, min_length,
+        out.
+
+    Returns
+    -------
+    int
+        The exit status.
+    """
     from ._filter import filter_labels
 
     if (
@@ -345,6 +527,18 @@ def _cmd_filter(args: argparse.Namespace) -> int:
 
 
 def _cmd_serve(args: argparse.Namespace) -> int:
+    """Run `patchworks serve`: serve a store for Neuroglancer.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        The parsed flags: store, port, host.
+
+    Returns
+    -------
+    int
+        The exit status.
+    """
     from ._serve import serve
 
     serve(args.store, port=args.port, host=args.host)
@@ -352,6 +546,18 @@ def _cmd_serve(args: argparse.Namespace) -> int:
 
 
 def _cmd_view(args: argparse.Namespace) -> int:
+    """Run `patchworks view`: open a store in napari.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        The parsed flags: image, labels, channel.
+
+    Returns
+    -------
+    int
+        The exit status.
+    """
     from .plugins.napari import view_in_napari
 
     view_in_napari(args.image, labels=args.labels, channel=args.channel)
@@ -359,7 +565,22 @@ def _cmd_view(args: argparse.Namespace) -> int:
 
 
 def _pair(text: str) -> tuple[str, str]:
-    """`child:parent` -> ("child", "parent")."""
+    """Parse `child:parent` as `("child", "parent")`.
+
+    Parameters
+    ----------
+    text : str
+        Two label image names, joined by a colon.
+
+    Returns
+    -------
+    tuple of str
+
+    Raises
+    ------
+    argparse.ArgumentTypeError
+        When either name is missing.
+    """
     child, sep, parent = text.partition(":")
     if not sep or not child or not parent:
         raise argparse.ArgumentTypeError(f"expected CHILD:PARENT, got {text!r}")
@@ -367,7 +588,24 @@ def _pair(text: str) -> tuple[str, str]:
 
 
 def _expect(text: str) -> tuple[str, str, tuple[int, int]]:
-    """`parent:child=1` or `parent:child=0-2` -> (parent, child, range)."""
+    """Parse `parent:child=1` or `parent:child=0-2`.
+
+    Parameters
+    ----------
+    text : str
+        A parent and a child label image, and how many children each parent
+        should hold: one number or a range.
+
+    Returns
+    -------
+    tuple
+        `(parent, child, (min, max))`.
+
+    Raises
+    ------
+    argparse.ArgumentTypeError
+        For anything else.
+    """
     pair, sep, rng = text.partition("=")
     parent, child = _pair(pair)
     try:
@@ -383,6 +621,19 @@ def _expect(text: str) -> tuple[str, str, tuple[int, int]]:
 
 
 def _cmd_tables(args: argparse.Namespace) -> int:
+    """Run `patchworks tables`: write object tables, and relate them.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+            The parsed flags: store, names, channels, relate, max_distance,
+        workers.
+
+    Returns
+    -------
+    int
+        The exit status.
+    """
     from ._tables import compute_table, relate_tables
     from .plugins.napari import _inner_label_names
 
@@ -404,7 +655,25 @@ def _cmd_tables(args: argparse.Namespace) -> int:
 
 
 def _position(text: str) -> tuple[str, dict]:
-    """`child:parent=apical` -> ("child", {"parent": ..., "apical": ...})."""
+    """Parse `child:parent=apical` for `--position`.
+
+    Parameters
+    ----------
+    text : str
+        A child and a parent label image, and the parent's apical side: an
+        axis direction (`+z`, `-z`...) or a label image to point away
+        from.
+
+    Returns
+    -------
+    tuple
+        `("child", {"parent": ..., "apical": ...})`.
+
+    Raises
+    ------
+    argparse.ArgumentTypeError
+        For anything else.
+    """
     pair, sep, apical = text.partition("=")
     child, parent = _pair(pair)
     if not sep or not apical:
@@ -416,6 +685,19 @@ def _position(text: str) -> tuple[str, dict]:
 
 
 def _cmd_review(args: argparse.Namespace) -> int:
+    """Run `patchworks review`: open the review in napari, or export it.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+            The parsed flags: store, expect, min_overlap, position, summary,
+        export, format, workbooks, write_labels.
+
+    Returns
+    -------
+    int
+        The exit status.
+    """
     from ._review import Review
 
     expect: dict = {}
@@ -456,6 +738,19 @@ def _cmd_review(args: argparse.Namespace) -> int:
 
 
 def _cmd_denoise_train(args: argparse.Namespace) -> int:
+    """Run `patchworks denoise-train`: train a Noise2Void model.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+            The parsed flags: image, out, channel, level, crop_shape, crops,
+        patch_size, batch_size, epochs, n2v2.
+
+    Returns
+    -------
+    int
+        The exit status.
+    """
     from .plugins.careamics import train_n2v
 
     out = train_n2v(
@@ -784,7 +1079,19 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Entry point of the `patchworks` command."""
+    """Entry point of the `patchworks` command.
+
+    Parameters
+    ----------
+    argv : sequence of str, optional
+        The arguments, without the program's name; default the command
+        line's.
+
+    Returns
+    -------
+    int
+        The exit status.
+    """
     args = build_parser().parse_args(argv)
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,

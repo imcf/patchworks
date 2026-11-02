@@ -114,7 +114,23 @@ def _block_max(arr: np.ndarray, block: tuple[int, ...]) -> np.ndarray:
 
 
 def _leading_index(ndim: int, n_spatial: int, channel: int) -> tuple[int, ...]:
-    """Index prefix selecting *channel* from the non-spatial leading axes."""
+    """Index prefix selecting *channel* from the non-spatial leading axes.
+
+    Parameters
+    ----------
+    ndim : int
+        The array's number of axes.
+    n_spatial : int
+        How many of them (the last ones) are spatial.
+    channel : int
+        The channel to select on the last leading axis; any axes before it
+        (time) take index 0.
+
+    Returns
+    -------
+    tuple of int
+        The prefix; empty when the array has no leading axes.
+    """
     n_leading = ndim - n_spatial
     if n_leading <= 0:
         return ()
@@ -122,7 +138,27 @@ def _leading_index(ndim: int, n_spatial: int, channel: int) -> tuple[int, ...]:
 
 
 def _level_array(root: zarr.Group, level: int, store_path: str) -> Any:
-    """Return the zarr array for one pyramid *level* of an OME-ZARR store."""
+    """The zarr array for one pyramid level of an OME-Zarr store.
+
+    Parameters
+    ----------
+    root : zarr.Group
+        The store's root group, holding the `multiscales` metadata.
+    level : int
+        The pyramid level, 0 the full resolution.
+    store_path : str
+        The store's path, named in the error.
+
+    Returns
+    -------
+    zarr.Array
+        The level's array.
+
+    Raises
+    ------
+    ValueError
+        When the metadata has no such level.
+    """
     attrs = dict(root.attrs)
     multiscales = attrs.get("multiscales") or attrs.get("ome", {}).get(
         "multiscales"
@@ -145,6 +181,18 @@ def occupancy_path(image_store: Union[str, Path], level: int = 0) -> str:
     one ("Object at ... is not recognized as a component of a Zarr
     hierarchy"), which would make every `members()`/`arrays()` call on the
     user's image warn.
+
+    Parameters
+    ----------
+    image_store : str or Path
+        The image store (`image.zarr`).
+    level : int, optional
+        The pyramid level the map was built from (default 0).
+
+    Returns
+    -------
+    str
+        `<image>.occupancy.zarr/<level>`.
     """
     store = str(image_store).rstrip("/")
     base = store[:-5] if store.endswith(".zarr") else store
@@ -252,6 +300,13 @@ def build_occupancy_map(
     regions = list(_iproduct(*ranges))
 
     def _one(starts: tuple[int, ...]) -> None:
+        """Reduce one region of the image to its occupancy cells, every channel.
+
+        Parameters
+        ----------
+        starts : tuple of int
+            The region's first cell on each spatial axis of the map.
+        """
         out_sl = tuple(
             slice(o, min(o + s, g)) for o, s, g in zip(starts, steps, grid)
         )

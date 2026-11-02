@@ -95,7 +95,17 @@ def _resolve_tile_shape(tile_shape, shape, dtype, use_gpu):
 
 
 def _is_zarr_path(path: str) -> bool:
-    """Whether *path* names a `.zarr` store (tolerating a trailing slash)."""
+    """Whether *path* names a `.zarr` store (tolerating a trailing slash).
+
+    Parameters
+    ----------
+    path : str
+        The path to check.
+
+    Returns
+    -------
+    bool
+    """
     return path.rstrip("/\\").endswith(".zarr")
 
 
@@ -144,6 +154,17 @@ def _fn_key(fn: Any) -> Any:
     Module + qualified name, plus a partial's bound arguments (plugins are
     partials over a config dict, so a changed threshold changes the key).
     Object addresses are left out: they differ between runs.
+
+    Parameters
+    ----------
+    fn : callable
+        The segmentation function, possibly a `functools.partial`.
+
+    Returns
+    -------
+    str or list
+        `"module.qualname"`, or for a partial a list of the function's key
+        and its bound arguments.
     """
     if isinstance(fn, functools.partial):
         return [
@@ -157,12 +178,35 @@ def _fn_key(fn: Any) -> Any:
 
 
 def _run_fingerprint(**parts: Any) -> str:
-    """Short hash naming a resumable run's stage store."""
+    """Short hash naming a resumable run's stage store.
+
+    Parameters
+    ----------
+    **parts
+        What identifies the run (image, function key, tile shape...);
+        anything JSON can't hold is hashed as its string form.
+
+    Returns
+    -------
+    str
+        12 hex digits.
+    """
     blob = json.dumps(parts, sort_keys=True, default=str).encode()
     return hashlib.sha1(blob).hexdigest()[:12]
 
 
 def _write_json_atomic(path: str, payload: Any) -> None:
+    """Write *payload* as JSON through a temporary file and a rename.
+
+    A job killed mid-write leaves the previous file whole.
+
+    Parameters
+    ----------
+    path : str
+        The file to write.
+    payload : object
+        Anything `json.dump` takes.
+    """
     tmp = f"{path}.tmp"
     with open(tmp, "w") as fh:
         json.dump(payload, fh)
@@ -185,11 +229,39 @@ def _stage_tiles(
 
     The engine behind `stitch="iou"` (it keeps each tile's halo, which the
     fused dask pass trims away) and `resume=True` (it records each
-    finished tile, so a rerun skips it). Returns every tile's label count,
-    which also spares the merge its renumbering pass.
+    finished tile, so a rerun skips it). Returning every tile's label count
+    also spares the merge its renumbering pass.
 
-    With several *devices*, tiles are shared out to one worker process per
-    GPU instead of threads (see :func:`_stage_on_gpus`).
+    Parameters
+    ----------
+    image : dask.array.Array
+        The image, chunked by tile.
+    fn : callable
+        The segmentation function.
+    stage_path : str
+        The stage store, created unless *checkpoint* says tiles are already
+        there.
+    tile : tuple of int
+        The tile shape.
+    overlap : list of int
+        The halo per axis.
+    n_workers : int
+        Threads staging tiles at once.
+    halo_dir : str or None
+        Where to keep each tile's halo, for IoU stitching; None keeps none.
+    checkpoint : str or None
+        A JSON file recording finished tiles, read to resume and rewritten
+        after each tile; None records nothing.
+    progress : bool
+        Show progress.
+    devices : list of str, optional
+        GPUs to share the tiles out to, one worker process each (see
+        :func:`_stage_on_gpus`); with one or none, threads are used.
+
+    Returns
+    -------
+    dict of int to int
+        Every tile's label count, by tile index.
     """
     import dask
     from concurrent.futures import ThreadPoolExecutor
@@ -212,6 +284,15 @@ def _stage_tiles(
     lock = threading.Lock()
 
     def record(index: int, n: int) -> None:
+        """Record a finished tile, in memory and in the checkpoint.
+
+        Parameters
+        ----------
+        index : int
+            The tile.
+        n : int
+            Its label count.
+        """
         with lock:
             done[index] = n
             if checkpoint is not None:
@@ -228,6 +309,13 @@ def _stage_tiles(
         return done
 
     def one(index: int) -> None:
+        """Stage one tile and record it.
+
+        Parameters
+        ----------
+        index : int
+            The tile.
+        """
         n = stage_tile(
             image,
             fn,
@@ -273,11 +361,28 @@ def _gpu_worker_init(device_queue: Any) -> None:
     `CUDA_VISIBLE_DEVICES` is read when CUDA initialises, which happens on
     a worker's first GPU call -- after this -- so torch, cupy or anything
     else in *fn* sees exactly one device, as device 0.
+
+    Parameters
+    ----------
+    device_queue : multiprocessing.Queue
+        The device ids still free; this worker takes one.
     """
     os.environ["CUDA_VISIBLE_DEVICES"] = str(device_queue.get())
 
 
 def _gpu_stage_one(index: int) -> tuple[int, int]:
+    """Stage one tile in a GPU worker process, from the forked `_gpu_job`.
+
+    Parameters
+    ----------
+    index : int
+        The tile.
+
+    Returns
+    -------
+    tuple of int
+        `(index, label_count)`.
+    """
     import dask
 
     from ._distributed import stage_tile
@@ -311,8 +416,31 @@ def _stage_on_gpus(
     Processes, not threads: a CUDA device choice is per-process for most
     frameworks, and a model cached per process (Cellpose's) would otherwise
     be shared across devices. Forked (Linux), so *fn* may be any callable,
-    closures included, and needs no `__main__` guard. Yields
-    `(index, label_count)` as tiles finish, in any order.
+    closures included, and needs no `__main__` guard.
+
+    Parameters
+    ----------
+    devices : list of str
+        The GPUs, as `CUDA_VISIBLE_DEVICES` names them.
+    image : dask.array.Array
+        The image, chunked by tile.
+    fn : callable
+        The segmentation function.
+    stage_path : str
+        The stage store, already created.
+    tile : tuple of int
+        The tile shape.
+    overlap : list of int
+        The halo per axis.
+    halo_dir : str or None
+        Where to keep each tile's halo, for IoU stitching.
+    todo : list of int
+        The tiles to stage.
+
+    Yields
+    ------
+    tuple of int
+        `(index, label_count)` as tiles finish, in any order.
     """
     import multiprocessing as mp
     import sys
@@ -349,10 +477,25 @@ def _stage_on_gpus(
 
 
 def _resolve_gpus(gpus: Any) -> list[str] | None:
-    """Device ids to use for `gpus=`: an int (the first N visible) or ids.
+    """Device ids to use for `gpus=`.
 
     Ids are what `CUDA_VISIBLE_DEVICES` holds (indices or `GPU-`/`MIG-`
     UUIDs); with it set, `gpus=2` means its first two entries.
+
+    Parameters
+    ----------
+    gpus : int, sequence or None
+        How many of the visible GPUs (the first N), or the ids themselves;
+        None for no multi-GPU run.
+
+    Returns
+    -------
+    list of str or None
+
+    Raises
+    ------
+    ValueError
+        When more GPUs are asked for than are visible.
     """
     if gpus is None:
         return None
@@ -374,7 +517,23 @@ def _resolve_gpus(gpus: Any) -> list[str] | None:
 def _read_tile(
     image: da.Array, index: int, tile: tuple[int, ...], overlap: list[int]
 ) -> np.ndarray:
-    """Tile *index* with its halo, exactly as :func:`stage_tile` reads it."""
+    """Tile *index* with its halo, exactly as :func:`stage_tile` reads it.
+
+    Parameters
+    ----------
+    image : dask.array.Array
+        The image.
+    index : int
+        The tile, in :func:`spatial_tiles` order.
+    tile : tuple of int
+        The tile shape.
+    overlap : list of int
+        The halo per axis.
+
+    Returns
+    -------
+    np.ndarray
+    """
     from ._distributed import normalize_overlap, spatial_tiles
 
     sl = spatial_tiles(image.shape, tile)[index]
@@ -403,10 +562,42 @@ def _plan(
 
     Counts tiles (and, with `skip_empty`, which hold signal, from the
     fast centre-window preview), sizes a tile's memory and the worker pool
-    exactly as the run would, and -- with *sample* > 0 -- times *fn* on that
-    many real tiles to extrapolate a duration. The first sampled tile also
-    pays any model load, so with two or more samples it is left out of the
-    average.
+    exactly as the run would, and -- with *sample* > 0 -- times *fn* on
+    that many real tiles to extrapolate a duration. The first sampled tile
+    also pays any model load, so with two or more samples it is left out of
+    the average.
+
+    Parameters
+    ----------
+    image : dask.array.Array
+        The image, chunked by tile.
+    fn : callable
+        The segmentation function, timed on sampled tiles.
+    overlap : list of int
+        The halo per axis.
+    skip_empty : bool
+        Count only the tiles with signal, as the run would.
+    threshold : float or None
+        The intensity that counts as signal for *skip_empty*; None picks it
+        as the run would.
+    use_gpu : bool
+        Size the worker pool for a GPU (one tile at a time).
+    max_workers : int or None
+        The run's worker cap.
+    devices : list of str or None
+        The GPUs of a multi-GPU run: one worker each.
+    stitch : str
+        The stitching mode, reported.
+    sample : int
+        Tiles to time *fn* on; 0 times nothing.
+
+    Returns
+    -------
+    dict
+        `grid`, `overlap`, `tiles`, `tiles_with_signal`, `stitch`,
+        `workers`, `tile_read_bytes`, `labels_bytes_uncompressed`,
+        `seconds_per_tile` and `estimated_seconds` (None without
+        samples).
     """
     import time as _time
 
@@ -501,6 +692,24 @@ def _stage_fused(
     Bounds concurrency to the machine so staging can neither OOM nor pin
     every core -- GPU: one eval at a time; CPU: as many tiles as fit RAM,
     leaving a core free. A distributed client manages its own concurrency.
+
+    Parameters
+    ----------
+    labeled : dask.array.Array
+        The labels, one dask task per tile.
+    stage_path : str
+        The stage store to write.
+    active_client : distributed.Client or None
+        The client already running, if any; without one, a GPU run starts a
+        temporary local cluster for the dashboard.
+    use_gpu : bool
+        Whether *fn* runs on a GPU.
+    max_workers : int or None
+        The worker cap; None sizes it from memory.
+    tile_nbytes : int
+        One tile's memory, for sizing the pool.
+    progress : bool
+        Show progress.
     """
     import dask as _dask
 
@@ -645,12 +854,12 @@ def tile_process(
 
     Parameters
     ----------
-    image:
+    image : da.Array or str or Path
         Dask array *or* path to an OME-ZARR store.
-    fn:
+    fn : Callable[[np.ndarray], np.ndarray]
         `(ndarray) -> ndarray` returning integer labels of the same shape.
         Must be picklable when using distributed schedulers.
-    tile_shape:
+    tile_shape : tuple of int, callable or str, optional
         Controls tiling before calling *fn*. Accepted values:
 
         - `None` : keep existing dask chunks.
@@ -667,7 +876,7 @@ def tile_process(
               tile_fn = partial(auto_tile_shape_cellpose, diameter=30, use_gpu=True)
               result = tile_process("image.zarr", fn, tile_shape=tile_fn)
 
-    overlap:
+    overlap : int, optional
         Voxels of overlap (halo) added to each tile before *fn* is called, so
         objects near tile boundaries have enough spatial context to be
         segmented correctly (Cellpose, StarDist, …). The halo is trimmed off
@@ -677,23 +886,23 @@ def tile_process(
 
         Merging is always **touching-label** based: after the halo is trimmed,
         labels that touch across a tile boundary are merged into one object.
-    channel:
+    channel : int, optional
         Channel index when *image* is a path. Ignored for arrays.
-    level:
+    level : int, optional
         Pyramid level when *image* is a path (0 = full resolution).
-    use_gpu:
+    use_gpu : bool, optional
         When `tile_shape="auto"`, size tiles against GPU VRAM instead of RAM.
         Also forces staging to one tile at a time (no VRAM contention).
-    max_workers:
+    max_workers : int, optional
         Cap the worker threads/processes used for staging and merging. `None`
         (default) auto-sizes to the machine: bounded by available RAM (tile
         size) and CPU (leaves one core free) so a run can neither OOM nor pin
         every core. Ignored when a distributed client is active (it manages its
         own concurrency).
-    progress:
+    progress : bool, optional
         Show progress bars for staging, the label write and the pyramid
         (default `True`). Set `False` to silence them.
-    write_to:
+    write_to : str or Path, optional
         Explicit output zarr store path. Overrides the default behaviour: the
         merged labels are written here as a single-resolution array named
         `output_component` (no pyramid). When None (default) and *image* is a
@@ -704,57 +913,57 @@ def tile_process(
         active :func:`patchworks.compression` codec (zstd level 1 unless
         changed); wrap the call in `with compression("blosc"):` to pick
         another.
-    output_component:
+    output_component : str, optional
         Label name. The array inside `write_to`, or the NGFF label image name
         under `labels/` when writing into the input store. Default
         `"labels"`.
-    pyramid_levels:
+    pyramid_levels : int, optional
         Number of resolution levels for the in-store label pyramid (only when
         writing into the input `.zarr`). Default 5.
-    pyramid_downscale:
+    pyramid_downscale : int, optional
         Per-level X/Y downsampling factor for that pyramid (Z is kept at full
         resolution). Default 2.
-    sequential_labels:
+    sequential_labels : bool, optional
         Renumber merged labels to a contiguous `1..N` range. Default False —
         labels stay globally unique but gappy (block-encoded), which is fine for
         counting/measurement. Uses a cheap linear post-pass (O(voxels)), not the
         O(n_chunks²) dask built-in.
-    skip_empty:
+    skip_empty : bool, optional
         Skip *fn* on background tiles. A tile whose max signal is <=
         `empty_threshold` returns all-zeros immediately. Biggest speed-up for
         sparse/mostly-background volumes. Use `estimate_empty_tiles()` first
         to pick a threshold.
-    empty_threshold:
+    empty_threshold : float, optional
         Intensity at or below which a tile is empty (`skip_empty=True` only).
         None → auto-derive via Otsu on a bounded sample.
-    stage_dir:
+    stage_dir : str or Path, optional
         Where to put the temporary stage store. `fn` is always run once per
         tile to this store, then the merge reads it back from disk (running
         `fn` again is never needed). Default → next to `write_to`, else next
         to the input store, else a system temp directory. The store gets a
         unique `_pws_stage_<id>.zarr` name, so concurrent runs sharing a
         directory never overwrite each other's tiles.
-    keep_stage:
+    keep_stage : bool, optional
         Keep the temp stage store after merging (default: delete it, also
         when the run fails). Its path is logged. Useful for debugging.
-    log_file:
+    log_file : str or Path or bool, optional
         Where to tee the `patchworks` INFO log (including a per-tile
         `tile k done` counter and ETA). `None`/`False` (default) writes
         no file -- configure :mod:`logging` as usual; `True` writes
         `patchworks.log` next to the output; a path writes there. Asking
         for a file also raises the `patchworks` logger to INFO.
-    verbose:
+    verbose : bool, optional
         Log each tile's location and shape as it is processed.
-    stitch:
+    stitch : str, optional
         How labels are joined across tile boundaries. `"touch"` (default)
         joins any two labels that touch there. `"iou"` joins them only when
         both tiles' predictions of the overlap zone agree (IoU >=
         `iou_threshold`), so two distinct cells pressed together at a seam
         stay two; it needs `overlap > 0` to have a zone to compare (an axis
         without one falls back to the IoU of the two boundary slices).
-    iou_threshold:
+    iou_threshold : float, optional
         Minimum IoU for `stitch="iou"` (default 0.5).
-    resume:
+    resume : bool, optional
         Make an interrupted run resumable: tiles are staged into a store
         named after this run's inputs (image, tiling, overlap, `fn` and its
         bound arguments, output), with a record of finished tiles. Rerunning
@@ -762,15 +971,15 @@ def tile_process(
         succeeds, and kept when it fails. `stitch="iou"` and `resume`
         stage tile by tile in threads rather than through dask, so an
         active distributed client is not used for staging.
-    dry_run:
+    dry_run : bool, optional
         Only plan: return a dict describing the run -- tile count and grid,
         tiles with signal (`skip_empty`), workers, memory per tile, output
         size -- without segmenting or writing anything. Check a tiling
         before a job waits hours in a queue for it.
-    plan_sample:
+    plan_sample : int, optional
         With `dry_run`, also time *fn* on this many real tiles (spread
         over the image) and extrapolate `estimated_seconds`.
-    gpus:
+    gpus : int or sequence of int or str, optional
         Segment on several GPUs at once: an int (the first N devices, of
         `CUDA_VISIBLE_DEVICES` if set) or a list of device ids. Each GPU
         gets its own worker process, pinned to it before CUDA starts, and

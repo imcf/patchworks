@@ -192,6 +192,19 @@ def filter_labels_by_size(
 
     # Pass 1, one chunk per thread; an all-zero chunk is skipped at once.
     def _count(sl):
+        """Each object's voxels in one chunk (pass 1).
+
+        Parameters
+        ----------
+        sl : tuple of slice
+            The chunk.
+
+        Returns
+        -------
+        tuple or None
+            `(sl, ids, counts)` without the background, or None for an
+            all-zero chunk.
+        """
         block = np.asarray(z[sl])
         if not block.any():
             return None
@@ -246,6 +259,13 @@ def filter_labels_by_size(
     # Pass 2 only where pass 1 found labels: a background chunk maps to
     # itself. Each task writes its own chunk, so the threads never share one.
     def _apply(sl):
+        """Rewrite one chunk through the lookup table (pass 2).
+
+        Parameters
+        ----------
+        sl : tuple of slice
+            The chunk, read and written in place.
+        """
         block = np.asarray(z[sl])
         z[sl] = lut[block].astype(out_dtype)
 

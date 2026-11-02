@@ -115,6 +115,18 @@ def decon_voxel_kwargs(
     """
 
     def _lateral(cal):
+        """The lateral voxel size, warning when x and y differ.
+
+        Parameters
+        ----------
+        cal : dict
+            A calibration with `x` and/or `y`.
+
+        Returns
+        -------
+        float or None
+            x (else y); None without either.
+        """
         x, y = cal.get("x"), cal.get("y")
         if x and y and abs(x - y) > 1e-9 * max(x, y):
             logger.warning(
@@ -154,21 +166,21 @@ def dog_label_fn(
 
     Parameters
     ----------
-    low_sigma, high_sigma:
+    low_sigma, high_sigma : float or tuple[float, ...]
         Gaussian sigmas for the narrow/wide blur, one number or one per axis.
         `dog = blur(low_sigma) - blur(high_sigma)`. In pixels by default,
         which on an anisotropic stack blurs z far further (physically) than
         x/y; see *sigma_units*.
-    threshold:
+    threshold : float
         Binary threshold applied to the DoG image (`dog > threshold`):
         in the image's intensity units, or, with *intensity_range*, as a
         fraction of that range.
-    use_gpu:
+    use_gpu : bool, optional
         Run gaussian_filter + label on GPU via cupy/cupyx instead of scipy.
         Independent of `decon_kwargs` — pycudadecon always needs a CUDA
         GPU regardless of this flag (it takes/returns plain NumPy), and this
         flag only picks the backend for the blur/label steps that follow.
-    decon_kwargs:
+    decon_kwargs : dict[str, Any], optional
         If given, each tile is first deconvolved via
         `pycudadecon.decon(block, **decon_kwargs)` before the DoG step.
         `None` (default) skips deconvolution. pycudadecon is CUDA-only, so
@@ -180,17 +192,17 @@ def dog_label_fn(
         `dxdata`/`dzdata`/`dxpsf`/`dzpsf` are filled in from
         *voxel_size* when you leave them out, so the voxel sizes cannot drift
         away from the image they describe. Anything you set explicitly wins.
-    voxel_size:
+    voxel_size : dict[str, float], optional
         Physical voxel size as `{"z": .., "y": .., "x": ..}`. The Snakemake
         workflow passes the image's own calibration automatically; from the
         API, :func:`patchworks.plugins.ome_zarr.read_pixel_size` reads it from
         a store.
-    sigma_units:
+    sigma_units : str, optional
         `"px"` (default) or `"um"`. With `"um"` the sigmas are
         physical distances, converted per axis with *voxel_size* -- so a
         cilium is blurred by the same distance along z as across it, however
         coarse the z-step.
-    connectivity:
+    connectivity : int, optional
         Which voxels of the thresholded mask belong together: 1 (default)
         sharing a face; 2 also an edge; 3 also a corner (in 3-D, 6-, 18- and
         26-neighbours). A thin oblique cilium is a staircase of voxels that
@@ -198,7 +210,7 @@ def dog_label_fn(
         merge must join tiles with the same value: the workflow passes it on
         by itself; from the API, give `merge_tile_labels(connectivity=)`.
 
-    intensity_range:
+    intensity_range : tuple[float, float], optional
         `(low, high)` of the whole image's channel, from
         :func:`patchworks.intensity_range`; the workflow measures it (1st
         and 99.9th percentiles). The DoG is divided by `high - low`, so
@@ -333,7 +345,17 @@ _DECON_INT_KEYS = ("wavelength", "krmax", "fixorigin")
 
 
 def _decon_ints(kwargs: dict[str, Any]) -> dict[str, Any]:
-    """*kwargs* with :data:`_DECON_INT_KEYS` as integers (rounded)."""
+    """*kwargs* with :data:`_DECON_INT_KEYS` as integers (rounded).
+
+    Parameters
+    ----------
+    kwargs : dict
+        pycudadecon's keyword arguments, from a config that may hold floats.
+
+    Returns
+    -------
+    dict
+    """
     return {
         k: int(round(float(v)))
         if k in _DECON_INT_KEYS and v is not None and not isinstance(v, bool)
@@ -349,6 +371,19 @@ def _cached_decon(img: np.ndarray, kwargs: dict[str, Any]) -> np.ndarray:
     initialised once per tile shape (edge tiles differ, and re-initialise).
     A PSF given as an array, or any keyword the cache does not model, falls
     back to the uncached one-shot call.
+
+    Parameters
+    ----------
+    img : np.ndarray
+        The tile, float32.
+    kwargs : dict
+        pycudadecon's keyword arguments: `psf` (a file), the OTF's, the
+        initialisation's and the run's.
+
+    Returns
+    -------
+    np.ndarray
+        The deconvolved tile.
     """
     import os
 
@@ -389,7 +424,22 @@ def _cached_decon(img: np.ndarray, kwargs: dict[str, Any]) -> np.ndarray:
 
 
 def _axial_fwhm_um(wavelength_nm: float, na: float, n: float) -> float:
-    """Widefield axial FWHM, `0.88 lambda / (n - sqrt(n^2 - NA^2))`."""
+    """Widefield axial FWHM, `0.88 lambda / (n - sqrt(n^2 - NA^2))`.
+
+    Parameters
+    ----------
+    wavelength_nm : float
+        Emission wavelength, nm.
+    na : float
+        Numerical aperture; capped just under *n*.
+    n : float
+        Immersion refractive index.
+
+    Returns
+    -------
+    float
+        In µm.
+    """
     na = min(na, n * 0.999)
     return 0.88 * (wavelength_nm / 1000) / (n - (n * n - na * na) ** 0.5)
 
@@ -406,6 +456,19 @@ def _resolve_dup_rev_z(
     turns it on when the tile is shallower than 4 axial FWHMs of the PSF
     (estimated from wavelength, NA and immersion index -- the same values
     the OTF is built from).
+
+    Parameters
+    ----------
+    kwargs : dict
+        pycudadecon's keyword arguments; anything but `dup_rev_z="auto"`
+        is returned as is.
+    shape : tuple of int
+        The tile's shape, z first.
+
+    Returns
+    -------
+    dict
+        *kwargs* with `dup_rev_z` True or False.
     """
     if kwargs.get("dup_rev_z") != "auto":
         return kwargs
@@ -433,8 +496,17 @@ def _physical_sigma(
 ) -> tuple[float, ...]:
     """Micrometre sigma(s) -> per-axis pixel sigmas, ordered (z, y, x).
 
-    A scalar applies to every axis; a 2-tuple is (y, x); a 3-tuple is
-    (z, y, x). An axis the calibration lacks falls back to 1 um per voxel.
+    Parameters
+    ----------
+    sigma : float or tuple of float
+        A scalar applies to every axis; a 2-tuple is (y, x); a 3-tuple is
+        (z, y, x).
+    voxel_size : dict of str to float
+        µm per voxel by axis; an axis it lacks falls back to 1 µm.
+
+    Returns
+    -------
+    tuple of float
     """
     axes = "zyx"
     values = (
@@ -449,7 +521,19 @@ def _physical_sigma(
 
 
 def _fit_sigma(sigma: Any, ndim: int) -> Any:
-    """Trim a (z, y, x) sigma to a 2-D tile's (y, x)."""
+    """Trim a (z, y, x) sigma to a 2-D tile's (y, x).
+
+    Parameters
+    ----------
+    sigma : float or sequence of float
+        A scalar is returned as is.
+    ndim : int
+        The tile's number of axes.
+
+    Returns
+    -------
+    float or tuple of float
+    """
     if np.isscalar(sigma) or len(sigma) == ndim:
         return sigma
     return tuple(sigma)[-ndim:]
@@ -491,6 +575,15 @@ def _fft_size(n: int) -> int:
     cudaDecon trims every axis down to such a length (783 -> 768), so a
     tile already that long goes through whole.
 
+    Parameters
+    ----------
+    n : int
+        The length needed.
+
+    Returns
+    -------
+    int
+
     Examples
     --------
     >>> [_fft_size(n) for n in (783, 799, 1080, 1084, 126, 2)]
@@ -522,6 +615,17 @@ def _pad_for_decon(img: np.ndarray) -> tuple[np.ndarray, tuple[slice, ...]]:
     :data:`DECON_MARGIN` on each side, up to a length cudaDecon keeps whole,
     moves both effects out of the tile. z is left alone: `dup_rev_z`
     covers its wrap, and its depth decides that.
+
+    Parameters
+    ----------
+    img : np.ndarray
+        The tile, y and x its last two axes.
+
+    Returns
+    -------
+    tuple
+        `(padded, inner)`: the mirrored tile, and the slices of *img*
+        inside it.
 
     Examples
     --------
@@ -602,7 +706,24 @@ def _restore_shape(arr: np.ndarray, shape: tuple[int, ...]) -> np.ndarray:
 def _segment_once(
     block: np.ndarray, dog_dict: dict[str, Any], use_gpu: bool
 ) -> np.ndarray:
-    """One decon + DoG + label pass; see :func:`_run` for the retry wrapper."""
+    """One decon + DoG + label pass; see :func:`_run` for the retry wrapper.
+
+    Parameters
+    ----------
+    block : np.ndarray
+        The tile.
+    dog_dict : dict
+        The settings :func:`dog_fn` built: `decon_kwargs` (None: no
+        deconvolution), `low_sigma` and `high_sigma` in pixels,
+        `threshold` and its `scale`, and `connectivity`.
+    use_gpu : bool
+        Filter and label on the GPU with cupy.
+
+    Returns
+    -------
+    np.ndarray
+        The tile's labels.
+    """
     img = block.astype("float32")
 
     decon_kwargs = dog_dict["decon_kwargs"]
@@ -665,7 +786,13 @@ _dense_warned: list[bool] = []
 
 
 def _warn_if_dense(mask) -> None:
-    """Warn once per process when the mask covers much of a tile."""
+    """Warn once per process when the mask covers much of a tile.
+
+    Parameters
+    ----------
+    mask : array of bool
+        The thresholded DoG.
+    """
     if _dense_warned:
         return
     fraction = float(mask.mean())
@@ -717,7 +844,18 @@ _CUPY_HINT = (
 
 
 def _requires(kwargs: dict) -> dict[str, str]:
-    """Modules these `kwargs` need (the workflow checks them up front)."""
+    """Modules these `kwargs` need (the workflow checks them up front).
+
+    Parameters
+    ----------
+    kwargs : dict
+        The DoG settings.
+
+    Returns
+    -------
+    dict of str to str
+        `{module: install hint}`: cupy with `use_gpu`.
+    """
     # pycudadecon (decon_kwargs) is not listed: every workflow environment
     # has it, and checking for it refused the launcher's configs on a
     # machine that only writes them.

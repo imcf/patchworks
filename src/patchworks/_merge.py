@@ -160,6 +160,18 @@ def _transverse_shifts(n_face_axes: int, connectivity: int) -> list:
 
     One step across the face plus `k` steps within it is a neighbour when
     `1 + k <= connectivity` (:func:`scipy.ndimage.generate_binary_structure`).
+
+    Parameters
+    ----------
+    n_face_axes : int
+        The axes of the face (the array's axes but the one crossed).
+    connectivity : int
+        1 across faces only; 2 also across edges; 3 also across corners.
+
+    Returns
+    -------
+    list of tuple of int
+        The offsets, one entry per face axis, `(0, ...)` included.
     """
     from itertools import product
 
@@ -171,8 +183,26 @@ def _transverse_shifts(n_face_axes: int, connectivity: int) -> list:
 
 
 def _face_neighbours(grid, ax, face_axes, n_per_dim) -> list:
-    """Flat indices of the far-side chunk and its neighbours across the face
-    (one step along any face axes, inside the grid)."""
+    """Flat indices of the far-side chunk and its neighbours across the face.
+
+    One step along any face axes, inside the grid.
+
+    Parameters
+    ----------
+    grid : sequence of int
+        The near-side chunk's grid position.
+    ax : int
+        The axis crossed: the far side is one chunk further along it.
+    face_axes : sequence of int
+        The other axes.
+    n_per_dim : sequence of int
+        The chunk grid's shape.
+
+    Returns
+    -------
+    list of int
+        Row-major chunk indices.
+    """
     from itertools import product
 
     out = []
@@ -226,6 +256,8 @@ def _scan_touching_pairs(
         an empty chunk can never produce a touching pair, so those columns are
         not read at all. On a sparse image (`skip_empty`) that is most of
         them.
+    progress : bool, optional
+        Log the scan's progress (default False).
     connectivity : int
         Which neighbours touch, as :func:`scipy.ndimage.generate_binary_structure`
         counts them: 1 across faces only; 2 also across edges; 3 (in 3-D)
@@ -283,6 +315,21 @@ def _scan_touching_pairs(
     shifts = _transverse_shifts(arr.ndim - 1, connectivity)
 
     def _one(task: tuple) -> "np.ndarray | None":
+        """The touching pairs across one chunk column of one boundary face.
+
+        Parameters
+        ----------
+        task : tuple
+            `(ax, pos, offsets, a_idx, b_idx)`: the axis crossed, the
+                boundary's position on it, the column's start on the face axes,
+            and
+            the chunks before and after the boundary (for their id offsets).
+
+        Returns
+        -------
+        np.ndarray or None
+            `(N, 2)` sorted unique pairs, or None when none touch.
+        """
         ax, pos, offsets, a_idx, b_idx = task
         face_axes = [a for a in range(arr.ndim) if a != ax]
         if connectivity <= 1:
@@ -388,8 +435,17 @@ def _scan_touching_pairs(
 def _pair_stats(a_ids: np.ndarray, b_ids: np.ndarray):
     """Overlap counts of `(a, b)` pairs and each side's voxel counts.
 
-    Returns `(pairs, inter, a_area, b_area)` where *pairs* is `(N, 2)`
-    and the areas are dicts `{id: voxels}`, background excluded.
+    Parameters
+    ----------
+    a_ids, b_ids : np.ndarray
+        Two label arrays of the same region, of the same shape.
+
+    Returns
+    -------
+    tuple
+        `(pairs, inter, a_area, b_area)`: *pairs* `(N, 2)` overlapping
+        ids, *inter* their overlap in voxels, and the areas as dicts
+        `{id: voxels}`, background excluded.
     """
     a = np.asarray(a_ids, dtype=np.int64).ravel()
     b = np.asarray(b_ids, dtype=np.int64).ravel()
@@ -427,15 +483,30 @@ def _iou_face_pairs(
 ) -> np.ndarray:
     """Pairs the two tiles agree are one object, over the overlap zone.
 
-    Each window is two label arrays of one region, as seen by the tile on
-    either side; counts are summed over all windows. A pair is joined when
-    each is the other's best match and their overlap covers at least
-    *threshold* of the smaller one. Measured against the smaller, not the
-    union (IoU): a tile sees a cell crossing the zone cut off where its read
-    region ends, and that cut version lies inside the whole one. Mutual best
-    matches only, so one tile's merged blob cannot glue two cells together.
-    *scores*, if given, receives the overlap of every mutual best match;
-    *weak*, the mutual best matches below *threshold*, as `(a, b, score)`.
+    A pair is joined when each is the other's best match and their overlap
+    covers at least *threshold* of the smaller one. Measured against the
+    smaller, not the union (IoU): a tile sees a cell crossing the zone cut
+    off where its read region ends, and that cut version lies inside the
+    whole one. Mutual best matches only, so one tile's merged blob cannot
+    glue two cells together.
+
+    Parameters
+    ----------
+    windows : list of tuple of np.ndarray
+        Each two label arrays of one region, as seen by the tile on either
+        side; counts are summed over all windows.
+    threshold : float
+        The overlap fraction of the smaller object needed to join.
+    scores : list of float, optional
+        Receives the overlap of every mutual best match.
+    weak : list, optional
+        Receives the mutual best matches below *threshold*, as
+        `(a, b, score)`.
+
+    Returns
+    -------
+    np.ndarray
+        `(N, 2)` int64 pairs to join.
     """
     inter: dict[tuple[int, int], int] = {}
     a_area: dict[int, int] = {}
@@ -470,8 +541,25 @@ def _iou_face_pairs(
 
 
 def _load_halo(halo_dir: str, index: int, key: str) -> "np.ndarray | None":
-    """Strip *key* (`"<axis>+"` / `"<axis>-"`) of tile *index*'s halo
-    file, or None. Only that member is decompressed, not every side's."""
+    """One strip of a tile's halo file.
+
+    Only that member is decompressed, not every side's.
+
+    Parameters
+    ----------
+    halo_dir : str
+        The directory of `<index>.npz` halo files.
+    index : int
+        The tile.
+    key : str
+        The strip: `"<axis>+"` (beyond the tile's end) or `"<axis>-"`
+        (before its start).
+
+    Returns
+    -------
+    np.ndarray or None
+        The strip, or None when the file or the strip is missing.
+    """
     path = os.path.join(halo_dir, f"{int(index)}.npz")
     if not os.path.exists(path):
         return None
@@ -520,12 +608,15 @@ def _scan_iou_pairs(
         Minimum IoU to join a pair.
     n_workers : int
         Threads to scan with.
-    progress : bool
+    progress : bool, optional
         Log progress.
     has_labels : np.ndarray of bool, optional
         Per tile, whether it holds any label. A face with an empty tile on
         either side is skipped: its halo strips are empty too (they keep
         only the core's ids), so nothing there can match.
+    weak_out : list, optional
+        Receives the mutual best matches below *threshold*, as
+        `(a, b, score)`, for :func:`_rescue_small_pieces`.
 
     Returns
     -------
@@ -552,12 +643,39 @@ def _scan_iou_pairs(
                 tasks.append((ia, ib, ax))
 
     def _one(task) -> np.ndarray:
+        """The pairs to join across one tile boundary.
+
+        Parameters
+        ----------
+        task : tuple
+            `(ia, ib, ax)`: the tiles before and after the boundary, and the
+            axis crossed.
+
+        Returns
+        -------
+        tuple
+            `(pairs, scores)` from :func:`_iou_face_pairs`.
+        """
         ia, ib, ax = task
         oa, ob = int(label_offsets[ia]), int(label_offsets[ib])
         sa = slices[ia]
         pos = sa[ax].stop
 
         def glob(ids: np.ndarray, off: int) -> np.ndarray:
+            """Tile-local ids made global, background kept at 0.
+
+            Parameters
+            ----------
+            ids : np.ndarray
+                The tile's labels.
+            off : int
+                The tile's id offset.
+
+            Returns
+            -------
+            np.ndarray
+                int64 ids.
+            """
             ids = np.asarray(ids, dtype=np.int64)
             return np.where(ids > 0, ids + off, 0)
 
@@ -627,7 +745,20 @@ def _scan_iou_pairs(
 
 
 def _halo_counts(halo_dir: str, n_chunks: int) -> "list[int] | None":
-    """Per-tile label counts recorded in the halo files, if all are there."""
+    """Per-tile label counts recorded in the halo files, if all are there.
+
+    Parameters
+    ----------
+    halo_dir : str
+        The directory of `<index>.npz` halo files.
+    n_chunks : int
+        The number of tiles.
+
+    Returns
+    -------
+    list of int or None
+        One count per tile, or None when a file or its count is missing.
+    """
     counts = []
     for i in range(n_chunks):
         path = os.path.join(halo_dir, f"{i}.npz")
@@ -733,6 +864,22 @@ def _label_dtype(dtype, max_label: int) -> np.dtype:
     Ids are renumbered to a global range, so a store that was fine per tile
     (Cellpose's uint16 masks, say) overflows once all tiles are summed --
     and a silent wrap-around gives unrelated objects the same id.
+
+    Parameters
+    ----------
+    dtype : dtype-like
+        The staged labels' dtype.
+    max_label : int
+        The highest id after the merge.
+
+    Returns
+    -------
+    np.dtype
+
+    Raises
+    ------
+    OverflowError
+        When even int64 cannot hold *max_label*.
     """
     dtype = np.dtype(dtype)
     if np.issubdtype(dtype, np.integer) and max_label <= np.iinfo(dtype).max:
@@ -950,7 +1097,13 @@ def _scratch_store(base: Union[str, Path, None], name: str) -> tuple[str, str]:
 
 
 def _remove_scratch(cleanup_path: str | None) -> None:
-    """Delete a scratch store (or the temp dir holding it); never raises."""
+    """Delete a scratch store (or the temp dir holding it); never raises.
+
+    Parameters
+    ----------
+    cleanup_path : str or None
+        The directory to delete; None deletes nothing.
+    """
     if cleanup_path is None:
         return
     shutil.rmtree(cleanup_path, ignore_errors=True)
@@ -961,10 +1114,23 @@ def _lut_scratch_dir(lut_nbytes: int, fallback: str) -> str:
     """Create a temp directory with room for the merge LUT.
 
     The system temp dir (`$TMPDIR`, which SLURM usually points at node-local
-    scratch) is preferred: it is local and fast to memory-map. On HPC nodes it
-    is also often small or RAM-backed, and a LUT runs to hundreds of MB, so
-    when it cannot hold the LUT with some headroom the directory is created
-    next to *fallback* (the output store) instead.
+    scratch) is preferred: it is local and fast to memory-map. On HPC nodes
+    it is also often small or RAM-backed, and a LUT runs to hundreds of MB,
+    so when it cannot hold the LUT with some headroom the directory is
+    created next to *fallback* instead.
+
+    Parameters
+    ----------
+    lut_nbytes : int
+        The LUT's size.
+    fallback : str
+        The output store, next to which the directory goes when the temp dir
+        is short of space.
+
+    Returns
+    -------
+    str
+        The new directory.
     """
     tmp = tempfile.gettempdir()
     try:
@@ -994,6 +1160,28 @@ def _combine_tile_parts(
     Memory: about 136 bytes per (object, tile) piece, a few times over while
     sorting -- ~1.5 GB for 2.7 M cilia, against the LUT's 8 bytes per id
     already held. Tiles are read one at a time.
+
+    Parameters
+    ----------
+    parts_dir : str
+        The directory of `<index>.npz` per-tile sums
+        (:func:`patchworks._distributed._save_partial`).
+    offsets : np.ndarray
+        Each tile's id offset, making its ids global.
+    counts : np.ndarray
+        Each tile's label count: tiles without labels have no file.
+    lut : np.ndarray
+        The merge's lookup table, global id to merged id.
+
+    Returns
+    -------
+    dict
+        Columns (`label`, `count`, sums...) with one row per merged object.
+
+    Raises
+    ------
+    FileNotFoundError
+        When a tile with labels has no file.
     """
     from ._tables import combine_partials
 
@@ -1040,6 +1228,22 @@ def _rescue_small_pieces(weak, lut, objects, min_voxels) -> np.ndarray:
     labels on the seams, against 0.2 % inside tiles). Joined to its match
     instead, it is part of a cell rather than a hole. Each small object
     joins one partner only (its best), so it cannot glue two cells.
+
+    Parameters
+    ----------
+    weak : list of tuple
+        The mutual best matches below the IoU threshold, `(a, b, score)`.
+    lut : np.ndarray
+        The merge's lookup table, global id to merged id.
+    objects : dict
+        The merged objects' table, with `label` and `count`.
+    min_voxels : int or None
+        The size filter's minimum; None rescues nothing.
+
+    Returns
+    -------
+    np.ndarray
+        `(N, 2)` int64 pairs to join as well.
     """
     if not weak or min_voxels is None:
         return np.empty((0, 2), dtype=np.int64)
@@ -1048,6 +1252,17 @@ def _rescue_small_pieces(weak, lut, objects, min_voxels) -> np.ndarray:
     count = objects["count"][order]
 
     def size(root):
+        """The merged size of each root id; 0 for an id with no row.
+
+        Parameters
+        ----------
+        root : np.ndarray
+            Merged ids.
+
+        Returns
+        -------
+        np.ndarray
+        """
         i = np.searchsorted(labels, root)
         i = np.minimum(i, len(labels) - 1)
         return np.where(labels[i] == root, count[i], 0)
@@ -1072,8 +1287,24 @@ def _rescue_small_pieces(weak, lut, objects, min_voxels) -> np.ndarray:
 
 
 def _size_filter_lut(lut, objects, min_voxels, max_voxels):
-    """Drop merged objects outside `[min_voxels, max_voxels]` from *lut*
-    (they become background) and from *objects*."""
+    """Drop merged objects outside `[min_voxels, max_voxels]`.
+
+    They become background in *lut* and leave *objects*.
+
+    Parameters
+    ----------
+    lut : np.ndarray
+        The merge's lookup table, global id to merged id.
+    objects : dict
+        The merged objects' table, with `label` and `count`.
+    min_voxels, max_voxels : int or None
+        The bounds, in voxels; None for no bound.
+
+    Returns
+    -------
+    tuple
+        `(lut, objects)`, filtered.
+    """
     count = objects["count"]
     keep = np.ones(len(count), bool)
     if min_voxels is not None:
@@ -1514,72 +1745,72 @@ def merge_tile_labels(
 
     Parameters
     ----------
-    labeled:
+    labeled : 'da.Array' or str or Path
         Per-tile label array. Either a dask array or a path to a zarr store
         that contains per-tile labels in `input_component`. A store is
         **modified**: unless `label_counts` is given, its per-tile ids are
         renumbered to a global range in place before the merge (the
         segmentation is unchanged, the ids are not). Copy it first if the
         original ids matter.
-    write_to:
+    write_to : str or Path, optional
         Output zarr store path. When None, an auto-temp store is used.
-    input_component:
+    input_component : str, optional
         Array name inside a zarr *input* store (ignored for dask arrays).
-    output_component:
+    output_component : str, optional
         Array name inside `write_to`. Default `"labels"`.
-    overlap:
+    overlap : int, optional
         If `labeled` is a dask array that was computed with `da.overlap`,
         pass the same depth here to trim the halos before merging.
         Set 0 (default) if the array has no overlap halos.
-    sequential_labels:
+    sequential_labels : bool, optional
         Renumber the merged labels to a contiguous `1..N` range. Folded into
         the merge's own lookup table, so it costs no extra pass over the
         volume. Default False.
-    label_counts:
+    label_counts : Mapping[int, int] or Sequence[int], optional
         Labels written per tile, when the producer recorded them (see
         :func:`patchworks.stage_tile`, which returns the count). Lets the
         merge derive every tile's global id range arithmetically instead of
         streaming the whole store to renumber it. `None` keeps the
         renumber pass.
-    output_chunks:
+    output_chunks : Sequence[int], optional
         Chunking for the merged store; must divide the staged chunk shape.
         Lets the merge write straight into a store you will keep (e.g. an
         OME-ZARR label group's level 0) instead of a scratch store that then
         has to be copied. See :func:`capped_output_chunks`.
-    shard_output:
+    shard_output : bool, optional
         Store the output in shards of one staged tile each (zarr v3; the
         chunks above are inside them). Each relabel worker writes one tile,
         so it writes whole shards, and the result is sharded with no second
         pass over it. Ignored when relabeling in place.
-    halo_dir:
+    halo_dir : str or Path, optional
         IoU stitching: the halo strips :func:`patchworks.stage_tile` saved
         (its `halo_dir=`). Labels are then joined across a tile boundary
         only when both tiles' predictions of the overlap zone agree
         (IoU >= `iou_threshold`), so two cells pressed together at a seam
         stay two. `None` (default) joins whatever touches.
-    iou_threshold:
+    iou_threshold : float, optional
         Minimum IoU for that join (default 0.5).
-    connectivity:
+    connectivity : int, optional
         Neighbourhood the tiles were labelled with: 1 (default) faces, 2
         also edges, 3 also corners (`scipy.ndimage.generate_binary_structure`).
         Labels touching across a tile boundary that way are joined, so the
         result is that of labelling the whole image at once.
-    parts_dir, min_voxels, max_voxels, objects_out:
+    parts_dir, min_voxels, max_voxels, objects_out : str or Path, optional
         Object sums saved per tile by :func:`stage_tile` (`parts_dir=`),
         combined into one row per merged object in *objects_out* -- the
         object table without a second read of the labels -- and an optional
         size filter applied in the same relabel pass. See
         :func:`zarr_native_merge`. Needs *label_counts*.
-    n_workers:
+    n_workers : int, optional
         Parallel workers for the relabel step. Default `min(4, cpu_count)`.
-    stage_dir:
+    stage_dir : str or Path, optional
         Directory for the temp stage zarr when *labeled* is a dask array.
         Default: a system temp directory.
-    keep_stage:
+    keep_stage : bool, optional
         Keep the temp stage zarr after merging. Default False.
-    progress:
+    progress : bool, optional
         Show a progress bar during the relabel step.
-    return_count:
+    return_count : bool, optional
         Also return the exact object count. Only meaningful (non-`None`)
         when `sequential_labels=True`, which already computes it for free
         while renumbering to `1..N` — otherwise no step here knows the

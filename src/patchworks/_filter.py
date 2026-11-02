@@ -13,11 +13,37 @@ logger = logging.getLogger(__name__)
 
 
 def _group(store: Union[str, Path], name: str) -> str:
+    """The path of label image *name* in *store*.
+
+    Parameters
+    ----------
+    store : str or Path
+        The OME-Zarr image (`image.zarr`, or a path into a bundle).
+    name : str
+        The label image's name.
+
+    Returns
+    -------
+    str
+        `<store>/labels/<name>`.
+    """
     return f"{str(store).rstrip('/')}/labels/{name}"
 
 
 def _volumes(cols: dict[str, np.ndarray]) -> tuple[np.ndarray, str]:
-    """Each object's volume and its unit: µm³ when calibrated, else voxels."""
+    """Each object's volume and its unit: µm³ when calibrated, else voxels.
+
+    Parameters
+    ----------
+    cols : dict of str to np.ndarray
+        The object table's columns (:func:`patchworks._tables.read_columns`).
+
+    Returns
+    -------
+    tuple
+        `(volumes, unit)`: float volumes in table order, and `"µm³"`,
+        `"µm²"` (a 2-D image) or `"voxels"`.
+    """
     for key, unit in (("area_um3", "µm³"), ("area_um2", "µm²")):
         if key in cols:
             return np.asarray(cols[key], dtype=float), unit
@@ -25,8 +51,24 @@ def _volumes(cols: dict[str, np.ndarray]) -> tuple[np.ndarray, str]:
 
 
 def _lengths(store: Union[str, Path], name: str, cols: dict) -> np.ndarray:
-    """Each object's length along its main axis (µm when calibrated), from
-    the spread its table records; NaN without one."""
+    """Each object's length along its main axis, from the spread its table
+    records.
+
+    Parameters
+    ----------
+    store : str or Path
+        The OME-Zarr image.
+    name : str
+        The label image the table belongs to (its axes and pixel size).
+    cols : dict
+        Its object table's columns.
+
+    Returns
+    -------
+    np.ndarray
+        The lengths in table order, µm when calibrated, else voxels; NaN
+        when the table records no spread.
+    """
     import pandas as pd
 
     from ._io import open_group_any
@@ -44,8 +86,22 @@ def _lengths(store: Union[str, Path], name: str, cols: dict) -> np.ndarray:
 
 
 def two_humps(volumes: np.ndarray, cut: float) -> bool:
-    """Whether the volumes fall in two groups with a dip at *cut*: the
-    histogram there under half the lower of the two peaks either side."""
+    """Whether the volumes fall in two groups with a dip at *cut*.
+
+    The histogram of the log volumes at *cut* must be under half the lower
+    of the two peaks either side.
+
+    Parameters
+    ----------
+    volumes : np.ndarray
+        The objects' volumes; zeros are left out.
+    cut : float
+        The volume to check for a dip, e.g. :func:`suggest_min_volume`'s.
+
+    Returns
+    -------
+    bool
+    """
     v = np.log10(volumes[volumes > 0])
     counts, edges = np.histogram(v, 16)
     at = int(np.clip(np.searchsorted(edges, np.log10(cut)) - 1, 0, 15))
@@ -56,8 +112,20 @@ def two_humps(volumes: np.ndarray, cut: float) -> bool:
 
 
 def suggest_min_volume(volumes: np.ndarray) -> float:
-    """The cut between small specks and the objects: Otsu's threshold on the
-    log of the volumes, where specks and real objects form two humps.
+    """The cut between small specks and the objects.
+
+    Otsu's threshold on the log of the volumes, where specks and real
+    objects form two humps.
+
+    Parameters
+    ----------
+    volumes : np.ndarray
+        The objects' volumes, in any unit; zeros are left out.
+
+    Returns
+    -------
+    float
+        The cut, in the volumes' unit.
 
     Examples
     --------
@@ -82,7 +150,22 @@ def suggest_min_volume(volumes: np.ndarray) -> float:
 
 
 def _histogram(volumes: np.ndarray, unit: str, cut: float) -> list[str]:
-    """A text histogram of the volumes on a log scale, the cut marked."""
+    """A text histogram of the volumes on a log scale, the cut marked.
+
+    Parameters
+    ----------
+    volumes : np.ndarray
+        The objects' volumes; zeros are left out.
+    unit : str
+        Their unit, printed on each line.
+    cut : float
+        The volume to mark with `<- cut`.
+
+    Returns
+    -------
+    list of str
+        One line per bin, 16 bins.
+    """
     v = volumes[volumes > 0]
     edges = np.logspace(np.log10(v.min()), np.log10(v.max()), 17)
     counts, _ = np.histogram(v, edges)
@@ -98,13 +181,22 @@ def _histogram(volumes: np.ndarray, unit: str, cut: float) -> list[str]:
 def size_report(store: Union[str, Path], name: str) -> dict[str, Any]:
     """The sizes of *name*'s objects, and what a minimum volume would keep.
 
+    Parameters
+    ----------
+    store : str or Path
+        The OME-Zarr image.
+    name : str
+        The label image, with its object table.
+
     Returns
     -------
     dict
         `unit`, `n`, `quantiles` ({percent: volume}), `suggested`
         (the cut from :func:`suggest_min_volume`), `histogram` (lines),
-        `cuts`: for the suggestion and round values around it, the objects
-        kept and, when the table relates them to a parent, kept per parent.
+        `two_humps`, `cuts`: for the suggestion and round values around
+        it, the objects kept and, when the table relates them to a parent,
+        kept per parent; `length_quantiles` and `by_length`, the same
+        for lengths along the main axis.
     """
     from ._tables import read_columns
 
@@ -132,6 +224,21 @@ def size_report(store: Union[str, Path], name: str) -> dict[str, Any]:
     )
 
     def row_for(keep, **what):
+        """One row of the report: what a cut keeps.
+
+        Parameters
+        ----------
+        keep : np.ndarray of bool
+            Which objects the cut keeps.
+        **what
+            The cut, e.g. `min_volume=0.5`, stored as is.
+
+        Returns
+        -------
+        dict
+            *what*, `kept`, and per parent label image the kept objects per
+            parent and the fraction of parents with one or more.
+        """
         row = {**what, "kept": int(keep.sum())}
         for parent, (ids, n_parents) in parents.items():
             inside = keep & (ids > 0)
@@ -176,6 +283,19 @@ def size_report(store: Union[str, Path], name: str) -> dict[str, Any]:
 
 
 def format_size_report(name: str, report: dict[str, Any]) -> str:
+    """The report from :func:`size_report` as text for the terminal.
+
+    Parameters
+    ----------
+    name : str
+        The label image, named on the first line.
+    report : dict
+        What :func:`size_report` returned.
+
+    Returns
+    -------
+    str
+    """
     unit = report["unit"]
     lines = [f"{name}: {report['n']:,} objects, volume in {unit}"]
     lines.append(
@@ -196,6 +316,19 @@ def format_size_report(name: str, report: dict[str, Any]) -> str:
         )
 
     def table(title, key, rows, fmt):
+        """Append a table of cuts to the lines.
+
+        Parameters
+        ----------
+        title : str
+            The table's first line.
+        key : str
+            The cut's key in each row (`"min_volume"`, `"min_length"`).
+        rows : list of dict
+            The rows, from :func:`size_report`.
+        fmt : callable
+            Formats a cut's value.
+        """
         lines.append(title)
         for row in rows:
             extra = "".join(
@@ -239,10 +372,27 @@ def filter_labels(
     min_length: float | None = None,
     out: str | None = None,
 ) -> tuple[str, int, int]:
-    """Write `labels/<out>`: *name* without the objects whose volume (µm³
-    when calibrated, else voxels) is outside `[min_volume, max_volume]`,
-    numbered 1..N, with its table. *name* is left as it is. *min_length*
-    (µm when calibrated) drops objects shorter along their main axis.
+    """Write *name* without the objects outside a size range.
+
+    The result, `labels/<out>`, is numbered 1..N and has its own table;
+    *name* is left as it is.
+
+    Parameters
+    ----------
+    store : str or Path
+        The OME-Zarr image.
+    name : str
+        The label image to filter, with its object table.
+    min_volume : float, optional
+        Drop objects smaller than this (µm³ when calibrated, else voxels).
+    max_volume : float, optional
+        Drop objects larger than this, in the same unit.
+    min_length : float, optional
+        Drop objects shorter than this along their main axis (µm when
+        calibrated, else voxels).
+    out : str, optional
+        The new label image's name (default `<name>_filtered`); one of
+        that name is overwritten.
 
     Returns
     -------

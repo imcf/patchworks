@@ -54,8 +54,24 @@ def applied_defaults(
 
     `fragments` (`"auto"` or absent: 0.1 in 3-D with a `diameter`,
     else off: without one, a cell's size is a guess) and, in 3-D where the
-    installed Cellpose takes it, `flow3D_smooth=1`. *takes_smooth*
-    defaults to :func:`takes_flow3d_smooth`.
+    installed Cellpose takes it, `flow3D_smooth=1`.
+
+    Parameters
+    ----------
+    do_3D : bool
+        Whether Cellpose runs in 3-D: both defaults are 3-D only.
+    settings : dict
+        The Cellpose settings given (the workflow config's `cellpose`
+        section); a key present there is left as it is.
+    takes_smooth : bool, optional
+        Whether the installed Cellpose takes `flow3D_smooth`. Defaults to
+        :func:`takes_flow3d_smooth`, which imports Cellpose to find out.
+
+    Returns
+    -------
+    dict
+        The settings to add: `fragments` always, `flow3D_smooth` when
+        it applies.
 
     Examples
     --------

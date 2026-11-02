@@ -40,6 +40,7 @@ class _Handler(SimpleHTTPRequestHandler):
     store_name = ""
 
     def end_headers(self) -> None:
+        """Add the CORS and range headers to every response."""
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Headers", "Range")
         self.send_header(
@@ -50,10 +51,24 @@ class _Handler(SimpleHTTPRequestHandler):
         super().end_headers()
 
     def do_OPTIONS(self) -> None:  # noqa: N802 - the CORS preflight
+        """Answer the browser's CORS preflight."""
         self.send_response(HTTPStatus.NO_CONTENT)
         self.end_headers()
 
     def translate_path(self, path: str) -> str:
+        """The file a URL path names, or a missing one outside the store.
+
+        Parameters
+        ----------
+        path : str
+            The URL path, which must start with `/<token>/<store_name>/`.
+
+        Returns
+        -------
+        str
+            The file's path on disk; a path that does not exist (a 404) for
+            anything outside the token's prefix or the store.
+        """
         # Only the store, only below the token: not the files beside it.
         prefix = f"/{self.token}/{self.store_name}/"
         real = super().translate_path("/" + path[len(f"/{self.token}/") :])
@@ -64,10 +79,25 @@ class _Handler(SimpleHTTPRequestHandler):
         return real
 
     def list_directory(self, path):  # no listings: only what is asked for
+        """Refuse directory listings: only what is asked for is served.
+
+        Parameters
+        ----------
+        path : str
+            The directory asked for (unused).
+        """
         self.send_error(HTTPStatus.NOT_FOUND)
         return None
 
     def send_head(self):
+        """Send the headers, honouring a single byte range.
+
+        Returns
+        -------
+        file or None
+            The open file, positioned at the range's start, for
+            :meth:`copyfile`; None after an error.
+        """
         path = self.translate_path(self.path)
         match = re.fullmatch(
             r"bytes=(\d*)-(\d*)", self.headers.get("Range", "").strip()
@@ -102,6 +132,15 @@ class _Handler(SimpleHTTPRequestHandler):
         return f
 
     def copyfile(self, source, outputfile) -> None:
+        """Copy the response body: only the range's bytes after a range request.
+
+        Parameters
+        ----------
+        source : file
+            The file :meth:`send_head` opened.
+        outputfile : file
+            The connection.
+        """
         remaining = getattr(self, "_remaining", None)
         if remaining is None:
             return super().copyfile(source, outputfile)
@@ -114,16 +153,54 @@ class _Handler(SimpleHTTPRequestHandler):
         self._remaining = None
 
     def log_message(self, format: str, *args: Any) -> None:
+        """Log nothing: a request per chunk is far too many to print.
+
+        Parameters
+        ----------
+        format : str
+            The message's format (unused).
+        *args
+            Its arguments (unused).
+        """
         pass  # a request per chunk: far too many to print
 
 
 def _zarr_scheme(store: Path) -> str:
+    """Neuroglancer's data source scheme for *store*.
+
+    Parameters
+    ----------
+    store : Path
+        The zarr store.
+
+    Returns
+    -------
+    str
+        `"zarr3"` for a zarr v3 store, else `"zarr"`.
+    """
     return "zarr3" if (store / "zarr.json").exists() else "zarr"
 
 
 def neuroglancer_state(store: Union[str, Path], base_url: str) -> dict:
-    """A Neuroglancer state: each channel an image layer (named, coloured,
-    the first shown) and each label image a segmentation layer."""
+    """A Neuroglancer state showing *store*.
+
+    Each channel is an image layer (named, coloured, the first shown) and
+    each label image a segmentation layer (hidden).
+
+    Parameters
+    ----------
+    store : str or Path
+        The OME-Zarr image on disk.
+    base_url : str
+        The URL it is served at, as Neuroglancer will reach it (through the
+        tunnel: `http://localhost:<port>/<token>/<name>`).
+
+    Returns
+    -------
+    dict
+        The state: `dimensions` (x, y, z with the voxel size),
+        `displayDimensions`, `layers` and `layout`.
+    """
     from .plugins.napari import _inner_label_names, _store_axes
     from .plugins.ome_zarr import _multiscale_meta, channel_names
 
@@ -197,8 +274,25 @@ def neuroglancer_state(store: Union[str, Path], base_url: str) -> dict:
 
 
 def _contrast(coarse, axes: str, channel: int) -> tuple[float, float]:
-    """The 1st-99.9th percentile of a channel's middle plane, at the
-    coarsest level (one small read)."""
+    """A channel's display range: its 1st-99.9th percentile.
+
+    From the middle plane at the coarsest level (one small read); zeros are
+    left out.
+
+    Parameters
+    ----------
+    coarse : zarr.Array
+        The coarsest pyramid level.
+    axes : str
+        Its axis names, e.g. `"czyx"`.
+    channel : int
+        The channel.
+
+    Returns
+    -------
+    tuple of float
+        `(low, high)`; `(0, 1)` for an empty plane.
+    """
     import numpy as np
 
     key = tuple(
@@ -214,6 +308,18 @@ def _contrast(coarse, axes: str, channel: int) -> tuple[float, float]:
 
 
 def neuroglancer_link(state: dict) -> str:
+    """The link opening Neuroglancer with *state*.
+
+    Parameters
+    ----------
+    state : dict
+        The state, from :func:`neuroglancer_state`.
+
+    Returns
+    -------
+    str
+        The public Neuroglancer's URL with the state in its fragment.
+    """
     return (
         NEUROGLANCER
         + "#!"
@@ -222,6 +328,17 @@ def neuroglancer_link(state: dict) -> str:
 
 
 def _free_port(host: str) -> int:
+    """A port free on *host*, as the system picks one.
+
+    Parameters
+    ----------
+    host : str
+        The address to bind.
+
+    Returns
+    -------
+    int
+    """
     with socket.socket() as s:
         s.bind((host, 0))
         return int(s.getsockname()[1])
@@ -236,8 +353,17 @@ def serve(
     """Serve *store* until interrupted, printing the SSH tunnel to open and
     the Neuroglancer link.
 
-    On a login node it listens on 127.0.0.1 only; in a SLURM job, on the
-    node's address, for the tunnel to reach it through the login node.
+    Parameters
+    ----------
+    store : str or Path
+        The OME-Zarr image directory (`image.zarr`); not a `.zip` bundle,
+        whose chunks are not files a browser can ask for.
+    port : int, optional
+        The port to listen on; 0 (default) picks a free one.
+    host : str, optional
+        The address to listen on. Default: 127.0.0.1 on a login node; in a
+        SLURM job, every address, for the tunnel to reach it through the
+        login node.
     """
     store = Path(store).resolve()
     if str(store).lower().endswith(".zip"):
