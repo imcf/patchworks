@@ -132,13 +132,14 @@ def neuroglancer_state(store: Union[str, Path], base_url: str) -> dict:
     if "c" in axes:
         import zarr
 
-        level0 = zarr.open_group(str(store), mode="r")[
-            meta["datasets"][0]["path"]
-        ]
+        group = zarr.open_group(str(store), mode="r")
+        level0 = group[meta["datasets"][0]["path"]]
         n = level0.shape[axes.index("c")]
         names = channel_names(str(store)) or [f"channel {i}" for i in range(n)]
+        coarse = group[meta["datasets"][-1]["path"]]
         for i, name in enumerate(names):
             color = _COLORS[i % len(_COLORS)]
+            lo, hi = _contrast(coarse, axes, i)
             layers.append(
                 {
                     "type": "image",
@@ -153,6 +154,8 @@ def neuroglancer_state(store: Union[str, Path], base_url: str) -> dict:
                         "#uicontrol invlerp normalized\n"
                         "void main() { emitRGB(color * normalized()); }\n"
                     ),
+                    # The data's own range: the dtype's (0-65535) is black.
+                    "shaderControls": {"normalized": {"range": [lo, hi]}},
                 }
             )
     else:
@@ -166,7 +169,44 @@ def neuroglancer_state(store: Union[str, Path], base_url: str) -> dict:
                 "visible": False,
             }
         )
-    return {"layers": layers, "layout": "xy"}
+    # x, y first: "xy" is the first two displayed axes, and the store's
+    # order (z, y, x) made it a z-y section.
+    # The axes declared up front, in that order and with the voxel size:
+    # displayDimensions alone is dropped while the store is still loading.
+    from .plugins.ome_zarr import read_pixel_size
+
+    shown = [a for a in "xyz" if a in axes]
+    size = read_pixel_size(str(store))
+    dimensions = {
+        a: [
+            float(size.get(a, 1.0)) * (1e-6 if size else 1.0),
+            "m" if size else "",
+        ]
+        for a in shown
+    }
+    return {
+        "dimensions": dimensions,
+        "displayDimensions": shown,
+        "layers": layers,
+        "layout": "xy",
+    }
+
+
+def _contrast(coarse, axes: str, channel: int) -> tuple[float, float]:
+    """The 1st-99.9th percentile of a channel's middle plane, at the
+    coarsest level (one small read)."""
+    import numpy as np
+
+    key = tuple(
+        channel if a == "c" else n // 2 if a in "tz" else slice(None)
+        for a, n in zip(axes, coarse.shape)
+    )
+    values = np.asarray(coarse[key]).ravel()
+    values = values[values != 0]
+    if not values.size:
+        return 0.0, 1.0
+    lo, hi = (float(v) for v in np.percentile(values, [1, 99.9]))
+    return lo, max(hi, lo + 1)
 
 
 def neuroglancer_link(state: dict) -> str:

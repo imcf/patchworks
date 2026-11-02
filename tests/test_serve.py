@@ -98,6 +98,12 @@ def test_neuroglancer_layers_named_after_the_channels(store):
     assert [x["localPosition"] for x in image] == [[0], [1]]
     assert [x["visible"] for x in image] == [True, False]
     assert image[0]["source"] == "zarr3://http://localhost:1/t/image.zarr"
+    # Each channel's own contrast, not the dtype's 0-65535 (black)
+    lo, hi = image[0]["shaderControls"]["normalized"]["range"]
+    assert 0 < lo < hi < 65535
+    # x, y first, so "xy" is an xy section (z-y in the store's order)
+    assert state["displayDimensions"] == ["x", "y", "z"]
+    assert list(state["dimensions"]) == ["x", "y", "z"]
     (seg,) = [x for x in state["layers"] if x["type"] == "segmentation"]
     assert seg["name"] == "cells"
     assert seg["source"].endswith("/image.zarr/labels/cells")
