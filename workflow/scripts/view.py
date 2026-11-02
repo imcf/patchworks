@@ -44,8 +44,17 @@ logging.getLogger("patchworks").setLevel(logging.INFO)
 
 
 def _warn_if_slow_to_read(path: str) -> None:
-    """A bundle on a network drive is read chunk by chunk over the network,
-    and one chunk at a time: copy it to this computer and unzip it."""
+    """Warn when the viewer or the store sits on a network drive.
+
+    A bundle on a network drive is read chunk by chunk over the network,
+    and one chunk at a time: copy it to this computer and unzip it. A pixi
+    environment there makes napari's start-up slow.
+
+    Parameters
+    ----------
+    path : str
+        The store or bundle to open.
+    """
     from bench_view import _drive
 
     from patchworks._io import split_zip_path
@@ -72,6 +81,7 @@ def _warn_if_slow_to_read(path: str) -> None:
 
 
 def main() -> None:
+    """Open a store in napari, as the command line says (see `--help`)."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "image",

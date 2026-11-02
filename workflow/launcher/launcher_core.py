@@ -74,7 +74,18 @@ def settings_path() -> Path:
 
 
 def load_settings(path: Path | None = None) -> dict[str, Any]:
-    """The remembered settings; empty if none (or unreadable)."""
+    """The remembered settings; empty if none (or unreadable).
+
+    Parameters
+    ----------
+    path : Path, optional
+        The settings file (default :func:`settings_path`).
+
+    Returns
+    -------
+    dict
+        Only :data:`SETTINGS_KEYS`.
+    """
     try:
         data = yaml.safe_load((path or settings_path()).read_text()) or {}
     except (OSError, yaml.YAMLError):
@@ -88,6 +99,13 @@ def save_settings(changes: dict[str, Any], path: Path | None = None) -> None:
     """Remember *changes* (only :data:`SETTINGS_KEYS`; a password never).
 
     Best effort: a read-only home must not break connecting.
+
+    Parameters
+    ----------
+    changes : dict
+        The settings to update; other keys are ignored.
+    path : Path, optional
+        The settings file (default :func:`settings_path`).
     """
     path = path or settings_path()
     data = {**load_settings(path)}
@@ -105,6 +123,16 @@ def load_clusters(path: str | Path) -> dict[str, dict[str, Any]]:
     `host_key_fingerprints` (a list, one per key type the server may
     offer) is the field; the older single `host_key_fingerprint` string is
     still accepted.
+
+    Parameters
+    ----------
+    path : str or Path
+        The presets' YAML file; a missing one gives no presets.
+
+    Returns
+    -------
+    dict
+        `{name: preset}`.
     """
     path = Path(path)
     raw = yaml.safe_load(path.read_text()) if path.exists() else None
@@ -123,7 +151,17 @@ def load_clusters(path: str | Path) -> dict[str, dict[str, Any]]:
 
 
 def fingerprint(key_bytes: bytes) -> str:
-    """OpenSSH-style `SHA256:...` fingerprint of a public key blob."""
+    """OpenSSH-style `SHA256:...` fingerprint of a public key blob.
+
+    Parameters
+    ----------
+    key_bytes : bytes
+        The public key, as the server sent it.
+
+    Returns
+    -------
+    str
+    """
     digest = hashlib.sha256(key_bytes).digest()
     return "SHA256:" + base64.b64encode(digest).decode().rstrip("=")
 
@@ -139,6 +177,17 @@ def check_host_key(
     user explicitly allowed an unverified one -- an in-memory "trust on first
     use" re-trusts on *every* session, since nothing is persisted, so on a
     shared deployment it would never verify anything.
+
+    Parameters
+    ----------
+    hostname : str
+        The server, named in the message.
+    got : str
+        The fingerprint of the key it presented.
+    expected : list of str
+        The pinned fingerprints; empty for none.
+    allow_unverified : bool
+        Accept any key when none is pinned.
 
     Raises
     ------
@@ -164,11 +213,39 @@ def check_host_key(
 
 
 def make_host_key_policy(expected: list[str], allow_unverified: bool):
-    """A paramiko MissingHostKeyPolicy applying :func:`check_host_key`."""
+    """A paramiko MissingHostKeyPolicy applying :func:`check_host_key`.
+
+    Parameters
+    ----------
+    expected : list of str
+        The pinned fingerprints.
+    allow_unverified : bool
+        Accept any key when none is pinned.
+
+    Returns
+    -------
+    paramiko.MissingHostKeyPolicy
+    """
     import paramiko
 
     class _Policy(paramiko.MissingHostKeyPolicy):
         def missing_host_key(self, client, hostname, key):
+            """Check the key; keep it for this session if accepted.
+
+            Parameters
+            ----------
+            client : paramiko.SSHClient
+                The client connecting.
+            hostname : str
+                The server.
+            key : paramiko.PKey
+                The key it presented.
+
+            Raises
+            ------
+            paramiko.SSHException
+                When the key is refused.
+            """
             try:
                 check_host_key(
                     hostname,
@@ -189,6 +266,19 @@ def make_host_key_policy(expected: list[str], allow_unverified: bool):
 
 
 def _yaml_or(text: str, default: Any) -> Any:
+    """A form field's YAML, or *default* when it is empty.
+
+    Parameters
+    ----------
+    text : str
+        The field's text.
+    default : object
+        The value for an empty field.
+
+    Returns
+    -------
+    object
+    """
     text = (text or "").strip()
     return yaml.safe_load(text) if text else default
 
@@ -199,6 +289,15 @@ def build_config(v: dict[str, Any]) -> dict[str, Any]:
     Complete on purpose: Snakemake overlays this file on the cluster copy's
     `config/config.yaml`, so any key left out here would silently take
     whatever that file holds.
+
+    Parameters
+    ----------
+    v : dict
+        The form's values, by the launcher's field names.
+
+    Returns
+    -------
+    dict
     """
     cfg: dict[str, Any] = {
         "input": v["input"],
@@ -323,6 +422,16 @@ def missing_fields(cfg: dict[str, Any]) -> list[str]:
 
     An empty `work_dir` would put the converted image at `/image.zarr`
     (and every result next to it), so it is refused before anything runs.
+
+    Parameters
+    ----------
+    cfg : dict
+        A run config, as :func:`build_config` builds it.
+
+    Returns
+    -------
+    list of str
+        The missing keys.
     """
     missing = []
     for key in ("input", "work_dir", "label_name"):
@@ -342,7 +451,17 @@ FILLS_SPACE = ("patchworks.plugins.plantseg", "patchworks.plugins.watershed")
 
 
 def fills_space(v: dict[str, Any]) -> bool:
-    """Whether the form values *v* pick a method that needs iou stitching."""
+    """Whether the form values *v* pick a method that needs iou stitching.
+
+    Parameters
+    ----------
+    v : dict
+        The form's values.
+
+    Returns
+    -------
+    bool
+    """
     return v.get("method") in SEEDED or (
         v.get("method") == "custom"
         and str(v.get("custom_module", "")).strip() in FILLS_SPACE
@@ -350,7 +469,18 @@ def fills_space(v: dict[str, Any]) -> bool:
 
 
 def config_problems(cfg: dict[str, Any]) -> list[str]:
-    """What the form holds that the workflow would get wrong."""
+    """What the form holds that the workflow would get wrong.
+
+    Parameters
+    ----------
+    cfg : dict
+        A run config, as :func:`build_config` builds it.
+
+    Returns
+    -------
+    list of str
+        The problems found.
+    """
     problems = []
     module = (cfg.get("custom") or {}).get("module")
     kwargs = (cfg.get("custom") or {}).get("kwargs") or {}
@@ -417,11 +547,33 @@ TIFF_SUFFIXES = (".tif", ".tiff")
 
 
 def is_glob(path: str) -> bool:
+    """Whether *path* holds glob characters.
+
+    Parameters
+    ----------
+    path : str
+        A path.
+
+    Returns
+    -------
+    bool
+    """
     return any(c in path for c in "*?[")
 
 
 def tiff_names(entries: list[tuple[str, bool]]) -> list[str]:
-    """The TIFF files of a folder listing (`(name, is_dir)` pairs)."""
+    """The TIFF files of a folder listing.
+
+    Parameters
+    ----------
+    entries : list of tuple
+        `(name, is_dir)` pairs.
+
+    Returns
+    -------
+    list of str
+        Sorted; hidden files left out.
+    """
     return sorted(
         name
         for name, is_dir in entries
@@ -436,6 +588,17 @@ def tiff_glob(folder: str, names: list[str]) -> str:
 
     A glob is case-sensitive, so it uses the suffix the files actually have
     (the most common one, if they are mixed).
+
+    Parameters
+    ----------
+    folder : str
+        The remote folder.
+    names : list of str
+        Its TIFF files.
+
+    Returns
+    -------
+    str
     """
     suffixes = [n[n.rfind(".") :] for n in names]
     suffix = max(set(suffixes), key=suffixes.count) if suffixes else ".tif"
@@ -447,14 +610,35 @@ def guess_sequence_pattern(names: list[str]) -> str | None:
 
     Looks for an axis letter (T, Z or C, either case) followed by digits,
     not preceded by another letter, that is in every name and changes
-    between them -- a constant one (`T0`) is no axis. None if no z or
-    channel index is found, or the names do not agree.
+    between them -- a constant one (`T0`) is no axis.
+
+    Parameters
+    ----------
+    names : list of str
+        The folder's TIFF files.
+
+    Returns
+    -------
+    str or None
+        None if no z or channel index is found, or the names do not agree.
     """
     import re
 
     token = re.compile(r"(?<![A-Za-z])([TZCtzc])(\d+)")
 
     def tokens(name: str) -> list[tuple[str, str, str]]:
+        """Every axis-letter-and-digits token of *name*.
+
+        Parameters
+        ----------
+        name : str
+            A file name.
+
+        Returns
+        -------
+        list of tuple
+            `(letter, digits, the character before it)`.
+        """
         # (letter, digits, the character before it)
         return [
             (m.group(1), m.group(2), name[m.start() - 1] if m.start() else "")
@@ -462,6 +646,13 @@ def guess_sequence_pattern(names: list[str]) -> str | None:
         ]
 
     def numbered() -> str | None:
+        """`img0001.tif, img0002.tif ...`: the number is the z plane.
+
+        Returns
+        -------
+        str or None
+            The pattern, when every name ends in a different number.
+        """
         # img0001.tif, img0002.tif ...: the number is the z plane.
         ends = [re.search(r"(\d+)\.tiff?$", n, re.IGNORECASE) for n in names]
         if all(ends) and len({m.group(1) for m in ends}) == len(names) > 1:
@@ -511,6 +702,16 @@ def needed_packages(cfg: dict[str, Any]) -> dict[str, str]:
 
     Mirrors the workflow's own check (`_pw.environment_problems`), which
     runs on the cluster and refuses to start without them.
+
+    Parameters
+    ----------
+    cfg : dict
+        A run config, as :func:`build_config` builds it.
+
+    Returns
+    -------
+    dict of str to str
+        `{module: why}`.
     """
     needs: dict[str, str] = {}
     custom = cfg.get("custom") or {}
@@ -527,7 +728,18 @@ def needed_packages(cfg: dict[str, Any]) -> dict[str, str]:
 
 
 def pixi_environments(toml_text: str | None) -> list[str]:
-    """The environments a workflow `pixi.toml` defines, default first."""
+    """The environments a workflow `pixi.toml` defines, default first.
+
+    Parameters
+    ----------
+    toml_text : str or None
+        The `pixi.toml`'s text.
+
+    Returns
+    -------
+    list of str
+        `["default"]` when it cannot be read.
+    """
     import tomllib
 
     try:
@@ -542,8 +754,18 @@ def suggest_environment(
 ) -> tuple[str | None, list[str]]:
     """The smallest environment with every package the run needs.
 
-    Returns it (None if no environment has them all) and one reason per
-    segmentation that needs something.
+    Parameters
+    ----------
+    cfgs : list of dict
+        The run's configs.
+    available : list of str
+        The environments `pixi.toml` defines.
+
+    Returns
+    -------
+    tuple
+        `(environment, reasons)`: None if no environment has them all,
+        and one reason per segmentation that needs something.
     """
     needs: set[str] = set()
     reasons = []
@@ -562,8 +784,18 @@ def suggest_environment(
 def setup_with_environment(setup_cmd: str, env: str) -> str | None:
     """*setup_cmd* activating pixi environment *env*.
 
-    None when the line does not use `pixi shell-hook`, so the environment
-    cannot be swapped in.
+    Parameters
+    ----------
+    setup_cmd : str
+        The environment setup line.
+    env : str
+        The pixi environment.
+
+    Returns
+    -------
+    str or None
+        None when the line does not use `pixi shell-hook`, so the
+        environment cannot be swapped in.
     """
     import re
 
@@ -594,6 +826,17 @@ def jobname_prefix(label: str) -> str:
     (in squeue and in SLURM's mails). As run_multi's
     `slurm_jobname_prefix`: alphanumerics, `_` and `-`, 50 at most.
 
+    Parameters
+    ----------
+    label : str
+        The segmentation's label name.
+
+    Returns
+    -------
+    str
+
+    Examples
+    --------
     >>> jobname_prefix("nuclei_labels_cpsam")
     'pw-nuclei_labels_cpsam'
     """
@@ -607,6 +850,24 @@ def snakemake_command(
     profile: str = "profile/slurm",
     label: str | None = None,
 ) -> str:
+    """Snakemake for one segmentation run.
+
+    Parameters
+    ----------
+    config_path : str
+        The run's config on the cluster.
+    mode : str
+        :data:`DRY_RUN`, or one of the two submit modes.
+    profile : str, optional
+        The Snakemake workflow profile (default `"profile/slurm"`).
+    label : str, optional
+        The label name, for the SLURM job names.
+
+    Returns
+    -------
+    str
+        The shell command.
+    """
     args = [
         "snakemake",
         "-s",
@@ -638,6 +899,24 @@ def convert_command(
     The same targets and state directory as run_multi's first phase, so a
     later run -- one segmentation or several -- finds the image converted
     and goes straight on. *Plan* needs that image.
+
+    Parameters
+    ----------
+    config_path : str
+        The run's config on the cluster.
+    cfg : dict
+        A run config, as :func:`build_config` builds it.
+    mode : str
+        :data:`DRY_RUN`, or one of the two submit modes.
+    workflow_dir : str
+        The workflow folder on the cluster.
+    profile : str, optional
+        The Snakemake workflow profile (default `"profile/slurm"`).
+
+    Returns
+    -------
+    str
+        The shell command.
     """
     work = cfg["work_dir"].rstrip("/")
     root = ".zgroup" if str(cfg.get("ngff_version")) == "0.4" else "zarr.json"
@@ -674,14 +953,40 @@ def convert_command(
 def multi_command(
     multi_path: str, mode: str, *, profile: str = "profile/slurm"
 ) -> str:
-    """`run_multi.py` for a multi-segmentation run."""
+    """`run_multi.py` for a multi-segmentation run.
+
+    Parameters
+    ----------
+    multi_path : str
+        The multi config on the cluster.
+    mode : str
+        :data:`DRY_RUN`, or one of the two submit modes.
+    profile : str, optional
+        The Snakemake workflow profile (default `"profile/slurm"`).
+
+    Returns
+    -------
+    str
+        The shell command.
+    """
     args = ["python", "scripts/run_multi.py", "--config", multi_path]
     args += ["-n"] if mode == DRY_RUN else ["--profile", profile]
     return " ".join(shlex.quote(a) for a in args)
 
 
 def safe_name(text: str) -> str:
-    """*text* reduced to characters safe in a file or job name."""
+    """*text* reduced to characters safe in a file or job name.
+
+    Parameters
+    ----------
+    text : str
+        A name.
+
+    Returns
+    -------
+    str
+        `"run"` when nothing is left.
+    """
     return (
         "".join(c if c.isalnum() or c in "_." else "-" for c in text) or "run"
     )
@@ -704,6 +1009,28 @@ def build_multi(
     relations, for `scripts/run_multi.py`. Each segmentation config is
     complete rather than split into a `common:` file: nothing then depends
     on what the cluster copy's config files happen to contain.
+
+    Parameters
+    ----------
+    shared : dict
+        The form values every segmentation shares.
+    segmentations : list of dict
+        Each segmentation's own form values.
+    relations : list of dict
+        The relations, `{a, b, ...}` each.
+    directory : str
+        The remote folder the files go to.
+    relate : dict, optional
+        The relate jobs' settings; empty values are left out.
+    bundle : dict, optional
+        The bundle settings; a None `format` asks for no bundle.
+    review : dict, optional
+        The review rules.
+
+    Returns
+    -------
+    dict
+        `{remote path: content}`.
     """
     files: dict[str, dict[str, Any]] = {}
     paths = []
@@ -745,7 +1072,18 @@ def build_multi(
 
 
 def multi_problems(files: dict[str, dict[str, Any]]) -> list[str]:
-    """What run_multi would reject, found before anything is uploaded."""
+    """What run_multi would reject, found before anything is uploaded.
+
+    Parameters
+    ----------
+    files : dict
+        The run's files, from :func:`build_multi`.
+
+    Returns
+    -------
+    list of str
+        The problems found.
+    """
     multi_path = next(p for p in files if p.endswith("/multi.yaml"))
     multi = files[multi_path]
     cfgs = [files[p] for p in multi["segmentations"]]
@@ -797,7 +1135,22 @@ def multi_problems(files: dict[str, dict[str, Any]]) -> list[str]:
 
 
 def inner_command(workflow_dir: str, setup_cmd: str, snakemake: str) -> str:
-    """`cd` + environment setup + snakemake, as one shell line."""
+    """`cd` + environment setup + snakemake, as one shell line.
+
+    Parameters
+    ----------
+    workflow_dir : str
+        The workflow folder on the cluster.
+    setup_cmd : str
+        The user's own environment setup (module load, pixi shell-hook
+        ...); empty for none.
+    snakemake : str
+        The command to run.
+
+    Returns
+    -------
+    str
+    """
     parts = [f"cd {shlex.quote(workflow_dir)}"]
     if setup_cmd.strip():
         # The user's own shell snippet (module load, pixi shell-hook ...),
@@ -832,6 +1185,26 @@ def controller_job_script(
     (:func:`sbatch_command`), where shell quoting applies: `#SBATCH`
     lines are not shell-parsed, so a quoted path there would be taken
     literally.
+
+    Parameters
+    ----------
+    inner : str
+        The shell line to run (:func:`inner_command`).
+    time : str, optional
+        The job's time limit (default 3 days).
+    mem : str, optional
+        Its memory (default `"16G"`).
+    partition, qos, account : str, optional
+        SLURM's; empty for the defaults.
+    gres : str, optional
+        A GPU, e.g. `"gpu:1"`; empty for none.
+    cpus : int, optional
+        Its CPUs (default 1).
+
+    Returns
+    -------
+    str
+        The script.
     """
     lines = [
         "#!/bin/bash -l",
@@ -867,7 +1240,21 @@ def controller_job_script(
 
 
 def sbatch_command(script: str, *, name: str, log: str) -> str:
-    """`sbatch --parsable` for *script*, logging to *log*."""
+    """`sbatch --parsable` for *script*, logging to *log*.
+
+    Parameters
+    ----------
+    script : str
+        The script's path on the cluster.
+    name : str
+        The job's name.
+    log : str
+        The log's path.
+
+    Returns
+    -------
+    str
+    """
     return " ".join(
         shlex.quote(a)
         for a in (
@@ -881,7 +1268,19 @@ def sbatch_command(script: str, *, name: str, log: str) -> str:
 
 
 def detached_command(inner: str, log: str) -> str:
-    """Run *inner* detached from the SSH session; prints `PID:<pid>`."""
+    """Run *inner* detached from the SSH session; prints `PID:<pid>`.
+
+    Parameters
+    ----------
+    inner : str
+        The shell line to run.
+    log : str
+        Where its output goes.
+
+    Returns
+    -------
+    str
+    """
     return (
         f"setsid nohup bash -lc {shlex.quote(inner)} "
         f"> {shlex.quote(log)} 2>&1 < /dev/null & echo PID:$!"
@@ -889,7 +1288,19 @@ def detached_command(inner: str, log: str) -> str:
 
 
 def parse_tag(output: str, tag: str) -> str | None:
-    """Value after `TAG:` in command output (`PID:123`), if any."""
+    """Value after `TAG:` in command output (`PID:123`), if any.
+
+    Parameters
+    ----------
+    output : str
+        The command's output.
+    tag : str
+        The tag, e.g. `"PID"`.
+
+    Returns
+    -------
+    str or None
+    """
     for line in output.splitlines():
         if line.startswith(f"{tag}:"):
             return line.split(":", 1)[1].strip() or None
@@ -897,7 +1308,17 @@ def parse_tag(output: str, tag: str) -> str | None:
 
 
 def parse_sbatch(output: str) -> str | None:
-    """Job id from `sbatch --parsable` (`123` or `123;cluster`)."""
+    """Job id from `sbatch --parsable` (`123` or `123;cluster`).
+
+    Parameters
+    ----------
+    output : str
+        sbatch's output.
+
+    Returns
+    -------
+    str or None
+    """
     for line in output.strip().splitlines()[::-1]:
         head = line.split(";")[0].strip()
         if head.isdigit():
@@ -909,8 +1330,19 @@ def stop_command(job: dict[str, Any], *, force: bool = False) -> str:
     """Stop a launched run, letting Snakemake cancel the jobs it submitted.
 
     SIGINT is Ctrl-C: Snakemake then cancels its SLURM jobs before it
-    exits, which a plain kill does not give it the chance to. *force* kills
-    outright, for a run that does not stop.
+    exits, which a plain kill does not give it the chance to.
+
+    Parameters
+    ----------
+    job : dict
+        The launched run, as the launcher records it (`slurm_job` or
+        `pid`, `config`, `kind`, `work_dir`, `started`...).
+    force : bool, optional
+        Kill outright, for a run that does not stop.
+
+    Returns
+    -------
+    str
     """
     if job.get("slurm_job"):
         jid = shlex.quote(str(job["slurm_job"]))
@@ -928,9 +1360,26 @@ def run_jobs_in_queue(
     steps: list[dict[str, Any]],
     queue: list[dict[str, str]],
 ) -> list[str]:
-    """The SLURM jobs of this run still in the queue: those its Snakemake
-    log says it submitted, and its controller. Nobody else's: the ids come
-    from the run's own log, not from job names."""
+    """The SLURM jobs of this run still in the queue.
+
+    Those its Snakemake log says it submitted, and its controller. Nobody
+    else's: the ids come from the run's own log, not from job names.
+
+    Parameters
+    ----------
+    job : dict
+        The launched run, as the launcher records it (`slurm_job` or
+        `pid`, `config`, `kind`, `work_dir`, `started`...).
+    steps : list of dict
+        The run's steps, from its log (:func:`parse_steps`).
+    queue : list of dict
+        The user's queue (:func:`parse_queue`).
+
+    Returns
+    -------
+    list of str
+        Job ids.
+    """
     queued = {row["job"] for row in queue}
     ids = [
         s["slurm_job"]
@@ -944,13 +1393,38 @@ def run_jobs_in_queue(
 
 
 def cancel_command(ids: list[str]) -> str:
-    """`scancel` for *ids* (job numbers only)."""
+    """`scancel` for *ids* (job numbers only).
+
+    Parameters
+    ----------
+    ids : list of str
+        Job ids; anything not a number is dropped.
+
+    Returns
+    -------
+    str
+        `"true"` when none is left.
+    """
     clean = [i for i in ids if str(i).isdigit()]
     return "scancel " + " ".join(clean) if clean else "true"
 
 
 def unlock_command(job: dict[str, Any], workflow_dir: str) -> str | None:
-    """Release the Snakemake lock a killed run left behind."""
+    """Release the Snakemake lock a killed run left behind.
+
+    Parameters
+    ----------
+    job : dict
+        The launched run, as the launcher records it (`slurm_job` or
+        `pid`, `config`, `kind`, `work_dir`, `started`...).
+    workflow_dir : str
+        The workflow folder on the cluster.
+
+    Returns
+    -------
+    str or None
+        None when the run's kind or config is unknown.
+    """
     config = job.get("config")
     if not config:
         return None
@@ -979,8 +1453,21 @@ def unlock_command(job: dict[str, Any], workflow_dir: str) -> str | None:
 def check_command(
     config: str, *, sample: int = 0, preview: str | None = None
 ) -> str:
-    """`scripts/check.py` on a run's config (or multi config), as JSON;
-    with *preview*, a picture of one segmented tile per segmentation."""
+    """`scripts/check.py` on a run's config (or multi config), as JSON.
+
+    Parameters
+    ----------
+    config : str
+        The config on the cluster.
+    sample : int, optional
+        Time the method on this many tiles (default 0).
+    preview : str, optional
+        A folder for a picture of one segmented tile per segmentation.
+
+    Returns
+    -------
+    str
+    """
     # -u: its progress reaches the log as it goes, not at the end.
     args = ["python", "-u", "scripts/check.py", config, "--json"]
     if sample:
@@ -991,15 +1478,36 @@ def check_command(
 
 
 def fetch_command(config: str) -> str:
-    """`scripts/fetch_models.py`: the run's models, downloaded now."""
+    """`scripts/fetch_models.py`: the run's models, downloaded now.
+
+    Parameters
+    ----------
+    config : str
+        The config on the cluster.
+
+    Returns
+    -------
+    str
+    """
     return " ".join(
         shlex.quote(a) for a in ("python", "scripts/fetch_models.py", config)
     )
 
 
 def channels_command(config: str, region=None) -> str:
-    """`scripts/channels.py`: a picture per channel of the converted image;
-    with *region* `(y0, y1, x0, x1)` (fractions), of that region only."""
+    """`scripts/channels.py`: a picture per channel of the converted image.
+
+    Parameters
+    ----------
+    config : str
+        The config on the cluster.
+    region : tuple of float, optional
+        `(y0, y1, x0, x1)` (fractions): that region only.
+
+    Returns
+    -------
+    str
+    """
     args = ["python", "scripts/channels.py", config, "--json"]
     if region is not None:
         args += ["--region", ",".join(f"{f:.4f}" for f in region)]
@@ -1007,11 +1515,34 @@ def channels_command(config: str, region=None) -> str:
 
 
 def zoom_region(zoom: int, x_pct: float, y_pct: float) -> tuple:
-    """The region `(y0, y1, x0, x1)`, in fractions, that a *zoom* centred
-    at (*x_pct*, *y_pct*) percent shows -- kept inside the image."""
+    """The region a zoom centred on a point shows, kept inside the image.
+
+    Parameters
+    ----------
+    zoom : int
+        The zoom factor (1: the whole image).
+    x_pct, y_pct : float
+        The centre, in percent of the width and height.
+
+    Returns
+    -------
+    tuple of float
+        `(y0, y1, x0, x1)`, in fractions.
+    """
     side = 1.0 / max(1, zoom)
 
     def span(centre: float) -> tuple:
+        """The start and end of the zoomed span around *centre*.
+
+        Parameters
+        ----------
+        centre : float
+            In percent.
+
+        Returns
+        -------
+        tuple of float
+        """
         start = min(max(centre / 100 - side / 2, 0.0), 1.0 - side)
         return start, start + side
 
@@ -1031,7 +1562,18 @@ CELLPOSE_FALLBACK_MODELS = ["cpsam", "cyto3", "nuclei", "cyto2"]
 
 
 def parse_models(output: str) -> list[str]:
-    """The model names CELLPOSE_MODELS_COMMAND printed ([] if none)."""
+    """The model names CELLPOSE_MODELS_COMMAND printed.
+
+    Parameters
+    ----------
+    output : str
+        The command's output.
+
+    Returns
+    -------
+    list of str
+        [] if none.
+    """
     tag = parse_tag(output, "MODELS")
     try:
         names = json.loads(tag) if tag else []
@@ -1043,9 +1585,18 @@ def parse_models(output: str) -> list[str]:
 def run_status_command(config: str, since: float | None = None) -> str:
     """`scripts/status.py` on a run's config (or multi config), as JSON.
 
-    *since* (seconds since the epoch): only failures logged after it --
-    the run's own, not an earlier run's (an environment variable, which
-    an older status.py simply ignores).
+    Parameters
+    ----------
+    config : str
+        The config on the cluster.
+    since : float, optional
+        Seconds since the epoch: only failures logged after it -- the run's
+        own, not an earlier run's (an environment variable, which an older
+        status.py simply ignores).
+
+    Returns
+    -------
+    str
     """
     cmd = " ".join(
         shlex.quote(a)
@@ -1055,8 +1606,20 @@ def run_status_command(config: str, since: float | None = None) -> str:
 
 
 def started_epoch(job: dict[str, Any]) -> float | None:
-    """When the job was launched (its `started` stamp, this computer's
-    local time), as seconds since the epoch; None if unknown."""
+    """When the job was launched, as seconds since the epoch.
+
+    Parameters
+    ----------
+    job : dict
+        The launched run, as the launcher records it (`slurm_job` or
+        `pid`, `config`, `kind`, `work_dir`, `started`...).
+        Its `started` stamp is this computer's local time.
+
+    Returns
+    -------
+    float or None
+        None if unknown.
+    """
     import datetime as _dt
 
     try:
@@ -1067,7 +1630,17 @@ def started_epoch(job: dict[str, Any]) -> float | None:
 
 
 def parse_json_output(output: str) -> dict[str, Any] | None:
-    """The last JSON object a script printed (logs may come before it)."""
+    """The last JSON object a script printed (logs may come before it).
+
+    Parameters
+    ----------
+    output : str
+        The script's output.
+
+    Returns
+    -------
+    dict or None
+    """
     for line in reversed(output.strip().splitlines()):
         line = line.strip()
         if line.startswith("{"):
@@ -1096,7 +1669,18 @@ RESOURCE_KEYS = (
 
 
 def profile_resources(text: str | None) -> dict[str, dict[str, Any]]:
-    """Each rule's resources in a workflow profile, defaults filled in."""
+    """Each rule's resources in a workflow profile, defaults filled in.
+
+    Parameters
+    ----------
+    text : str or None
+        The profile's YAML.
+
+    Returns
+    -------
+    dict
+        `{rule: resources}`, with `"default"` for the defaults alone.
+    """
     profile = yaml.safe_load(text or "") or {}
     defaults = profile.get("default-resources") or {}
     rules = profile.get("set-resources") or {}
@@ -1107,7 +1691,18 @@ def profile_resources(text: str | None) -> dict[str, dict[str, Any]]:
 
 
 def first_attempt(value: Any) -> int | None:
-    """A profile memory or time for the first attempt (`"attempt * 64000"`)."""
+    """A profile memory or time for the first attempt (`"attempt * 64000"`).
+
+    Parameters
+    ----------
+    value : int, float, str or None
+        The profile's value.
+
+    Returns
+    -------
+    int or None
+        None when it is not one number.
+    """
     import re
 
     if value is None or isinstance(value, bool):
@@ -1121,12 +1716,24 @@ def first_attempt(value: Any) -> int | None:
 def profile_with_overrides(
     text: str, overrides: dict[str, dict[str, Any]]
 ) -> str:
-    """The profile *text* with *overrides* (`{rule: {key: value}}`).
+    """The profile *text* with *overrides*.
 
     A memory set for `segment` grows with each attempt like the profile's
     own (`attempt * N`), and goes to `prepare` too: prepare sizes
     `tile_shape: "auto"` from its own allocation, standing in for the
     segment job's.
+
+    Parameters
+    ----------
+    text : str
+        The profile's YAML.
+    overrides : dict
+        `{rule: {key: value}}`.
+
+    Returns
+    -------
+    str
+        The new profile's YAML.
     """
     profile = yaml.safe_load(text or "") or {}
     rules = profile.setdefault("set-resources", {}) or {}
@@ -1149,7 +1756,18 @@ def profile_with_overrides(
 
 
 def slurm_minutes(text: str) -> int | None:
-    """SLURM's `[D-]HH:MM:SS` (or `MM:SS`, `MM`) as minutes."""
+    """SLURM's `[D-]HH:MM:SS` (or `MM:SS`, `MM`) as minutes.
+
+    Parameters
+    ----------
+    text : str
+        A SLURM time.
+
+    Returns
+    -------
+    int or None
+        None for no limit, or anything not a time.
+    """
     text = (text or "").strip()
     if not text or text.upper() in ("UNLIMITED", "INFINITE"):
         return None
@@ -1185,8 +1803,18 @@ CLUSTER_INFO_COMMAND = (
 
 
 def _gres_options(gres: str) -> set[str]:
-    """What a job may ask for of a node's `%G` (`gpu:rtx4090:8(S:0-1)`):
-    one GPU, of any type and of this type."""
+    """What a job may ask for of a node's `%G` (`gpu:rtx4090:8(S:0-1)`).
+
+    Parameters
+    ----------
+    gres : str
+        sinfo's `%G` for a node.
+
+    Returns
+    -------
+    set of str
+        One GPU of any type, and one of each named type.
+    """
     options = set()
     for item in gres.split(","):
         item = item.split("(")[0].strip()
@@ -1199,7 +1827,20 @@ def _gres_options(gres: str) -> set[str]:
 
 
 def parse_cluster_info(output: str) -> dict[str, Any]:
-    """Partitions, the QOS and accounts this account may use, QOS limits."""
+    """Partitions, the QOS and accounts this account may use, QOS limits.
+
+    Parameters
+    ----------
+    output : str
+        The output of :data:`CLUSTER_INFO_COMMAND`, in `#partitions`,
+        `#assoc`, `#qos` and `#partqos` sections.
+
+    Returns
+    -------
+    dict
+        `partitions`, `default_partition`, `assoc`, `accounts`,
+        `maxwall`, `default_qos`, `allow_qos`.
+    """
     partitions: dict[str, dict[str, Any]] = {}
     assoc: dict[str, set[str]] = {}
     accounts: list[str] = []
@@ -1274,8 +1915,20 @@ def parse_cluster_info(output: str) -> dict[str, Any]:
 
 
 def default_qos(info: dict[str, Any], partition: str | None = None) -> str:
-    """The QOS a job gets on *partition* when it asks for none ("" when
-    not known)."""
+    """The QOS a job gets on *partition* when it asks for none.
+
+    Parameters
+    ----------
+    info : dict
+        What :func:`parse_cluster_info` read of the cluster.
+    partition : str or None
+        The partition; None for the default one.
+
+    Returns
+    -------
+    str
+        "" when not known.
+    """
     defaults = info.get("default_qos") or {}
     part = partition or info.get("default_partition") or ""
     return defaults.get(part) or defaults.get("") or ""
@@ -1284,9 +1937,23 @@ def default_qos(info: dict[str, Any], partition: str | None = None) -> str:
 def fitting_qos(
     info: dict[str, Any], partition: str | None, minutes: int | None
 ) -> str:
-    """The QOS this account may use on *partition* whose MaxWall allows
-    *minutes*, the shortest such (shorter ones usually start sooner); ""
-    when none is known to."""
+    """The shortest QOS this account may use on *partition* that allows
+    *minutes* (shorter ones usually start sooner).
+
+    Parameters
+    ----------
+    info : dict
+        What :func:`parse_cluster_info` read of the cluster.
+    partition : str or None
+        The partition; None for the default one.
+    minutes : int or None
+        The job's time limit; None or 0 for none.
+
+    Returns
+    -------
+    str
+        "" when none is known to.
+    """
     maxwall = info.get("maxwall") or {}
     fitting = [
         q
@@ -1302,8 +1969,22 @@ def fitting_qos(
 def qos_for(
     info: dict[str, Any], partition: str | None, minutes: int | None
 ) -> str:
-    """The QOS to ask for so a job of *minutes* is accepted: "" when the
-    default QOS allows it, else :func:`fitting_qos`."""
+    """The QOS to ask for so a job of *minutes* is accepted.
+
+    Parameters
+    ----------
+    info : dict
+        What :func:`parse_cluster_info` read of the cluster.
+    partition : str or None
+        The partition; None for the default one.
+    minutes : int or None
+        The job's time limit; None or 0 for none.
+
+    Returns
+    -------
+    str
+        "" when the default QOS allows it, else :func:`fitting_qos`.
+    """
     if not minutes:
         return ""
     default = default_qos(info, partition)
@@ -1323,8 +2004,24 @@ def better_qos(
     qos: str | None,
     minutes: int | None,
 ) -> str:
-    """The QOS to switch to when *qos* (blank: the default QOS) is known
-    to be too short for *minutes*; "" when it is not, or none fits."""
+    """The QOS to switch to when *qos* is known to be too short for *minutes*.
+
+    Parameters
+    ----------
+    info : dict
+        What :func:`parse_cluster_info` read of the cluster.
+    partition : str or None
+        The partition; None for the default one.
+    qos : str or None
+        The QOS chosen; blank for the default one.
+    minutes : int or None
+        The job's time limit; None or 0 for none.
+
+    Returns
+    -------
+    str
+        "" when it is not too short, or none fits.
+    """
     effective = qos or default_qos(info, partition)
     limit = (info.get("maxwall") or {}).get(effective) if effective else None
     if not minutes or limit is None or limit >= minutes:
@@ -1333,7 +2030,20 @@ def better_qos(
 
 
 def usable_qos(info: dict[str, Any], partition: str | None = None) -> list[str]:
-    """The QOS this account may use, on *partition* when known."""
+    """The QOS this account may use, on *partition* when known.
+
+    Parameters
+    ----------
+    info : dict
+        What :func:`parse_cluster_info` read of the cluster.
+    partition : str, optional
+        The partition; None for any.
+
+    Returns
+    -------
+    list of str
+        Empty when the associations are not known.
+    """
     assoc = info.get("assoc") or {}
     if not assoc:
         return []
@@ -1346,13 +2056,39 @@ def usable_qos(info: dict[str, Any], partition: str | None = None) -> list[str]:
 
 
 def qos_refused(info: dict[str, Any], partition: str | None, qos: str) -> bool:
-    """Whether *partition* refuses *qos* (its AllowQos); False if unknown."""
+    """Whether *partition* refuses *qos* (its AllowQos).
+
+    Parameters
+    ----------
+    info : dict
+        What :func:`parse_cluster_info` read of the cluster.
+    partition : str or None
+        The partition; None for the default one.
+    qos : str
+        The QOS; blank is never refused.
+
+    Returns
+    -------
+    bool
+        False if unknown.
+    """
     allowed = (info.get("allow_qos") or {}).get(partition or "")
     return bool(qos) and allowed is not None and qos not in allowed
 
 
 def partition_rows(info: dict[str, Any]) -> list[dict[str, Any]]:
-    """The cluster's partitions as a readable table, GPU ones first."""
+    """The cluster's partitions as a readable table, GPU ones first.
+
+    Parameters
+    ----------
+    info : dict
+        What :func:`parse_cluster_info` read of the cluster.
+
+    Returns
+    -------
+    list of dict
+        One row per partition.
+    """
     rows = []
     for name, p in info.get("partitions", {}).items():
         limit = p["timelimit"]
@@ -1414,8 +2150,21 @@ def gpu_memory_gb(
 ) -> tuple[int | None, str]:
     """The segment GPU's memory, from its gres or its partition's GPUs.
 
-    Returns `(GB, which GPU)`; `(None, why)` when not known. With
-    several types on the partition, the smallest: the job may land on any.
+    With several types on the partition, the smallest: the job may land on
+    any.
+
+    Parameters
+    ----------
+    resources : dict
+        The segment rule's resources (`gres`, `slurm_partition`).
+    info : dict
+        What :func:`parse_cluster_info` read of the cluster.
+        None when not read.
+
+    Returns
+    -------
+    tuple
+        `(GB, which GPU)`; `(None, why)` when not known.
     """
     gres = str(resources.get("gres") or "")
     parts = gres.split(":")
@@ -1443,9 +2192,20 @@ def gpu_memory_gb(
 
 
 def needs_gpu_memory(cfg: dict[str, Any]) -> bool:
-    """Cellpose on the GPU with `tile_shape: "auto"` and no
-    `gpu_memory_gb`: prepare would size its tiles for an 8 GB GPU (the
-    workflow's `_pw.sized_for_fallback_gpu`)."""
+    """Whether prepare would size this config's tiles for an 8 GB GPU.
+
+    Cellpose on the GPU with `tile_shape: "auto"` and no
+    `gpu_memory_gb` (the workflow's `_pw.sized_for_fallback_gpu`).
+
+    Parameters
+    ----------
+    cfg : dict
+        A run config.
+
+    Returns
+    -------
+    bool
+    """
     return (
         cfg.get("tile_shape", "auto") == "auto"
         and not cfg.get("gpu_memory_gb")
@@ -1455,8 +2215,20 @@ def needs_gpu_memory(cfg: dict[str, Any]) -> bool:
 
 
 def with_gpu_memory(files: dict[str, dict], gb: int) -> dict[str, dict]:
-    """*files* with `gpu_memory_gb` set where tiles would be sized for
-    the 8 GB fallback."""
+    """*files* with `gpu_memory_gb` set where tiles would be sized for the
+    8 GB fallback.
+
+    Parameters
+    ----------
+    files : dict
+        The run's files, `{path: content}`; only configs are changed.
+    gb : int
+        The segment GPU's memory.
+
+    Returns
+    -------
+    dict
+    """
     return {
         path: {**cfg, "gpu_memory_gb": gb}
         if "label_name" in cfg and needs_gpu_memory(cfg)
@@ -1474,6 +2246,18 @@ def resource_problems(
     a runtime over the QOS's MaxWall or the partition's time limit: sbatch
     refuses such a job (QOSMaxWallDurationPerJobLimit ...) or it waits
     forever, with an empty log either way.
+
+    Parameters
+    ----------
+    resources : dict
+        Each rule's resources, from the profile (:func:`profile_resources`).
+    info : dict
+        What :func:`parse_cluster_info` read of the cluster.
+
+    Returns
+    -------
+    list of str
+        The problems found.
     """
     assoc, maxwall = info.get("assoc") or {}, info.get("maxwall") or {}
     partitions = info.get("partitions") or {}
@@ -1570,7 +2354,23 @@ SBATCH_ERRORS = {
 def explain_sbatch_error(
     text: str, info: dict[str, Any] | None, slurm: dict[str, Any]
 ) -> str | None:
-    """Why sbatch refused the controller job, and what to choose instead."""
+    """Why sbatch refused the controller job, and what to choose instead.
+
+    Parameters
+    ----------
+    text : str
+        sbatch's error.
+    info : dict
+        What :func:`parse_cluster_info` read of the cluster.
+        None when not read.
+    slurm : dict
+        The controller job's settings (`partition`, `qos`, `time`...).
+
+    Returns
+    -------
+    str or None
+        None for an error it does not know.
+    """
     lowered = text.lower()
     reason = next(
         (why for key, why in SBATCH_ERRORS.items() if key.lower() in lowered),
@@ -1601,7 +2401,17 @@ def explain_sbatch_error(
 
 
 def _duration(minutes: int) -> str:
-    """*minutes* as SLURM writes a time: D-HH:MM:SS or HH:MM:SS."""
+    """*minutes* as SLURM writes a time: D-HH:MM:SS or HH:MM:SS.
+
+    Parameters
+    ----------
+    minutes : int
+        A duration.
+
+    Returns
+    -------
+    str
+    """
     days, rest = divmod(minutes, 1440)
     clock = f"{rest // 60:02d}:{rest % 60:02d}:00"
     return f"{days}-{clock}" if days else clock
@@ -1639,7 +2449,19 @@ _RUN_ID = re.compile(
 
 
 def parse_queue(output: str) -> list[dict[str, str]]:
-    """Your patchworks jobs in the queue, with why each waits."""
+    """Your patchworks jobs in the queue, with why each waits.
+
+    Parameters
+    ----------
+    output : str
+        squeue's output, `|`-separated: id, name, state, reason, elapsed,
+        limit, partition.
+
+    Returns
+    -------
+    list of dict
+        One row per job named `pw-...` or `patchworks...`.
+    """
     rows = []
     for line in output.splitlines():
         fields = line.strip().split("|")
@@ -1679,7 +2501,17 @@ STEPS_FILTER = (
 
 
 def steps_command(log: str) -> str:
-    """The step lines of the controller's log *log* (see :data:`STEPS_FILTER`)."""
+    """The step lines of the controller's log *log* (see :data:`STEPS_FILTER`).
+
+    Parameters
+    ----------
+    log : str
+        The controller's log on the cluster.
+
+    Returns
+    -------
+    str
+    """
     return (
         f"grep -E {shlex.quote(STEPS_FILTER)} {shlex.quote(log)} "
         "2>/dev/null | tail -n 20000"
@@ -1715,8 +2547,19 @@ CONTROLLER_PROBLEMS = (
 
 
 def controller_problem(text: str) -> tuple[str, str | None] | None:
-    """The error that ended a controller, and what to do; None if its log
-    shows none."""
+    """The error that ended a controller, and what to do.
+
+    Parameters
+    ----------
+    text : str
+        The controller's log.
+
+    Returns
+    -------
+    tuple or None
+        `(line, hint)`, *hint* None for an unknown error; None if the log
+        shows none.
+    """
     for pattern, hint in CONTROLLER_PROBLEMS:
         # The last line that matches: after an exception's bare name comes
         # its message.
@@ -1740,17 +2583,38 @@ _FINISHED = re.compile(r"Finished job(?:id:)? (\d+)")
 def parse_steps(text: str) -> list[dict[str, Any]]:
     """The steps Snakemake ran, from its log, the latest attempt of each.
 
-    Each: `rule`, `wildcards`, `log` (the step's own log),
-    `slurm_job` and `slurm_log` (when submitted to SLURM), `mem_mb`,
-    `attempt`, `state` ("submitted", "failed" or "done") and
-    `earlier`: the attempts before, each with its SLURM job, log and
-    memory.
+    Parameters
+    ----------
+    text : str
+        The controller's log (or its step lines).
+
+    Returns
+    -------
+    list of dict
+        Each: `rule`, `wildcards`, `log` (the step's own log),
+        `slurm_job` and `slurm_log` (when submitted to SLURM), `mem_mb`,
+        `attempt`, `state` ("submitted", "failed" or "done") and
+        `earlier`: the attempts before, each with its SLURM job, log and
+        memory.
     """
     # Keyed by job id, rule and log: run_multi's Snakemake processes share
     # one log, each numbering its jobs from 0.
     steps: dict[tuple, dict[str, Any]] = {}
 
     def latest(jid: str, rule: str | None = None) -> dict[str, Any] | None:
+        """The latest step with Snakemake job id *jid* (and *rule*).
+
+        Parameters
+        ----------
+        jid : str
+            Snakemake's job id.
+        rule : str, optional
+            The rule; None for any.
+
+        Returns
+        -------
+        dict or None
+        """
         return next(
             (
                 v
@@ -1766,6 +2630,12 @@ def parse_steps(text: str) -> list[dict[str, Any]]:
         Its job id alone is ambiguous (run_multi's Snakemakes have the same
         DAG shape, so the same ids): its SLURM job, then its log, say which
         segmentation's step it is.
+
+        Parameters
+        ----------
+        block : dict
+            The error block: `jid`, `rule`, `error`, and its `slurm_job` and
+            `log` when it names them.
         """
         if not block["error"] or block["jid"] is None:
             return
@@ -1899,9 +2769,22 @@ def parse_steps(text: str) -> list[dict[str, Any]]:
 
 
 def _run_multi_step(steps: dict, line: str) -> bool:
-    """A relation or bundle step from a line of run_multi's own (they are
-    not Snakemake's, so its rule blocks do not show them); True if it was
-    one."""
+    """A relation or bundle step from a line of run_multi's own.
+
+    They are not Snakemake's, so its rule blocks do not show them.
+
+    Parameters
+    ----------
+    steps : dict
+        The steps found so far, updated in place.
+    line : str
+        One line of the log.
+
+    Returns
+    -------
+    bool
+        True if it was one.
+    """
     started = re.match(r"\[run_multi\] \$ (.*)", line)
     if started:
         cmd = started.group(1)
@@ -1963,7 +2846,18 @@ KILLED = (
 
 
 def why_killed(text: str) -> str | None:
-    """Why SLURM ended a job, from the end of its log; None if it did not."""
+    """Why SLURM ended a job, from the end of its log.
+
+    Parameters
+    ----------
+    text : str
+        The end of the SLURM log.
+
+    Returns
+    -------
+    str or None
+        None if SLURM did not end it.
+    """
     return next((why for pat, why in KILLED if re.search(pat, text)), None)
 
 
@@ -1977,12 +2871,21 @@ TAIL_MARK = "@@patchworks-tail@@"
 
 
 def tails_command(lines: int) -> str:
-    """A command printing the last *lines* of each file named on its
-    standard input, one path per line, each after a :data:`TAIL_MARK` line.
+    """A command printing the last *lines* of each file named on its standard
+    input, one path per line, each after a :data:`TAIL_MARK` line.
 
     The paths go on standard input, not the command line: a multi run has
     hundreds of logs with long paths, and a command that long exceeds the
     largest message an SSH server accepts -- it drops the whole connection.
+
+    Parameters
+    ----------
+    lines : int
+        How many lines of each file.
+
+    Returns
+    -------
+    str
     """
     loop = (
         "while IFS= read -r p; do "
@@ -1993,7 +2896,19 @@ def tails_command(lines: int) -> str:
 
 
 def parse_tails(output: str, paths: list[str]) -> dict[str, str]:
-    """:func:`tails_command`'s output for *paths*, back to `{path: text}`."""
+    """:func:`tails_command`'s output for *paths*, back to `{path: text}`.
+
+    Parameters
+    ----------
+    output : str
+        The command's output.
+    paths : list of str
+        The paths, in the order they were given.
+
+    Returns
+    -------
+    dict of str to str
+    """
     found: dict[str, list[str]] = {p: [] for p in paths}
     i = -1
     for line in output.splitlines():
@@ -2005,9 +2920,20 @@ def parse_tails(output: str, paths: list[str]) -> dict[str, str]:
 
 
 def last_progress(text: str, label: str | None = None) -> dict[str, Any] | None:
-    """The last progress line a step logged (`patchworks._progress`):
-    `label`, `fraction`, `elapsed`, `left`; with *label*, the last
-    one of that label (a relate job logs one per relation)."""
+    """The last progress line a step logged (`patchworks._progress`).
+
+    Parameters
+    ----------
+    text : str
+        The step's log.
+    label : str, optional
+        Only that label's lines (a relate job logs one per relation).
+
+    Returns
+    -------
+    dict or None
+        `label`, `fraction`, `done`, `total`, `elapsed`, `left`.
+    """
     for line in reversed(text.splitlines()):
         m = _PROGRESS.search(line)
         if m and label is not None and m["label"].strip() != label:
@@ -2027,11 +2953,20 @@ def last_progress(text: str, label: str | None = None) -> dict[str, Any] | None:
 
 
 def status_command(job: dict[str, Any]) -> str:
-    """Shell line printing RUNNING/PENDING/DONE for a registered job, or
-    `UNKNOWN <why>` when SLURM did not answer -- never DONE for that.
+    """Shell line printing RUNNING/PENDING/DONE for a registered job.
 
-    All your jobs, not `-j <id>`: squeue errors out for an id it has
-    already forgotten, which is a finished job, not a failure.
+    `UNKNOWN <why>` when SLURM did not answer -- never DONE for that. All
+    your jobs, not `-j <id>`: squeue errors out for an id it has already
+    forgotten, which is a finished job, not a failure.
+
+    Parameters
+    ----------
+    job : dict
+        The launched run, as the launcher records it.
+
+    Returns
+    -------
+    str
     """
     if job.get("slurm_job"):
         jid = str(job["slurm_job"])
@@ -2048,14 +2983,48 @@ def status_command(job: dict[str, Any]) -> str:
 
 
 def plan_row(label: str, plan: dict[str, Any]) -> dict[str, Any]:
-    """One readable table row for a plan (`_pw.plan_run`)."""
+    """One readable table row for a plan (`_pw.plan_run`).
+
+    Parameters
+    ----------
+    label : str
+        The segmentation.
+    plan : dict
+        Its plan.
+
+    Returns
+    -------
+    dict
+    """
 
     def axes(value: Any) -> str:
+        """A shape as `a × b × c`.
+
+        Parameters
+        ----------
+        value : list, tuple or None
+            The shape, or a single value.
+
+        Returns
+        -------
+        str
+        """
         if isinstance(value, (list, tuple)):
             return " × ".join(str(v) for v in value)
         return "" if value is None else str(value)
 
     def known(value: Any) -> Any:
+        """*value*, or `"?"` when None.
+
+        Parameters
+        ----------
+        value : object
+            Any value.
+
+        Returns
+        -------
+        object
+        """
         return "?" if value is None else value
 
     gib = 1024**3
@@ -2086,7 +3055,17 @@ def plan_row(label: str, plan: dict[str, Any]) -> dict[str, Any]:
 
 
 def last_error_line(text: str) -> str:
-    """The line of a traceback worth showing first (its last non-empty one)."""
+    """The line of a traceback worth showing first (its last non-empty one).
+
+    Parameters
+    ----------
+    text : str
+        The traceback.
+
+    Returns
+    -------
+    str
+    """
     lines = [line.strip() for line in text.strip().splitlines() if line.strip()]
     return lines[-1] if lines else ""
 
@@ -2109,7 +3088,17 @@ IMAGE_SUFFIXES = (
 
 
 def is_store(name: str) -> bool:
-    """A directory that is one dataset rather than a folder to open."""
+    """A directory that is one dataset rather than a folder to open.
+
+    Parameters
+    ----------
+    name : str
+        The directory's name.
+
+    Returns
+    -------
+    bool
+    """
     return name.lower().endswith((".zarr", ".n5"))
 
 
@@ -2118,11 +3107,21 @@ def browse_entries(
 ) -> list[tuple[str, str]]:
     """`(name, kind)` for a remote listing, in the order to show them.
 
-    *entries* are `(name, is_dir)`. Kinds: `"dir"` (a folder to open),
-    `"store"` (a `.zarr` folder, picked like a file), `"image"` (a
-    file with an image suffix) and `"file"`. Hidden entries are left out;
-    folders come first, then stores, images and other files, each by name.
-    With *dirs_only*, only folders (and stores, which are folders too).
+    Kinds: `"dir"` (a folder to open), `"store"` (a `.zarr` folder,
+    picked like a file), `"image"` (a file with an image suffix) and
+    `"file"`. Hidden entries are left out; folders come first, then
+    stores, images and other files, each by name.
+
+    Parameters
+    ----------
+    entries : list of tuple
+        `(name, is_dir)` pairs.
+    dirs_only : bool, optional
+        Only folders (and stores, which are folders too).
+
+    Returns
+    -------
+    list of tuple
     """
     rank = {"dir": 0, "store": 1, "image": 2, "file": 3}
     out = []
@@ -2140,7 +3139,17 @@ def browse_entries(
 
 
 def parent_dir(path: str) -> str:
-    """The folder above *path* (`/` stays `/`)."""
+    """The folder above *path* (`/` stays `/`).
+
+    Parameters
+    ----------
+    path : str
+        A remote path.
+
+    Returns
+    -------
+    str
+    """
     path = path.rstrip("/")
     if not path:
         return "/"
@@ -2149,6 +3158,19 @@ def parent_dir(path: str) -> str:
 
 
 def join_remote(folder: str, name: str) -> str:
+    """*name* inside remote *folder*.
+
+    Parameters
+    ----------
+    folder : str
+        A remote folder.
+    name : str
+        A file or folder in it.
+
+    Returns
+    -------
+    str
+    """
     return f"{folder.rstrip('/')}/{name}" if folder != "/" else f"/{name}"
 
 
@@ -2158,11 +3180,32 @@ def join_remote(folder: str, name: str) -> str:
 
 
 def registry_line(job: dict[str, Any]) -> str:
+    """The registry's line for *job*: one JSON object.
+
+    Parameters
+    ----------
+    job : dict
+        The launched run, as the launcher records it.
+
+    Returns
+    -------
+    str
+    """
     return json.dumps(job, sort_keys=True) + "\n"
 
 
 def parse_registry(text: str) -> list[dict[str, Any]]:
-    """Jobs recorded in the registry, newest first; bad lines are skipped."""
+    """Jobs recorded in the registry, newest first; bad lines are skipped.
+
+    Parameters
+    ----------
+    text : str
+        The registry file.
+
+    Returns
+    -------
+    list of dict
+    """
     jobs = []
     for line in text.splitlines():
         try:
@@ -2175,8 +3218,21 @@ def parse_registry(text: str) -> list[dict[str, Any]]:
 
 
 def registry_without(text: str, names: set[str]) -> str:
-    """The registry *text* without the jobs named *names* (the list only:
-    their logs and results stay)."""
+    """The registry *text* without the jobs named *names*.
+
+    The list only: their logs and results stay.
+
+    Parameters
+    ----------
+    text : str
+        The registry file.
+    names : set of str
+        The jobs to leave out.
+
+    Returns
+    -------
+    str
+    """
     kept = []
     for line in text.splitlines():
         try:
@@ -2191,6 +3247,18 @@ def registry_without(text: str, names: set[str]) -> str:
 # Which of the registry's jobs still run: all your SLURM jobs (squeue with
 # a list of ids fails as a whole once one id is purged) and each PID.
 def running_command(jobs: list[dict[str, Any]]) -> str:
+    """A command listing which of *jobs* still run.
+
+    Parameters
+    ----------
+    jobs : list of dict
+        The launched runs: SLURM jobs and login-node processes.
+
+    Returns
+    -------
+    str
+        It prints the queued job ids, and `PID<pid>` for each live process.
+    """
     pids = [str(j["pid"]) for j in jobs if str(j.get("pid", "")).isdigit()]
     return "; ".join(
         ["squeue --me -h -o %i 2>/dev/null"]
@@ -2199,8 +3267,19 @@ def running_command(jobs: list[dict[str, Any]]) -> str:
 
 
 def ended_jobs(jobs: list[dict[str, Any]], output: str) -> set[str]:
-    """The names of *jobs* no longer running, from :func:`running_command`'s
-    *output*."""
+    """The names of *jobs* no longer running.
+
+    Parameters
+    ----------
+    jobs : list of dict
+        The launched runs.
+    output : str
+        :func:`running_command`'s output.
+
+    Returns
+    -------
+    set of str
+    """
     running = {line.strip() for line in output.splitlines()}
     return {
         j["name"]
@@ -2214,8 +3293,19 @@ DISMISSED = f"{LOG_DIR}/dismissed_failures.json"
 
 
 def failure_key(failure: dict[str, Any]) -> str:
-    """What identifies a failure: its log and its error. A step that fails
-    again differently is a new failure, shown again."""
+    """What identifies a failure: its log and its error.
+
+    A step that fails again differently is a new failure, shown again.
+
+    Parameters
+    ----------
+    failure : dict
+        A failure, from `status.py`.
+
+    Returns
+    -------
+    str
+    """
     return f"{failure.get('log')}|{failure.get('error')}"
 
 
@@ -2229,7 +3319,18 @@ RUN_KINDS = ("One segmentation", "Several segmentations + relations")
 
 
 def _flow(value: Any) -> str:
-    """*value* as the one-line YAML a text field holds (`[4, 30, 30]`)."""
+    """*value* as the one-line YAML a text field holds (`[4, 30, 30]`).
+
+    Parameters
+    ----------
+    value : object
+        A config value.
+
+    Returns
+    -------
+    str
+        "" for None.
+    """
     if value is None:
         return ""
     if isinstance(value, (list, tuple, dict)):
@@ -2238,11 +3339,32 @@ def _flow(value: Any) -> str:
 
 
 def _text(value: Any) -> str:
+    """*value* as a text field's text; "" for None.
+
+    Parameters
+    ----------
+    value : object
+        A config value.
+
+    Returns
+    -------
+    str
+    """
     return "" if value is None else str(value)
 
 
 def shared_state(cfg: dict[str, Any]) -> dict[str, Any]:
-    """Form values of what a run's segmentations share."""
+    """Form values of what a run's segmentations share.
+
+    Parameters
+    ----------
+    cfg : dict
+        A run config (the first, for a multi run).
+
+    Returns
+    -------
+    dict
+    """
     compression = str(cfg.get("compression", "zstd"))
     return {
         "input": _text(cfg.get("input")),
@@ -2275,7 +3397,19 @@ def shared_state(cfg: dict[str, Any]) -> dict[str, Any]:
 
 
 def segmentation_state(cfg: dict[str, Any], k: str = "") -> dict[str, Any]:
-    """Form values of one segmentation; *k* prefixes the keys."""
+    """Form values of one segmentation.
+
+    Parameters
+    ----------
+    cfg : dict
+        Its config.
+    k : str, optional
+        Prefixes the keys (a multi run's `s0_`, `s1_`...).
+
+    Returns
+    -------
+    dict
+    """
     custom = cfg.get("custom") or {}
     method = cfg.get("method", "cellpose")
     if method == "custom" and custom.get("module") == DOG_MODULE:
@@ -2366,6 +3500,18 @@ def form_state(
     The form holds what :func:`build_config` writes; a config written by
     hand may hold more (`seed_labels`, `denoise:` ...), which would be
     lost: those keys are returned, to be said.
+
+    Parameters
+    ----------
+    seg_cfgs : list of dict
+        The segmentation configs.
+    multi : dict, optional
+        The multi config, for a multi run.
+
+    Returns
+    -------
+    tuple
+        `(state, keys the form cannot hold)`.
     """
     state = shared_state(seg_cfgs[0])
     state["run_kind"] = RUN_KINDS[0 if multi is None else 1]
@@ -2456,12 +3602,39 @@ def template_files(
 
     One config is `<name>.yaml`; a multi run a folder `<name>/` with
     its `multi.yaml` naming the segmentations next to it (relative, so
-    the folder can be copied or shared). Without *with_image*, input and
-    work_dir are left out: loading the template keeps the form's.
+    the folder can be copied or shared).
+
+    Parameters
+    ----------
+    files : dict
+        The run's files, `{path: content}`.
+    name : str
+        The template's name.
+    directory : str
+        The templates' folder on the cluster.
+    with_image : bool, optional
+        Keep input and work_dir; without (default), loading the template
+        keeps the form's.
+
+    Returns
+    -------
+    dict
+        `{path: content}`.
     """
     name = safe_name(name)
 
     def strip(cfg: dict) -> dict:
+        """*cfg* without the image's keys, unless *with_image*.
+
+        Parameters
+        ----------
+        cfg : dict
+            A config.
+
+        Returns
+        -------
+        dict
+        """
         return (
             dict(cfg)
             if with_image
@@ -2486,7 +3659,19 @@ def template_files(
 
 
 def template_choices(entries: list[tuple[str, bool]], directory: str) -> dict:
-    """Template name -> the file to load, from a listing of *directory*."""
+    """Template name -> the file to load, from a listing of *directory*.
+
+    Parameters
+    ----------
+    entries : list of tuple
+        `(name, is_dir)` pairs.
+    directory : str
+        The templates' folder.
+
+    Returns
+    -------
+    dict of str to str
+    """
     out = {}
     for name, is_dir in sorted(entries):
         if is_dir:
@@ -2512,13 +3697,35 @@ REQUIRED_SCRIPTS = (
 
 
 def update_command(workflow_dir: str) -> str:
-    """`git pull` the cluster's clone, fast-forward only (never a merge)."""
+    """`git pull` the cluster's clone, fast-forward only (never a merge).
+
+    Parameters
+    ----------
+    workflow_dir : str
+        The workflow folder on the cluster.
+
+    Returns
+    -------
+    str
+    """
     return f"cd {shlex.quote(workflow_dir)} && git pull --ff-only 2>&1"
 
 
 def explain_remote_error(text: str) -> str:
-    """The line worth showing of a failed remote command: for a script the
-    cluster's workflow does not have yet, what to do about it."""
+    """The line worth showing of a failed remote command.
+
+    For a script the cluster's workflow does not have yet, what to do
+    about it.
+
+    Parameters
+    ----------
+    text : str
+        The command's output.
+
+    Returns
+    -------
+    str
+    """
     import re
 
     missing = re.search(
@@ -2553,9 +3760,30 @@ def serve_command(
     qos: str = "",
     account: str = "",
 ) -> str:
-    """Start `pixi run serve <store>` in the background, its output in
-    *log*: as a small SLURM job (it prints `JOB:<id>`), or on the login
-    node (`PID:<pid>`)."""
+    """Start `pixi run serve <store>` in the background, its output in *log*.
+
+    Parameters
+    ----------
+    workflow_dir : str
+        The workflow folder on the cluster.
+    setup_cmd : str
+        The environment setup line.
+    store : str
+        The `image.zarr` to serve.
+    log : str
+        Where its output goes.
+    in_job : bool, optional
+        As a small SLURM job (default; it prints `JOB:<id>`), or on the
+        login node (`PID:<pid>`).
+    time : str, optional
+        The job's time limit (default 6 hours).
+    partition, qos, account : str, optional
+        SLURM's; empty for the defaults.
+
+    Returns
+    -------
+    str
+    """
     inner = inner_command(
         workflow_dir, setup_cmd, f"pixi run serve {shlex.quote(store)}"
     )
@@ -2585,8 +3813,18 @@ def serve_command(
 
 
 def parse_serve(text: str) -> dict[str, Any] | None:
-    """Where `patchworks serve` listens and its Neuroglancer state, from
-    the line it prints for programs; None until it has."""
+    """Where `patchworks serve` listens and its Neuroglancer state.
+
+    Parameters
+    ----------
+    text : str
+        Its log.
+
+    Returns
+    -------
+    dict or None
+        `{host, port, base, state}`; None until it has printed it.
+    """
     for line in reversed(text.splitlines()):
         if line.startswith(SERVE_TAG + " "):
             try:
@@ -2598,7 +3836,21 @@ def parse_serve(text: str) -> dict[str, Any] | None:
 
 def neuroglancer_link(state: dict, remote_port: int, local_port: int) -> str:
     """The Neuroglancer link, its sources moved to the local end of the
-    tunnel."""
+    tunnel.
+
+    Parameters
+    ----------
+    state : dict
+        The state `patchworks serve` printed.
+    remote_port : int
+        The port it listens on.
+    local_port : int
+        The tunnel's local port.
+
+    Returns
+    -------
+    str
+    """
     import urllib.parse
 
     text = json.dumps(state, separators=(",", ":")).replace(

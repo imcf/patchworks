@@ -29,11 +29,24 @@ MAX_SIDE = 1024
 def channel_pictures(store: str, out: Path, region=None) -> dict:
     """A picture per channel: each one's maximum over z.
 
-    The whole image, from the finest pyramid level about MAX_SIDE wide; or
-    with *region* `(y0, y1, x0, x1)`, fractions of the image's height and
-    width, that region alone, from the finest level that draws it about
-    MAX_SIDE wide -- a zoom with the detail of the finer levels, reading
-    only that region.
+    Parameters
+    ----------
+    store : str
+        The OME-Zarr image.
+    out : Path
+        The directory the PNG files go to.
+    region : tuple of float, optional
+        `(y0, y1, x0, x1)`, fractions of the image's height and width: that
+        region alone, from the finest level that draws it about `MAX_SIDE`
+        wide -- a zoom with the detail of the finer levels, reading only
+        that region. None (default): the whole image, from the finest level
+        about `MAX_SIDE` wide.
+
+    Returns
+    -------
+    dict
+        `store`, `axes`, `shape`, `channels`, `voxel_um`, the
+        `level` read, the `region`, and the pictures' paths.
     """
     import numpy as np
     import zarr
@@ -94,6 +107,7 @@ def channel_pictures(store: str, out: Path, region=None) -> dict:
 
 
 def main() -> None:
+    """Write the channel pictures of a run's converted image (see `--help`)."""
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("config", help="a run config, or a multi config")
     parser.add_argument("--json", action="store_true", help="print JSON")

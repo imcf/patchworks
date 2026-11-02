@@ -47,6 +47,17 @@ use_clone_src()
 
 
 def _load_yaml(path: Path) -> dict:
+    """A YAML file's content.
+
+    Parameters
+    ----------
+    path : Path
+        The file.
+
+    Returns
+    -------
+    dict
+    """
     return yaml.safe_load(path.read_text())
 
 
@@ -70,16 +81,42 @@ def _snakemake_cmd(
     directory: each config needs its own `.snakemake` state directory, or
     concurrent runs would contend for the same `.snakemake/locks/`.
 
-    *common*, when given, is passed as the first of two `--configfile`
-    values. Snakemake merges them in order with the later winning, so the
-    settings every config shares -- the input, the work_dir, everything
-    `convert` reads -- live in one file and the per-config file carries only
-    what actually differs.
+    Parameters
+    ----------
+    configfile : Path
+        The segmentation's config.
+    workflow_dir : Path
+        The workflow folder (the Snakefile's).
+    profile : str or None
+        Snakemake's `--workflow-profile` (e.g. `profile/slurm`); None runs
+        locally with *cores*.
+    cores : int
+        Cores for a local run.
+    dry_run : bool
+        Only print what would run (`-n -p`).
+    state_dir : Path, optional
+        Snakemake's `--directory`, holding this run's `.snakemake`.
+    targets : list of str, optional
+        What to make (default: the labels).
+    extra : list of str, optional
+        More Snakemake arguments, passed as they are.
+    jobname_prefix : str, optional
+        The SLURM job names' prefix, with a profile (see
+        :func:`slurm_jobname_prefix`).
+    common : Path, optional
+        Passed as the first of two `--configfile` values. Snakemake merges
+        them in order with the later winning, so the settings every config
+        shares -- the input, the work_dir, everything `convert` reads --
+        live in one file and the per-config file carries only what actually
+        differs.
+    extra_configfiles : list of Path, optional
+        Appended after *configfile* and so win over both it and *common* --
+        used to pin a driver-computed value (e.g. a resolved `tile_shape`)
+        across every config without editing any config file on disk.
 
-    *extra_configfiles*, when given, are appended after *configfile* and so
-    win over both it and *common* -- used to pin a driver-computed value
-    (e.g. a resolved `tile_shape`) across every config without editing any
-    config file on disk.
+    Returns
+    -------
+    list of str
     """
     configfiles = [str(configfile.resolve())]
     if common is not None:
@@ -120,10 +157,19 @@ def slurm_jobname_prefix(label: str) -> str:
     `--job-name` in `slurm_extra`, so a prefix is the only way to get
     something recognisable into `squeue`. It becomes `<prefix>_<uuid>`,
     which puts the readable part first -- the part that survives truncation
-    in a queue listing.
+    in a queue listing. The executor requires alphanumerics, underscores and
+    hyphens only, at most 50 characters, and rejects the whole run
+    otherwise.
 
-    The executor requires alphanumerics, underscores and hyphens only, at
-    most 50 characters, and rejects the whole run otherwise.
+    Parameters
+    ----------
+    label : str
+        The segmentation's label name.
+
+    Returns
+    -------
+    str
+        `pw-<label>`, sanitised and truncated.
 
     Examples
     --------
@@ -137,17 +183,38 @@ def slurm_jobname_prefix(label: str) -> str:
 
 
 def _safe_filename(name: str) -> str:
-    """Sanitise a label name for use as (part of) a log filename."""
+    """Sanitise a label name for use as (part of) a log filename.
+
+    Parameters
+    ----------
+    name : str
+        The label name.
+
+    Returns
+    -------
+    str
+        Letters, digits, `_` and `-` only.
+    """
     return re.sub(r"[^A-Za-z0-9_-]", "-", name)
 
 
 def _test_email(cfg: dict) -> int:
-    """Send one test notification and report the outcome. Returns an exit code.
+    """Send one test notification and report the outcome.
 
     "No email arrived" has two very different causes that look identical from
     the outside: the address never made it into the merged config, or it did
     and the message was dropped somewhere downstream. This distinguishes them
     without waiting for a multi-hour step to finish.
+
+    Parameters
+    ----------
+    cfg : dict
+        The merged config: `notify_email`, `notify_events`.
+
+    Returns
+    -------
+    int
+        The exit code.
     """
     from patchworks._notify import send, slurm_mail_extra
 
@@ -275,7 +342,20 @@ def _bundle_settings(multi_cfg: dict, args) -> dict:
 
     Same precedence as :func:`_relate_settings` -- flag > config > default
     -- so `pixi run multi-slurm`, a fixed command, can still produce a
-    bundle by way of the config alone.
+    bundle by way of the config alone. The partition and QOS fall back to
+    the relate jobs'.
+
+    Parameters
+    ----------
+    multi_cfg : dict
+        The multi config, with its `bundle:` block (or `bundle: none`).
+    args : argparse.Namespace
+        The command line's `--bundle-*` flags (and `--relate-*`).
+
+    Returns
+    -------
+    dict
+        `format` (`"zip"`, `"iso"` or None), and the job's settings.
 
     Raises
     ------
@@ -323,6 +403,21 @@ def _bundle_cmd(
     Under `--profile` this is an `srun`, for the same reason the
     occupancy and relate steps are: it reads every file the run produced,
     which a login node kills without a message.
+
+    Parameters
+    ----------
+    image_store : str
+        The finished `image.zarr`.
+    workflow_dir : Path
+        The workflow folder.
+    bundle : dict
+        The packing settings, from :func:`_bundle_settings`.
+    profile : bool
+        Whether the run uses a SLURM profile: then the packing is a job.
+
+    Returns
+    -------
+    list of str
     """
     script = str(workflow_dir / "scripts" / "export_iso.py")
     # Absolute: the command runs from the workflow directory.
@@ -360,7 +455,24 @@ def _bundle_cmd(
 def _run_bundle(
     image_store: str, workflow_dir: Path, bundle: dict, profile: bool
 ) -> int:
-    """Pack the store, returning the exit code (0 when not configured)."""
+    """Pack the store.
+
+    Parameters
+    ----------
+    image_store : str
+        The finished `image.zarr`.
+    workflow_dir : Path
+        The workflow folder.
+    bundle : dict
+        The packing settings, from :func:`_bundle_settings`.
+    profile : bool
+        Whether the run uses a SLURM profile.
+
+    Returns
+    -------
+    int
+        The exit code (0 when not configured).
+    """
     if not bundle["format"]:
         return 0
     cmd = _bundle_cmd(image_store, workflow_dir, bundle, profile)
@@ -391,8 +503,8 @@ def _relate_cmd(
     relate_time: int,
     relate_qos: str | None,
 ) -> list[str]:
-    """Build one `srun` invocation of `relate.py` for the relations of
-    one parent (a single pair, or several children of the same parent).
+    """Build one `srun` invocation of `relate.py` for the relations of one
+    parent (a single pair, or several children of the same parent).
 
     One job per parent, not one for the whole `relations:` list: a single
     shared `srun` time budget let a slow pair starve the others out of a
@@ -401,6 +513,31 @@ def _relate_cmd(
     related in a single pass that reads the parent once. Jobs of different
     parents run concurrently, and `relate.py` skips a pair whose workbook
     is already up to date, so a retry only redoes what actually failed.
+
+    Parameters
+    ----------
+    rel : dict or list of dict
+        The relation(s): `{a, b, output}`, all with the same parent `b`.
+    work_dir : str
+        The run's work_dir.
+    image_store : str
+        The `image.zarr`.
+    workflow_dir : Path
+        The workflow folder.
+    relate_partition : str
+        The job's SLURM partition.
+    relate_mem : str
+        Its memory, e.g. `"64G"`.
+    relate_cpus : int
+        Its CPUs.
+    relate_time : int
+        Its time limit, minutes.
+    relate_qos : str or None
+        Its QOS; None for the default.
+
+    Returns
+    -------
+    list of str
     """
     rels = [rel] if isinstance(rel, dict) else list(rel)
     b_name = rels[0]["b"]
@@ -450,6 +587,20 @@ def _relate_cmd(
 
 
 def _run(cmd: list[str], workflow_dir: Path) -> int:
+    """Run *cmd* in the workflow folder, echoing it first.
+
+    Parameters
+    ----------
+    cmd : list of str
+        The command.
+    workflow_dir : Path
+        Where to run it.
+
+    Returns
+    -------
+    int
+        Its exit code.
+    """
     print(f"[run_multi] $ {' '.join(cmd)}", flush=True)
     return subprocess.run(cmd, cwd=workflow_dir).returncode
 
@@ -479,6 +630,18 @@ def _review_rules(multi_cfg: dict, label_names: list[str]) -> dict:
     they sit in their parent (apical, basal, lateral, central). `patchworks
     review` flags whatever breaks them. Relations may also carry
     `max_distance_um` (the nearest parent for a child touching none).
+
+    Parameters
+    ----------
+    multi_cfg : dict
+        The multi config.
+    label_names : list of str
+        The run's label images, which the rules must name.
+
+    Returns
+    -------
+    dict
+        The rules; exits naming what is wrong.
     """
     block = multi_cfg.get("review") or {}
     if not isinstance(block, dict):
@@ -567,19 +730,40 @@ def _review_rules(multi_cfg: dict, label_names: list[str]) -> dict:
 
 
 def _tile_channels(cfg: dict) -> int:
-    """Channels a segment tile carries (as `_pw.tile_channels`): the
-    nuclei channel or the seed labels are stacked onto the image."""
+    """Channels a segment tile carries (as `_pw.tile_channels`).
+
+    The nuclei channel or the seed labels are stacked onto the image.
+
+    Parameters
+    ----------
+    cfg : dict
+        A segmentation config.
+
+    Returns
+    -------
+    int
+    """
     two = cfg.get("nuclei_channel") is not None or bool(cfg.get("seed_labels"))
     return 2 if two else 1
 
 
 def seed_dependencies(cfgs: list[dict]) -> dict[int, int]:
-    """`{config index: index of the config whose labels it grows from}`.
+    """Which config each `seed_labels` config grows from.
 
     A config with `seed_labels: <name>` reads that label image in every
     tile, so the config producing `<name>` must have finished first.
     Labels no listed config produces are taken from the store as they are
     (an earlier run); `prepare` checks they exist.
+
+    Parameters
+    ----------
+    cfgs : list of dict
+        The segmentation configs, in the multi config's order.
+
+    Returns
+    -------
+    dict of int to int
+        `{config index: index of the config whose labels it grows from}`.
     """
     by_name = {cfg.get("label_name"): i for i, cfg in enumerate(cfgs)}
     return {
@@ -598,6 +782,18 @@ def seed_plan(cfgs: list[dict], image_store: str) -> list[str]:
     them, with nothing to show for it. Say so loudly, and name the configs'
     own label images, since a near-miss (`nuclei_labels` for
     `nuclei_labels_cpsam`) is the usual cause.
+
+    Parameters
+    ----------
+    cfgs : list of dict
+        The segmentation configs, in the multi config's order.
+    image_store : str
+        The `image.zarr`, where seeds from an earlier run would be.
+
+    Returns
+    -------
+    list of str
+        One line per `seed_labels` config.
     """
     names = [cfg.get("label_name") for cfg in cfgs]
     lines = []
@@ -630,6 +826,17 @@ def label_ready(image_store: str | Path, name: str) -> bool:
 
     Finished, not merely there: segmenting in place writes tiles into a bare
     group, and only the end of the merge registers it (multiscales).
+
+    Parameters
+    ----------
+    image_store : str or Path
+        The `image.zarr`.
+    name : str
+        The label image.
+
+    Returns
+    -------
+    bool
     """
     group = Path(image_store) / "labels" / str(name)
     for meta in ("zarr.json", ".zattrs"):
@@ -650,6 +857,20 @@ def relation_problems(
 
     Caught before the segmentations, not as a zarr ArrayNotFoundError from
     the relate job hours later.
+
+    Parameters
+    ----------
+    relations : list of dict
+        The multi config's `relations:`, `{a, b, ...}` each.
+    cfgs : list of dict
+        The segmentation configs, in the multi config's order.
+    image_store : str or Path
+        The `image.zarr`, where finished label images are found.
+
+    Returns
+    -------
+    list of str
+        The problems found.
     """
     names = [str(cfg.get("label_name")) for cfg in cfgs]
     problems = []
@@ -675,6 +896,17 @@ def stale_runs(cfgs: list[dict], image_store: str | Path) -> list[Path]:
     marker still there nothing would re-make it: the run would report ok and
     only the relations fail, on labels that are not there. The caller clears
     these directories (everything in them is made again by the run).
+
+    Parameters
+    ----------
+    cfgs : list of dict
+        The segmentation configs, in the multi config's order.
+    image_store : str or Path
+        The `image.zarr`.
+
+    Returns
+    -------
+    list of Path
     """
     stale = []
     for cfg in cfgs:
@@ -688,7 +920,18 @@ def stale_runs(cfgs: list[dict], image_store: str | Path) -> list[Path]:
 
 
 def zarr_root_file(cfg: dict) -> str:
-    """The store's root metadata file, as rules/common.smk names it."""
+    """The store's root metadata file, as rules/common.smk names it.
+
+    Parameters
+    ----------
+    cfg : dict
+        A segmentation config: its `ngff_version`.
+
+    Returns
+    -------
+    str
+        `".zgroup"` for NGFF 0.4, else `"zarr.json"`.
+    """
     return (
         ".zgroup"
         if str(cfg.get("ngff_version", "auto")) == "0.4"
@@ -698,6 +941,13 @@ def zarr_root_file(cfg: dict) -> str:
 
 def _validate_configs(paths: list[Path], cfgs: list[dict]) -> str:
     """Check the cross-config invariants, or exit naming what is wrong.
+
+    Parameters
+    ----------
+    paths : list of Path
+        The configs' files.
+    cfgs : list of dict
+        The segmentation configs, in the multi config's order.
 
     Returns
     -------
@@ -720,10 +970,33 @@ def config_set_problems(paths: list[Path], cfgs: list[dict]) -> list[str]:
     label_relations, or not at all when two configs quietly overwrote each
     other's label group. Only `work_dir` was checked, and only when
     relations were configured and it was not a dry run.
+
+    Parameters
+    ----------
+    paths : list of Path
+        The configs' files, named in the messages.
+    cfgs : list of dict
+        The segmentation configs, in the multi config's order.
+
+    Returns
+    -------
+    list of str
+        The problems found.
     """
     problems = []
 
     def _spread(key):
+        """Each config's value of *key*, by file name, for a message.
+
+        Parameters
+        ----------
+        key : str
+            A config key.
+
+        Returns
+        -------
+        dict
+        """
         return {p.name: cfg.get(key) for p, cfg in zip(paths, cfgs)}
 
     work_dirs = {cfg.get("work_dir") for cfg in cfgs}
@@ -825,13 +1098,20 @@ def _resolve_shared_tile_shape(
     `diameter`, GPU budget) would actually produce, then pins every config
     to the *smallest* of them by voxel count -- the most memory-constrained
     case, and safe for every config since a smaller tile only ever asks for
-    less memory than that config's own budget allows, never more. Configs
-    can therefore use different `do_3D`/`diameter`/channel-count
-    settings and still end up with one shared, valid `tile_shape`.
+    less memory than that config's own budget allows, never more.
 
     Only called once the converted image exists (the sizer needs its real
     shape/dtype), so this runs from `main()` after phase A, not from
     `_validate_configs()`.
+
+    Parameters
+    ----------
+    seg_cfgs : list of dict
+        The segmentation configs.
+    image_store : str
+        The converted `image.zarr`.
+    work_dir : str
+        The run's work_dir, where the YAML file is written.
 
     Returns
     -------
@@ -910,18 +1190,30 @@ def run_after(
 ) -> list[tuple[str, str]]:
     """Run every job, each as soon as the one it depends on has succeeded.
 
-    *ready(j)*, when given, says job *j* has already made what the jobs
-    depending on it need, before it ends: they start then. (A seeded
-    segmentation needs its seeds' labels, not their object table, which can
-    take hours more.)
+    Jobs without a dependency start at once, side by side. One whose
+    dependency failed is not started (`"skipped"`) unless
+    *skip_after_failure* is False; a failure does not stop the others, which
+    are independent and may hold hours of finished GPU work.
 
-    *launch(i)* starts job *i* and returns its `Popen`. Jobs without a
-    dependency start at once, side by side. One whose dependency failed is
-    not started (`"skipped"`) unless *skip_after_failure* is False; a
-    failure does not stop the others, which are independent and may hold
-    hours of finished GPU work.
-
-    *on_exit(i, returncode)*, when given, is called as each job ends.
+    Parameters
+    ----------
+    names : list of str
+        The jobs' names, for the results.
+    deps : dict of int to int
+        `{i: j}`: job *i* starts after job *j*.
+    launch : callable
+        `launch(i)` starts job *i* and returns its `Popen`.
+    poll_seconds : float, optional
+        How often to check the jobs (default 5).
+    skip_after_failure : bool, optional
+        Skip a job whose dependency failed (default True).
+    ready : callable, optional
+        `ready(j)` says job *j* has already made what the jobs depending
+        on it need, before it ends: they start then. (A seeded segmentation
+        needs its seeds' labels, not their object table, which can take
+        hours more.)
+    on_exit : callable, optional
+        `on_exit(i, returncode)` is called as each job ends.
 
     Returns
     -------
@@ -966,7 +1258,16 @@ RUN_STATE = "run_multi_state.json"
 
 
 def write_run_state(run: Path, **fields) -> None:
-    """Record how *run*'s Snakemake is doing (`state`, `exit`, times)."""
+    """Record how *run*'s Snakemake is doing (`state`, `exit`, times).
+
+    Parameters
+    ----------
+    run : Path
+        The segmentation's folder in work_dir.
+    **fields
+        What to record, e.g. `state="running", pid=...`. With `started`
+        the record starts afresh; otherwise it is updated.
+    """
     import time
 
     path = run / RUN_STATE
@@ -986,11 +1287,24 @@ def tee_output(proc: subprocess.Popen, path: Path):
     The segmentations' Snakemakes all write into the one controller log,
     where nothing says which line is whose: a Snakemake that stopped or hung
     before its first job left no trace anyone could attribute. Its own copy
-    keeps that. Returns the copying thread.
+    keeps that.
+
+    Parameters
+    ----------
+    proc : subprocess.Popen
+        The process, its stdout a pipe.
+    path : Path
+        The file to copy it to.
+
+    Returns
+    -------
+    threading.Thread
+        The copying thread, started.
     """
     import threading
 
     def _copy():
+        """Copy every line until the process closes its output."""
         sink = getattr(sys.stdout, "buffer", None)
         with open(path, "wb") as out:
             for line in iter(proc.stdout.readline, b""):
@@ -1017,6 +1331,17 @@ def relation_dependencies(
     {parent: cells, apical: nuclei}`) classifies the cilia in the cilia ->
     cells workbook from the nuclei -> cells relation; run side by side, the
     cilia job could finish first and find no nuclei related yet.
+
+    Parameters
+    ----------
+    relations : list of dict
+        The relation jobs, `{a, b, ...}` each.
+    review_rules : dict or None
+        The `review:` rules, with their `position` rules.
+
+    Returns
+    -------
+    dict of int to int
     """
     rules = (review_rules or {}).get("position") or {}
     index = {(r.get("a"), r.get("b")): j for j, r in enumerate(relations)}
@@ -1038,9 +1363,21 @@ DRIVER_FILE = ".run_multi.pid"
 
 
 def _slurm_job_running(job_id: str) -> bool | None:
-    """Whether SLURM job *job_id* (yours) is still queued or running; None
-    when SLURM cannot be asked. All your jobs, not `squeue -j`: that
-    errors out for an id SLURM has already forgotten -- a finished job."""
+    """Whether SLURM job *job_id* (yours) is still queued or running.
+
+    All your jobs, not `squeue -j`: that errors out for an id SLURM has
+    already forgotten -- a finished job.
+
+    Parameters
+    ----------
+    job_id : str
+        The job's id.
+
+    Returns
+    -------
+    bool or None
+        None when SLURM cannot be asked.
+    """
     try:
         out = subprocess.run(
             ["squeue", "--me", "-h", "-o", "%i"],
@@ -1070,8 +1407,20 @@ def _slurm_job_running(job_id: str) -> bool | None:
 
 
 def _process_args(pid: int) -> list[str] | None:
-    """The command line of *pid*: [] if there is no such process, None if
-    it cannot be read. /proc on Linux, `ps` elsewhere (macOS)."""
+    """The command line of *pid*.
+
+    /proc on Linux, `ps` elsewhere (macOS).
+
+    Parameters
+    ----------
+    pid : int
+        The process.
+
+    Returns
+    -------
+    list of str or None
+        [] if there is no such process, None if it cannot be read.
+    """
     cmdline = Path(f"/proc/{pid}/cmdline")
     if Path("/proc/self/cmdline").exists():
         try:
@@ -1104,8 +1453,20 @@ def _own_job() -> str | None:
 
 
 def _remote_driver_alive(host: str, pid: int) -> bool | None:
-    """Whether *pid* on login node *host* is a live run_multi, asked over
-    ssh; None when ssh cannot get there without a password."""
+    """Whether *pid* on login node *host* is a live run_multi, asked over ssh.
+
+    Parameters
+    ----------
+    host : str
+        The login node.
+    pid : int
+        The process.
+
+    Returns
+    -------
+    bool or None
+        None when ssh cannot get there without a password.
+    """
     try:
         out = subprocess.run(
             [
@@ -1142,7 +1503,19 @@ def _remote_driver_alive(host: str, pid: int) -> bool | None:
 
 
 def _driver_alive(pid: int) -> bool:
-    """Whether *pid* is a live run_multi on this machine."""
+    """Whether *pid* is a live run_multi on this machine.
+
+    Parameters
+    ----------
+    pid : int
+        The process.
+
+    Returns
+    -------
+    bool
+        True also for a live process whose command line cannot be read;
+        always False on Windows, where it cannot be checked.
+    """
     if os.name == "nt":
         return False  # os.kill(pid, 0) sends Ctrl-C there; no check
     try:
@@ -1166,6 +1539,18 @@ def claim_driver(work_dir: str | Path, config: Path) -> Path:
     group, one of them holding the lock the other then fails on. A driver
     left running from an earlier attempt did exactly that. The marker of a
     driver that died is taken over; it is removed at exit.
+
+    Parameters
+    ----------
+    work_dir : str or Path
+        The run's work_dir, where the marker goes.
+    config : Path
+        The multi config, recorded in the marker.
+
+    Returns
+    -------
+    Path
+        The marker.
     """
     import atexit
     import socket
@@ -1255,6 +1640,7 @@ def claim_driver(work_dir: str | Path, config: Path) -> Path:
     )
 
     def _release():
+        """Remove the marker at exit, if it is still this driver's."""
         try:
             if json.loads(marker.read_text()).get("pid") == me:
                 marker.unlink()
@@ -1266,7 +1652,17 @@ def claim_driver(work_dir: str | Path, config: Path) -> Path:
 
 
 def held_locks(state_dir: Path) -> list[Path]:
-    """Snakemake's lock files for a run whose --directory is *state_dir*."""
+    """Snakemake's lock files for a run whose --directory is *state_dir*.
+
+    Parameters
+    ----------
+    state_dir : Path
+        The run's Snakemake directory.
+
+    Returns
+    -------
+    list of Path
+    """
     locks = Path(state_dir) / ".snakemake" / "locks"
     return sorted(locks.glob("*")) if locks.is_dir() else []
 
@@ -1278,6 +1674,17 @@ def _still_working(state_dir: Path, label: str) -> str | None:
     a snakemake process on this machine working in *state_dir* -- one left
     running when its run_multi was killed. Also a reason when neither can
     be checked.
+
+    Parameters
+    ----------
+    state_dir : Path
+        The run's Snakemake directory.
+    label : str
+        The segmentation's label name (its jobs' name prefix).
+
+    Returns
+    -------
+    str or None
     """
     prefix = slurm_jobname_prefix(label) + "_"
     try:
@@ -1317,6 +1724,11 @@ def release_stale_locks(state_dirs: list[tuple[Path, str]]) -> None:
     left over from a run that was killed -- unless that run's Snakemake or
     its jobs outlived it, which :func:`_still_working` checks. Snakemake's
     `--unlock` does the same: it deletes these files.
+
+    Parameters
+    ----------
+    state_dirs : list of tuple
+        `(state_dir, label)` per segmentation.
     """
     for state_dir, label in state_dirs:
         locks = held_locks(state_dir)
@@ -1339,7 +1751,20 @@ def release_stale_locks(state_dirs: list[tuple[Path, str]]) -> None:
 
 def _resolve(path_str: str, *bases: Path) -> Path:
     """*path_str* as given if absolute, else under the first of *bases*
-    holding it (the first base when none does, so the error names it)."""
+    holding it.
+
+    Parameters
+    ----------
+    path_str : str
+        A path, `~` expanded.
+    *bases : Path
+        The folders to look in, in order.
+
+    Returns
+    -------
+    Path
+        Under the first base when none holds it, so the error names it.
+    """
     path = Path(path_str).expanduser()
     if path.is_absolute():
         return path
@@ -1357,6 +1782,15 @@ def _config_bases(workflow_dir: Path) -> list[Path]:
     `pixi run multi-slurm --config my_multi.yaml` from a project folder
     finds the file there, while the shipped `config/multi.yaml` still
     resolves against `workflow/`.
+
+    Parameters
+    ----------
+    workflow_dir : Path
+        The workflow folder, the last place looked.
+
+    Returns
+    -------
+    list of Path
     """
     bases = []
     for base in (os.environ.get("INIT_CWD"), os.getcwd(), workflow_dir):
@@ -1366,6 +1800,9 @@ def _config_bases(workflow_dir: Path) -> list[Path]:
 
 
 def main() -> None:
+    """Run every segmentation of a multi config, then the relations and the
+    bundle (see `--help`).
+    """
     parser = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -1602,6 +2039,19 @@ def main() -> None:
 
     # Phase B: every segmentation at once, each with its own state directory.
     def _launch(cfg_path, cfg):
+        """Start one segmentation's Snakemake.
+
+        Parameters
+        ----------
+        cfg_path : Path
+            Its config.
+        cfg : dict
+            The config, loaded.
+
+        Returns
+        -------
+        subprocess.Popen
+        """
         cmd = _snakemake_cmd(
             cfg_path,
             workflow_dir=workflow_dir,
@@ -1638,6 +2088,15 @@ def main() -> None:
         return proc
 
     def _ended(i, code):
+        """Record how a segmentation's Snakemake ended.
+
+        Parameters
+        ----------
+        i : int
+            The segmentation.
+        code : int
+            Its exit code.
+        """
         if args.dry_run:
             return
         import time
@@ -1757,6 +2216,9 @@ def main() -> None:
     relations = [rel for rel in relations if rel not in skipped]
 
     def _finish():
+        """Pack the store and exit; exit failed without packing when relations
+        were skipped.
+        """
         # Not bundled with relations missing: it would look complete.
         if skipped:
             sys.exit(1)
@@ -1773,6 +2235,17 @@ def main() -> None:
         group_rels = list(groups.values())
 
         def _launch_relation(i):
+            """Start the relate job of one parent's relations.
+
+            Parameters
+            ----------
+            i : int
+                The parent's group of relations.
+
+            Returns
+            -------
+            subprocess.Popen
+            """
             cmd = _relate_cmd(
                 group_rels[i],
                 work_dir=work_dir,

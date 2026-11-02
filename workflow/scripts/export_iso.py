@@ -68,7 +68,17 @@ _VOLID_MAX = 32
 
 
 def human(n: float) -> str:
-    """Bytes as a short human-readable string."""
+    """Bytes as a short human-readable string.
+
+    Parameters
+    ----------
+    n : float
+        Bytes.
+
+    Returns
+    -------
+    str
+    """
     for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
         if n < 1024:
             return f"{n:.1f} {unit}"
@@ -77,14 +87,36 @@ def human(n: float) -> str:
 
 
 def tree_size(path: Path) -> tuple[int, int]:
-    """Total bytes and file count under *path*."""
+    """Total bytes and file count under *path*.
+
+    Parameters
+    ----------
+    path : Path
+        A directory.
+
+    Returns
+    -------
+    tuple of int
+    """
     total, count, _ = tree_stats(path)
     return total, count
 
 
 def tree_stats(path: Path) -> tuple[int, int, float]:
-    """Total bytes, file count and newest modification time under *path*,
-    in one walk (a stat per file, which the size needs anyway)."""
+    """Total bytes, file count and newest modification time under *path*.
+
+    In one walk (a stat per file, which the size needs anyway).
+
+    Parameters
+    ----------
+    path : Path
+        A directory.
+
+    Returns
+    -------
+    tuple
+        `(bytes, files, newest mtime)`.
+    """
     total = count = 0
     newest = 0.0
     for item in path.rglob("*"):
@@ -97,7 +129,19 @@ def tree_stats(path: Path) -> tuple[int, int, float]:
 
 
 def volume_id(name: str) -> str:
-    """A volume label xorriso will accept, derived from the store's name."""
+    """A volume label xorriso will accept, derived from the store's name.
+
+    Parameters
+    ----------
+    name : str
+        The store's name.
+
+    Returns
+    -------
+    str
+        Upper case, letters, digits and underscores, at most `_VOLID_MAX`
+        characters.
+    """
     cleaned = "".join(c if c.isalnum() else "_" for c in name.upper())
     return cleaned[:_VOLID_MAX].strip("_") or "PATCHWORKS"
 
@@ -141,7 +185,19 @@ def find_builder() -> tuple[str, list[str]]:
 
 
 def build_command(store: Path, output: Path) -> list[str]:
-    """The ISO-builder invocation that packs *store* into *output*."""
+    """The ISO-builder invocation that packs *store* into *output*.
+
+    Parameters
+    ----------
+    store : Path
+        The `.zarr` directory.
+    output : Path
+        The `.iso` to write.
+
+    Returns
+    -------
+    list of str
+    """
     executable, prefix = find_builder()
     return [
         executable,
@@ -182,6 +238,16 @@ def write_zip(store: Path, output: Path, progress: bool = True) -> None:
     Written entry by entry, so memory stays flat however many files the
     store holds -- the failure mode of the pure-Python *ISO* builders is
     that they assemble the image in RAM first, which this does not do.
+
+    Parameters
+    ----------
+    store : Path
+        The `.zarr` directory; the archive holds it as its one top-level
+        directory.
+    output : Path
+        The `.zip` to write.
+    progress : bool, optional
+        Print progress (default True).
     """
     total = sum(1 for p in store.rglob("*") if p.is_file())
     done = 0
@@ -207,6 +273,13 @@ def write_zip(store: Path, output: Path, progress: bool = True) -> None:
 
 
 def main() -> int:
+    """Pack a store into an `.iso` or a `.zip` (see `--help`).
+
+    Returns
+    -------
+    int
+        The exit status.
+    """
     parser = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,

@@ -28,7 +28,19 @@ from pathlib import Path
 
 
 def _num_chunks(arr: "da.Array") -> int:  # noqa: F821 - dask imported lazily by callers
-    """Total chunk count of a dask array, for picking the coarser side to rechunk to."""
+    """Total chunk count of a dask array.
+
+    For picking the coarser side to rechunk to.
+
+    Parameters
+    ----------
+    arr : dask.array.Array
+        The array.
+
+    Returns
+    -------
+    int
+    """
     return math.prod(len(c) for c in arr.chunks)
 
 
@@ -37,6 +49,18 @@ def _n_objects(image_store: str, name: str) -> str:
 
     Read from the metadata the merge already wrote, never by scanning -- a
     progress line that costs a full volume read would defeat its own purpose.
+
+    Parameters
+    ----------
+    image_store : str
+        The OME-Zarr image.
+    name : str
+        The label image.
+
+    Returns
+    -------
+    str
+        E.g. `"12,345 objects"`, or `"object count unknown"`.
     """
     import zarr
 
@@ -49,11 +73,24 @@ def _n_objects(image_store: str, name: str) -> str:
 
 
 def written_outputs(out_path: Path, a_name: str, b_name: str) -> list[Path]:
-    """What a relation's workbook was written as: the `.xlsx`, or -- a
-    sheet too long for Excel -- its two csv files (`<stem>_<name>.csv`).
+    """What a relation's workbook was written as.
 
-    Only the .xlsx used to count, so every relation of more than a million
-    objects was recomputed from scratch on each run: hours each.
+    The `.xlsx`, or -- a sheet too long for Excel -- its two csv files
+    (`<stem>_<name>.csv`). Only the .xlsx used to count, so every relation
+    of more than a million objects was recomputed from scratch on each run:
+    hours each.
+
+    Parameters
+    ----------
+    out_path : Path
+        The workbook's `.xlsx` path.
+    a_name, b_name : str
+        The child and parent label images (the csv files' suffixes).
+
+    Returns
+    -------
+    list of Path
+        Empty when neither form exists.
     """
     if out_path.exists():
         return [out_path]
@@ -66,7 +103,7 @@ def written_outputs(out_path: Path, a_name: str, b_name: str) -> list[Path]:
 def _relation_up_to_date(
     work_dir: str, a_name: str, b_name: str, out_path: Path
 ) -> bool:
-    """Whether *out_path* already reflects the current *a_name*/*b_name* labels.
+    """Whether *out_path* already reflects the current labels.
 
     Mirrors the workflow's existing "delete to force" convention (see
     `image.zarr` not being reconverted once it exists): a relation is
@@ -74,7 +111,21 @@ def _relation_up_to_date(
     `labels.done` merge marker, and stale (or never computed) otherwise.
     Missing markers -- a label group written before merge started recording
     one, or a nonstandard `image_store` layout -- are treated as "unknown,
-    recompute" rather than raise, since staleness can't be judged without them.
+    recompute" rather than raise, since staleness can't be judged without
+    them.
+
+    Parameters
+    ----------
+    work_dir : str
+        The run's work_dir, holding `<name>/labels.done`.
+    a_name, b_name : str
+        The child and parent label images.
+    out_path : Path
+        The workbook.
+
+    Returns
+    -------
+    bool
     """
     outputs = written_outputs(out_path, a_name, b_name)
     if not outputs:
@@ -93,8 +144,21 @@ def _relation_up_to_date(
 def _tables_ready(
     image_store: str, a_name: str, b_name: str, max_distance=None
 ) -> bool:
-    """Both tables current, and *a*'s already relating it to *b* (by
-    distance too, when asked)."""
+    """Both tables current, and *a*'s already relating it to *b*.
+
+    Parameters
+    ----------
+    image_store : str
+        The OME-Zarr image.
+    a_name, b_name : str
+        The child and parent label images.
+    max_distance : float, optional
+        When given, the distance column must be there too.
+
+    Returns
+    -------
+    bool
+    """
     from patchworks._tables import has_table, is_stale, read_columns
 
     groups = [f"{image_store}/labels/{n}" for n in (a_name, b_name)]
@@ -246,6 +310,20 @@ def _group_matches(
     A child chunked differently from the parent (segmented at another
     tile_shape) is related on its own, the finer side rechunked to the
     coarser: same shape, different chunking is extra I/O, not an error.
+
+    Parameters
+    ----------
+    image_store : str
+        The OME-Zarr image.
+    children : list of str
+        The child label images.
+    b_name : str
+        The parent label image.
+
+    Returns
+    -------
+    dict
+        `{child: matches}`, as :func:`patchworks.label_relations` gives.
     """
     import dask.array as da
     import zarr
@@ -253,6 +331,17 @@ def _group_matches(
     from patchworks._relations import label_relations_many
 
     def array(name):
+        """Level 0 of label image *name*.
+
+        Parameters
+        ----------
+        name : str
+            The label image.
+
+        Returns
+        -------
+        zarr.Array
+        """
         return zarr.open_array(image_store, path=f"labels/{name}/0", mode="r")
 
     b = array(b_name)
@@ -299,6 +388,7 @@ def _group_matches(
 
 
 def main() -> None:
+    """Compute the relations listed on the command line (see `--help`)."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--work-dir", required=True)
     parser.add_argument("--image-store", required=True)

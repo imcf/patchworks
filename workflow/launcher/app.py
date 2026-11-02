@@ -70,6 +70,17 @@ if not _log.handlers:
 
 
 def _log_lost(transport, doing: str, why: str = "") -> None:
+    """Log why the SSH connection was lost; never fails itself.
+
+    Parameters
+    ----------
+    transport : paramiko.Transport or None
+        The connection's transport, for its own error.
+    doing : str
+        What was being done, for the message.
+    why : str, optional
+        The command's own error, if any.
+    """
     # Never let the diagnostic itself fail.
     try:
         reason = transport.get_exception() if transport is not None else None
@@ -105,6 +116,13 @@ _CONNECTION_CACHE = ("cluster_info", "cellpose_models")
 
 
 def _cache_with_connection(key: str) -> None:
+    """Keep a session value with the connection, for a reload to restore.
+
+    Parameters
+    ----------
+    key : str
+        The `st.session_state` key.
+    """
     entry = _connections().get(st.session_state.get("resume_token", ""))
     if entry is not None and key in st.session_state:
         entry.setdefault("cache", {})[key] = st.session_state[key]
@@ -117,7 +135,15 @@ def _viewer_ip() -> str | None:
 
 
 def _remember_connection(client, target: str) -> None:
-    """Keep *client* for reloads of this page, and drop stale ones."""
+    """Keep *client* for reloads of this page, and drop stale ones.
+
+    Parameters
+    ----------
+    client : paramiko.SSHClient
+        The open connection.
+    target : str
+        `user@host:port`, shown when it is restored.
+    """
     now = time.time()
     kept = _connections()
     for token, entry in list(kept.items()):
@@ -140,7 +166,13 @@ def _remember_connection(client, target: str) -> None:
 
 
 def _forget_resume(close: bool = False) -> None:
-    """This page's connection is no longer to be found by a reload."""
+    """This page's connection is no longer to be found by a reload.
+
+    Parameters
+    ----------
+    close : bool, optional
+        Also close the connection (default False).
+    """
     entry = _connections().pop(st.session_state.pop("resume_token", ""), None)
     if close and entry is not None:
         entry["client"].close()
@@ -209,9 +241,29 @@ def connect(
     allow_unverified,
     use_keys=False,
 ):
-    """Open the SSH connection: with the password typed, or (*use_keys*)
-    with the keys and agent `ssh` itself would use -- *password* is then
-    the key's passphrase, if any."""
+    """Open the SSH connection.
+
+    Parameters
+    ----------
+    host : str
+        The login node.
+    port : int
+        Its SSH port.
+    username : str
+        The cluster account.
+    password : str
+        The password typed; with *use_keys*, the key's passphrase, if any.
+    fingerprints : list of str
+        The host key fingerprints pinned for the cluster.
+    allow_unverified : bool
+        Accept any host key when none is pinned.
+    use_keys : bool, optional
+        Use the keys and agent `ssh` itself would use, not a password.
+
+    Returns
+    -------
+    paramiko.SSHClient
+    """
     client = paramiko.SSHClient()
     client.load_system_host_keys()
     client.set_missing_host_key_policy(
@@ -249,7 +301,13 @@ def connect(
 
 
 def _remember_preset(preset: dict) -> None:
-    """The cluster preset of this connection, for a reload to restore."""
+    """The cluster preset of this connection, for a reload to restore.
+
+    Parameters
+    ----------
+    preset : dict
+        The cluster preset in use.
+    """
     st.session_state["preset"] = preset
     entry = _connections().get(st.session_state.get("resume_token", ""))
     if entry is not None:
@@ -296,9 +354,21 @@ def _forget_connection() -> None:
 
 
 def _connection_lost(why: str):
-    """In the page's own thread: back to the log-in prompt at once. In a
+    """Leave the page after the connection dropped.
+
+    In the page's own thread: back to the log-in prompt at once. In a
     worker thread (the Jobs tab's parallel fetches), which cannot touch the
-    page: raise :class:`ConnectionLost` for its caller to do so."""
+    page: raise :class:`ConnectionLost` for its caller to do so.
+
+    Parameters
+    ----------
+    why : str
+        What happened.
+
+    Raises
+    ------
+    ConnectionLost
+    """
     from streamlit.runtime.scriptrunner import get_script_run_ctx
 
     if get_script_run_ctx(suppress_warning=True) is not None:
@@ -319,6 +389,25 @@ def run(
 
     A dropped connection sends the page back to the log-in prompt (see
     :func:`_connection_lost`).
+
+    Parameters
+    ----------
+    client : paramiko.SSHClient
+        The connection to the cluster.
+    command : str
+        The shell command.
+    login : bool, optional
+        In a login shell, `bash -lc` (default), for the PATH the user's
+        profile sets.
+    timeout : float, optional
+        Seconds to wait (default 120).
+    stdin_text : str, optional
+        Text for the command's standard input.
+
+    Returns
+    -------
+    tuple
+        `(exit code, stdout, stderr)`.
     """
     wrapped = f"bash -lc {shlex.quote(command)}" if login else command
     transport = client.get_transport() if client is not None else None
@@ -362,6 +451,20 @@ def run(
 
 
 def read_remote(client, path: str) -> str | None:
+    """A remote text file's content.
+
+    Parameters
+    ----------
+    client : paramiko.SSHClient
+        The connection to the cluster.
+    path : str
+        The file.
+
+    Returns
+    -------
+    str or None
+        None when it cannot be read.
+    """
     try:
         with client.open_sftp() as sftp, sftp.open(path) as fh:
             return fh.read().decode(errors="replace")
@@ -370,6 +473,19 @@ def read_remote(client, path: str) -> str | None:
 
 
 def write_remote(client, path: str, text: str, *, append=False) -> None:
+    """Write (or append to) a remote text file.
+
+    Parameters
+    ----------
+    client : paramiko.SSHClient
+        The connection to the cluster.
+    path : str
+        The file.
+    text : str
+        What to write.
+    append : bool, optional
+        Append rather than replace (default False).
+    """
     with client.open_sftp() as sftp:
         if append:
             with sftp.open(path, "a") as fh:
@@ -379,6 +495,17 @@ def write_remote(client, path: str, text: str, *, append=False) -> None:
 
 
 def remote_is_dir(path: str) -> bool:
+    """Whether *path* is a folder on the cluster.
+
+    Parameters
+    ----------
+    path : str
+        A remote path.
+
+    Returns
+    -------
+    bool
+    """
     try:
         return stat.S_ISDIR(get_sftp().stat(path).st_mode or 0)
     except OSError:
@@ -386,7 +513,19 @@ def remote_is_dir(path: str) -> bool:
 
 
 def list_remote(path: str) -> list[tuple[str, bool]]:
-    """`(name, is_dir)` for each entry of a remote folder."""
+    """`(name, is_dir)` for each entry of a remote folder.
+
+    Links to folders count as folders.
+
+    Parameters
+    ----------
+    path : str
+        The remote folder.
+
+    Returns
+    -------
+    list of tuple
+    """
     sftp = get_sftp()
     entries = []
     for attr in sftp.listdir_attr(path):
@@ -412,16 +551,46 @@ MAX_ENTRIES = 300
 
 
 def _go(cwd_key: str, path: str) -> None:
+    """Open folder *path* in a browser dialog.
+
+    Parameters
+    ----------
+    cwd_key : str
+        The dialog's folder key.
+    path : str
+        The folder.
+    """
     st.session_state[cwd_key] = path
 
 
 def _go_typed(cwd_key: str, typed_key: str) -> None:
+    """Open the folder typed in a browser dialog.
+
+    Parameters
+    ----------
+    cwd_key : str
+        The dialog's folder key.
+    typed_key : str
+        The text field's key.
+    """
     path = st.session_state.get(typed_key, "").strip()
     if path:
         st.session_state[cwd_key] = path
 
 
 def _pick(key: str, path: str) -> None:
+    """Put *path* in the field *key*, and close the dialog.
+
+    Applied before the input is drawn on the next run: a widget's value
+    cannot be changed once it is on the page.
+
+    Parameters
+    ----------
+    key : str
+        The field's key.
+    path : str
+        The path chosen.
+    """
     # Applied before the input is drawn on the next run: a widget's value
     # cannot be changed once it is on the page.
     st.session_state[f"{key}__picked"] = path
@@ -429,12 +598,36 @@ def _pick(key: str, path: str) -> None:
 
 
 def _pick_tiffs(key: str, pattern_glob: str, pattern: str | None) -> None:
+    """Pick a folder of TIFFs: its glob, and the sequence pattern guessed.
+
+    Parameters
+    ----------
+    key : str
+        The input field's key.
+    pattern_glob : str
+        The glob matching the folder's TIFFs.
+    pattern : str or None
+        The `sequence_pattern` guessed from their names.
+    """
     _pick(key, pattern_glob)
     if pattern:
         st.session_state["sequence_pattern__picked"] = pattern
 
 
 def _start_dir(value: str, dirs_only: bool) -> str:
+    """Where a browser dialog opens: the field's folder, else home.
+
+    Parameters
+    ----------
+    value : str
+        The field's current path.
+    dirs_only : bool
+        The dialog picks folders: the path itself, if it is one.
+
+    Returns
+    -------
+    str
+    """
     sftp = get_sftp()
     value = value.strip()
     if value.startswith("/"):
@@ -450,6 +643,19 @@ def _start_dir(value: str, dirs_only: bool) -> str:
 def browse(
     key: str, label: str, dirs_only: bool, tiff_folder: bool = False
 ) -> None:
+    """The dialog choosing a path on the cluster.
+
+    Parameters
+    ----------
+    key : str
+        The field the path goes to.
+    label : str
+        What is chosen, for the dialog's text.
+    dirs_only : bool
+        Pick folders only.
+    tiff_folder : bool, optional
+        Offer to pick a folder of TIFFs as one image.
+    """
     if st.session_state.pop(f"{key}__close", False):
         st.rerun()
     cwd_key = f"{key}__cwd"
@@ -545,6 +751,13 @@ def browse(
 
 
 def _update_workflow(wf_dir: str) -> None:
+    """`git pull` the cluster's clone, and look at what it has again.
+
+    Parameters
+    ----------
+    wf_dir : str
+        The workflow folder on the cluster.
+    """
     rc, out, _ = run(get_client(), core.update_command(wf_dir), timeout=300)
     st.session_state["update_note"] = (rc, out.strip()[-2000:])
     # What the clone has, looked at again.
@@ -553,8 +766,16 @@ def _update_workflow(wf_dir: str) -> None:
 
 
 def workflow_version_check(wf_dir: str) -> None:
-    """Warn when the cluster's clone is older than this launcher (it lacks
-    scripts the launcher runs), and offer to update it."""
+    """Warn when the cluster's clone is older than this launcher, and offer to
+    update it.
+
+    Older: it lacks scripts the launcher runs.
+
+    Parameters
+    ----------
+    wf_dir : str
+        The workflow folder on the cluster.
+    """
     missing = st.session_state.setdefault("missing_scripts", {})
     if wf_dir not in missing:
         absent = []
@@ -598,7 +819,27 @@ def remote_path(
     narrow: bool = False,
     tiff_folder: bool = False,
 ) -> str:
-    """A path on the cluster: typed in, or chosen with *Browse*."""
+    """A path on the cluster: typed in, or chosen with *Browse*.
+
+    Parameters
+    ----------
+    label : str
+        The field's label.
+    key : str
+        Its widget key.
+    dirs_only : bool, optional
+        Browse for folders only.
+    help : str, optional
+        Its explanation (default :func:`help_for`).
+    narrow : bool, optional
+        A narrower field.
+    tiff_folder : bool, optional
+        Offer to pick a folder of TIFFs as one image.
+
+    Returns
+    -------
+    str
+    """
     picked = st.session_state.pop(f"{key}__picked", None)
     if picked is not None:
         st.session_state[key] = picked
@@ -622,7 +863,19 @@ def remote_path(
 
 
 def section(title: str, caption: str | None = None):
-    """A bordered block of the page, with a heading."""
+    """A bordered block of the page, with a heading.
+
+    Parameters
+    ----------
+    title : str
+        The heading.
+    caption : str, optional
+        A line under it.
+
+    Returns
+    -------
+    streamlit container
+    """
     box = st.container(border=True)
     box.markdown(f"#### {title}")
     if caption:
@@ -677,7 +930,17 @@ SHORT_KEYS = {
 
 
 def help_for(key: str | None) -> str | None:
-    """The explanation of the field with widget key *key* (help_text.HELP)."""
+    """The explanation of the field with widget key *key* (`help_text.HELP`).
+
+    Parameters
+    ----------
+    key : str or None
+        The widget key; a multi run's `s<i>_` prefix is ignored.
+
+    Returns
+    -------
+    str or None
+    """
     if not key:
         return None
     if key in HELP:
@@ -687,9 +950,25 @@ def help_for(key: str | None) -> str | None:
 
 
 def _init(key: str, help: str | None = None, **default) -> dict:
-    """`key=`, its explanation (`help=`, the question mark beside the
-    field) and the widget's default, unless the key already holds a value
-    (one a past run's config put there): a widget given both warns."""
+    """A widget's `key=`, `help=` and default.
+
+    The default only unless the key already holds a value (one a past run's
+    config put there): a widget given both warns.
+
+    Parameters
+    ----------
+    key : str
+        The widget key.
+    help : str, optional
+        Its explanation (default :func:`help_for`).
+    **default
+        The widget's default, e.g. `value=0`.
+
+    Returns
+    -------
+    dict
+        Keyword arguments for the widget.
+    """
     out = {"key": key, "help": help or help_for(key)}
     if key in st.session_state:
         return out
@@ -697,6 +976,23 @@ def _init(key: str, help: str | None = None, **default) -> dict:
 
 
 def _opt_float(label: str, container=st, help=None, key=None):
+    """A number field that may be left empty.
+
+    Parameters
+    ----------
+    label : str
+        The field's label.
+    container : streamlit container, optional
+        Where to draw it (default the page).
+    help : str, optional
+        Its explanation.
+    key : str, optional
+        Its widget key.
+
+    Returns
+    -------
+    float or None
+    """
     text = container.text_input(label, **_init(key, help=help, value=""))
     return float(text) if text.strip() else None
 
@@ -757,8 +1053,20 @@ def image_form() -> dict:
 
 
 def _channel_pictures(work_dir: str, region=None) -> dict:
-    """Run scripts/channels.py on the cluster (the whole image, or a
-    *region*), as JSON; `{"error": ...}` if it could not."""
+    """Run scripts/channels.py on the cluster, as JSON.
+
+    Parameters
+    ----------
+    work_dir : str
+        The run's work_dir (its `image.zarr`).
+    region : tuple of float, optional
+        `(y0, y1, x0, x1)` fractions; None for the whole image.
+
+    Returns
+    -------
+    dict
+        The script's report; `{"error": ...}` if it could not.
+    """
     # Any config of this work_dir will do: the script reads only its
     # work_dir. Written here, so this works before Configure is complete.
     probe = f"{wf_dir}/config/launcher_channels_probe.yaml"
@@ -779,6 +1087,17 @@ def _channel_pictures(work_dir: str, region=None) -> dict:
 
 
 def _read_picture(path: str) -> bytes | None:
+    """A remote picture's bytes.
+
+    Parameters
+    ----------
+    path : str
+        The remote file.
+
+    Returns
+    -------
+    bytes or None
+    """
     try:
         with get_sftp().open(path) as fh:
             return fh.read()
@@ -787,7 +1106,20 @@ def _read_picture(path: str) -> bytes | None:
 
 
 def _outlined(picture: bytes, region) -> bytes:
-    """*picture* with the zoom's *region* (fractions) drawn on it."""
+    """*picture* with the zoom's *region* drawn on it.
+
+    Parameters
+    ----------
+    picture : bytes
+        A PNG.
+    region : tuple of float
+        `(y0, y1, x0, x1)` fractions.
+
+    Returns
+    -------
+    bytes
+        A PNG.
+    """
     import io as _io
 
     from PIL import Image, ImageDraw
@@ -808,7 +1140,13 @@ def _outlined(picture: bytes, region) -> bytes:
 
 def channels_view(work_dir: str) -> None:
     """Each channel of the converted image, to pick the channels by; and a
-    zoom into any region, with the detail of the finer levels."""
+    zoom into any region, with the detail of the finer levels.
+
+    Parameters
+    ----------
+    work_dir : str
+        The run's work_dir.
+    """
     with st.expander("See the channels", icon=":material/palette:"):
         key = f"channels_{work_dir}"
         st.caption(
@@ -878,6 +1216,13 @@ def channels_view(work_dir: str) -> None:
 
 
 def tiling_form() -> dict:
+    """The tiling fields: level, tile_shape, tiles_per_job, overlap...
+
+    Returns
+    -------
+    dict
+        The form's values.
+    """
     v: dict = {}
     c1, c2, c3, c4 = st.columns(4)
     v["level"] = c1.number_input(
@@ -959,6 +1304,21 @@ def outputs_form() -> dict:
 
 
 def _remote_yaml(path: str) -> dict:
+    """A remote YAML file's content.
+
+    Parameters
+    ----------
+    path : str
+        The file.
+
+    Returns
+    -------
+    dict
+
+    Raises
+    ------
+    FileNotFoundError
+    """
     text = read_remote(get_client(), path)
     if text is None:
         raise FileNotFoundError(path)
@@ -970,6 +1330,13 @@ def load_run(path: str, wf_dir: str) -> None:
 
     A multi config's segmentations and common file resolve as run_multi
     resolves them: next to the multi config, then in the workflow folder.
+
+    Parameters
+    ----------
+    path : str
+        The config, or a multi config, on the cluster.
+    wf_dir : str
+        The workflow folder on the cluster.
     """
     try:
         cfg = _remote_yaml(path)
@@ -979,6 +1346,17 @@ def load_run(path: str, wf_dir: str) -> None:
             here = core.parent_dir(path)
 
             def resolve(p: str) -> str:
+                """A path the multi config names, as run_multi resolves it.
+
+                Parameters
+                ----------
+                p : str
+                    The path as written.
+
+                Returns
+                -------
+                str
+                """
                 if p.startswith("/"):
                     return p
                 for base in (here, wf_dir):
@@ -1032,7 +1410,13 @@ def templates_dir() -> str:
 
 
 def save_template_form(draft: dict) -> None:
-    """Keep the form's settings under a name, to start the next run from."""
+    """Keep the form's settings under a name, to start the next run from.
+
+    Parameters
+    ----------
+    draft : dict
+        The run's files as the form describes them.
+    """
     with st.popover("Save as template", icon=":material/bookmark_add:"):
         name = st.text_input(
             "name",
@@ -1059,7 +1443,16 @@ def save_template_form(draft: dict) -> None:
 
 
 def start_from_form(wf_dir: str, jobs: list[dict]) -> None:
-    """Reopen a past launch's config, or any config file on the cluster."""
+    """Reopen a past launch's config, a template, or any config file on the
+    cluster.
+
+    Parameters
+    ----------
+    wf_dir : str
+        The workflow folder on the cluster.
+    jobs : list of dict
+        The past launches, from the registry.
+    """
     past = list(
         dict.fromkeys(
             j["config"]
@@ -1126,8 +1519,20 @@ def segmentation_form(
 ) -> dict:
     """One segmentation: what to label, how, and how to post-process it.
 
-    *k* prefixes every widget key, so several can sit on one page; the keys
-    are the ones :func:`launcher_core.segmentation_state` fills in.
+    Parameters
+    ----------
+    k : str, optional
+        Prefixes every widget key, so several can sit on one page; the keys
+        are the ones :func:`launcher_core.segmentation_state` fills in.
+    label : str, optional
+        The default label name.
+    others : list of str, optional
+        The run's other segmentations, to seed from.
+
+    Returns
+    -------
+    dict
+        The form's values.
     """
     v: dict = {}
     st.markdown("**What to segment**")
@@ -1331,6 +1736,15 @@ def plantseg_form(v: dict, k: str, others: list[str]) -> None:
 
     Both can grow one cell per nucleus: nuclei from a channel (the
     nuclei_channel above) or another segmentation's objects (seed_labels).
+
+    Parameters
+    ----------
+    v : dict
+        The segmentation's form values, added to.
+    k : str
+        Its widget keys' prefix.
+    others : list of str
+        The run's other segmentations, to seed from.
     """
     if v["method"] == "plantseg":
         c1, c2, c3, c4 = st.columns(4)
@@ -1436,7 +1850,18 @@ def segmentations_form() -> list[dict]:
 
 
 def relations_form(labels: list[str]) -> tuple[list[dict], dict, dict]:
-    """Relations between segmentations, their jobs and the review rules."""
+    """Relations between segmentations, their jobs and the review rules.
+
+    Parameters
+    ----------
+    labels : list of str
+        The run's label names.
+
+    Returns
+    -------
+    tuple
+        `(relations, relate job settings, review rules)`.
+    """
     st.caption(
         "Each row relates every object of `a` to the `b` object it overlaps "
         "most, written as a two-sheet Excel workbook in work_dir."
@@ -1613,7 +2038,15 @@ def relations_form(labels: list[str]) -> tuple[list[dict], dict, dict]:
 
 
 def upload(client, files: dict) -> None:
-    """Write the run's config files (remote path -> config) to the cluster."""
+    """Write the run's config files to the cluster.
+
+    Parameters
+    ----------
+    client : paramiko.SSHClient
+        The connection to the cluster.
+    files : dict
+        The run's config files, `{remote path: config}`.
+    """
     for path in files:
         parent = path.rsplit("/", 1)[0]
         run(client, f"mkdir -p {shlex.quote(parent)}", login=False)
@@ -1622,7 +2055,17 @@ def upload(client, files: dict) -> None:
 
 
 def run_config_path(files: dict) -> str:
-    """The file a run is started from: its multi.yaml, or its one config."""
+    """The file a run is started from: its multi.yaml, or its one config.
+
+    Parameters
+    ----------
+    files : dict
+        The run's config files, `{remote path: config}`.
+
+    Returns
+    -------
+    str
+    """
     return next(
         (p for p in files if p.endswith("/multi.yaml")), next(iter(files))
     )
@@ -1634,6 +2077,22 @@ def check_on_cluster(client, wf_dir, setup, files) -> dict:
     On the cluster, in the run's environment: the installed Cellpose
     models, the plugins and the converted image are all there to check
     against, as the run itself will.
+
+    Parameters
+    ----------
+    client : paramiko.SSHClient
+        The connection to the cluster.
+    wf_dir : str
+        The workflow folder on the cluster.
+    setup : str
+        The environment setup line (module load, pixi shell-hook ...).
+    files : dict
+        The run's config files, `{remote path: config}`.
+
+    Returns
+    -------
+    dict
+        check.py's report; `{"error", "output"}` if it could not run.
     """
     upload(client, files)
     rc, out, err = run(
@@ -1653,7 +2112,15 @@ def check_on_cluster(client, wf_dir, setup, files) -> dict:
 
 
 def _wide_image(picture, **kwargs) -> None:
-    """An image as wide as the page (Streamlit renamed the option)."""
+    """An image as wide as the page (Streamlit renamed the option).
+
+    Parameters
+    ----------
+    picture : bytes
+        The image.
+    **kwargs
+        More `st.image` arguments, e.g. `caption`.
+    """
     try:
         st.image(picture, width="stretch", **kwargs)
     except Exception:  # noqa: BLE001 - an older Streamlit
@@ -1661,7 +2128,13 @@ def _wide_image(picture, **kwargs) -> None:
 
 
 def show_previews(report: dict) -> None:
-    """Each segmentation's tried tile, full width, with what it found."""
+    """Each segmentation's tried tile, full width, with what it found.
+
+    Parameters
+    ----------
+    report : dict
+        check.py's report.
+    """
     for seg in report.get("segmentations", []):
         plan = seg.get("plan") or {}
         if not plan.get("preview"):
@@ -1700,7 +2173,13 @@ def show_previews(report: dict) -> None:
 
 
 def show_check(report: dict) -> None:
-    """Problems first, then the plan of every segmentation."""
+    """Problems first, then the plan of every segmentation.
+
+    Parameters
+    ----------
+    report : dict
+        check.py's report.
+    """
     if "error" in report:
         st.error(f"check could not run: {report['error']}")
         with st.expander("output", icon=":material/terminal:"):
@@ -1737,8 +2216,33 @@ def show_check(report: dict) -> None:
 def start_job(
     client, *, wf_dir, setup, inner, name, mode, slurm, record
 ) -> dict | None:
-    """Start *inner* as a SLURM job or detached on the login node, and
-    record it on the cluster so the Jobs tab finds it again."""
+    """Start *inner* as a SLURM job or detached on the login node, and record
+    it on the cluster so the Jobs tab finds it again.
+
+    Parameters
+    ----------
+    client : paramiko.SSHClient
+        The connection to the cluster.
+    wf_dir : str
+        The workflow folder on the cluster.
+    setup : str
+        The environment setup line (module load, pixi shell-hook ...).
+    inner : str
+        The shell line to run.
+    name : str
+        The run's name, `<kind>_<stamp>`: its log's and script's names.
+    mode : str
+        :data:`launcher_core.SLURM_JOB`, or the login node.
+    slurm : dict
+        The controller job's settings (`time`, `mem`, `partition`...).
+    record : dict
+        More to record with the job (`kind`, `config`...).
+
+    Returns
+    -------
+    dict or None
+        The job recorded; None when it could not start.
+    """
     log_dir = f"{wf_dir}/{core.LOG_DIR}"
     log = f"{log_dir}/{name}.log"
     rc, _, err = run(client, f"mkdir -p {shlex.quote(log_dir)}", login=False)
@@ -1807,12 +2311,38 @@ def launch(
     slurm,
     convert_only=False,
 ):
-    """Upload *files* (remote path -> config dict) and start the run.
+    """Upload *files* and start the run.
 
     A single config runs `snakemake`; a multi run (whose files include a
     `multi.yaml`) runs `scripts/run_multi.py`, which segments, relates
-    and bundles. With *convert_only*, only the conversion runs (from the
-    first segmentation's config), as run_multi's first phase would.
+    and bundles.
+
+    Parameters
+    ----------
+    client : paramiko.SSHClient
+        The connection to the cluster.
+    wf_dir : str
+        The workflow folder on the cluster.
+    setup_cmd : str
+        The environment setup line.
+    files : dict
+        The run's config files, `{remote path: config}`.
+    name : str
+        The run's name.
+    mode : str
+        Dry run, or one of the two submit modes.
+    profile : str
+        The Snakemake workflow profile.
+    slurm : dict
+        The controller job's settings.
+    convert_only : bool, optional
+        Only the conversion runs (from the first segmentation's config), as
+        run_multi's first phase would.
+
+    Returns
+    -------
+    dict or None
+        The job started.
     """
     if convert_only:
         name = f"convert_{name.rsplit('_', 1)[-1]}"
@@ -1910,6 +2440,7 @@ _LAUNCH_REQUEST_TTL = 300
 
 
 def _request_launch() -> None:
+    """The Launch button's callback: ask for a launch on the next run."""
     st.session_state["launch_requested"] = time.time()
     # At once, before the page is redrawn (which takes a while).
     st.toast(
@@ -1936,7 +2467,32 @@ def _launch_now(
     convert_only,
 ) -> bool:
     """The Launch button: this run's profile (with the resource changes),
-    then :func:`launch`. Whether the run started."""
+    then :func:`launch`.
+
+    Parameters
+    ----------
+    mode : str
+        Dry run, or one of the two submit modes.
+    overrides : dict
+        The resource changes, `{rule: {key: value}}`.
+    profile : str
+        The workflow profile.
+    profile_text : str
+        Its YAML, for this run's own copy.
+    run_setup : str
+        The environment setup line.
+    files : dict
+        The run's config files, `{remote path: config}`.
+    slurm : dict
+        The controller job's settings.
+    convert_only : bool
+        Only the conversion.
+
+    Returns
+    -------
+    bool
+        Whether the run started.
+    """
     run_profile = profile
     if overrides and mode != core.DRY_RUN:
         st.write(":material/tune: writing this run's profile…")
@@ -1971,6 +2527,28 @@ def submit_timing(client, *, wf_dir, setup, files, name, segment, account):
     It runs where the segment jobs run -- their partition, QOS and GPU --
     so the seconds per tile are the ones the run will see, and draws one
     segmented tile per segmentation, to judge the settings by.
+
+    Parameters
+    ----------
+    client : paramiko.SSHClient
+        The connection to the cluster.
+    wf_dir : str
+        The workflow folder on the cluster.
+    setup : str
+        The environment setup line (module load, pixi shell-hook ...).
+    files : dict
+        The run's config files, `{remote path: config}`.
+    name : str
+        The run's name.
+    segment : dict
+        The segment rule's resources.
+    account : str
+        The SLURM account; empty for the default.
+
+    Returns
+    -------
+    dict or None
+        The job started.
     """
     upload(client, files)
     first = next(c for p, c in files.items() if not p.endswith("multi.yaml"))
@@ -2012,8 +2590,16 @@ def submit_timing(client, *, wf_dir, setup, files, name, segment, account):
 def cluster_info(refresh: bool = False) -> dict | None:
     """Partitions, QOS and accounts (sinfo, sacctmgr), once per connection.
 
-    None when the cluster answers neither (not SLURM, or no such commands
-    on the login shell's PATH): the fields are then typed in.
+    Parameters
+    ----------
+    refresh : bool, optional
+        Ask the cluster again.
+
+    Returns
+    -------
+    dict or None
+        None when the cluster answers neither (not SLURM, or no such
+        commands on the login shell's PATH): the fields are then typed in.
     """
     if refresh or "cluster_info" not in st.session_state:
         _, out, _ = run(get_client(), core.CLUSTER_INFO_COMMAND, timeout=60)
@@ -2026,11 +2612,23 @@ def cluster_info(refresh: bool = False) -> dict | None:
 
 
 def controller_qos_default(preset: dict, time: str) -> str:
-    """The controller's QOS: the preset's, else one that allows *time*
-    when the default QOS may not ("" for the default).
+    """The controller's QOS: the preset's, else one that allows *time* when
+    the default QOS may not.
 
-    Follows *time* and the partition while the QOS shown is still the
-    one chosen here, not one the user picked.
+    Follows *time* and the partition while the QOS shown is still the one
+    chosen here, not one the user picked.
+
+    Parameters
+    ----------
+    preset : dict
+        The cluster preset.
+    time : str
+        The controller's time limit.
+
+    Returns
+    -------
+    str
+        "" for the default.
     """
     if preset.get("controller_qos"):
         return preset["controller_qos"]
@@ -2055,6 +2653,13 @@ def controller_qos_default(preset: dict, time: str) -> str:
 
 
 def _set_qos(qos: str) -> None:
+    """Put *qos* in the controller's QOS field.
+
+    Parameters
+    ----------
+    qos : str
+        The QOS.
+    """
     st.session_state["ctrl_qos"] = qos
 
 
@@ -2070,6 +2675,25 @@ def slurm_choice(
 
     Blank means SLURM's default (the default partition, the account's
     default QOS).
+
+    Parameters
+    ----------
+    container : streamlit container
+        Where to draw it.
+    label : str
+        The field's label.
+    key : str
+        Its widget key.
+    options : list of str
+        What the cluster offers; with none, a text field.
+    default : str, optional
+        The value shown first.
+    help : str, optional
+        Its explanation.
+
+    Returns
+    -------
+    str
     """
     if not options:
         return container.text_input(
@@ -2093,10 +2717,22 @@ def slurm_choice(
 
 
 def resources_editor(resources: dict, info: dict | None = None) -> dict:
-    """The profile's resources per rule, editable; returns the overrides.
+    """The profile's resources per rule, editable.
 
     With the cluster's *info*, partition, QOS and GPU are picked from what
     it has and the account may use.
+
+    Parameters
+    ----------
+    resources : dict
+        Each rule's resources, from the profile.
+    info : dict, optional
+        What :func:`launcher_core.parse_cluster_info` read.
+
+    Returns
+    -------
+    dict
+        The overrides, `{rule: {key: value}}`.
     """
     rules = [
         r for r in ("segment", "convert", "prepare", "merge") if r in resources
@@ -2119,6 +2755,21 @@ def resources_editor(resources: dict, info: dict | None = None) -> dict:
     if info:
 
         def column(name, values, help):
+            """A dropdown column of *values* (and any value already in it).
+
+            Parameters
+            ----------
+            name : str
+                The column.
+            values : iterable of str
+                What the cluster offers.
+            help : str
+                Its explanation.
+
+            Returns
+            -------
+            streamlit column config
+            """
             current = {r[name] for r in rows if r[name]}
             return st.column_config.SelectboxColumn(
                 name, options=sorted(set(values) | current), help=help
@@ -2209,9 +2860,23 @@ def job_actions(
 ) -> None:
     """The job's state, and Stop / Cancel all / Unlock / Relaunch.
 
-    *run_jobs*: this run's SLURM jobs still in the queue (its controller
-    included), pre-selected in "Cancel jobs"; *queue*: all your patchworks
-    jobs in the queue, any of which may be added.
+    Parameters
+    ----------
+    job : dict
+        The launched run, as the registry records it.
+    state : str
+        RUNNING, PENDING, DONE or UNKNOWN.
+    alive : bool
+        Whether it still runs.
+    setup : str
+        The environment setup line (module load, pixi shell-hook ...).
+    auto : bool, optional
+        The page refreshes itself.
+    run_jobs : list of str, optional
+        This run's SLURM jobs still in the queue (its controller included),
+        pre-selected in "Cancel jobs".
+    queue : list of dict, optional
+        All your patchworks jobs in the queue, any of which may be added.
     """
     ident = job.get("slurm_job") or job.get("pid")
     kind = "SLURM job" if job.get("slurm_job") else "PID"
@@ -2361,8 +3026,22 @@ def job_actions(
 
 
 def clear_jobs(container, jobs: list[dict], text: str, picked: dict) -> None:
-    """Shorten the job list (and Configure's past launches): this job, or
-    every job that has ended. Logs and results stay on the cluster."""
+    """Shorten the job list (and Configure's past launches).
+
+    This job, or every job that has ended. Logs and results stay on the
+    cluster.
+
+    Parameters
+    ----------
+    container : streamlit container
+        Where to draw the button.
+    jobs : list of dict
+        The jobs listed.
+    text : str
+        The registry file's text.
+    picked : dict
+        The job shown.
+    """
     path = f"{wf_dir}/{core.REGISTRY}"
     with container.popover("Clear", icon=":material/delete_sweep:"):
         st.caption(
@@ -2394,7 +3073,13 @@ def clear_jobs(container, jobs: list[dict], text: str, picked: dict) -> None:
 
 
 def queue_view(rows: list[dict]) -> None:
-    """Your patchworks jobs in the SLURM queue, and why each waits."""
+    """Your patchworks jobs in the SLURM queue, and why each waits.
+
+    Parameters
+    ----------
+    rows : list of dict
+        From :func:`launcher_core.parse_queue`.
+    """
     if not rows:
         return
     running = sum(r["state"] == "RUNNING" for r in rows)
@@ -2418,7 +3103,13 @@ TAIL_LINES = 300
 
 
 def _fetch_tails(paths) -> None:
-    """The last lines of each log in *paths*, in one command."""
+    """The last lines of each log in *paths*, in one command.
+
+    Parameters
+    ----------
+    paths : iterable of str
+        Remote logs; those already fetched are skipped.
+    """
     paths = [p for p in dict.fromkeys(paths) if p and p not in _TAILS]
     if not paths:
         return
@@ -2433,14 +3124,41 @@ def _fetch_tails(paths) -> None:
 
 
 def _tail(path: str, lines: int = 60) -> str:
+    """The last *lines* of a remote log (fetched once per page).
+
+    Parameters
+    ----------
+    path : str
+        The log.
+    lines : int, optional
+        How many lines (default 60).
+
+    Returns
+    -------
+    str
+    """
     if path not in _TAILS:
         _fetch_tails([path])
     return "\n".join(_TAILS[path].splitlines()[-lines:])
 
 
 def fetch_job(job: dict, setup: str) -> dict:
-    """Everything the Jobs tab shows of *job*, fetched first and in
-    parallel, so the page is redrawn at once rather than piece by piece."""
+    """Everything the Jobs tab shows of *job*, fetched first and in parallel.
+
+    So the page is redrawn at once rather than piece by piece.
+
+    Parameters
+    ----------
+    job : dict
+        The launched run, as the registry records it.
+    setup : str
+        The environment setup line (module load, pixi shell-hook ...).
+
+    Returns
+    -------
+    dict
+        The commands' results, by what they are.
+    """
     _TAILS.clear()
     calls = {
         # squeue may live behind `module load`, so SLURM jobs are checked
@@ -2534,7 +3252,18 @@ def fetch_job(job: dict, setup: str) -> dict:
 
 
 def step_progress(step: dict | None) -> tuple[float, str]:
-    """How far a running step got, from the progress lines in its log."""
+    """How far a running step got, from the progress lines in its log.
+
+    Parameters
+    ----------
+    step : dict or None
+        The step.
+
+    Returns
+    -------
+    tuple
+        `(fraction, text)`.
+    """
     if not step or not step.get("log"):
         return 0.0, "waiting to start"
     progress = core.last_progress(_tail(step["log"], TAIL_LINES))
@@ -2553,8 +3282,24 @@ def step_progress(step: dict | None) -> tuple[float, str]:
 
 
 def segmentation_progress(seg: dict, steps: list[dict]) -> tuple[float, str]:
-    """One segmentation's bar: tiles segmented (any method: segment_tile.py
-    checkpoints each), then the merge's own progress lines."""
+    """One segmentation's bar.
+
+    Tiles segmented (any method: segment_tile.py checkpoints each), then
+    the merge's own progress lines.
+
+    Parameters
+    ----------
+    seg : dict
+        Its status, from status.py.
+    steps : list of dict
+        The run's steps, from its controller's log
+        (:func:`launcher_core.parse_steps`).
+
+    Returns
+    -------
+    tuple
+        `(fraction, text)`.
+    """
     total, done = seg["batches"], seg["batches_done"]
     if seg["stage"] == "done":
         return 1.0, "merged"
@@ -2633,11 +3378,33 @@ def segmentation_progress(seg: dict, steps: list[dict]) -> tuple[float, str]:
 
 
 def _gb(mem_mb) -> str:
+    """Megabytes as GB, for a table.
+
+    Parameters
+    ----------
+    mem_mb : int or None
+        Megabytes.
+
+    Returns
+    -------
+    str
+        `"?"` when unknown.
+    """
     return f"{mem_mb / 1000:g} GB" if mem_mb else "?"
 
 
 def earlier_attempts(step: dict) -> list[str]:
-    """Each earlier attempt of *step*: how it ended, with its memory."""
+    """Each earlier attempt of *step*: how it ended, with its memory.
+
+    Parameters
+    ----------
+    step : dict
+        The step.
+
+    Returns
+    -------
+    list of str
+    """
     return [
         f"{e['attempt']}: "
         + (
@@ -2654,8 +3421,19 @@ def earlier_attempts(step: dict) -> list[str]:
 
 
 def memory_advice(steps: list[dict]) -> list[str]:
-    """Per step that ran out of memory: how much ran out, what its retry
-    got, and the first-try memory to give it next time."""
+    """Per step that ran out of memory: how much ran out, what its retry got,
+    and the first-try memory to give it next time.
+
+    Parameters
+    ----------
+    steps : list of dict
+        The run's steps, from its controller's log
+        (:func:`launcher_core.parse_steps`).
+
+    Returns
+    -------
+    list of str
+    """
     out = []
     for rule in sorted({s["rule"] for s in steps}):
         hit = [
@@ -2695,8 +3473,16 @@ def memory_advice(steps: list[dict]) -> list[str]:
 
 
 def steps_view(steps: list[dict], queue: list[dict]) -> None:
-    """The workflow's steps (from the controller's log): where each runs,
-    and the log of each one not done."""
+    """The workflow's steps: where each runs, and the log of each one not
+    done.
+
+    Parameters
+    ----------
+    steps : list of dict
+        From the controller's log.
+    queue : list of dict
+        Your jobs in the queue, for their states.
+    """
     if not steps:
         return
     states = {r["job"]: r["state"].lower() for r in queue}
@@ -2747,8 +3533,24 @@ def steps_view(steps: list[dict], queue: list[dict]) -> None:
 
 
 def _relation_progress(rel: dict, steps: list[dict]) -> dict | None:
-    """The progress of one relation, from its relate job's log: each logs a
-    line per relation (`nuclei -> cells: 4,839/12,000 (40%) ...`)."""
+    """The progress of one relation, from its relate job's log.
+
+    Each logs a line per relation (`nuclei -> cells: 4,839/12,000 (40%)
+    ...`).
+
+    Parameters
+    ----------
+    rel : dict
+        The relation, `{a, b, ...}`.
+    steps : list of dict
+        The run's steps, from its controller's log
+        (:func:`launcher_core.parse_steps`).
+
+    Returns
+    -------
+    dict or None
+        As :func:`launcher_core.last_progress`.
+    """
     parent = re.sub(r"[^A-Za-z0-9_-]", "-", rel["b"])
     for step in reversed(steps):
         if (
@@ -2763,7 +3565,23 @@ def _relation_progress(rel: dict, steps: list[dict]) -> dict | None:
 
 
 def job_progress(job: dict, steps: list[dict], result) -> dict | None:
-    """How far the run got (scripts/status.py); returns that status."""
+    """How far the run got (scripts/status.py), drawn as bars.
+
+    Parameters
+    ----------
+    job : dict
+        The launched run, as the registry records it.
+    steps : list of dict
+        The run's steps, from its controller's log
+        (:func:`launcher_core.parse_steps`).
+    result : tuple
+        status.py's `(exit code, stdout, stderr)`.
+
+    Returns
+    -------
+    dict or None
+        The status; None when it could not be read.
+    """
     rc, out, err = result
     status = core.parse_json_output(out)
     if not status or "segmentations" not in status:
@@ -2829,7 +3647,13 @@ def job_progress(job: dict, steps: list[dict], result) -> dict | None:
 
 
 def job_failures(status: dict) -> None:
-    """The steps that failed, what to do, and their logs."""
+    """The steps that failed, what to do, and their logs.
+
+    Parameters
+    ----------
+    status : dict
+        The run's status, from status.py.
+    """
     failed = list(status.get("failures") or []) + [
         {**f, "step": f"{seg['label_name']}: {f['step']}"}
         for seg in status["segmentations"]
@@ -2892,9 +3716,25 @@ def _tunnels() -> dict:
 
 
 def _open_tunnel(client, host: str, port: int):
-    """Forward a local port (the same, if free) to *host*:*port* as the
-    cluster sees it, over the launcher's own SSH connection -- the
-    `ssh -L` the user would otherwise run."""
+    """Forward a local port to *host*:*port* as the cluster sees it.
+
+    The same port, if free; over the launcher's own SSH connection -- the
+    `ssh -L` the user would otherwise run.
+
+    Parameters
+    ----------
+    client : paramiko.SSHClient
+        The connection to the cluster.
+    host : str
+        The node the server runs on.
+    port : int
+        Its port.
+
+    Returns
+    -------
+    socketserver.ThreadingTCPServer
+        Serving in a thread; its `server_address` holds the local port.
+    """
     import select
     import socketserver
     import threading
@@ -2903,6 +3743,10 @@ def _open_tunnel(client, host: str, port: int):
 
     class Forward(socketserver.BaseRequestHandler):
         def handle(self):
+            """Pump one browser connection through an SSH channel until either
+            side
+            closes.
+            """
             try:
                 chan = transport.open_channel(
                     "direct-tcpip", (host, port), self.request.getpeername()
@@ -2947,6 +3791,13 @@ def _open_tunnel(client, host: str, port: int):
 
 
 def _stop_neuroglancer(ng: dict) -> None:
+    """Close the tunnel and stop the server.
+
+    Parameters
+    ----------
+    ng : dict
+        The running server: its `log`, and `job` or `pid`.
+    """
     tunnel = _tunnels().pop(ng["log"], None)
     if tunnel is not None:
         tunnel.shutdown()
@@ -2961,7 +3812,13 @@ def _stop_neuroglancer(ng: dict) -> None:
 
 def neuroglancer_view(store: str) -> None:
     """Start `patchworks serve` on the cluster, tunnel it here, and link
-    Neuroglancer to it: the store viewed in the browser, nothing copied."""
+    Neuroglancer to it: the store viewed in the browser, nothing copied.
+
+    Parameters
+    ----------
+    store : str
+        The `image.zarr` on the cluster.
+    """
     st.markdown("**In Neuroglancer** (in the browser, nothing copied)")
     ng = st.session_state.get("neuroglancer")
     if ng is None or ng.get("store") != store:
@@ -3037,7 +3894,13 @@ def neuroglancer_view(store: str) -> None:
 
 
 def job_results(status: dict) -> None:
-    """What the run made: objects, seams, relations, how to look at it."""
+    """What the run made: objects, seams, relations, how to look at it.
+
+    Parameters
+    ----------
+    status : dict
+        The run's status, from status.py.
+    """
     done = [s for s in status["segmentations"] if s["stage"] == "done"]
     if not done and not status.get("relations"):
         return
@@ -3092,13 +3955,30 @@ MAX_DOWNLOAD = 200 * 1024**2
 
 
 def _fetch(path: str, key: str) -> None:
+    """Fetch a remote file into the session (a button's callback).
+
+    Parameters
+    ----------
+    path : str
+        The remote file.
+    key : str
+        The session key to keep it under.
+    """
     sftp = get_sftp()
     with sftp.open(path) as fh:
         st.session_state[key] = fh.read()
 
 
 def download_button(path: str, label: str) -> None:
-    """Fetch a result file from the cluster on demand, then download it."""
+    """Fetch a result file from the cluster on demand, then download it.
+
+    Parameters
+    ----------
+    path : str
+        The remote file.
+    label : str
+        The button's label.
+    """
     key = f"dl_{path}"
     data = st.session_state.get(key)
     if data is None:
@@ -3837,6 +4717,13 @@ with tab_jobs:
             else None
         )
         def monitor(job=jobs[pick]):
+            """The picked job, redrawn every 15 s while it runs.
+
+            Parameters
+            ----------
+            job : dict
+                The launched run, as the registry records it.
+            """
             setup = job.get("setup", setup_cmd)
             try:
                 data = fetch_job(job, setup)

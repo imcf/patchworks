@@ -46,14 +46,47 @@ from pathlib import Path
 
 
 def _files(path):
+    """How many files are under *path*.
+
+    Parameters
+    ----------
+    path : str or Path
+        A directory.
+
+    Returns
+    -------
+    int
+    """
     return sum(1 for p in Path(path).rglob("*") if p.is_file())
 
 
 def _bytes(path):
+    """How many bytes the files under *path* hold.
+
+    Parameters
+    ----------
+    path : str or Path
+        A directory.
+
+    Returns
+    -------
+    int
+    """
     return sum(p.stat().st_size for p in Path(path).rglob("*") if p.is_file())
 
 
 def _human(n):
+    """Bytes as a short human-readable string.
+
+    Parameters
+    ----------
+    n : float
+        Bytes.
+
+    Returns
+    -------
+    str
+    """
     for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
         if n < 1024:
             return f"{n:.1f} {unit}"
@@ -62,7 +95,17 @@ def _human(n):
 
 
 def _levels(group_path):
-    """Numeric pyramid levels present in a group, in order."""
+    """Numeric pyramid levels present in a group, in order.
+
+    Parameters
+    ----------
+    group_path : str or Path
+        An image or label group directory.
+
+    Returns
+    -------
+    list of str
+    """
     return sorted(
         (p.name for p in Path(group_path).iterdir() if p.name.isdigit()),
         key=int,
@@ -70,6 +113,7 @@ def _levels(group_path):
 
 
 def main():
+    """Reshard an existing store's levels in place (see `--help`)."""
     ap = argparse.ArgumentParser()
     ap.add_argument("--store", required=True, help="path to image.zarr")
     ap.add_argument(

@@ -69,7 +69,18 @@ DEFAULTS = {
 
 
 def with_defaults(cfg: dict) -> dict:
-    """*cfg* with every setting it leaves out taken from :data:`DEFAULTS`."""
+    """*cfg* with every setting it leaves out taken from :data:`DEFAULTS`.
+
+    Parameters
+    ----------
+    cfg : dict
+        A segmentation config, as loaded.
+
+    Returns
+    -------
+    dict
+        A new dict; the defaults are deep-copied.
+    """
     import copy
 
     return {**copy.deepcopy(DEFAULTS), **cfg}
@@ -79,13 +90,26 @@ class _Tee:
     """Write to several streams at once (e.g. the SLURM log and a file)."""
 
     def __init__(self, *streams):
+        """Parameters
+        ----------
+        *streams
+            The streams to write to, each with `write` and `flush`.
+        """
         self._streams = streams
 
     def write(self, data):
+        """Write *data* to every stream.
+
+        Parameters
+        ----------
+        data : str
+            The text.
+        """
         for stream in self._streams:
             stream.write(data)
 
     def flush(self):
+        """Flush every stream."""
         for stream in self._streams:
             stream.flush()
 
@@ -154,10 +178,20 @@ def pin_slurm_gpus(environ=None, visible=None) -> str | None:
     (SLURM_STEP_GPUS / SLURM_JOB_GPUS, physical indices): restrict CUDA to
     them -- but only when this process can see more GPUs than it was given.
     Otherwise the node isolates GPUs already, its own showing as index 0,
-    and pinning a physical index would hide it.
+    and pinning a physical index would hide it. Must run before anything
+    initialises CUDA (it reads the variable once).
 
-    Returns what was set, or None. Must run before anything initialises
-    CUDA (it reads the variable once).
+    Parameters
+    ----------
+    environ : mapping, optional
+        The environment to read and set (default `os.environ`).
+    visible : int, optional
+        How many GPUs this process sees (default: asked of nvidia-smi).
+
+    Returns
+    -------
+    str or None
+        What CUDA_VISIBLE_DEVICES was set to, or None.
     """
     environ = os.environ if environ is None else environ
     if environ.get("CUDA_VISIBLE_DEVICES", "").strip():
@@ -252,17 +286,40 @@ def open_image(work_dir, channel, level, nuclei_channel=None, seed_labels=None):
 
 
 def tile_channels(cfg) -> int:
-    """How many channels a segment tile carries: 2 with `nuclei_channel`
-    or `seed_labels` (stacked on a leading axis), else 1. The tile sizer
-    charges per channel."""
+    """How many channels a segment tile carries.
+
+    2 with `nuclei_channel` or `seed_labels` (stacked on a leading axis),
+    else 1. The tile sizer charges per channel.
+
+    Parameters
+    ----------
+    cfg : dict
+        The segmentation's config, defaults applied.
+
+    Returns
+    -------
+    int
+    """
     two = cfg.get("nuclei_channel") is not None or bool(cfg.get("seed_labels"))
     return 2 if two else 1
 
 
 def sized_for_fallback_gpu(cfg) -> bool:
-    """Whether `tile_shape: "auto"` falls back to an 8 GB GPU: Cellpose on
-    the GPU without `gpu_memory_gb` (prepare, on a CPU node, cannot ask
-    the segment GPU). Other methods are sized to the host's memory."""
+    """Whether `tile_shape: "auto"` falls back to an 8 GB GPU.
+
+    Cellpose on the GPU without `gpu_memory_gb` (prepare, on a CPU node,
+    cannot ask the segment GPU). Other methods are sized to the host's
+    memory.
+
+    Parameters
+    ----------
+    cfg : dict
+        The segmentation's config, defaults applied.
+
+    Returns
+    -------
+    bool
+    """
     return (
         cfg.get("tile_shape", "auto") == "auto"
         and not cfg.get("gpu_memory_gb")
@@ -277,6 +334,20 @@ def resolve_tile_shape(cfg, image, work_dir) -> tuple[int, ...]:
     `"auto"` sizes the tile to the segment GPU's memory (`gpu_memory_gb`,
     from the config: prepare runs on a CPU node), charging per channel, and
     for Cellpose 3-D for the tile it resizes by the anisotropy.
+
+    Parameters
+    ----------
+    cfg : dict
+        The segmentation's config, defaults applied.
+    image : dask.array.Array
+        The image as it will be tiled (its shape and dtype).
+    work_dir : str or Path
+        The run's work_dir: its `image.zarr`'s calibration gives Cellpose's
+        anisotropy.
+
+    Returns
+    -------
+    tuple of int
     """
     from patchworks import auto_tile_shape, auto_tile_shape_cellpose
 
@@ -343,6 +414,16 @@ def object_extents(labels):
 
     Objects touching the array's edge are left out: cut by it, their size
     is not known.
+
+    Parameters
+    ----------
+    labels : array-like
+        A label image (one tile).
+
+    Returns
+    -------
+    np.ndarray
+        int64.
     """
     import numpy as np
     from scipy import ndimage
@@ -360,9 +441,20 @@ def object_extents(labels):
 
 
 def overlap_from_extents(extents) -> list[int]:
-    """The overlap for objects of these extents: per axis, the larger ones
-    (90th percentile) and a 10% margin -- so an object across a seam is
-    seen whole by one of the two tiles."""
+    """The overlap for objects of these extents.
+
+    Per axis, the larger ones (90th percentile) and a 10% margin -- so an
+    object across a seam is seen whole by one of the two tiles.
+
+    Parameters
+    ----------
+    extents : array-like
+        `(n, ndim)` object extents, from :func:`object_extents`.
+
+    Returns
+    -------
+    list of int
+    """
     import numpy as np
 
     extents = np.asarray(extents)
@@ -373,18 +465,28 @@ def overlap_from_extents(extents) -> list[int]:
 
 
 def resolve_overlap(cfg, ndim: int, tile_shape=None) -> tuple:
-    """`overlap` as given, or for `"auto"` (or none) from the objects:
+    """`overlap` as given, or for `"auto"` (or none) from the objects.
 
     1. this segmentation's object table, from an earlier run (its objects);
     2. the objects of the tiles tried with `check --sample` (saved in
        `<work_dir>/<label_name>/object_extents.json`);
     3. else :data:`OVERLAP_FALLBACK` on every axis.
 
-    With *tile_shape*, an automatic overlap is capped at half the tile per
-    axis (a halo as wide as the tile is refused): the tiles are then
-    smaller than the objects, which the source says.
+    Parameters
+    ----------
+    cfg : dict
+        The segmentation's config, defaults applied.
+    ndim : int
+        The image's spatial axes.
+    tile_shape : tuple of int, optional
+        When given, an automatic overlap is capped at half the tile per axis
+        (a halo as wide as the tile is refused): the tiles are then smaller
+        than the objects, which the source says.
 
-    Returns `(overlap, where it came from)`.
+    Returns
+    -------
+    tuple
+        `(overlap, where it came from)`.
     """
     import numpy as np
 
@@ -408,6 +510,20 @@ def resolve_overlap(cfg, ndim: int, tile_shape=None) -> tuple:
 
 
 def _auto_overlap(cfg, ndim: int) -> tuple:
+    """The automatic overlap, from the objects (see :func:`resolve_overlap`).
+
+    Parameters
+    ----------
+    cfg : dict
+        The segmentation's config, defaults applied.
+    ndim : int
+        The image's spatial axes.
+
+    Returns
+    -------
+    tuple
+        `(overlap, where it came from)`.
+    """
     import numpy as np
 
     work = Path(cfg["work_dir"])
@@ -458,7 +574,18 @@ def _auto_overlap(cfg, ndim: int) -> tuple:
 
 
 def _anisotropy(cfg) -> float | None:
-    """z step over pixel size, from the converted image's calibration."""
+    """z step over pixel size, from the converted image's calibration.
+
+    Parameters
+    ----------
+    cfg : dict
+        The segmentation's config, defaults applied.
+
+    Returns
+    -------
+    float or None
+        None when there is no image yet, or no calibration.
+    """
     try:
         from patchworks.plugins.cellpose import cellpose_anisotropy
         from patchworks.plugins.ome_zarr import read_pixel_size
@@ -522,7 +649,20 @@ def _device() -> str:
 
 
 def check_overlap(overlap, tile_shape) -> None:
-    """Refuse a halo as wide as the tile: it re-segments the neighbours."""
+    """Refuse a halo as wide as the tile: it re-segments the neighbours.
+
+    Parameters
+    ----------
+    overlap : sequence of int
+        The halo per axis.
+    tile_shape : sequence of int
+        The tile shape.
+
+    Raises
+    ------
+    ValueError
+        When an axis's overlap is at least its tile extent.
+    """
     for axis, (ov, extent) in enumerate(zip(overlap, tile_shape)):
         if ov >= extent:
             raise ValueError(
@@ -537,11 +677,27 @@ def plan_run(cfg, sample: int = 0, preview: str | None = None) -> dict:
 
     The tiles prepare would make (the same sizing), how many hold signal
     (when the occupancy map is built: `convert` builds it), the GPU jobs,
-    and the size of the result. With *sample*, the method runs on that many
-    real tiles (the first only loads the model) for a time per tile: run it
-    where the jobs would run, on a GPU for a GPU method. With *preview* (a
-    PNG path) as well, the last of them is drawn there: its middle plane,
-    and the objects found on it outlined.
+    and the size of the result.
+
+    Parameters
+    ----------
+    cfg : dict
+        The segmentation's config, defaults applied.
+    sample : int, optional
+        Run the method on this many real tiles (the first only loads the
+        model) for a time per tile: run it where the jobs would run, on a
+        GPU for a GPU method. 0 (default) runs nothing.
+    preview : str, optional
+        With *sample*, a PNG path: the last tile tried is drawn there, its
+        middle plane and the objects found on it outlined.
+
+    Returns
+    -------
+    dict
+        `shape`, `tile_shape`, `overlap` and its source, `grid`,
+        `tiles`, `tiles_with_signal`, `gpu_jobs`, `tiles_per_job`,
+        the sizes, and with *sample* the times, `gpu_hours` and the
+        objects' extents.
     """
     import time
 
@@ -634,6 +790,13 @@ def plan_run(cfg, sample: int = 0, preview: str | None = None) -> dict:
     label = cfg.get("label_name", "labels")
 
     def say(text):  # the try's progress, to its log (stdout is the report)
+        """Log the try's progress (stdout is the report).
+
+        Parameters
+        ----------
+        text : str
+            The line.
+        """
         print(f"[check] {label}: {text}", file=sys.stderr, flush=True)
 
     say(
@@ -743,10 +906,23 @@ def plan_run(cfg, sample: int = 0, preview: str | None = None) -> dict:
 def write_preview(image, labels, path) -> int | None:
     """A PNG of one tile: the image, and beside it the objects outlined.
 
-    A 3-D tile shows the plane with the most objects (returned; None for
-    2-D). The image
-    is stretched between its 1st and 99th percentiles; each object gets a
-    colour of its own.
+    The image is stretched between its 1st and 99th percentiles; each
+    object gets a colour of its own.
+
+    Parameters
+    ----------
+    image : np.ndarray
+        The tile, 2-D or 3-D.
+    labels : np.ndarray
+        Its labels.
+    path : str or Path
+        The PNG to write.
+
+    Returns
+    -------
+    int or None
+        For a 3-D tile, the plane shown (the one with the most objects);
+        None for 2-D.
     """
     from PIL import Image
     from skimage.segmentation import find_boundaries
@@ -798,12 +974,22 @@ def write_preview(image, labels, path) -> int | None:
 
 
 def fetch_models(cfg) -> str:
-    """Download the model a config segments with, now: on a node with
-    internet access (the login node), not the offline GPU nodes.
+    """Download the model a config segments with, now.
 
-    Cellpose's weights go to `~/.cellpose`, PlantSeg's zoo U-Nets to
-    `$PLANTSEG_HOME`; both on the shared home, where the segment jobs
-    read them. Returns what was done, for the log.
+    On a node with internet access (the login node), not the offline GPU
+    nodes. Cellpose's weights go to `~/.cellpose`, PlantSeg's zoo U-Nets
+    to `$PLANTSEG_HOME`; both on the shared home, where the segment jobs
+    read them.
+
+    Parameters
+    ----------
+    cfg : dict
+        The segmentation's config, defaults applied.
+
+    Returns
+    -------
+    str
+        What was done, for the log.
     """
     method = cfg.get("method", "cellpose")
     if method == "cellpose":
@@ -834,6 +1020,18 @@ def check_seed_labels(work_dir, cfg) -> None:
 
     Run from `prepare`: under `run_multi` the config producing them has
     finished by then; run alone, its labels must already be in the store.
+
+    Parameters
+    ----------
+    work_dir : str or Path
+        The run's work_dir.
+    cfg : dict
+        The segmentation's config, defaults applied.
+
+    Raises
+    ------
+    ValueError
+        When the seed labels are missing or not finished.
     """
     name = cfg.get("seed_labels")
     if not name:
@@ -883,8 +1081,22 @@ def stage_path(work_dir, label_name):
 
 
 def parts_path(work_dir, label_name):
-    """Where segment jobs keep each tile's object sums for the merge, which
-    builds the object table from them instead of reading the labels again."""
+    """Where segment jobs keep each tile's object sums for the merge.
+
+    The merge builds the object table from them instead of reading the
+    labels again.
+
+    Parameters
+    ----------
+    work_dir : str or Path
+        The run's work_dir.
+    label_name : str
+        The segmentation's label name.
+
+    Returns
+    -------
+    str
+    """
     return str(Path(work_dir) / label_name / "parts")
 
 
@@ -893,6 +1105,17 @@ def halo_path(work_dir, label_name):
 
     Beside the label group, never inside it: the label group is what gets
     exported, and these are scratch for the merge.
+
+    Parameters
+    ----------
+    work_dir : str or Path
+        The run's work_dir.
+    label_name : str
+        The segmentation's label name.
+
+    Returns
+    -------
+    str
     """
     return str(Path(work_dir) / label_name / "halo")
 
@@ -904,6 +1127,17 @@ def segment_progress_path(target_path, batch):
     recreates the target (stage store or label group) from scratch, which
     removes the checkpoint too. One kept anywhere else could outlive a wiped
     store and have a retry skip tiles whose data no longer exists.
+
+    Parameters
+    ----------
+    target_path : str or Path
+        The stage store or label group the batch writes into.
+    batch : int
+        The batch.
+
+    Returns
+    -------
+    Path
     """
     return Path(target_path) / f".patchworks_segment_{int(batch)}.json"
 
@@ -911,8 +1145,20 @@ def segment_progress_path(target_path, batch):
 def load_segment_progress(path, indices, tile_shape):
     """Tile label counts already staged by an earlier attempt of this batch.
 
-    Returns an empty dict unless the checkpoint describes this exact batch
-    (same tiles, same tile shape): anything else is stale.
+    Parameters
+    ----------
+    path : str or Path
+        The checkpoint (:func:`segment_progress_path`).
+    indices : sequence of int
+        The batch's tiles.
+    tile_shape : sequence of int
+        The tile shape.
+
+    Returns
+    -------
+    dict of int to int
+        Empty unless the checkpoint describes this exact batch (same tiles,
+        same tile shape): anything else is stale.
     """
     try:
         saved = json.loads(Path(path).read_text())
@@ -926,7 +1172,19 @@ def load_segment_progress(path, indices, tile_shape):
 
 
 def save_segment_progress(path, indices, tile_shape, counts):
-    """Atomically record the tiles finished so far (write, then rename)."""
+    """Atomically record the tiles finished so far (write, then rename).
+
+    Parameters
+    ----------
+    path : str or Path
+        The checkpoint (:func:`segment_progress_path`).
+    indices : sequence of int
+        The batch's tiles.
+    tile_shape : sequence of int
+        The tile shape.
+    counts : dict of int to int
+        The finished tiles' label counts.
+    """
     path = Path(path)
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text(
@@ -959,8 +1217,20 @@ def load_tiles_json(path):
 
 def merge_connectivity(cfg) -> int:
     """The neighbourhood a config labels with, so the merge joins tiles the
-    same way: `custom: kwargs: connectivity` (the DoG plugin), else the
-    top-level `connectivity` (the threshold method), else 1 (faces)."""
+    same way.
+
+    `custom: kwargs: connectivity` (the DoG plugin), else the top-level
+    `connectivity` (the threshold method), else 1 (faces).
+
+    Parameters
+    ----------
+    cfg : dict
+        The segmentation's config, defaults applied.
+
+    Returns
+    -------
+    int
+    """
     kwargs = (cfg.get("custom") or {}).get("kwargs") or {}
     if cfg.get("method") == "custom" and "connectivity" in kwargs:
         return int(kwargs["connectivity"])
@@ -976,8 +1246,21 @@ def _with_voxel_size(fn, kwargs, cfg):
     declares a `voxel_size` parameter gets `{"z": .., "y": .., "x": ..}`
     from the store's own NGFF calibration, unless the config sets it.
 
-    Returns *kwargs* unchanged when the function does not take it, the config
-    already supplied it, or the store carries no calibration.
+    Parameters
+    ----------
+    fn : callable
+        The custom function (or its `patchworks_kwargs_target`).
+    kwargs : dict
+        The config's `custom.kwargs`.
+    cfg : dict
+        The segmentation's config, defaults applied.
+
+    Returns
+    -------
+    dict
+        *kwargs*, with `voxel_size` added; unchanged when the function does
+        not take it, the config already supplied it, or the store carries no
+        calibration.
     """
     import inspect
 
@@ -1011,8 +1294,20 @@ def _with_voxel_size(fn, kwargs, cfg):
 def _unknown_kwargs(fn, provided, *, skip=()) -> list[str]:
     """Keys in *provided* that *fn* would reject, ignoring *skip*.
 
-    Returns an empty list when the signature can't be introspected (C
-    extensions, `**kwargs`-only wrappers) rather than guessing.
+    Parameters
+    ----------
+    fn : callable
+        The function.
+    provided : iterable of str
+        The keyword arguments a config gives it.
+    skip : iterable of str, optional
+        Keys never reported (filled in elsewhere).
+
+    Returns
+    -------
+    list of str
+        Empty when the signature can't be introspected (C extensions,
+        `**kwargs`-only wrappers) rather than guessing.
     """
     import inspect
 
@@ -1033,6 +1328,11 @@ def validate_config(cfg) -> None:
     to `model.eval()`, so it failed in the first GPU job -- after convert
     and prepare had already run. `gpu_memory_gb: "auto"` was truthy, so
     `"auto" * 1024**3` tried to build a ~4 GB string.
+
+    Parameters
+    ----------
+    cfg : dict
+        The segmentation's config, defaults applied.
 
     Raises
     ------
@@ -1236,6 +1536,16 @@ def _stitch_problems(cfg) -> list[str]:
     stitching joins every pair of labels touching across a seam: measured
     on a 3 x 4 grid of cells cut by six tiles, 12 cells came out as 5. The
     plugin says so with `patchworks_stitch = "iou"` on its function.
+
+    Parameters
+    ----------
+    cfg : dict
+        The segmentation's config, defaults applied.
+
+    Returns
+    -------
+    list of str
+        The problems found.
     """
     if cfg.get("method") != "custom" or cfg.get("stitch", "touch") == "iou":
         return []
@@ -1260,8 +1570,19 @@ def _stitch_problems(cfg) -> list[str]:
 
 
 def _seed_labels_problems(cfg) -> list[str]:
-    """Check `seed_labels`: a label image name, for a method that can
-    grow from it (a custom function taking `seeds`)."""
+    """Check `seed_labels`: a label image name, for a method that can grow
+    from it (a custom function taking `seeds`).
+
+    Parameters
+    ----------
+    cfg : dict
+        The segmentation's config, defaults applied.
+
+    Returns
+    -------
+    list of str
+        The problems found.
+    """
     name = cfg.get("seed_labels")
     if name is None:
         return []
@@ -1309,7 +1630,17 @@ def _seed_labels_problems(cfg) -> list[str]:
 
 
 def has_module(name: str) -> bool:
-    """Whether *name* is importable here, without importing it."""
+    """Whether *name* is importable here, without importing it.
+
+    Parameters
+    ----------
+    name : str
+        A module, e.g. `"cupy"`.
+
+    Returns
+    -------
+    bool
+    """
     import importlib.util
 
     try:
@@ -1323,10 +1654,20 @@ def environment_problems(cfg) -> list[str]:
 
     A custom function lists them in `patchworks_requires`: `{module:
     hint}`, or a function of its kwargs returning one (cupy only with
-    `use_gpu`). `denoise:` needs CAREamics, `dilate_gpu` cupy. Only the import specs are
-    looked up -- nothing is imported, so this is cheap enough for run_multi
-    to check every config before converting, where a missing PlantSeg used
-    to surface as an ImportError in the first GPU job.
+    `use_gpu`). `denoise:` needs CAREamics, `dilate_gpu` cupy. Only the
+    import specs are looked up -- nothing is imported, so this is cheap
+    enough for run_multi to check every config before converting, where a
+    missing PlantSeg used to surface as an ImportError in the first GPU job.
+
+    Parameters
+    ----------
+    cfg : dict
+        The segmentation's config, defaults applied.
+
+    Returns
+    -------
+    list of str
+        One line per missing package, with how to install it.
     """
     import importlib
 
@@ -1380,6 +1721,16 @@ def _denoise_problems(spec) -> list[str]:
     Checked here, on the prepare node, so a typo'd path fails in seconds
     rather than on every GPU job. CAREamics itself is not imported: the
     prepare environment need not have PyTorch.
+
+    Parameters
+    ----------
+    spec : dict
+        The `denoise:` block.
+
+    Returns
+    -------
+    list of str
+        The problems found.
     """
     if not isinstance(spec, dict) or not spec.get("model"):
         return [
@@ -1411,7 +1762,19 @@ def _denoise_problems(spec) -> list[str]:
 
 
 def _cellpose_problems(cp: dict) -> list[str]:
-    """Unknown keys in the `cellpose:` block, checked against model.eval."""
+    """Unknown keys in the `cellpose:` block, checked against model.eval.
+
+    Parameters
+    ----------
+    cp : dict
+        The `cellpose:` block.
+
+    Returns
+    -------
+    list of str
+        The problems found; none when Cellpose or its weights are not here
+        to check against.
+    """
     problems = _cellpose_model_problems(cp)
     known = ("model", "diameter", "do_3D", "gpu")
     extra = {k: v for k, v in cp.items() if k not in known}
@@ -1446,6 +1809,16 @@ def _cellpose_model_problems(cp: dict) -> list[str]:
     (`cyto3`) left in a config against a v4 install therefore segments
     every tile with the wrong model, silently. A path is left alone: that is
     a custom-trained model, which no name list can vouch for.
+
+    Parameters
+    ----------
+    cp : dict
+        The `cellpose:` block.
+
+    Returns
+    -------
+    list of str
+        The problems found.
     """
     name = cp.get("model", "cyto3")
     if not isinstance(name, str) or Path(name).exists():
@@ -1470,7 +1843,18 @@ def _cellpose_model_problems(cp: dict) -> list[str]:
 
 
 def _custom_problems(spec) -> list[str]:
-    """Check a `custom:` spec resolves and its kwargs match the target."""
+    """Check a `custom:` spec resolves and its kwargs match the target.
+
+    Parameters
+    ----------
+    spec : dict
+        The `custom:` block: `module`, `function`, `kwargs`.
+
+    Returns
+    -------
+    list of str
+        The problems found.
+    """
     if not isinstance(spec, dict) or "module" not in spec:
         return ['method: "custom" needs a custom: block with a module']
     import importlib
@@ -1499,6 +1883,15 @@ def uses_image_range(cfg) -> bool:
     neighbouring tiles get different contrast and cells are cut at the
     seams. On by default for `method: "cellpose"`; `normalize: "tile"`
     (or an explicit `cellpose.normalize`) keeps Cellpose's own.
+
+    Parameters
+    ----------
+    cfg : dict
+        The segmentation's config, defaults applied.
+
+    Returns
+    -------
+    bool
     """
     if cfg.get("method", "cellpose") != "cellpose":
         return False
@@ -1523,6 +1916,16 @@ def image_wide_kwargs(cfg, store, regions=None) -> dict:
     tile), PlantSeg's standardization (the tile's mean and std), and the
     scale of the DoG threshold (the channel's intensity range). Each is
     measured on full-resolution crops of the tiles being segmented instead.
+
+    Parameters
+    ----------
+    cfg : dict
+        The segmentation's config, defaults applied.
+    store : str
+        The converted image.
+    regions : sequence of tuple of slice, optional
+        The tiles being segmented, where the crops are taken; None places
+        them at random.
 
     Returns
     -------
@@ -1556,11 +1959,35 @@ def image_wide_kwargs(cfg, store, regions=None) -> dict:
     given = spec.get("kwargs") or {}
 
     def value(name):
+        """A keyword argument's value: the config's, else its default.
+
+        Parameters
+        ----------
+        name : str
+            The keyword argument.
+
+        Returns
+        -------
+        object
+            None when the function has no such parameter.
+        """
         if name in given:
             return given[name]
         return params[name].default if name in params else None
 
     def sigma_px(name):
+        """A sigma keyword argument in pixels (converted from µm when
+        `sigma_units` is `"um"`).
+
+        Parameters
+        ----------
+        name : str
+            The keyword argument, e.g. `"foreground_sigma"`.
+
+        Returns
+        -------
+        list of float or float
+        """
         sigma = np.asarray(value(name) or 0.0, dtype=float)
         if value("sigma_units") == "um":
             from patchworks.plugins.ome_zarr import read_pixel_size
@@ -1682,7 +2109,11 @@ def _build_method_fn(cfg, intensity_range=None):
     Parameters
     ----------
     cfg : dict
-        Snakemake config, see :func:`build_fn`.
+        The segmentation's config, defaults applied.
+    intensity_range : sequence of (float, float), optional
+        The image-wide intensity range per channel, for Cellpose's
+        normalisation (see :func:`uses_image_range`); None leaves Cellpose
+        its own per-tile percentiles.
 
     Returns
     -------
@@ -1720,6 +2151,18 @@ def _build_method_fn(cfg, intensity_range=None):
         conn = merge_connectivity(cfg)
 
         def fn(tile):
+            """Otsu threshold, connected components: `method: "threshold"`.
+
+            Parameters
+            ----------
+            tile : np.ndarray
+                The tile.
+
+            Returns
+            -------
+            np.ndarray
+                int32 labels.
+            """
             from scipy.ndimage import generate_binary_structure, label
             from skimage.filters import threshold_otsu
 

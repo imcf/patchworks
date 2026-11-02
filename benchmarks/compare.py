@@ -16,6 +16,17 @@ from pathlib import Path
 
 
 def main() -> int:
+    """Print a markdown table comparing two benchmark runs, and a GitHub
+    warning for each case slower than `--threshold` times the base.
+
+    Reads its arguments from the command line: the base and head results
+    (JSON files from `bench.py`) and `--threshold` (default 1.25).
+
+    Returns
+    -------
+    int
+        0: a slow case warns, it does not fail.
+    """
     ap = argparse.ArgumentParser()
     ap.add_argument("base")
     ap.add_argument("head")
