@@ -107,6 +107,13 @@ for its id, show only the ones selected. Every URL holds a random token, and
 only the store is served, read-only. Serve the unzipped `image.zarr`, not
 the bundle. No 3-D meshes: objects are shown in cross-section.
 
+Chrome (142 and later) asks whether the Neuroglancer page may reach
+"apps and services on this device": **Allow**, since the tunnel's end is
+on this computer. Refused or dismissed, every chunk fails ("blocked by CORS
+policy: Permission was denied ... `loopback` address space" in the
+console): allow it again under the padlock left of the address, *Site
+settings*, *Local network access*, then reload.
+
 ## Remote stores
 
 Any fsspec URL works where a path does, for reading and for writing labels

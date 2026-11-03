@@ -42,6 +42,10 @@ class _Handler(SimpleHTTPRequestHandler):
     def end_headers(self) -> None:
         """Add the CORS and range headers to every response."""
         self.send_header("Access-Control-Allow-Origin", "*")
+        # A public page (Neuroglancer's) reading from localhost: Chrome asks
+        # the server's leave first (Private Network Access), and since
+        # Chrome 142 the user's too ("Local network access").
+        self.send_header("Access-Control-Allow-Private-Network", "true")
         self.send_header("Access-Control-Allow-Headers", "Range")
         self.send_header(
             "Access-Control-Expose-Headers",
