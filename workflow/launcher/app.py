@@ -3735,17 +3735,38 @@ def _open_tunnel(client, host: str, port: int):
     socketserver.ThreadingTCPServer
         Serving in a thread; its `server_address` holds the local port.
     """
-    import select
     import socketserver
     import threading
 
     transport = client.get_transport()
 
+    def pump(read, write) -> None:
+        """Copy one direction until it ends or either side fails.
+
+        Parameters
+        ----------
+        read : callable
+            `recv` of the side read.
+        write : callable
+            `sendall` of the side written.
+        """
+        try:
+            while True:
+                data = read(1 << 16)
+                if not data:
+                    break
+                write(data)
+        except (OSError, EOFError):
+            pass  # the browser or the server went away: nothing to report
+
     class Forward(socketserver.BaseRequestHandler):
         def handle(self):
-            """Pump one browser connection through an SSH channel until either
-            side
-            closes.
+            """Pump one browser connection through an SSH channel until
+            either side closes.
+
+            One thread per direction, blocking reads: no `select` on
+            paramiko's internal pipes, whose descriptors a closing channel
+            frees under a select still using them.
             """
             try:
                 chan = transport.open_channel(
@@ -3755,26 +3776,21 @@ def _open_tunnel(client, host: str, port: int):
                 return
             if chan is None:
                 return
+            up = threading.Thread(
+                target=pump,
+                args=(self.request.recv, chan.sendall),
+                daemon=True,
+            )
+            up.start()
             try:
-                while True:
-                    ready, _, _ = select.select(
-                        [self.request, chan], [], [], 300
-                    )
-                    if not ready:
-                        break
-                    if self.request in ready:
-                        data = self.request.recv(1 << 16)
-                        if not data:
-                            break
-                        chan.sendall(data)
-                    if chan in ready:
-                        data = chan.recv(1 << 16)
-                        if not data:
-                            break
-                        self.request.sendall(data)
+                pump(chan.recv, self.request.sendall)
             finally:
-                chan.close()
-                self.request.close()
+                for close in (chan.close, self.request.close):
+                    try:
+                        close()
+                    except OSError:
+                        pass
+                up.join(timeout=5)
 
     socketserver.ThreadingTCPServer.allow_reuse_address = True
     for want in (port, 0):
