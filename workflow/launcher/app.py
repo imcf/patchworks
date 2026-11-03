@@ -3881,7 +3881,9 @@ def neuroglancer_view(store: str) -> None:
             get_client(), host, int(info["port"])
         )
     local = tunnel.server_address[1]
-    link = core.neuroglancer_link(info["state"], int(info["port"]), local)
+    link = core.neuroglancer_link(
+        info["state"], int(info["port"]), local, info.get("viewer")
+    )
     c1.link_button(
         "Open Neuroglancer", link, icon=":material/open_in_new:", type="primary"
     )

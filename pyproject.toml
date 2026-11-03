@@ -65,6 +65,10 @@ dog = ["pycudadecon"]
 # on conda-forge only (`plant-seg`; the workflow's `-e plantseg`).
 careamics = ["careamics>=0.3"]
 gpu = ["nvidia-ml-py"]
+# neuroglancer: `patchworks serve` hosts its viewer next to the store, so
+# the browser reads both from one address (a public page may not read
+# localhost in today's browsers).
+neuroglancer = ["neuroglancer"]
 # remote reads/writes s3://, gs:// and https:// stores through fsspec
 # (credentials come from the usual AWS/GCP environment or config files).
 remote = ["fsspec[http,s3,gcs]"]

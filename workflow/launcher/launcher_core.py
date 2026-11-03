@@ -3834,9 +3834,13 @@ def parse_serve(text: str) -> dict[str, Any] | None:
     return None
 
 
-def neuroglancer_link(state: dict, remote_port: int, local_port: int) -> str:
-    """The Neuroglancer link, its sources moved to the local end of the
-    tunnel.
+def neuroglancer_link(
+    state: dict,
+    remote_port: int,
+    local_port: int,
+    viewer: str | None = None,
+) -> str:
+    """The Neuroglancer link, moved to the local end of the tunnel.
 
     Parameters
     ----------
@@ -3846,6 +3850,11 @@ def neuroglancer_link(state: dict, remote_port: int, local_port: int) -> str:
         The port it listens on.
     local_port : int
         The tunnel's local port.
+    viewer : str, optional
+        The Neuroglancer `patchworks serve` runs (its `viewer`), which
+        holds the state itself: its URL, moved to the local port. None, or
+        the public one (an older serve, no `neuroglancer` package): the
+        public one, with the state in the link.
 
     Returns
     -------
@@ -3853,7 +3862,23 @@ def neuroglancer_link(state: dict, remote_port: int, local_port: int) -> str:
     """
     import urllib.parse
 
-    text = json.dumps(state, separators=(",", ":")).replace(
-        f"localhost:{remote_port}/", f"localhost:{local_port}/"
-    )
+    def local(text: str) -> str:
+        """*text* with the serve's port swapped for the tunnel's.
+
+        Parameters
+        ----------
+        text : str
+            A URL, or the state as JSON.
+
+        Returns
+        -------
+        str
+        """
+        return text.replace(
+            f"localhost:{remote_port}/", f"localhost:{local_port}/"
+        )
+
+    if viewer and viewer != NEUROGLANCER:
+        return local(viewer)
+    text = local(json.dumps(state, separators=(",", ":")))
     return NEUROGLANCER + "#!" + urllib.parse.quote(text)
