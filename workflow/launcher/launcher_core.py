@@ -3759,6 +3759,7 @@ def serve_command(
     partition: str = "",
     qos: str = "",
     account: str = "",
+    link_port: int | None = None,
 ) -> str:
     """Start `pixi run serve <store>` in the background, its output in *log*.
 
@@ -3779,14 +3780,18 @@ def serve_command(
         The job's time limit (default 6 hours).
     partition, qos, account : str, optional
         SLURM's; empty for the defaults.
+    link_port : int, optional
+        The local end of the launcher's tunnel, picked before: the link and
+        the store's addresses in it use it.
 
     Returns
     -------
     str
     """
-    inner = inner_command(
-        workflow_dir, setup_cmd, f"pixi run serve {shlex.quote(store)}"
-    )
+    serve = f"pixi run serve {shlex.quote(store)}"
+    if link_port:
+        serve += f" --link-port {int(link_port)}"
+    inner = inner_command(workflow_dir, setup_cmd, serve)
     if not in_job:
         return (
             f"nohup setsid bash -c {shlex.quote(inner)} > {shlex.quote(log)} "
@@ -3797,7 +3802,8 @@ def serve_command(
         "--parsable",
         "--job-name=pw-serve",
         f"--time={time}",
-        "--mem=4G",
+        # Room for the decoded chunks it cuts small for Neuroglancer.
+        "--mem=8G",
         "--cpus-per-task=4",
         f"--output={log}",
     ]
@@ -3810,6 +3816,37 @@ def serve_command(
             args.append(f"--{flag}={value}")
     args += ["--wrap", inner]
     return " ".join(shlex.quote(a) for a in args) + " | sed 's/^/JOB:/'"
+
+
+#: How long a Neuroglancer server may run: the choices offered, minutes.
+SERVE_TIMES = {"6 h": 360, "1 day": 1440, "1 week": 10080}
+
+
+def serve_alive_command(ng: dict[str, Any]) -> str:
+    """Shell line printing whether a Neuroglancer server still runs.
+
+    Parameters
+    ----------
+    ng : dict
+        The server: its SLURM `job`, or its `pid` on the login node.
+
+    Returns
+    -------
+    str
+        It prints `SERVING`, `STOPPED`, or `UNKNOWN` when SLURM did not
+        answer (never `STOPPED` for that).
+    """
+    if ng.get("job"):
+        jid = str(ng["job"])
+        if not jid.isdigit():
+            return "echo STOPPED"
+        return (
+            "out=$(squeue --me -h -o %i 2>&1) || { echo UNKNOWN; exit 0; }; "
+            f"printf '%s\\n' \"$out\" | tr -d ' ' | grep -qx {jid} "
+            "&& echo SERVING || echo STOPPED"
+        )
+    pid = shlex.quote(str(ng.get("pid", "")))
+    return f"kill -0 {pid} 2>/dev/null && echo SERVING || echo STOPPED"
 
 
 def parse_serve(text: str) -> dict[str, Any] | None:

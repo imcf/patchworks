@@ -73,10 +73,15 @@ while connected; **Disconnect** closes it.
    segmentation, then the results (object counts, seam report, relation
    workbooks to download); **Stop**, **Unlock** after a killed run,
    **Relaunch**. **View in Neuroglancer** serves the store from the cluster
-   (a small SLURM job, or the login node) and tunnels it over the
-   launcher's own SSH connection: the link opens Neuroglancer in your
-   browser, on the computer the launcher runs on, with nothing copied.
-   **Stop** ends the server and the tunnel.
+   (a SLURM job of 6 h, 1 day or 1 week, its QOS picked to allow it; or
+   the login node) and tunnels it to the computer the launcher runs on,
+   over an SSH connection of the tunnel's own (the same log-in, opened
+   again if it drops, so viewing never slows or breaks the launcher's).
+   The link opens Neuroglancer from the server itself, at the tunnel's
+   port: nothing copied, no browser setting needed. A server whose time
+   is up says so, with **Start again**. **Stop** ends the server and the
+   tunnel. The single xy panel is the fast view: side views read every
+   plane of their strip.
 
 The configs it writes (`config/launcher_*.yaml`) are ordinary workflow
 configs you can also run from a terminal.

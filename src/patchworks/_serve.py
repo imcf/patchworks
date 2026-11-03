@@ -744,6 +744,7 @@ def serve(
     *,
     port: int = 0,
     host: str | None = None,
+    link_port: int | None = None,
 ) -> None:
     """Serve *store* until interrupted, printing the SSH tunnel to open and
     the Neuroglancer link.
@@ -759,6 +760,10 @@ def serve(
         The address to listen on. Default: 127.0.0.1 on a login node; in a
         SLURM job, every address, for the tunnel to reach it through the
         login node.
+    link_port : int, optional
+        The port on the browser's computer the tunnel comes out at, when
+        not *port* (the launcher picks a free one there first): the link
+        and the store's addresses in it use it.
     """
     store = Path(store).resolve()
     if str(store).lower().endswith(".zip"):
@@ -787,14 +792,16 @@ def serve(
     server = ThreadingHTTPServer((host, port), handler)
     server.daemon_threads = True
 
-    base = f"http://localhost:{port}/{token}/{store.name}"
+    # The addresses the browser uses: the local end of the tunnel.
+    local = link_port or port
+    base = f"http://localhost:{local}/{token}/{store.name}"
     user = getpass.getuser()
     here = socket.gethostname()
     if in_job:
         login = os.environ.get("SLURM_SUBMIT_HOST", "<login node>")
-        tunnel = f"ssh -N -L {port}:{here}:{port} {user}@{login}"
+        tunnel = f"ssh -N -L {local}:{here}:{port} {user}@{login}"
     else:
-        tunnel = f"ssh -N -L {port}:localhost:{port} {user}@{here}"
+        tunnel = f"ssh -N -L {local}:localhost:{port} {user}@{here}"
     state = neuroglancer_state(store, base)
     # Neuroglancer through this server when installed: the public page
     # cannot read localhost in today's browsers without the user's leave.
@@ -802,13 +809,14 @@ def serve(
     viewer = NEUROGLANCER
     if own is not None:
         handler.func.upstream = own[0]  # type: ignore[attr-defined]
-        viewer = f"http://localhost:{port}{own[1]}"
+        viewer = f"http://localhost:{local}{own[1]}"
     print(
         SERVE_TAG,
         json.dumps(
             {
                 "host": here,
                 "port": port,
+                "link_port": local,
                 "base": base,
                 "state": state,
                 "viewer": viewer,

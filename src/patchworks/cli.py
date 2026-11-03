@@ -532,7 +532,7 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     Parameters
     ----------
     args : argparse.Namespace
-        The parsed flags: store, port, host.
+        The parsed flags: store, port, link_port, host.
 
     Returns
     -------
@@ -541,7 +541,7 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     """
     from ._serve import serve
 
-    serve(args.store, port=args.port, host=args.host)
+    serve(args.store, port=args.port, host=args.host, link_port=args.link_port)
     return 0
 
 
@@ -990,6 +990,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("store", help="an image.zarr (not a .zip bundle)")
     p.add_argument("--port", type=int, default=0, help="default: a free one")
+    p.add_argument(
+        "--link-port",
+        type=int,
+        help="the tunnel's port on the browser's computer, when not --port",
+    )
     p.add_argument(
         "--host",
         help="address to listen on (default 127.0.0.1; in a SLURM job the "
