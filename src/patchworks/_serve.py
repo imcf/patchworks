@@ -344,6 +344,12 @@ def neuroglancer_state(store: Union[str, Path], base_url: str) -> dict:
         "displayDimensions": shown,
         "layers": layers,
         "layout": "xy",
+        # Neuroglancer's defaults (1 GB of GPU memory, 32 downloads at a
+        # time) leave a whole-slide image at a coarse level, and every
+        # request crosses the SSH tunnel: more room, more in flight.
+        "gpuMemoryLimit": 2_000_000_000,
+        "systemMemoryLimit": 4_000_000_000,
+        "concurrentDownloads": 64,
     }
 
 

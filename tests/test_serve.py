@@ -106,6 +106,8 @@ def test_neuroglancer_layers_named_after_the_channels(store):
     assert 0 < lo < hi < 65535
     # x, y first, so "xy" is an xy section (z-y in the store's order)
     assert state["displayDimensions"] == ["x", "y", "z"]
+    # Room for the fine levels of a whole slide, through the tunnel
+    assert state["gpuMemoryLimit"] >= 2e9 and state["concurrentDownloads"] > 32
     assert list(state["dimensions"]) == ["x", "y", "z"]
     (seg,) = [x for x in state["layers"] if x["type"] == "segmentation"]
     assert seg["name"] == "cells"
