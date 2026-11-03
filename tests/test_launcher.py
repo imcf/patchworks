@@ -2553,6 +2553,20 @@ def test_neuroglancer_from_the_results(monkeypatch):
     assert "neuroglancer" not in at.session_state
 
 
+def test_the_link_to_the_servers_own_neuroglancer():
+    """A serve running Neuroglancer itself: the link is its viewer, moved to
+    the tunnel's local port; without one, the public viewer with the
+    state in the link."""
+    state = {"layers": [{"source": "zarr3://http://localhost:39001/t/i.zarr"}]}
+    link = core.neuroglancer_link(
+        state, 39001, 50000, "http://localhost:39001/v/abc/"
+    )
+    assert link == "http://localhost:50000/v/abc/"
+    public = core.neuroglancer_link(state, 39001, 50000)
+    assert public.startswith(core.NEUROGLANCER + "#!")
+    assert "localhost%3A50000" in public or "localhost:50000" in public
+
+
 def test_the_tunnel_forwards_to_the_server(tmp_path):
     """The launcher's port forward: a browser's request to the local port
     reaches the server through the SSH connection's channel."""

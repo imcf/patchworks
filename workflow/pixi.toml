@@ -19,7 +19,7 @@ cudadecon = ">=0.7.0,<0.8" # for the DoG plugin's deconvolution
 
 [pypi-dependencies]
 # This clone's own patchworks: `git pull` updates scripts and library together.
-patchworks = { path = "..", editable = true, extras = ["workflow", "cellpose", "imaris", "bioio", "dog"] }
+patchworks = { path = "..", editable = true, extras = ["workflow", "cellpose", "imaris", "bioio", "dog", "neuroglancer"] }
 
 [feature.cp3.pypi-dependencies]
 cellpose = ">=3.0,<4"

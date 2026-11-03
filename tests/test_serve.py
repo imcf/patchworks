@@ -120,3 +120,76 @@ def test_a_bundle_is_refused(tmp_path):
 
     with pytest.raises(SystemExit, match="unzipped"):
         serve(tmp_path / "image.zarr.zip")
+
+
+def test_neuroglancer_runs_behind_the_same_port(store):
+    """With Neuroglancer's own server beside it, every path outside the
+    token goes to that server (the viewer, its state stream, its POSTs), so
+    the page and the store come from one address: no public page reading
+    localhost, which browsers block."""
+    from http.server import BaseHTTPRequestHandler
+    from pathlib import Path
+
+    class Viewer(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            """Answer with the path asked for."""
+            body = f"viewer {self.path}".encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_POST(self):  # noqa: N802
+            """Echo the body back."""
+            body = self.rfile.read(int(self.headers["Content-Length"]))
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            """Quiet."""
+
+    upstream = ThreadingHTTPServer(("127.0.0.1", 0), Viewer)
+    threading.Thread(target=upstream.serve_forever, daemon=True).start()
+    handler = partial(
+        type(
+            "H",
+            (_Handler,),
+            {
+                "token": "secret",
+                "store_name": "image.zarr",
+                "upstream": f"127.0.0.1:{upstream.server_address[1]}",
+            },
+        ),
+        directory=str(Path(store).parent),
+    )
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{httpd.server_address[1]}"
+    try:
+        assert _get(f"{url}/v/abc/").read() == b"viewer /v/abc/"
+        post = urllib.request.Request(
+            f"{url}/state/abc", data=b'{"x": 1}', method="POST"
+        )
+        assert urllib.request.urlopen(post).read() == b'{"x": 1}'
+        # The store is still the store's
+        whole = (Path(store) / "zarr.json").read_bytes()
+        assert _get(f"{url}/secret/image.zarr/zarr.json").read() == whole
+    finally:
+        for s in (httpd, upstream):
+            s.shutdown()
+            s.server_close()
+
+
+def test_the_viewer_holds_the_state():
+    """Neuroglancer's own server, when installed: it serves its viewer and
+    keeps the state, so the link is the viewer's URL alone."""
+    pytest.importorskip("neuroglancer")
+    from patchworks._serve import start_viewer
+
+    state = {"dimensions": {"x": [1e-6, "m"]}, "layers": [], "layout": "xy"}
+    netloc, path = start_viewer(state)
+    assert netloc.startswith("127.0.0.1:") and path.startswith("/v/")
+    page = urllib.request.urlopen(f"http://{netloc}{path}").read()
+    assert b"<html" in page.lower()

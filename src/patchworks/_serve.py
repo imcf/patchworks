@@ -38,6 +38,9 @@ class _Handler(SimpleHTTPRequestHandler):
 
     token = ""
     store_name = ""
+    #: `host:port` of the Neuroglancer server running beside this one, to
+    #: which every path outside `/<token>/` is passed; "" for none.
+    upstream = ""
 
     def end_headers(self) -> None:
         """Add the CORS and range headers to every response."""
@@ -81,6 +84,73 @@ class _Handler(SimpleHTTPRequestHandler):
             # Somewhere that is not a file: a 404, whatever it asks for.
             return os.path.join(self.directory, f".{self.token}", "missing")
         return real
+
+    def _to_viewer(self) -> bool:
+        """Whether this request is the Neuroglancer server's.
+
+        Returns
+        -------
+        bool
+            True for any path outside `/<token>/`, when one runs.
+        """
+        return bool(self.upstream) and not self.path.startswith(
+            f"/{self.token}/"
+        )
+
+    def _proxy(self) -> None:
+        """Pass the request to the Neuroglancer server, and stream its answer
+        back (its state updates are one long-lived response)."""
+        import http.client
+
+        length = int(self.headers.get("Content-Length") or 0)
+        body = self.rfile.read(length) if length else None
+        conn = http.client.HTTPConnection(self.upstream, timeout=3600)
+        headers = {
+            k: v
+            for k, v in self.headers.items()
+            if k.lower() not in ("host", "connection", "accept-encoding")
+        }
+        try:
+            conn.request(self.command, self.path, body=body, headers=headers)
+            resp = conn.getresponse()
+        except OSError:
+            self.send_error(HTTPStatus.BAD_GATEWAY)
+            return
+        self.send_response(resp.status)
+        for k, v in resp.getheaders():
+            if k.lower() not in (
+                "transfer-encoding",
+                "connection",
+                "content-length",
+                "access-control-allow-origin",
+            ):
+                self.send_header(k, v)
+        self.send_header("Connection", "close")
+        self.close_connection = True
+        self.end_headers()
+        try:
+            while True:
+                block = resp.read1(65536)
+                if not block:
+                    break
+                self.wfile.write(block)
+                self.wfile.flush()
+        except OSError:
+            pass  # the browser went away
+        finally:
+            conn.close()
+
+    def do_GET(self) -> None:  # noqa: N802
+        """A file of the store, or the Neuroglancer server's answer."""
+        if self._to_viewer():
+            return self._proxy()
+        return super().do_GET()
+
+    def do_POST(self) -> None:  # noqa: N802
+        """Neuroglancer's state and actions, for its server."""
+        if self._to_viewer():
+            return self._proxy()
+        self.send_error(HTTPStatus.NOT_FOUND)
 
     def list_directory(self, path):  # no listings: only what is asked for
         """Refuse directory listings: only what is asked for is served.
@@ -311,21 +381,60 @@ def _contrast(coarse, axes: str, channel: int) -> tuple[float, float]:
     return lo, max(hi, lo + 1)
 
 
-def neuroglancer_link(state: dict) -> str:
+def start_viewer(state: dict) -> tuple[str, str] | None:
+    """Start Neuroglancer's own server, showing *state*, if installed.
+
+    Served through :func:`serve`'s port (every path outside its token),
+    the page and its data come from one address: a public page reading
+    `localhost` is what browsers now block (Chrome's "Local network
+    access", Firefox's too).
+
+    Parameters
+    ----------
+    state : dict
+        The Neuroglancer state, from :func:`neuroglancer_state`.
+
+    Returns
+    -------
+    tuple of str or None
+        `(host:port of its server, the viewer's path)`, e.g.
+        `("127.0.0.1:40123", "/v/abc/")`; None without the `neuroglancer`
+        package.
+    """
+    try:
+        import neuroglancer
+    except ImportError:
+        return None
+    neuroglancer.set_server_bind_address("127.0.0.1", 0)
+    viewer = neuroglancer.Viewer()
+    viewer.set_state(neuroglancer.ViewerState(state))
+    url = urllib.parse.urlsplit(viewer.get_viewer_url())
+    _VIEWERS.append(viewer)  # kept alive with the server
+    return url.netloc, url.path
+
+
+_VIEWERS: list = []
+
+
+def neuroglancer_link(state: dict, viewer: str = NEUROGLANCER) -> str:
     """The link opening Neuroglancer with *state*.
 
     Parameters
     ----------
     state : dict
         The state, from :func:`neuroglancer_state`.
+    viewer : str, optional
+        The Neuroglancer to open: the one :func:`serve` hosts
+        (`http://localhost:<port>/<token>/neuroglancer/`), or the public
+        one (default).
 
     Returns
     -------
     str
-        The public Neuroglancer's URL with the state in its fragment.
+        *viewer*'s URL with the state in its fragment.
     """
     return (
-        NEUROGLANCER
+        viewer
         + "#!"
         + urllib.parse.quote(json.dumps(state, separators=(",", ":")))
     )
@@ -383,7 +492,9 @@ def serve(
     token = secrets.token_urlsafe(12)
     handler = partial(
         type(
-            "Handler", (_Handler,), {"token": token, "store_name": store.name}
+            "Handler",
+            (_Handler,),
+            {"token": token, "store_name": store.name},
         ),
         directory=str(store.parent),
     )
@@ -399,16 +510,31 @@ def serve(
     else:
         tunnel = f"ssh -N -L {port}:localhost:{port} {user}@{here}"
     state = neuroglancer_state(store, base)
+    # Neuroglancer through this server when installed: the public page
+    # cannot read localhost in today's browsers without the user's leave.
+    own = start_viewer(state)
+    viewer = NEUROGLANCER
+    if own is not None:
+        handler.func.upstream = own[0]  # type: ignore[attr-defined]
+        viewer = f"http://localhost:{port}{own[1]}"
     print(
         SERVE_TAG,
-        json.dumps({"host": here, "port": port, "base": base, "state": state}),
+        json.dumps(
+            {
+                "host": here,
+                "port": port,
+                "base": base,
+                "state": state,
+                "viewer": viewer,
+            }
+        ),
         flush=True,
     )
     print(f"serving {store} on {here}:{port} (Ctrl+C to stop)")
     print("\n1. On your computer, open the tunnel (and keep it open):")
     print(f"   {tunnel}")
     print("\n2. Open this link in Chrome or Firefox:")
-    print(f"   {neuroglancer_link(state)}")
+    print(f"   {viewer if own is not None else neuroglancer_link(state)}")
     print(
         "\n   Each channel is a layer (the first shown); the label images "
         "are segmentation layers, switched off: tick them in the layer list.",
