@@ -70,7 +70,10 @@ def test_files_with_cors_and_byte_ranges(server, store):
     assert r.status == 206 and r.read() == whole[-5:]
     # The CORS preflight Neuroglancer's Range requests need
     pre = urllib.request.Request(url, method="OPTIONS")
-    assert urllib.request.urlopen(pre).status == 204
+    pre = urllib.request.urlopen(pre)
+    assert pre.status == 204
+    # Chrome's Private Network Access: a public page reading localhost
+    assert pre.headers["Access-Control-Allow-Private-Network"] == "true"
 
 
 def test_nothing_without_the_token_and_no_listings(server, store):
