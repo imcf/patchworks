@@ -222,3 +222,99 @@ def test_one_connection_serves_many_chunks(server, store):
     conn.request("GET", "/secret/image.zarr/zarr.json")
     assert conn.getresponse().read() == whole  # still the same connection
     conn.close()
+
+
+@pytest.mark.parametrize("shard", [False, True])
+def test_small_chunks_read_back_as_the_store(tmp_path, shard):
+    """Neuroglancer is offered every array in chunks one plane deep and at
+    most 256 wide, cut from the real ones: written out as a store of their
+    own, they read back as exactly the original arrays."""
+    import itertools
+
+    import zarr
+
+    from patchworks._serve import _Rechunked
+
+    rng = np.random.default_rng(0)
+    img = rng.integers(0, 4000, (2, 5, 300, 520)).astype("uint16")
+    store = to_ome_zarr(
+        img,
+        tmp_path / "image.zarr",
+        axes="czyx",
+        n_levels=2,
+        chunks=(1, 3, 200, 300),
+        shard=shard,
+        progress=False,
+    )
+    lab = rng.integers(0, 50, (5, 300, 520)).astype("int32")
+    write_labels(store, lab, name="cells", chunks=(4, 150, 170), progress=False)
+    from pathlib import Path
+
+    re = _Rechunked(Path(store), cache_bytes=1 << 20)  # a small cache: evicts
+    assert {"0", "1", "labels/cells/0"} <= set(re.arrays)
+    out = tmp_path / "view.zarr"
+    for rel, doc in re.arrays.items():
+        meta = json.loads(re.metadata(rel))
+        view = meta["chunk_grid"]["configuration"]["chunk_shape"]
+        assert view[:-2] == [1] * (len(view) - 2) and max(view[-2:]) <= 256
+        (out / rel).mkdir(parents=True)
+        (out / rel / "zarr.json").write_text(json.dumps(meta))
+        grid = [range(-(-n // c)) for n, c in zip(doc["shape"], view)]
+        for idx in itertools.product(*grid):
+            key = out / rel / "c" / "/".join(map(str, idx))
+            key.parent.mkdir(parents=True, exist_ok=True)
+            key.write_bytes(re.chunk(rel, idx))
+        original = zarr.open_array(str(Path(store) / rel), mode="r")[...]
+        assert np.array_equal(
+            zarr.open_array(str(out / rel), mode="r")[...], original
+        )
+    with pytest.raises(IndexError):
+        re.chunk("labels/cells/0", (99, 0, 0))
+
+
+def test_the_server_offers_the_small_chunks(store):
+    """Through HTTP: an array's metadata names the small chunks, and a chunk
+    is there to read; a file that is not an array's is served as it is."""
+    from pathlib import Path
+
+    from numcodecs import Zstd
+
+    from patchworks._serve import _Rechunked
+
+    handler = partial(
+        type(
+            "H",
+            (_Handler,),
+            {
+                "token": "secret",
+                "store_name": "image.zarr",
+                "rechunked": _Rechunked(Path(store)),
+            },
+        ),
+        directory=str(Path(store).parent),
+    )
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{httpd.server_address[1]}/secret/image.zarr"
+    try:
+        meta = json.loads(_get(f"{base}/0/zarr.json").read())
+        assert meta["chunk_grid"]["configuration"]["chunk_shape"] == [
+            1,
+            1,
+            32,
+            32,
+        ]
+        raw = Zstd().decode(_get(f"{base}/0/c/1/2/0/0").read())
+        plane = np.frombuffer(raw, "<u2").reshape(32, 32)
+        expected = np.arange(2 * 4 * 32 * 32, dtype="uint16").reshape(
+            2, 4, 32, 32
+        )
+        assert np.array_equal(plane, expected[1, 2])
+        group = (Path(store) / "zarr.json").read_bytes()
+        assert _get(f"{base}/zarr.json").read() == group
+        with pytest.raises(urllib.error.HTTPError) as err:
+            _get(f"{base}/0/c/9/0/0/0")
+        assert err.value.code == 404
+    finally:
+        httpd.shutdown()
+        httpd.server_close()

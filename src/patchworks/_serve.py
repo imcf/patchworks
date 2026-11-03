@@ -32,6 +32,233 @@ SERVE_TAG = "PATCHWORKS_SERVE"
 _COLORS = ("#00ff00", "#ff00ff", "#00ffff", "#ffff00", "#ffffff", "#ff0000")
 
 
+#: The chunks Neuroglancer is given, per spatial axis: one plane deep and
+#: this wide in y and x (less where the store's own are smaller).
+VIEW_CHUNK = 256
+
+
+class _Rechunked:
+    """A store's arrays as Neuroglancer is shown them: in small chunks.
+
+    A store written for napari and the workflow has chunks one plane deep
+    but 1024 wide (the image), or 14 planes deep and 839 wide (labels,
+    40 MB once unpacked). Neuroglancer fetches a whole chunk for any part
+    of it, through the SSH tunnel: the labels' fourteen planes for the one
+    shown, and for a side view 126 whole planes. Each array is offered
+    instead in chunks one plane deep and :data:`VIEW_CHUNK` wide, cut on
+    request from the real ones, which are kept decoded in memory a while.
+
+    Parameters
+    ----------
+    store : Path
+        The OME-Zarr image (zarr v3; a v2 store is served as it is).
+    cache_bytes : int, optional
+        Memory for decoded real chunks; default a third of what the
+        process may use, at most 2 GB.
+    """
+
+    def __init__(self, store: Path, cache_bytes: int | None = None) -> None:
+        import threading
+        from collections import OrderedDict
+
+        self.store = store
+        self.arrays: dict[str, dict[str, Any]] = {}
+        self._open: dict[str, Any] = {}
+        self._cache: OrderedDict = OrderedDict()
+        self._lock = threading.Lock()
+        self._used = 0
+        if cache_bytes is None:
+            from ._chunks import _get_available_memory
+
+            cache_bytes = min(2 << 30, _get_available_memory() // 3)
+        self.cache_bytes = int(cache_bytes)
+        for meta in store.rglob("zarr.json"):
+            try:
+                doc = json.loads(meta.read_text())
+            except (OSError, ValueError):
+                continue
+            if doc.get("node_type") != "array" or doc.get("zarr_format") != 3:
+                continue
+            rel = meta.parent.relative_to(store).as_posix()
+            self.arrays[rel] = doc
+
+    def view_chunks(self, rel: str) -> tuple[int, ...]:
+        """The chunk shape Neuroglancer is given for array *rel*.
+
+        Parameters
+        ----------
+        rel : str
+            The array's path in the store, e.g. `"labels/cells/0"`.
+
+        Returns
+        -------
+        tuple of int
+            1 on every axis but the last two, which are at most
+            :data:`VIEW_CHUNK`.
+        """
+        doc = self.arrays[rel]
+        real = _real_chunks(doc)
+        n = len(doc["shape"])
+        return tuple(
+            min(VIEW_CHUNK, c) if i >= n - 2 else 1 for i, c in enumerate(real)
+        )
+
+    def metadata(self, rel: str) -> bytes:
+        """Array *rel*'s `zarr.json`, with the small chunks and plain zstd.
+
+        Parameters
+        ----------
+        rel : str
+            The array's path in the store.
+
+        Returns
+        -------
+        bytes
+        """
+        doc = dict(self.arrays[rel])
+        doc["chunk_grid"] = {
+            "name": "regular",
+            "configuration": {"chunk_shape": list(self.view_chunks(rel))},
+        }
+        doc["chunk_key_encoding"] = {
+            "name": "default",
+            "configuration": {"separator": "/"},
+        }
+        doc["codecs"] = [
+            {"name": "bytes", "configuration": {"endian": "little"}},
+            {"name": "zstd", "configuration": {"level": 1, "checksum": False}},
+        ]
+        doc.pop("storage_transformers", None)
+        return json.dumps(doc).encode()
+
+    def _array(self, rel: str):
+        """The zarr array *rel*, opened once.
+
+        Parameters
+        ----------
+        rel : str
+            The array's path in the store.
+
+        Returns
+        -------
+        zarr.Array
+        """
+        if rel not in self._open:
+            import zarr
+
+            self._open[rel] = zarr.open_array(
+                str(self.store / rel), mode="r", zarr_format=3
+            )
+        return self._open[rel]
+
+    def _real_chunk(self, rel: str, index: tuple[int, ...]):
+        """Real chunk *index* of array *rel*, decoded (cached).
+
+        Parameters
+        ----------
+        rel : str
+            The array's path in the store.
+        index : tuple of int
+            The real chunk's index on each axis.
+
+        Returns
+        -------
+        np.ndarray
+        """
+        import numpy as np
+
+        key = (rel, index)
+        with self._lock:
+            if key in self._cache:
+                self._cache.move_to_end(key)
+                return self._cache[key]
+        arr = self._array(rel)
+        real = _real_chunks(self.arrays[rel])
+        sl = tuple(
+            slice(i * c, min((i + 1) * c, n))
+            for i, c, n in zip(index, real, arr.shape)
+        )
+        block = np.asarray(arr[sl])
+        with self._lock:
+            self._cache[key] = block
+            self._used += block.nbytes
+            while self._used > self.cache_bytes and len(self._cache) > 1:
+                _, old = self._cache.popitem(last=False)
+                self._used -= old.nbytes
+        return block
+
+    def chunk(self, rel: str, index: tuple[int, ...]) -> bytes:
+        """Small chunk *index* of array *rel*, encoded as its metadata says.
+
+        Parameters
+        ----------
+        rel : str
+            The array's path in the store.
+        index : tuple of int
+            The small chunk's index on each axis.
+
+        Returns
+        -------
+        bytes
+            zstd of the chunk's little-endian bytes, padded to the full
+            chunk shape at the array's edge (as zarr stores it).
+
+        Raises
+        ------
+        IndexError
+            For an index outside the array.
+        """
+        import numpy as np
+        from numcodecs import Zstd
+
+        doc = self.arrays[rel]
+        shape = doc["shape"]
+        view = self.view_chunks(rel)
+        real = _real_chunks(doc)
+        if len(index) != len(shape) or any(
+            i < 0 or i * v >= n for i, v, n in zip(index, view, shape)
+        ):
+            raise IndexError(index)
+        lo = [i * v for i, v in zip(index, view)]
+        hi = [min(a + v, n) for a, v, n in zip(lo, view, shape)]
+        dtype = np.dtype(doc["data_type"]).newbyteorder("<")
+        fill = doc.get("fill_value") or 0
+        out = np.full(view, fill, dtype=dtype)
+        # The real chunks this one overlaps (one, unless they do not align).
+        first = [a // c for a, c in zip(lo, real)]
+        last = [(b - 1) // c for b, c in zip(hi, real)]
+        for ridx in np.ndindex(*[b - a + 1 for a, b in zip(first, last)]):
+            r = tuple(a + k for a, k in zip(first, ridx))
+            block = self._real_chunk(rel, r)
+            start = [i * c for i, c in zip(r, real)]
+            src, dst = [], []
+            for a, b, s0, n in zip(lo, hi, start, block.shape):
+                a2, b2 = max(a, s0), min(b, s0 + n)
+                src.append(slice(a2 - s0, b2 - s0))
+                dst.append(slice(a2 - a, b2 - a))
+            out[tuple(dst)] = block[tuple(src)]
+        return Zstd(level=1).encode(np.ascontiguousarray(out).tobytes())
+
+
+def _real_chunks(doc: dict) -> list[int]:
+    """The chunk shape a zarr v3 array is read in: its shard's inner
+    chunks when sharded, else its chunk grid.
+
+    Parameters
+    ----------
+    doc : dict
+        The array's `zarr.json`.
+
+    Returns
+    -------
+    list of int
+    """
+    for codec in doc.get("codecs") or []:
+        if codec.get("name") == "sharding_indexed":
+            return list(codec["configuration"]["chunk_shape"])
+    return list(doc["chunk_grid"]["configuration"]["chunk_shape"])
+
+
 class _Handler(SimpleHTTPRequestHandler):
     """Read-only files under *directory*, below a secret path prefix, with
     CORS and single byte ranges."""
@@ -45,6 +272,8 @@ class _Handler(SimpleHTTPRequestHandler):
     #: `host:port` of the Neuroglancer server running beside this one, to
     #: which every path outside `/<token>/` is passed; "" for none.
     upstream = ""
+    #: The store's arrays in small chunks; None serves the files as they are.
+    rechunked: _Rechunked | None = None
 
     def end_headers(self) -> None:
         """Add the CORS and range headers to every response."""
@@ -146,10 +375,51 @@ class _Handler(SimpleHTTPRequestHandler):
             conn.close()
 
     def do_GET(self) -> None:  # noqa: N802
-        """A file of the store, or the Neuroglancer server's answer."""
+        """A file of the store, a small chunk, or the Neuroglancer server's
+        answer."""
         if self._to_viewer():
             return self._proxy()
+        if self._rechunked():
+            return None
         return super().do_GET()
+
+    def _rechunked(self) -> bool:
+        """Answer from :attr:`rechunked` when the path is an array's
+        metadata or one of its chunks.
+
+        Returns
+        -------
+        bool
+            Whether it answered.
+        """
+        if self.rechunked is None:
+            return False
+        prefix = f"/{self.token}/{self.store_name}/"
+        path = urllib.parse.unquote(self.path.split("?", 1)[0])
+        if not path.startswith(prefix):
+            return False
+        rel = path[len(prefix) :]
+        arrays = self.rechunked.arrays
+        if rel.endswith("/zarr.json") and rel[: -len("/zarr.json")] in arrays:
+            body = self.rechunked.metadata(rel[: -len("/zarr.json")])
+            ctype = "application/json"
+        elif "/c/" in rel and rel.split("/c/", 1)[0] in arrays:
+            name, key = rel.split("/c/", 1)
+            try:
+                index = tuple(int(k) for k in key.split("/"))
+                body = self.rechunked.chunk(name, index)
+            except (ValueError, IndexError):
+                self.send_error(HTTPStatus.NOT_FOUND)
+                return True
+            ctype = "application/octet-stream"
+        else:
+            return False
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+        return True
 
     def do_POST(self) -> None:  # noqa: N802
         """Neuroglancer's state and actions, for its server."""
@@ -506,7 +776,11 @@ def serve(
         type(
             "Handler",
             (_Handler,),
-            {"token": token, "store_name": store.name},
+            {
+                "token": token,
+                "store_name": store.name,
+                "rechunked": _Rechunked(store),
+            },
         ),
         directory=str(store.parent),
     )

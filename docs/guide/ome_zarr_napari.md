@@ -107,6 +107,14 @@ for its id, show only the ones selected. Every URL holds a random token, and
 only the store is served, read-only. Serve the unzipped `image.zarr`, not
 the bundle. No 3-D meshes: objects are shown in cross-section.
 
+Neuroglancer fetches a whole chunk for any part of it, through the tunnel,
+so the server offers it every array in small chunks instead (one plane
+deep, at most 256 x 256), cut on request from the store's own and kept
+in memory a while (up to 2 GB, a third of the job's memory): a view
+costs the planes shown, not the 14 planes of a label chunk, and a side
+view one strip of each plane, not whole 1024 x 1024 planes. The store
+itself is not changed.
+
 The viewer itself comes from the same server, through the same tunnel
 (the `neuroglancer` package, in the workflow's environment; `pip install
 "patchworks[neuroglancer]"` elsewhere): the page and the store share one
