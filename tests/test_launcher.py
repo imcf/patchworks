@@ -2513,6 +2513,7 @@ def test_neuroglancer_from_the_results(monkeypatch):
         {
             "scripts/status.py": json.dumps(status),
             "pw-serve": "JOB:4242\n",
+            "SERVING": "SERVING\n",
             "squeue": "DONE\n",
             "tail -n": "the log\n",
         },
@@ -2527,27 +2528,46 @@ def test_neuroglancer_from_the_results(monkeypatch):
     sent = next(c for c in ssh.commands if "pw-serve" in c)
     assert "--wrap" in sent and "pixi run serve /scratch/run/image.zarr" in sent
     ng = at.session_state["neuroglancer"]
+    # The tunnel's local port, picked first: the server's link names it.
+    assert f"--link-port {ng['local_port']}" in sent
+    assert "--time=06:00:00" in sent and "--mem=8G" in sent
     assert ng["job"] == "4242"
     assert any("Starting the server" in i.value for i in at.info)
     # The server is up: its line in the job's log.
-    state = {
-        "layers": [{"source": "zarr3://http://localhost:39001/t/image.zarr"}]
-    }
+    local = ng["local_port"]
+    viewer = f"http://localhost:{local}/v/abc/"
     ssh.files[ng["log"]] = (
         "PATCHWORKS_SERVE "
         + json.dumps(
-            {"host": "sca30", "port": 39001, "base": "", "state": state}
+            {
+                "host": "sca30",
+                "port": 39001,
+                "link_port": local,
+                "base": "",
+                "state": {"layers": []},
+                "viewer": viewer,
+            }
         )
         + "\n"
     ).encode()
     at.run()
     assert not at.exception
     (link,) = [b for b in at.get("link_button")]
-    import urllib.parse
-
-    shown = json.loads(urllib.parse.unquote(link.proto.url.split("#!", 1)[1]))
-    local = shown["layers"][0]["source"].split("localhost:")[1].split("/")[0]
-    assert local.isdigit()
+    # The server's own viewer, at the tunnel's port, which was free.
+    assert link.proto.url == viewer
+    assert not any("was taken" in w.value for w in at.warning), [
+        w.value for w in at.warning
+    ]
+    # Its time is up: said, with why, instead of a link to nothing.
+    ssh.answers["SERVING"] = "STOPPED\n"
+    ssh.files[ng["log"]] += (
+        b"error: *** JOB 4242 CANCELLED DUE TO TIME LIMIT ***\n"
+    )
+    at.run()
+    assert not at.exception
+    assert not list(at.get("link_button"))
+    assert any("stopped" in w.value and "time" in w.value for w in at.warning)
+    ssh.answers["SERVING"] = "SERVING\n"
     next(b for b in at.button if b.label == "Stop").click().run()
     assert any("scancel 4242" in c for c in ssh.commands)
     assert "neuroglancer" not in at.session_state
@@ -2623,4 +2643,72 @@ def test_the_tunnel_forwards_to_the_server(tmp_path):
     rude.close()
     assert fetch(0) == b"through the tunnel"
     tunnel.shutdown()
+    httpd.shutdown()
+
+
+def test_the_tunnel_has_a_connection_of_its_own(tmp_path):
+    """With the launcher's log-in to open another, the tunnel uses a
+    connection of its own (viewing cannot slow or break the launcher's),
+    opens it again once it dropped, and closes it with the tunnel."""
+    pytest.importorskip("paramiko")
+    import socket
+    import threading
+    import types
+    import urllib.request
+    from functools import partial
+    from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+
+    (tmp_path / "hello.txt").write_text("through its own connection")
+    httpd = ThreadingHTTPServer(
+        ("127.0.0.1", 0),
+        partial(SimpleHTTPRequestHandler, directory=str(tmp_path)),
+    )
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    port = httpd.server_address[1]
+    opened, closed = [], []
+
+    def make_client(name):
+        state = {"active": True}
+        transport = types.SimpleNamespace(
+            open_channel=lambda kind, dest, origin: (
+                opened.append(name) or socket.create_connection(dest)
+            ),
+            is_active=lambda: state["active"],
+            set_keepalive=lambda s: None,
+        )
+        return types.SimpleNamespace(
+            get_transport=lambda: transport,
+            close=lambda: closed.append(name),
+            state=state,
+        )
+
+    launchers = make_client("launcher's")
+    reopened = []
+
+    def reopen():
+        reopened.append(make_client(f"own {len(reopened)}"))
+        return reopened[-1]
+
+    source = (ROOT / "workflow/launcher/app.py").read_text()
+    start = source.index("def _open_tunnel(")
+    end = source.index("\ndef _stop_neuroglancer(")
+    namespace: dict = {"_log": types.SimpleNamespace(warning=print)}
+    exec(source[start:end], namespace)
+    free = socket.socket()
+    free.bind(("127.0.0.1", 0))
+    want = free.getsockname()[1]
+    free.close()
+    tunnel = namespace["_open_tunnel"](
+        launchers, "127.0.0.1", port, local_port=want, reopen=reopen
+    )
+    assert tunnel.server_address[1] == want  # the port the link names
+    url = f"http://127.0.0.1:{want}/hello.txt"
+    assert urllib.request.urlopen(url).read() == b"through its own connection"
+    assert urllib.request.urlopen(url).read() == b"through its own connection"
+    assert opened == ["own 0", "own 0"] and len(reopened) == 1
+    reopened[0].state["active"] = False  # it dropped
+    assert urllib.request.urlopen(url).read() == b"through its own connection"
+    assert opened[-1] == "own 1"
+    tunnel.close()
+    assert closed == ["own 1"]
     httpd.shutdown()

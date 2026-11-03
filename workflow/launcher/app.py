@@ -26,6 +26,7 @@ import stat
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+from functools import partial
 from pathlib import Path
 
 import paramiko
@@ -134,7 +135,7 @@ def _viewer_ip() -> str | None:
     return ip if isinstance(ip, str) else None
 
 
-def _remember_connection(client, target: str) -> None:
+def _remember_connection(client, target: str, reopen=None) -> None:
     """Keep *client* for reloads of this page, and drop stale ones.
 
     Parameters
@@ -143,6 +144,9 @@ def _remember_connection(client, target: str) -> None:
         The open connection.
     target : str
         `user@host:port`, shown when it is restored.
+    reopen : callable, optional
+        Opens another connection with the same log-in: the Neuroglancer
+        tunnel's own.
     """
     now = time.time()
     kept = _connections()
@@ -160,6 +164,7 @@ def _remember_connection(client, target: str) -> None:
         "preset": {},
         "ip": _viewer_ip(),
         "used": now,
+        "reopen": reopen,
     }
     st.session_state["resume_token"] = token
     st.query_params[_RESUME_PARAM] = token
@@ -232,7 +237,7 @@ def get_client() -> paramiko.SSHClient | None:
     return client
 
 
-def connect(
+def _open_ssh(
     host,
     port,
     username,
@@ -241,7 +246,7 @@ def connect(
     allow_unverified,
     use_keys=False,
 ):
-    """Open the SSH connection.
+    """Open an SSH connection to the cluster (nothing kept).
 
     Parameters
     ----------
@@ -290,13 +295,63 @@ def connect(
             look_for_keys=False,
             allow_agent=False,
         )
+    return client
+
+
+def connect(
+    host,
+    port,
+    username,
+    password,
+    fingerprints,
+    allow_unverified,
+    use_keys=False,
+):
+    """Open the SSH connection.
+
+    Parameters
+    ----------
+    host : str
+        The login node.
+    port : int
+        Its SSH port.
+    username : str
+        The cluster account.
+    password : str
+        The password typed; with *use_keys*, the key's passphrase, if any.
+    fingerprints : list of str
+        The host key fingerprints pinned for the cluster.
+    allow_unverified : bool
+        Accept any host key when none is pinned.
+    use_keys : bool, optional
+        Use the keys and agent `ssh` itself would use, not a password.
+
+    Returns
+    -------
+    paramiko.SSHClient
+    """
+    client = _open_ssh(
+        host, port, username, password, fingerprints, allow_unverified, use_keys
+    )
     # A keepalive every 30 s: firewalls drop an idle connection, and the
     # page sits idle while you fill in the form.
     client.get_transport().set_keepalive(30)
     st.session_state["ssh_client"] = client
     st.session_state["ssh_target"] = f"{username}@{host}:{port}"
     st.session_state.pop("connection_lost", None)
-    _remember_connection(client, st.session_state["ssh_target"])
+    # The same log-in again, for the Neuroglancer tunnel's own connection
+    # (kept in this process's memory with the connection, never on disk).
+    reopen = partial(
+        _open_ssh,
+        host,
+        port,
+        username,
+        password,
+        fingerprints,
+        allow_unverified,
+        use_keys,
+    )
+    _remember_connection(client, st.session_state["ssh_target"], reopen)
     _guess_workflow_dir()
 
 
@@ -3715,30 +3770,68 @@ def _tunnels() -> dict:
     return {}
 
 
-def _open_tunnel(client, host: str, port: int):
+def _open_tunnel(
+    client, host: str, port: int, local_port: int = 0, reopen=None
+):
     """Forward a local port to *host*:*port* as the cluster sees it.
 
-    The same port, if free; over the launcher's own SSH connection -- the
-    `ssh -L` the user would otherwise run.
+    The `ssh -L` the user would otherwise run. With *reopen*, over a
+    connection of its own (opened again whenever it dropped), so viewing
+    can neither slow nor break the launcher's own; else over *client*'s.
 
     Parameters
     ----------
     client : paramiko.SSHClient
-        The connection to the cluster.
+        The launcher's connection to the cluster.
     host : str
         The node the server runs on.
     port : int
         Its port.
+    local_port : int, optional
+        The local port to listen on (the one the server's link names);
+        else *port*, else any free one.
+    reopen : callable, optional
+        Opens a new connection with the launcher's log-in.
 
     Returns
     -------
     socketserver.ThreadingTCPServer
-        Serving in a thread; its `server_address` holds the local port.
+        Serving in a thread; its `server_address` holds the local port, and
+        its `close()` stops it and its own connection.
     """
+    import socket
     import socketserver
     import threading
 
-    transport = client.get_transport()
+    own: dict = {"client": None}
+    lock = threading.Lock()
+
+    def transport():
+        """A live transport to open the next channel on.
+
+        Returns
+        -------
+        paramiko.Transport
+            The tunnel's own connection's (opened again when it dropped),
+            else the launcher's.
+        """
+        with lock:
+            mine = own["client"]
+            t = mine.get_transport() if mine is not None else None
+            if t is not None and t.is_active():
+                return t
+            if reopen is not None:
+                try:
+                    mine = reopen()
+                    t = mine.get_transport()
+                    t.set_keepalive(30)
+                    # Larger windows: chunks of megabytes, not a shell.
+                    t.default_window_size = 16 << 20
+                    own["client"] = mine
+                    return t
+                except Exception:  # noqa: BLE001 - the launcher's, then
+                    _log.warning("the tunnel's own connection failed")
+            return client.get_transport()
 
     def pump(read, write) -> None:
         """Copy one direction until it ends or either side fails.
@@ -3769,22 +3862,34 @@ def _open_tunnel(client, host: str, port: int):
             frees under a select still using them.
             """
             try:
-                chan = transport.open_channel(
+                chan = transport().open_channel(
                     "direct-tcpip", (host, port), self.request.getpeername()
                 )
             except Exception:  # noqa: BLE001 - the browser retries
                 return
             if chan is None:
                 return
-            up = threading.Thread(
-                target=pump,
-                args=(self.request.recv, chan.sendall),
-                daemon=True,
-            )
+
+            def browser_to_server() -> None:
+                """Copy the browser's requests up; once it hangs up, close
+                the channel, which ends the other direction too (the server
+                would keep a keep-alive connection open)."""
+                pump(self.request.recv, chan.sendall)
+                chan.close()
+
+            up = threading.Thread(target=browser_to_server, daemon=True)
             up.start()
             try:
                 pump(chan.recv, self.request.sendall)
             finally:
+                # shutdown, not just close: the other thread is blocked
+                # reading this socket, and a close alone neither wakes it
+                # nor tells the browser the answer has ended (a server
+                # ending its answer by closing hung the browser).
+                try:
+                    self.request.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
                 for close in (chan.close, self.request.close):
                     try:
                         close()
@@ -3792,16 +3897,27 @@ def _open_tunnel(client, host: str, port: int):
                         pass
                 up.join(timeout=5)
 
-    socketserver.ThreadingTCPServer.allow_reuse_address = True
-    for want in (port, 0):
+    class Tunnel(socketserver.ThreadingTCPServer):
+        allow_reuse_address = True
+        daemon_threads = True
+
+        def close(self) -> None:
+            """Stop listening, and close the tunnel's own connection."""
+            self.shutdown()
+            self.server_close()
+            if own["client"] is not None:
+                own["client"].close()
+
+    server = None
+    for want in dict.fromkeys(
+        p for p in (local_port, port, 0) if p is not None
+    ):
         try:
-            server = socketserver.ThreadingTCPServer(
-                ("127.0.0.1", want), Forward
-            )
+            server = Tunnel(("127.0.0.1", want), Forward)
             break
         except OSError:
             continue
-    server.daemon_threads = True
+    assert server is not None  # port 0 always binds
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server
 
@@ -3816,8 +3932,7 @@ def _stop_neuroglancer(ng: dict) -> None:
     """
     tunnel = _tunnels().pop(ng["log"], None)
     if tunnel is not None:
-        tunnel.shutdown()
-        tunnel.server_close()
+        tunnel.close()
     stop = f"scancel {ng['job']}" if ng.get("job") else f"kill {ng['pid']}"
     try:
         run(get_client(), stop, timeout=30)
@@ -3826,9 +3941,41 @@ def _stop_neuroglancer(ng: dict) -> None:
     st.session_state.pop("neuroglancer", None)
 
 
+def _free_local_port() -> int:
+    """A port free on this computer, for the tunnel's local end.
+
+    Returns
+    -------
+    int
+    """
+    import socket
+
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def _reopen():
+    """The current connection's log-in, to open another with.
+
+    Returns
+    -------
+    callable or None
+        None when the connection was not made on this page (restored
+        without it): the tunnel then shares the launcher's.
+    """
+    entry = _connections().get(st.session_state.get("resume_token", ""))
+    return (entry or {}).get("reopen")
+
+
 def neuroglancer_view(store: str) -> None:
     """Start `patchworks serve` on the cluster, tunnel it here, and link
     Neuroglancer to it: the store viewed in the browser, nothing copied.
+
+    The tunnel's local port is picked first and handed to the server, so
+    its link names it; the tunnel has its own SSH connection; and the
+    server is checked on each redraw, so one that ended (its time limit)
+    says so instead of leaving a link to nothing.
 
     Parameters
     ----------
@@ -3840,20 +3987,34 @@ def neuroglancer_view(store: str) -> None:
     if ng is None or ng.get("store") != store:
         where = st.radio(
             "run the server",
-            ["as a SLURM job (6 h)", "on the login node"],
+            [
+                *(f"as a SLURM job, {t}" for t in core.SERVE_TIMES),
+                "on the login node",
+            ],
             horizontal=True,
             key="ng_where",
             help="It reads the store while you browse: a job keeps that off "
-            "the login node. Stop it when done.",
+            "the login node, until its time is up. Stop it when done.",
         )
         if st.button("View in Neuroglancer", icon=":material/3d_rotation:"):
             in_job = where.startswith("as a SLURM")
+            minutes = core.SERVE_TIMES.get(where.rsplit(", ", 1)[-1], 360)
+            info = cluster_info() if in_job else None
+            qos = core.qos_for(info, None, minutes) if info else ""
+            local_port = _free_local_port()
             log = f"{wf_dir}/{core.LOG_DIR}/serve_{int(time.time())}.log"
             run(get_client(), f"mkdir -p {shlex.quote(wf_dir)}/{core.LOG_DIR}")
             _, out, err = run(
                 get_client(),
                 core.serve_command(
-                    wf_dir, setup_cmd, store, log, in_job=in_job
+                    wf_dir,
+                    setup_cmd,
+                    store,
+                    log,
+                    in_job=in_job,
+                    time=core._duration(minutes),
+                    qos=qos,
+                    link_port=local_port,
                 ),
                 timeout=60,
             )
@@ -3861,22 +4022,45 @@ def neuroglancer_view(store: str) -> None:
             if not started:
                 st.error(
                     "the server did not start: "
-                    + core.explain_remote_error(err or out)
+                    + (
+                        core.explain_sbatch_error(err or out, info, {})
+                        or core.explain_remote_error(err or out)
+                    )
                 )
                 return
             kind, ident = started.groups()
             st.session_state["neuroglancer"] = {
                 "store": store,
                 "log": log,
+                "local_port": local_port,
                 "job" if kind == "JOB" else "pid": ident,
             }
             st.rerun()
         return
-    info = core.parse_serve(read_remote(get_client(), ng["log"]) or "")
     c1, c2 = st.columns([3, 1])
     if c2.button("Stop", icon=":material/stop_circle:", key="ng_stop"):
         _stop_neuroglancer(ng)
         st.rerun()
+    _, alive, _ = run(get_client(), core.serve_alive_command(ng), timeout=30)
+    log_text = read_remote(get_client(), ng["log"]) or ""
+    if alive.strip() == "STOPPED":
+        tunnel = _tunnels().pop(ng["log"], None)
+        if tunnel is not None:
+            tunnel.close()
+        why = core.why_killed(log_text[-20000:]) or core.last_error_line(
+            log_text
+        )
+        c1.warning(
+            "The Neuroglancer server has stopped"
+            + (f": {why}" if why else "")
+            + ". Start it again for a new link.",
+            icon=":material/power_off:",
+        )
+        if c1.button("Start again", key="ng_again"):
+            st.session_state.pop("neuroglancer", None)
+            st.rerun()
+        return
+    info = core.parse_serve(log_text)
     if info is None:
         c1.info(
             "Starting the server"
@@ -3894,20 +4078,33 @@ def neuroglancer_view(store: str) -> None:
     tunnel = _tunnels().get(ng["log"])
     if tunnel is None:
         tunnel = _tunnels()[ng["log"]] = _open_tunnel(
-            get_client(), host, int(info["port"])
+            get_client(),
+            host,
+            int(info["port"]),
+            local_port=int(ng.get("local_port") or 0),
+            reopen=_reopen(),
         )
     local = tunnel.server_address[1]
     link = core.neuroglancer_link(
-        info["state"], int(info["port"]), local, info.get("viewer")
+        info["state"],
+        int(info.get("link_port") or info["port"]),
+        local,
+        info.get("viewer"),
     )
     c1.link_button(
         "Open Neuroglancer", link, icon=":material/open_in_new:", type="primary"
     )
+    if info.get("link_port") and int(info["link_port"]) != local:
+        c1.warning(
+            f"Port {info['link_port']} was taken on this computer meanwhile: "
+            "the viewer may open without data. Stop, then start it again."
+        )
     st.caption(
         f"Served from {info['host']}:{info['port']}, tunnelled to "
         f"localhost:{local} on the computer this launcher runs on (the "
         "browser must be there too). Each channel is a layer, the first "
-        "shown; the label images are segmentation layers: tick them."
+        "shown; the label images are segmentation layers: tick them. "
+        "The single xy panel is the fast one: side views read every plane."
     )
 
 
@@ -4163,6 +4360,11 @@ with st.sidebar:
             icon=":material/link:",
         )
         if st.button("Disconnect", icon=":material/link_off:"):
+            # The Neuroglancer tunnels' own connections too (the servers
+            # run on: Stop ends them).
+            for tunnel in list(_tunnels().values()):
+                tunnel.close()
+            _tunnels().clear()
             get_client().close()
             _forget_resume(close=True)
             # Not straight back in with the SSH key: you asked to leave.
