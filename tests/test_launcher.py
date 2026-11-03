@@ -2607,5 +2607,20 @@ def test_the_tunnel_forwards_to_the_server(tmp_path):
     body = urllib.request.urlopen(f"http://127.0.0.1:{local}/hello.txt").read()
     assert body == b"through the tunnel"
     assert opened == [("direct-tcpip", ("127.0.0.1", port))]
+    # Many at once, as Neuroglancer asks, and a browser hanging up early:
+    # every answer arrives, and nothing is left broken.
+    from concurrent.futures import ThreadPoolExecutor
+
+    def fetch(_):
+        return urllib.request.urlopen(
+            f"http://127.0.0.1:{local}/hello.txt"
+        ).read()
+
+    with ThreadPoolExecutor(16) as pool:
+        assert set(pool.map(fetch, range(64))) == {b"through the tunnel"}
+    rude = socket.create_connection(("127.0.0.1", local))
+    rude.sendall(b"GET /hello.txt HTTP/1.1\r\nHost: x\r\n\r\n")
+    rude.close()
+    assert fetch(0) == b"through the tunnel"
     tunnel.shutdown()
     httpd.shutdown()
