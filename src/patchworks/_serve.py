@@ -38,6 +38,10 @@ class _Handler(SimpleHTTPRequestHandler):
 
     token = ""
     store_name = ""
+    # Keep-alive: through the SSH tunnel every new connection is a new
+    # channel to the node, and the browser opens only six at a time.
+    # HTTP/1.0 closed one after every chunk.
+    protocol_version = "HTTP/1.1"
     #: `host:port` of the Neuroglancer server running beside this one, to
     #: which every path outside `/<token>/` is passed; "" for none.
     upstream = ""
@@ -60,6 +64,7 @@ class _Handler(SimpleHTTPRequestHandler):
     def do_OPTIONS(self) -> None:  # noqa: N802 - the CORS preflight
         """Answer the browser's CORS preflight."""
         self.send_response(HTTPStatus.NO_CONTENT)
+        self.send_header("Content-Length", "0")
         self.end_headers()
 
     def translate_path(self, path: str) -> str:
@@ -194,6 +199,7 @@ class _Handler(SimpleHTTPRequestHandler):
             f.close()
             self.send_response(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
             self.send_header("Content-Range", f"bytes */{size}")
+            self.send_header("Content-Length", "0")
             self.end_headers()
             return None
         self.send_response(HTTPStatus.PARTIAL_CONTENT)

@@ -195,3 +195,30 @@ def test_the_viewer_holds_the_state():
     assert netloc.startswith("127.0.0.1:") and path.startswith("/v/")
     page = urllib.request.urlopen(f"http://{netloc}{path}").read()
     assert b"<html" in page.lower()
+
+
+def test_one_connection_serves_many_chunks(server, store):
+    """Keep-alive: through the SSH tunnel a new connection is a new channel
+    to the node, so the chunks share one (HTTP/1.0 closed it each time)."""
+    import http.client
+    from pathlib import Path
+
+    whole = (Path(store) / "zarr.json").read_bytes()
+    conn = http.client.HTTPConnection(server.removeprefix("http://"))
+    for headers in ({}, {"Range": "bytes=0-3"}, {"Range": "bytes=-2"}):
+        conn.request("GET", "/secret/image.zarr/zarr.json", headers=headers)
+        r = conn.getresponse()
+        body = r.read()
+        assert r.version == 11 and not r.will_close
+        assert body in (whole, whole[:4], whole[-2:])
+    conn.request("OPTIONS", "/secret/image.zarr/zarr.json")
+    r = conn.getresponse()
+    r.read()
+    assert r.status == 204
+    conn.request("GET", "/secret/image.zarr/missing")
+    r = conn.getresponse()
+    r.read()
+    assert r.status == 404
+    conn.request("GET", "/secret/image.zarr/zarr.json")
+    assert conn.getresponse().read() == whole  # still the same connection
+    conn.close()
