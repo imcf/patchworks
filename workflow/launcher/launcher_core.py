@@ -2982,7 +2982,21 @@ def status_command(job: dict[str, Any]) -> str:
     return f"kill -0 {pid} 2>/dev/null && echo RUNNING || echo DONE"
 
 
-def plan_row(label: str, plan: dict[str, Any]) -> dict[str, Any]:
+#: What launching does to a segmentation (check.py's `launch` state), as
+#: the plan table says it.
+LAUNCH_STATES = {
+    "new": "segment",
+    "resume": "continue",
+    "redo": "REDO (settings changed)",
+    "done": "nothing (finished)",
+    "done_other_settings": "nothing (finished, other settings)",
+    "unknown": "?",
+}
+
+
+def plan_row(
+    label: str, plan: dict[str, Any], launch: dict[str, Any] | None = None
+) -> dict[str, Any]:
     """One readable table row for a plan (`_pw.plan_run`).
 
     Parameters
@@ -2991,6 +3005,8 @@ def plan_row(label: str, plan: dict[str, Any]) -> dict[str, Any]:
         The segmentation.
     plan : dict
         Its plan.
+    launch : dict, optional
+        What launching does to it (check.py's `launch`): its first row.
 
     Returns
     -------
@@ -3028,8 +3044,10 @@ def plan_row(label: str, plan: dict[str, Any]) -> dict[str, Any]:
         return "?" if value is None else value
 
     gib = 1024**3
-    row = {
-        "segmentation": label,
+    row = {"segmentation": label}
+    if launch:
+        row["on Launch"] = LAUNCH_STATES.get(launch.get("state"), "?")
+    row |= {
         "image shape": axes(plan.get("shape")),
         "tile shape": axes(plan.get("tile_shape")),
         "grid": axes(plan.get("grid")),

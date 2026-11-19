@@ -65,7 +65,13 @@ while connected; **Disconnect** closes it.
    [`pixi run check`](snakemake.md#3-run) on the cluster: every problem
    the run would hit and, once the image is converted (*Convert only*),
    tiles, GPU jobs and the size of the result; *Try it on a GPU* draws one segmented tile per segmentation, to judge the settings by, and adds the
-   hours. *Dry run* first,
+   hours. It also says what Launch will do to each segmentation: segment
+   it, continue it (jobs done so far), leave it (finished), or tile it again
+   because a setting that decides its tiles changed since they were made
+   (which one, from what to what, and how many GPU jobs that redoes). A
+   finished segmentation is never redone by itself: when its settings
+   changed since, the check says so, and deleting its folder in work_dir
+   redoes it. *Dry run* first,
    then *Submit*. The controller runs as a small SLURM job (or on the login
    node), so you can close the browser. Launching the same settings again
    resumes.

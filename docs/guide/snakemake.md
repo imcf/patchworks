@@ -103,7 +103,12 @@ follows the jobs until the end. A run that stops (or fails) resumes where
 it was when started again with the same command; finished steps are not
 redone. Once the image is converted, `check` also plans each
 segmentation with the run's own tile sizing: tiles, how many hold signal,
-GPU jobs, memory per tile, size of the result. `check $C --sample 3` times
+GPU jobs, memory per tile, size of the result; and says what starting the
+run does to each (`on launch:`): segment it, continue it, leave it
+(finished), or tile it again because a setting that decides its tiles
+changed (`cellpose.do_3D: False -> True`), redoing its GPU jobs. A finished
+segmentation is left as it is even then: delete its folder in work_dir to
+redo it. `check $C --sample 3` times
 the method on 3 real tiles for the hours a job and the run will take, and
 `--preview DIR` adds a picture of one of them per segmentation, its
 objects outlined, to judge the settings before the run: run it where the
