@@ -181,8 +181,9 @@ work_dir/
 
 Look at the results with `pixi run -e viewer napari work_dir/image.zarr`,
 and check them with `patchworks review` ([Reviewing](review.md)). The store
-opens in any OME-Zarr reader; a store from an older version can be brought
-up to the spec with `patchworks fix-metadata image.zarr`.
+opens in any OME-Zarr reader: `pixi run validate work_dir/image.zarr`
+checks it against the spec and says what to repair; a store from an older
+version is brought up to it with `patchworks fix-metadata image.zarr`.
 
 ## Options worth knowing
 

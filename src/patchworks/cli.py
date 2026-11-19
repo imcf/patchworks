@@ -426,6 +426,45 @@ def _cmd_info(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_validate(args: argparse.Namespace) -> int:
+    """Run `patchworks validate`: check a store against the spec.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        The parsed flags: store, quiet.
+
+    Returns
+    -------
+    int
+        1 when something readers may refuse was found, else 0.
+    """
+    from ._validate import validate
+
+    findings, summary, spec_checked = validate(args.store)
+    if not args.quiet:
+        print("\n".join(summary))
+        print()
+    if not spec_checked:
+        print(
+            "OME-Zarr spec not checked: needs the validator "
+            '(pip install "patchworks[validate]")'
+        )
+    for finding in findings:
+        print(finding)
+    errors = sum(f.error for f in findings)
+    warnings = len(findings) - errors
+    if not findings:
+        print(
+            "valid: "
+            + ("the OME-Zarr spec and " if spec_checked else "")
+            + "what patchworks writes"
+        )
+    else:
+        print(f"{errors} error(s), {warnings} warning(s)")
+    return 1 if errors else 0
+
+
 def _cmd_fix_metadata(args: argparse.Namespace) -> int:
     """Run `patchworks fix-metadata`: repair NGFF metadata, name channels.
 
@@ -958,6 +997,17 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("info", help="levels, chunks, codecs and labels")
     p.add_argument("store")
     p.set_defaults(func=_cmd_info)
+
+    p = sub.add_parser(
+        "validate",
+        help="check a store against the OME-Zarr spec and what patchworks "
+        "writes (exit status 1 on errors)",
+    )
+    p.add_argument("store")
+    p.add_argument(
+        "-q", "--quiet", action="store_true", help="only what is wrong"
+    )
+    p.set_defaults(func=_cmd_validate)
 
     p = sub.add_parser(
         "fix-metadata",

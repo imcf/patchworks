@@ -19,7 +19,7 @@ cudadecon = ">=0.7.0,<0.8" # for the DoG plugin's deconvolution
 
 [pypi-dependencies]
 # This clone's own patchworks: `git pull` updates scripts and library together.
-patchworks = { path = "..", editable = true, extras = ["workflow", "cellpose", "imaris", "bioio", "dog", "neuroglancer"] }
+patchworks = { path = "..", editable = true, extras = ["workflow", "cellpose", "imaris", "bioio", "dog", "neuroglancer", "validate"] }
 
 [feature.cp3.pypi-dependencies]
 cellpose = ">=3.0,<4"
@@ -105,5 +105,6 @@ channels = "python scripts/channels.py" # <config>: a picture per channel, once 
 status = "python scripts/status.py" # <config or multi config>: how far it got
 zip = "python scripts/export_iso.py --format zip" # --store image.zarr
 serve = "patchworks serve" # <work_dir>/image.zarr: for Neuroglancer, through an SSH tunnel
+validate = "patchworks validate" # <work_dir>/image.zarr: against the OME-Zarr spec
 iso = "python scripts/export_iso.py" # needs xorriso, genisoimage or mkisofs
 reshard = "python scripts/reshard_store.py" # --store image.zarr: repack with shards

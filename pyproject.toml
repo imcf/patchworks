@@ -148,10 +148,14 @@ dev = [
     "pandas>=2.0",
     "ruff==0.15.18",
     "mypy>=1.10",
+    # the OME-Zarr spec validator: tests/test_validate.py
+    "yaozarrs[io]",
 ]
 docs = ["zensical>=0.0.72", "mkdocstrings[python]>=0.24"]
+# `patchworks validate`: the OME-Zarr spec validator
+validate = ["yaozarrs[io]"]
 all = [
-    "patchworks[io,gpu,distributed,bioio,imaris,napari]",
+    "patchworks[io,gpu,distributed,bioio,imaris,napari,validate]",
     "psutil",
     "tqdm",
     "scikit-image",
