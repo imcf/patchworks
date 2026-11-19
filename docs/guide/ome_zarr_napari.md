@@ -127,7 +127,10 @@ deep, at most 256 x 256), cut on request from the store's own and kept
 in memory a while (up to 2 GB, a third of the job's memory): a view
 costs the planes shown, not the 14 planes of a label chunk, and a side
 view one strip of each plane, not whole 1024 x 1024 planes. The store
-itself is not changed.
+itself is not changed. Label images written since 3.6 are stored that way
+already (planes of 512 x 512 in shards, see `chunk_layout`), which helps
+napari and every other reader too; `pixi run reshard --store image.zarr
+--layout viewer` rewrites an older store so.
 
 The viewer itself comes from the same server, through the same tunnel
 (the `neuroglancer` package, in the workflow's environment; `pip install

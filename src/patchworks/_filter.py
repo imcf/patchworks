@@ -399,7 +399,6 @@ def filter_labels(
     tuple
         `(out, kept, dropped)`.
     """
-    import dask.array as da
 
     from ._io import open_group_any
     from ._provenance import PROVENANCE_KEY
@@ -418,7 +417,9 @@ def filter_labels(
         keep &= _lengths(store, name, cols) >= float(min_length)
     labels = np.asarray(cols["label"], dtype=np.int64)
     group = open_group_any(group_path)
-    level0 = da.from_zarr(_level0(group))
+    from ._chunks import dask_from_zarr
+
+    level0 = dask_from_zarr(_level0(group))
     lut = np.zeros(int(labels.max(initial=0)) + 1, dtype=level0.dtype)
     lut[labels[keep]] = np.arange(1, int(keep.sum()) + 1, dtype=lut.dtype)
     filtered = level0.map_blocks(lambda b: lut[b], dtype=level0.dtype)

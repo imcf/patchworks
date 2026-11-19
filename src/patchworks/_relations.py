@@ -12,7 +12,7 @@ import dask.array as da
 import numpy as np
 import zarr
 
-from ._chunks import cpu_allocation
+from ._chunks import cpu_allocation, dask_from_zarr, io_chunks
 from ._progress import PROGRESS_INTERVAL_S as _PROGRESS_INTERVAL_S
 from ._progress import log_progress
 
@@ -117,7 +117,7 @@ def _as_source(source, component: str):
         try:
             return zarr.open_array(str(source), path=component, mode="r")
         except Exception:
-            return da.from_zarr(str(source), component=component)
+            return dask_from_zarr(str(source), component=component)
     return source
 
 
@@ -135,7 +135,7 @@ def _chunk_grid(arr) -> tuple:
         A zarr array's chunk shape, or a dask array's chunk sizes per axis.
     """
     if isinstance(arr, zarr.Array):
-        return tuple(int(c) for c in arr.chunks)
+        return io_chunks(arr)
     return tuple(tuple(int(x) for x in c) for c in arr.chunks)
 
 

@@ -340,13 +340,20 @@ def from_zarr_any(path: Union[str, Path], component: str | None = None):
     """
     import dask.array as _da
 
+    from ._chunks import view_chunks
+
     source, prefix = open_zarr_source(path)
     inner = _component(prefix, component) if component else prefix
-    return (
-        _da.from_zarr(source, component=inner)
-        if inner
-        else _da.from_zarr(source)
-    )
+    try:
+        arr = zarr.open_array(source, path=inner or "", mode="r")
+    except Exception:  # not an array: let dask say what it is
+        return (
+            _da.from_zarr(source, component=inner)
+            if inner
+            else _da.from_zarr(source)
+        )
+    # A sharded array's chunks are small: blocks of a plane of a shard
+    return _da.from_zarr(arr, chunks=view_chunks(arr))
 
 
 def _component(prefix: str, name: str) -> str:
@@ -411,6 +418,11 @@ def load_ome_zarr(
         ) from exc
 
     zarr_chunks = chunks
+    if chunks is None:
+        from ._chunks import view_chunks
+
+        # A sharded array's chunks are small: blocks of a plane of a shard
+        zarr_chunks = view_chunks(root[path])
     if chunks is not None and channel is not None:
         zarr_ndim = len(root[path].shape)
         if zarr_ndim > len(chunks):

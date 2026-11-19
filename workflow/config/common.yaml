@@ -14,6 +14,7 @@ tile_shape: [16, 1024, 1024] # the same for every segmentation; "auto" sizes it
 # convert_chunks: null
 # shard: false            # true: far fewer files
 # shard_labels: false     # also shard label level 0 (one extra pass)
+# chunk_layout: "auto"    # "viewer": planes of 512x512 in shards (labels: auto)
 # ngff_version: "auto"    # or "0.4" for older readers
 # compression: "zstd"     # or "zstd:3", "blosc", "none"
 # pyramid_levels: 5

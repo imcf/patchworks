@@ -6,7 +6,7 @@ import logging
 import numpy as np
 import zarr
 
-from ._chunks import chunk_slices
+from ._chunks import chunk_slices, io_chunks
 
 logger = logging.getLogger(__name__)
 
@@ -115,7 +115,8 @@ def relabel_sequential_zarr(store_path: str, component: str = "labels") -> int:
     """
     root = zarr.open_group(store_path, mode="r+")
     z = root[component]
-    z_shape, z_chunks = z.shape, z.chunks
+    # Whole shards: threads writing chunks of one shard lose each other's
+    z_shape, z_chunks = z.shape, io_chunks(z)
 
     # One chunk at a time in every dimension, never a whole z-slab.
     slices = chunk_slices(z_shape, z_chunks)

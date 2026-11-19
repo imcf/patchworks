@@ -35,7 +35,7 @@ import dask.array as da
 import numpy as np
 import zarr
 
-from ._chunks import chunk_slices, cpu_allocation
+from ._chunks import chunk_slices, cpu_allocation, dask_from_zarr, io_chunks
 from ._io import is_remote, zarr_compressor_kwargs
 from ._progress import track
 
@@ -1422,7 +1422,7 @@ def zarr_native_merge(
     """
     root = zarr.open_group(staged_path, mode="r+")
     arr = root[staged_component]
-    shape, chunk_shape = arr.shape, arr.chunks
+    shape, chunk_shape = arr.shape, io_chunks(arr)
 
     n_per_dim = [(s + c - 1) // c for s, c in zip(shape, chunk_shape)]
     n_chunks = int(np.prod(n_per_dim))
@@ -1937,5 +1937,5 @@ def merge_tile_labels(
             else:
                 _remove_scratch(stage_cleanup)
 
-    result = da.from_zarr(effective_out, component=output_component)
+    result = dask_from_zarr(effective_out, component=output_component)
     return (result, n_objects) if return_count else result

@@ -307,6 +307,7 @@ def build_config(v: dict[str, Any]) -> dict[str, Any]:
         "reuse_pyramid": v.get("reuse_pyramid", False),
         "convert_chunks": _yaml_or(v.get("convert_chunks", ""), None),
         "shard": v.get("shard", False),
+        "chunk_layout": v.get("chunk_layout", "auto"),
         "ngff_version": v.get("ngff_version", "auto"),
         "sequence_pattern": v.get("sequence_pattern") or None,
         "compression": v.get("compression", "zstd"),
@@ -1101,6 +1102,7 @@ def multi_problems(files: dict[str, dict[str, Any]]) -> list[str]:
         "sequence_pattern",
         "convert_chunks",
         "shard",
+        "chunk_layout",
         "reuse_pyramid",
         "ngff_version",
     ):
@@ -3333,6 +3335,8 @@ def failure_key(failure: dict[str, Any]) -> str:
 
 DOG_MODULE = "patchworks.plugins.dog"
 COMPRESSIONS = ("zstd", "zstd:3", "blosc", "blosc:lz4", "none")
+#: The chunk layouts a config may ask for (`chunk_layout`).
+CHUNK_LAYOUTS = ("auto", "viewer", "tiles")
 RUN_KINDS = ("One segmentation", "Several segmentations + relations")
 
 
@@ -3390,6 +3394,11 @@ def shared_state(cfg: dict[str, Any]) -> dict[str, Any]:
         "sequence_pattern": _text(cfg.get("sequence_pattern")),
         "reuse_pyramid": bool(cfg.get("reuse_pyramid", False)),
         "shard": bool(cfg.get("shard", False)),
+        "chunk_layout": (
+            str(cfg.get("chunk_layout", "auto"))
+            if cfg.get("chunk_layout", "auto") in CHUNK_LAYOUTS
+            else "auto"
+        ),
         "ngff_version": str(cfg.get("ngff_version", "auto")),
         "compression": compression if compression in COMPRESSIONS else "zstd",
         "convert_chunks": _flow(cfg.get("convert_chunks")),

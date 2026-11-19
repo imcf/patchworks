@@ -54,6 +54,14 @@ HELP = {
     "shard": "Pack the converted image's many small chunk files into fewer, "
     "larger ones (zarr sharding). For filesystems that dislike many small "
     "files, or a file quota. Choose before converting.",
+    "chunk_layout": "How the arrays are cut into chunks. **auto**: label "
+    "images in planes of 512 x 512 packed in shards, which viewers "
+    "(Neuroglancer, napari) read several times faster, unless the store's "
+    "label images are already in the older layout (they then keep it); the "
+    "image as before. **viewer**: the image too (choose before converting). "
+    "**tiles**: as before 3.6, chunks following the tiles. An existing store "
+    "is rewritten for viewers with `pixi run reshard --store image.zarr "
+    "--layout viewer`.",
     "ngff_version": "The OME-Zarr version written. **auto**: 0.5 (zarr v3). "
     "**0.4**: zarr v2, for older readers (some Fiji/Java tools); no "
     "sharding.",

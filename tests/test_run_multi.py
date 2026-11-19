@@ -624,7 +624,7 @@ def test_merge_shards_the_label_pyramid():
     src = (_workflow_dir() / "scripts" / "merge.py").read_text()
     # The call's own arguments contain ")", so end it on the closing line.
     register = src.split("register_labels(")[1].split("\n)")[0]
-    assert 'shard=cfg.get("shard", False)' in register
+    assert 'else cfg.get("shard", False)' in register
 
 
 def test_ngff_version_reaches_convert_and_merge():
@@ -872,7 +872,7 @@ def test_merge_reports_the_label_chunk_cost():
     # The note has to name the remedy, and only fire when it is not taken.
     # Both keys, not just shard_labels: each pyramid level holds about as
     # many chunks as level 0, so level 0 is under a third of the group.
-    assert 'if (not shard_labels or not cfg.get("shard"))' in src
+    assert 'and (not shard_labels or not cfg.get("shard"))' in src
     assert "`shard` covers levels 1..N" in src
     # And echo the values it read: a key set in the wrong config file is
     # otherwise indistinguishable from the feature not working.
@@ -904,7 +904,7 @@ def test_reshard_script_skips_already_sharded_arrays():
     spec.loader.exec_module(module)
 
     src = (_workflow_dir() / "scripts" / "reshard_store.py").read_text()
-    assert "already sharded" in src
+    assert "already " in src and "sharded." in src
     assert "--labels-only" in src
     assert "--dry-run" in src
     # It must never silently eat a merge-state attr.
@@ -2280,6 +2280,7 @@ def test_every_setting_is_listed_where_it_belongs():
         "convert_chunks",
         "shard",
         "shard_labels",
+        "chunk_layout",
         "ngff_version",
         "compression",
         "pyramid_levels",
@@ -2869,3 +2870,120 @@ def test_segment_job_refuses_tiles_prepared_for_other_settings(
     script = _workflow_dir() / "scripts" / "segment_tile.py"
     with pytest.raises(SystemExit, match="prepared with other settings"):
         runpy.run_path(str(script), init_globals={"snakemake": snake})
+
+
+def _merge_staged(tmp_path, *, layout=None, old_labels=False):
+    """merge.py on two segmented tiles (an object across their seam, one
+    inside the second): the label image it writes, opened."""
+    import json
+    import logging
+    import runpy
+    import sys
+    from types import SimpleNamespace
+
+    import numpy as np
+    import zarr
+
+    from patchworks.plugins.ome_zarr import to_ome_zarr, write_labels
+
+    work = tmp_path / "work"
+    run = work / "cells"
+    (run / "seg").mkdir(parents=True)
+    store = work / "image.zarr"
+    to_ome_zarr(
+        np.zeros((1, 4, 32, 64), "uint16"),
+        store,
+        axes="czyx",
+        n_levels=2,
+        progress=False,
+    )
+    if old_labels:
+        # A label image of the store, in the tiles layout
+        write_labels(
+            store,
+            np.ones((4, 32, 64), "int32"),
+            name="nuclei",
+            layout="tiles",
+            progress=False,
+        )
+    staged = zarr.open_group(str(run / "stage.zarr"), mode="w").create_array(
+        "staged", shape=(4, 32, 64), chunks=(4, 32, 32), dtype="uint32"
+    )
+    tile0 = np.zeros((4, 32, 32), "uint32")
+    tile0[1:3, 4:12, 26:32] = 1  # to the seam at x = 32
+    tile1 = np.zeros((4, 32, 32), "uint32")
+    tile1[1:3, 4:12, 0:6] = 1  # its other half
+    tile1[0:2, 20:30, 10:20] = 2
+    staged[:, :, :32], staged[:, :, 32:] = tile0, tile1
+    (run / "seg" / "0.done").write_text(json.dumps({"counts": {"0": 1}}))
+    (run / "seg" / "1.done").write_text(json.dumps({"counts": {"1": 2}}))
+    tiles = run / "tiles.json"
+    tiles.write_text(
+        json.dumps(
+            {
+                "batches": [[0], [1]],
+                "target_path": str(run / "stage.zarr"),
+                "target_component": "staged",
+                "tile_shape": [4, 32, 32],
+                "overlap": [0, 0, 0],
+            }
+        )
+    )
+    config = {"work_dir": str(work), "label_name": "cells", "level": 0}
+    if layout:
+        config["chunk_layout"] = layout
+    snake = SimpleNamespace(
+        config=config,
+        input=SimpleNamespace(tiles=str(tiles)),
+        output=[str(run / "labels.done")],
+        log=[str(run / "logs" / "merge.log")],
+    )
+    scripts = str(_workflow_dir() / "scripts")
+    sys.path.insert(0, scripts)
+    saved = sys.stdout, sys.stderr, list(logging.getLogger().handlers)
+    try:
+        runpy.run_path(f"{scripts}/merge.py", init_globals={"snakemake": snake})
+    finally:
+        sys.path.remove(scripts)
+        sys.stdout, sys.stderr = saved[0], saved[1]
+        logging.getLogger().handlers[:] = saved[2]
+    assert (run / "labels.done").exists()
+    return zarr.open_group(str(store / "labels" / "cells"), mode="r")
+
+
+@pytest.mark.parametrize(
+    "layout, old_labels, viewer",
+    [
+        (None, False, True),
+        (None, True, False),
+        ("tiles", False, False),
+        ("viewer", True, True),
+    ],
+)
+def test_merged_labels_are_written_for_viewers(
+    tmp_path, layout, old_labels, viewer
+):
+    """A new store's labels in planes of chunks inside shards; a store
+    whose labels are in the tiles layout keeps it (unless asked); the
+    labels the same either way, with their pyramid, table and values."""
+    import numpy as np
+
+    from patchworks._tables import is_stale, read_columns
+    from patchworks.plugins.ome_zarr import read_ngff_attr
+
+    group = _merge_staged(tmp_path, layout=layout, old_labels=old_labels)
+    level0, level1 = group["0"], group["1"]
+    labels = level0[...]
+    assert len(np.unique(labels)) == 3  # the seam-crossing object is one
+    assert labels[1, 5, 30] == labels[1, 5, 33] != 0
+    if viewer:
+        assert level0.chunks == (1, 32, 64) and level0.shards == (4, 32, 64)
+        assert level1.chunks == (1, 16, 32) and level1.shards == (4, 16, 32)
+    else:
+        assert level0.shards is None and level0.chunks == (4, 32, 32)
+    assert level1[...].max() == labels.max()  # the pyramid, from level 0
+    assert dict(group.attrs)["n_objects"] == 2
+    path = str(tmp_path / "work" / "image.zarr" / "labels" / "cells")
+    assert not is_stale(path) and len(read_columns(path)["label"]) == 2
+    entries = read_ngff_attr(group.attrs, "image-label")["properties"]
+    assert [e["label-value"] for e in entries] == [1, 2]
