@@ -59,6 +59,112 @@ def load(path: Path) -> tuple[list[Path], list[dict], bool]:
     return paths, cfgs, True
 
 
+def _pinned(cfgs: list[dict], multi: bool) -> dict:
+    """The tile shape a multi run pins every config to, if it does.
+
+    `run_multi` pins `tile_shape: "auto"` configs that would size their
+    tiles differently to one shape, written to
+    `.multi_tile_shape.generated.yaml`; their runs are prepared with that.
+
+    Parameters
+    ----------
+    cfgs : list of dict
+        The segmentation configs.
+    multi : bool
+        Whether they are a multi config's.
+
+    Returns
+    -------
+    dict
+        `{"tile_shape": [...]}` from the last run's file; empty when none.
+    """
+    if not multi or any(c.get("tile_shape", "auto") != "auto" for c in cfgs):
+        return {}
+    import yaml
+
+    path = Path(cfgs[0]["work_dir"]) / ".multi_tile_shape.generated.yaml"
+    try:
+        return dict(yaml.safe_load(path.read_text()) or {})
+    except (OSError, ValueError, yaml.YAMLError):
+        return {}
+
+
+def launch_effect(cfg: dict, plan: dict | None, pinned: dict) -> dict:
+    """What launching does to one segmentation, from its markers.
+
+    Parameters
+    ----------
+    cfg : dict
+        The segmentation's config, defaults applied.
+    plan : dict or None
+        Its plan (`_pw.plan_run`), for the GPU jobs; None before
+        conversion.
+    pinned : dict
+        A multi run's pinned tile shape (:func:`_pinned`).
+
+    Returns
+    -------
+    dict
+        `state` (`"new"`, `"resume"`, `"redo"`, `"done"` or
+        `"done_other_settings"`), `text` (one line) and `changes` (the
+        settings that changed since its tiles were prepared).
+    """
+    import json
+
+    from _pw import preparation_changes
+    from status import segmentation_status
+
+    status = segmentation_status(cfg)
+    run = Path(cfg["work_dir"]) / cfg.get("label_name", "labels")
+    try:
+        manifest = json.loads((run / "tiles.json").read_text())
+    except (OSError, ValueError):
+        manifest = None
+    changes = (
+        preparation_changes(manifest, {**cfg, **pinned}) if manifest else []
+    )
+    jobs = (plan or {}).get("gpu_jobs")
+    jobs_text = f"{jobs} GPU jobs" if jobs is not None else "its GPU jobs"
+    if status["merged"]:
+        if changes:
+            state = "done_other_settings"
+            text = (
+                f"finished with other settings ({'; '.join(changes)}): left "
+                f"as it is. To redo it with these, delete {run}"
+            )
+        else:
+            state, text = "done", "finished: nothing to redo"
+    elif changes:
+        state = "redo"
+        done = status["batches_done"]
+        text = (
+            f"settings changed since its tiles were prepared "
+            f"({'; '.join(changes)}): tiled again, and {jobs_text} run"
+            + (f" (the {done} done so far are redone)" if done else "")
+        )
+    elif manifest is not None and status["batches"]:
+        state = "resume"
+        text = (
+            f"continues: {status['batches_done']} of {status['batches']} "
+            "GPU jobs done"
+            + (
+                f", {status['tiles_done']} of {status['tiles']} tiles"
+                if status["tiles"]
+                else ""
+            )
+        )
+    else:
+        state = "new"
+        text = (
+            f"tiled and segmented: {jobs_text}"
+            if plan
+            else "tiled and segmented once the image is converted"
+        )
+    if status.get("waits_for"):
+        text += f"; starts once {status['waits_for']} is merged"
+    return {"state": state, "text": text, "changes": changes}
+
+
 def check(
     path: Path, sample: int = 0, preview: str | Path | None = None
 ) -> dict:
@@ -78,7 +184,8 @@ def check(
     -------
     dict
         `shared_problems`, `converted`, and per segmentation its
-        `problems` and `plan`.
+        `problems`, `plan` and `launch` (what launching does to it:
+        :func:`launch_effect`).
     """
     from _pw import plan_run, validate_config
 
@@ -89,6 +196,7 @@ def check(
     }
     store = Path(cfgs[0]["work_dir"]) / "image.zarr"
     report["converted"] = converted(store)
+    pinned = _pinned(cfgs, multi)
     for p, cfg in zip(paths, cfgs):
         entry: dict = {
             "label_name": cfg.get("label_name", "labels"),
@@ -115,6 +223,14 @@ def check(
                 )
             except Exception as exc:  # reported, the other configs go on
                 entry["plan_error"] = f"{type(exc).__name__}: {exc}"
+        try:
+            entry["launch"] = launch_effect(cfg, entry["plan"], pinned)
+        except Exception as exc:  # reported, the check goes on
+            entry["launch"] = {
+                "state": "unknown",
+                "text": f"could not tell ({type(exc).__name__}: {exc})",
+                "changes": [],
+            }
         report["segmentations"].append(entry)
     # A plan that fails (an overlap as wide as the tile) fails prepare too.
     report["valid"] = not report["shared_problems"] and not any(
@@ -159,6 +275,8 @@ def format_report(report: dict) -> str:
             lines += [f"  - {p}" for p in e["problems"]]
             continue
         lines.append(f"{e['label_name']}: config OK")
+        if e.get("launch"):
+            lines.append(f"  on launch: {e['launch']['text']}")
         plan = e.get("plan")
         if e.get("plan_error"):
             lines.append(f"  plan failed: {e['plan_error']}")

@@ -116,6 +116,39 @@ def prepared_settings(cfg: dict) -> dict:
     return json.loads(json.dumps(picked, sort_keys=True, default=str))
 
 
+def _changes(old: dict, new: dict, prefix: str = "") -> list[str]:
+    """Each setting that differs between two sets of settings, dotted.
+
+    Parameters
+    ----------
+    old, new : dict
+        The settings before and now; nested dicts (a `cellpose:` block)
+        are compared key by key.
+    prefix : str, optional
+        Put before each key (the enclosing keys, dotted).
+
+    Returns
+    -------
+    list of str
+        `"key: old -> new"`, sorted by key.
+
+    Examples
+    --------
+    >>> _changes({"a": 1, "c": {"x": 1, "y": 2}}, {"a": 1, "c": {"x": 1}})
+    ['c.y: 2 -> None']
+    """
+    out = []
+    for key in sorted(set(old) | set(new)):
+        a, b = old.get(key), new.get(key)
+        if a == b:
+            continue
+        if isinstance(a, dict) and isinstance(b, dict):
+            out += _changes(a, b, f"{prefix}{key}.")
+        else:
+            out.append(f"{prefix}{key}: {a!r} -> {b!r}")
+    return out
+
+
 def preparation_changes(manifest: dict, cfg: dict) -> list[str]:
     """How *cfg* differs from the settings its run was prepared with.
 
@@ -149,16 +182,11 @@ def preparation_changes(manifest: dict, cfg: dict) -> list[str]:
     ['cellpose.do_3D: tiles of one plane (prepared for 2-D), now 3-D']
     >>> m = {"settings": prepared_settings({"cellpose": {"do_3D": False}})}
     >>> preparation_changes(m, {"cellpose": {"do_3D": True}})
-    ["cellpose: {'do_3D': False} -> {'do_3D': True}"]
+    ['cellpose.do_3D: False -> True']
     """
     saved = manifest.get("settings")
     if saved is not None:
-        now = prepared_settings(cfg)
-        return [
-            f"{k}: {saved.get(k)!r} -> {now.get(k)!r}"
-            for k in sorted(set(saved) | set(now))
-            if saved.get(k) != now.get(k)
-        ]
+        return _changes(saved, prepared_settings(cfg))
     changes = []
     tile = list(manifest.get("tile_shape") or [])
     wanted = cfg.get("tile_shape", "auto")

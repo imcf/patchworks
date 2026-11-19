@@ -802,7 +802,7 @@ def test_a_run_prepared_for_other_settings_is_prepared_again(tmp_path):
     assert stale_preparation(cfg) == []  # the same config: nothing to redo
     now = {**cfg, "cellpose": {"do_3D": True, "diameter": 60}}
     (changed,) = stale_preparation(now)
-    assert changed.startswith("cellpose:") and "'do_3D': True" in changed
+    assert changed == "cellpose.do_3D: False -> True"
     clear_preparation(now)
     assert not (run / "tiles.json").exists()
     assert not (run / "seg").exists() and not (run / "stage.zarr.done").exists()

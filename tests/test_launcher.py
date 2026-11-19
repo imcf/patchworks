@@ -535,6 +535,11 @@ def test_required_fields_and_plan_helpers():
         },
     )
     assert timed["s / tile"] == 12.0 and timed["GPU hours"] == 3.2
+    # What Launch does to it comes first, after its name
+    redo = core.plan_row("cells", plan, {"state": "redo", "text": "..."})
+    assert list(redo)[:2] == ["segmentation", "on Launch"]
+    assert redo["on Launch"] == "REDO (settings changed)"
+    assert "on Launch" not in row
     assert core.last_error_line("a\nFileNotFoundError: x\n\n") == (
         "FileNotFoundError: x"
     )

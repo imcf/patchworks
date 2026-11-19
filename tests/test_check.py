@@ -369,3 +369,104 @@ def test_overlap_auto_from_the_cellpose_diameter(tmp_path):
     # The halo still fits the tile.
     spec, _ = _pw.resolve_overlap(cfg, 3, (126, 100, 100))
     assert spec == [33, 50, 50]
+
+
+def _prepared(tmp_path, cfg_path, batches_done=0, merged=False):
+    """Mark the run of *cfg_path* prepared (two batches) as it is now."""
+    from _pw import prepared_settings, with_defaults
+
+    cfg = with_defaults(yaml.safe_load(cfg_path.read_text()))
+    run = tmp_path / "w" / "cells"
+    (run / "seg").mkdir(parents=True)
+    manifest = {
+        "tile_shape": cfg["tile_shape"],
+        "batches": [[0, 1], [2]],
+        "settings": prepared_settings(cfg),
+    }
+    (run / "tiles.json").write_text(json.dumps(manifest))
+    for i in range(batches_done):
+        (run / "seg" / f"{i}.done").touch()
+    if merged:
+        (run / "labels.done").touch()
+    return run
+
+
+def test_what_launch_will_do(tmp_path):
+    """Before Launch: a new run is segmented, a started one continues, a
+    changed one is tiled again (with what changed), a finished one is
+    left alone -- also when its settings changed since, which it says."""
+    (tmp_path / "w").mkdir()
+    _converted(tmp_path / "w")
+    path = _config(tmp_path)
+
+    def launch():
+        seg = check.check(path)["segmentations"][0]
+        return seg["launch"], check.format_report(check.check(path))
+
+    effect, _ = launch()
+    assert effect == {
+        "state": "new",
+        "text": "tiled and segmented: 1 GPU jobs",
+        "changes": [],
+    }
+
+    run = _prepared(tmp_path, path, batches_done=1)
+    effect, text = launch()
+    assert effect["state"] == "resume"
+    assert effect["text"] == "continues: 1 of 2 GPU jobs done, 2 of 3 tiles"
+    assert "  on launch: continues: 1 of 2 GPU jobs done" in text
+
+    path = _config(tmp_path, tile_shape=[8, 64, 64], stitch="iou")
+    effect, _ = launch()
+    assert effect["state"] == "redo"
+    assert effect["changes"] == [
+        "stitch: 'touch' -> 'iou'",
+        "tile_shape: [8, 32, 32] -> [8, 64, 64]",
+    ]
+    assert effect["text"] == (
+        "settings changed since its tiles were prepared (stitch: 'touch' -> "
+        "'iou'; tile_shape: [8, 32, 32] -> [8, 64, 64]): tiled again, and "
+        "1 GPU jobs run (the 1 done so far are redone)"
+    )
+
+    (run / "labels.done").touch()
+    effect, _ = launch()
+    assert effect["state"] == "done_other_settings"
+    assert effect["text"].endswith(
+        f"left as it is. To redo it with these, delete {run}"
+    )
+    path = _config(tmp_path)
+    effect, _ = launch()
+    assert effect == {
+        "state": "done",
+        "text": "finished: nothing to redo",
+        "changes": [],
+    }
+
+
+def test_a_multi_runs_pinned_tile_shape_is_no_change(tmp_path):
+    """run_multi prepares "auto" configs with its pinned tile shape: that
+    is not a change of settings."""
+    from _pw import prepared_settings, with_defaults
+
+    cfg = {"work_dir": str(tmp_path / "w"), "tile_shape": "auto"}
+    (tmp_path / "w").mkdir()
+    (tmp_path / "w" / ".multi_tile_shape.generated.yaml").write_text(
+        "tile_shape: [8, 32, 32]\n"
+    )
+    pinned = check._pinned([cfg], multi=True)
+    assert pinned == {"tile_shape": [8, 32, 32]}
+    assert check._pinned([cfg], multi=False) == {}
+    run = tmp_path / "w" / "labels"
+    run.mkdir()
+    manifest = {
+        "batches": [[0]],
+        "settings": prepared_settings({**cfg, **pinned}),
+    }
+    (run / "tiles.json").write_text(json.dumps(manifest))
+    assert (
+        check.launch_effect(with_defaults(cfg), None, pinned)["state"]
+        == "resume"
+    )
+    effect = check.launch_effect(with_defaults(cfg), None, {})
+    assert effect["changes"] == ["tile_shape: [8, 32, 32] -> 'auto'"]

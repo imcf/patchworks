@@ -2247,8 +2247,17 @@ def show_check(report: dict) -> None:
             st.error(f"**{seg['label_name']}**: {problem}")
         if seg.get("plan_error"):
             st.error(f"**{seg['label_name']}**: {seg['plan_error']}")
+        # What Launch will do: redone work and ignored changes stand out.
+        launch = seg.get("launch") or {}
+        text = f"**{seg['label_name']}** on Launch: {launch.get('text')}"
+        if launch.get("state") == "redo":
+            st.warning(text, icon=":material/restart_alt:")
+        elif launch.get("state") == "done_other_settings":
+            st.warning(text, icon=":material/info:")
+        elif launch:
+            st.caption(text)
     rows = [
-        core.plan_row(seg["label_name"], seg["plan"])
+        core.plan_row(seg["label_name"], seg["plan"], seg.get("launch"))
         for seg in report["segmentations"]
         if seg.get("plan")
     ]
