@@ -175,3 +175,36 @@ def test_fix_metadata_drops_deleted_label_images_from_the_list(tmp_path):
     )
     root = zarr.open_group(path, mode="r")
     assert read_ngff_attr(root["labels"].attrs, "labels") == ["fresh"]
+
+
+@pytest.mark.parametrize("version", ["0.4", "0.5"])
+def test_label_images_link_back_to_their_image(tmp_path, version):
+    """`image-label` names its image (`source`), and fix-metadata adds
+    the link to label images written before, touching nothing else."""
+    from patchworks._provenance import PROVENANCE_KEY
+    from patchworks._tables import label_fingerprint
+    from patchworks.plugins.ome_zarr import write_ngff_attrs
+
+    path = _store(tmp_path, version)
+    cells = zarr.open_group(path, mode="r+")["labels"]["cells"]
+    assert read_ngff_attr(cells.attrs, "image-label")["source"] == {
+        "image": "../../"
+    }
+    # As older versions wrote it: no source
+    old = {"version": read_ngff_attr(cells.attrs, "image-label")["version"]}
+    write_ngff_attrs(cells, **{"image-label": old})
+    record = dict(cells.attrs)[PROVENANCE_KEY]
+    fingerprint = label_fingerprint(cells)
+
+    assert fix_ngff_metadata(path) == [
+        "labels/cells: linked to its image (source)"
+    ]
+    cells = zarr.open_group(path, mode="r")["labels"]["cells"]
+    assert read_ngff_attr(cells.attrs, "image-label") == {
+        **old,
+        "source": {"image": "../../"},
+    }
+    # How the labels were made, and so their tables, stay as they were
+    assert dict(cells.attrs)[PROVENANCE_KEY] == record
+    assert label_fingerprint(cells) == fingerprint
+    assert fix_ngff_metadata(path) == []

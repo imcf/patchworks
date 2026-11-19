@@ -11,6 +11,7 @@ patchworks convert scan.czi scan.zarr
 patchworks segment scan.zarr --method cellpose --model cyto3 --diameter 30 --gpu
 
 # What is in the store: levels, chunks, codecs, calibration, label images
+# (and how each was made: when, by which version, method, channel, level)
 patchworks info scan.zarr
 
 # Did the tiling leave marks in the labels?
@@ -37,6 +38,10 @@ patchworks review scan.zarr --expect cells:nuclei=1
 
 # Bring a store written by an older patchworks up to the OME-Zarr spec
 patchworks fix-metadata scan.zarr
+
+# Put each object's values (volume, length, parent, position) into its
+# label image's metadata, for napari: after the relations or a review
+patchworks fix-metadata scan.zarr --properties
 
 # Name the channels (napari, Fiji show them): from the original file, or typed
 patchworks fix-metadata scan.zarr --channels-from scan.czi

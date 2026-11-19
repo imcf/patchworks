@@ -3565,6 +3565,9 @@ def fix_ngff_metadata(store: Union[str, Path]) -> list[str]:
       none before).
     - The `labels` list: entries without a label image (one deleted by
       hand) removed, label images missing from it added.
+    - A label image's `image-label` without a `source`: the link back to
+      the image (`"../../"`) added. Nothing else of it, nor patchworks'
+      own record of how the labels were made, is touched.
     - A label image with more pyramid levels than its image: the extra
       (coarsest) levels are dropped, as the spec requires the counts equal.
       One with fewer is reported, not changed: that needs levels computed
@@ -3647,6 +3650,15 @@ def fix_ngff_metadata(store: Union[str, Path]) -> list[str]:
     for name in names:
         group = root["labels"][name]
         n_label = fix(group, f"labels/{name}")
+        image_label = read_ngff_attr(group.attrs, "image-label")
+        if isinstance(image_label, dict) and "source" not in image_label:
+            write_ngff_attrs(
+                group,
+                **{
+                    "image-label": {**image_label, "source": dict(LABEL_SOURCE)}
+                },
+            )
+            done.append(f"labels/{name}: linked to its image (source)")
         if n_image and n_label > n_image:
             ms = read_ngff_attr(group.attrs, "multiscales")
             extra = [d["path"] for d in ms[0]["datasets"][n_image:]]
@@ -3665,6 +3677,30 @@ def fix_ngff_metadata(store: Union[str, Path]) -> list[str]:
                 "(register_labels) to rebuild its pyramid"
             )
     return done
+
+
+#: The `image-label` `source`: where the labels' image is, relative to
+#: the label group (`<image>/labels/<name>`). Valid in OME-Zarr 0.4 and 0.5.
+LABEL_SOURCE = {"image": "../../"}
+
+
+def _image_label(group) -> dict:
+    """The `image-label` entry patchworks writes on a label group.
+
+    Its version, and the `source` link back to the image the labels were
+    made from, which readers use to put the labels over that image.
+
+    Parameters
+    ----------
+    group : zarr.Group
+        The label group, for its NGFF version.
+
+    Returns
+    -------
+    dict
+        `{"version", "source"}`.
+    """
+    return {"version": _ngff_version_for(group), "source": dict(LABEL_SOURCE)}
 
 
 def register_labels(
@@ -3779,9 +3815,7 @@ def register_labels(
             translation=read_translation(store, level),
         )
         grp = _open_group(group)
-        write_ngff_attrs(
-            grp, **{"image-label": {"version": _ngff_version_for(grp)}}
-        )
+        write_ngff_attrs(grp, **{"image-label": _image_label(grp)})
         if n_objects is not None:
             # patchworks' own hints, not NGFF keys, so they stay at the top level
             # where a consumer can find them without knowing the layout.
