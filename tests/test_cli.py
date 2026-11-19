@@ -31,6 +31,9 @@ def test_segment_info_seams(tmp_path, blobs, capsys):
     out = capsys.readouterr().out
     assert "labels/labels" in out and "level 1" in out
     assert "ZstdCodec" in out
+    # How the labels were made: when, and with what
+    made = next(line for line in out.splitlines() if "made " in line)
+    assert "by patchworks" in made and "level 0" in made
 
     seams = ["seams", f"{store}/labels/labels", "--tile-shape", "2,32,32"]
     assert main(seams) == 0
