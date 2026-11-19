@@ -36,6 +36,10 @@ patchworks serve scan.zarr
 # Look at the likely mistakes one by one and fix them (napari)
 patchworks review scan.zarr --expect cells:nuclei=1
 
+# Is it valid OME-Zarr, and what should be repaired? (exit status 1 on errors;
+# the spec check needs pip install "patchworks[validate]")
+patchworks validate scan.zarr
+
 # Bring a store written by an older patchworks up to the OME-Zarr spec
 patchworks fix-metadata scan.zarr
 
@@ -50,6 +54,11 @@ patchworks fix-metadata scan.zarr --channels-from "planes/*.tif" --sequence-patt
 ```
 
 `fix-metadata` only touches metadata, in place, and is safe to run twice.
+`validate` checks the store with an independent OME-Zarr validator
+([yaozarrs](https://github.com/imaging-formats/yaozarrs)), each problem
+with the validator's code, then what patchworks writes and the store lacks
+(a label image without its `source`, unnamed channels, an object table out
+of date), each with its repair, and prints what the store holds.
 `review` also runs without a window: `--summary`, `--export DIR`,
 `--workbooks DIR`, `--write-labels NAME` (see [Reviewing](review.md)).
 
