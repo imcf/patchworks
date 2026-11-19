@@ -21,6 +21,7 @@ from _pw import (
     load_tiles_json,
     open_image,
     pin_slurm_gpus,
+    preparation_changes,
     save_segment_progress,
     segment_progress_path,
     start_log,
@@ -37,6 +38,18 @@ work_dir = cfg["work_dir"]
 label_name = cfg.get("label_name", "labels")
 
 manifest = load_tiles_json(snakemake.input.tiles)  # noqa: F821
+# Tiles prepared for other settings (a 2-D tiling under a now-3-D config):
+# refuse now, not after hours of Cellpose on the wrong shape.
+changed = preparation_changes(manifest, cfg)
+if changed:
+    raise SystemExit(
+        f"[patchworks] {label_name}: the tiles were prepared with other "
+        "settings than this config's:\n  "
+        + "\n  ".join(changed)
+        + f"\nPrepare again: delete {work_dir}/{label_name}/tiles.json and "
+        f"{work_dir}/{label_name}/seg (run_multi and the launcher do it "
+        "themselves), then run again."
+    )
 # A second channel (nuclei_channel) or a label image to grow from
 # (seed_labels) rides along on a leading axis, untiled.
 nuclei_channel = cfg.get("nuclei_channel")

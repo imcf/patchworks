@@ -1561,8 +1561,26 @@ def test_main_runs_with_an_explicit_tile_shape_seeds_first(
             {"common": str(common), "segmentations": [str(cells), str(nuclei)]}
         )
     )
+    # nuclei was prepared earlier, unfinished, with other tiles (a 2-D
+    # tiling, the config since changed): prepared again, its segmented
+    # batches gone; cyto_labels, prepared with its config, is kept.
+    from _pw import with_defaults
+
+    for name, cfg_file, tiles in (
+        ("nuclei", nuclei, [1, 8000, 8000]),
+        ("cyto_labels", cells, None),
+    ):
+        cfg = with_defaults(
+            {
+                **yaml.safe_load(common.read_text()),
+                **yaml.safe_load(cfg_file.read_text()),
+            }
+        )
+        if tiles:
+            cfg["tile_shape"] = tiles
+        _prepared_run(tmp_path / "results", cfg)
     log = []
-    monkeypatch.setattr(run_multi, "_run", lambda cmd, wd: 0)  # convert
+    monkeypatch.setattr(run_multi, "_run", lambda cmd, wd, **k: 0)  # convert
     monkeypatch.setattr(run_multi, "_run_bundle", lambda *a: 0)
 
     envs = []
@@ -1589,6 +1607,27 @@ def test_main_runs_with_an_explicit_tile_shape_seeds_first(
     assert (run / "snakemake.out").read_text() == "nuclei says hi\n"
     # Checked once here, so not again in each side-by-side Snakemake.
     assert all(e["PATCHWORKS_CONFIG_CHECKED"] == "1" for e in envs)
+    results = tmp_path / "results"
+    assert not (results / "nuclei" / "tiles.json").exists()
+    assert not (results / "nuclei" / "seg").exists()
+    assert (results / "cyto_labels" / "tiles.json").exists()
+    assert (results / "cyto_labels" / "seg" / "0.done").exists()
+
+
+def _prepared_run(work, cfg):
+    """A run directory as prepare leaves it, for *cfg*: tiles.json with its
+    settings, the stage marker and a segmented batch."""
+    from _pw import prepared_settings
+
+    run = Path(work) / cfg["label_name"]
+    (run / "seg").mkdir(parents=True)
+    (run / "seg" / "0.done").touch()
+    (run / "stage.zarr.done").touch()
+    (run / "tiles.json").write_text(
+        json.dumps(
+            {"tile_shape": [1, 8, 8], "settings": prepared_settings(cfg)}
+        )
+    )
 
 
 def test_config_option_resolves_from_where_pixi_runs(tmp_path, monkeypatch):
@@ -1619,7 +1658,7 @@ def test_config_option_resolves_from_where_pixi_runs(tmp_path, monkeypatch):
         )
     )
     started = []
-    monkeypatch.setattr(run_multi, "_run", lambda cmd, wd: 0)
+    monkeypatch.setattr(run_multi, "_run", lambda cmd, wd, **k: 0)
     monkeypatch.setattr(run_multi, "_run_bundle", lambda *a: 0)
     monkeypatch.setattr(
         run_multi.subprocess,
@@ -1734,7 +1773,7 @@ def test_a_missing_package_stops_the_run_before_converting(
     )
     monkeypatch.setattr(_pw, "has_module", lambda name: name != "plantseg")
     ran = []
-    monkeypatch.setattr(run_multi, "_run", lambda *a: ran.append(a) or 0)
+    monkeypatch.setattr(run_multi, "_run", lambda *a, **k: ran.append(a) or 0)
     monkeypatch.setattr(sys, "argv", ["run_multi.py", "--config", str(multi)])
     with pytest.raises(SystemExit) as done:
         run_multi.main()
@@ -1804,7 +1843,7 @@ def test_a_config_failing_on_a_stale_lock_says_how_to_unlock(
     monkeypatch.setattr(
         run_multi, "_still_working", lambda d, label: "SLURM still lists jobs"
     )
-    monkeypatch.setattr(run_multi, "_run", lambda cmd, wd: 0)
+    monkeypatch.setattr(run_multi, "_run", lambda cmd, wd, **k: 0)
     monkeypatch.setattr(
         run_multi.subprocess,
         "Popen",
@@ -2046,7 +2085,7 @@ def test_relations_on_labels_a_run_left_missing_are_skipped(
         )
     )
     log = []
-    monkeypatch.setattr(run_multi, "_run", lambda cmd, wd: 0)  # convert
+    monkeypatch.setattr(run_multi, "_run", lambda cmd, wd, **k: 0)  # convert
 
     def popen(cmd, cwd=None, **kwargs):
         name = Path(cmd[cmd.index("--configfile") + 2]).stem
@@ -2546,6 +2585,8 @@ def _run_segment(tmp_path, monkeypatch, fail_on=None):
         "load_segment_progress",
         "save_segment_progress",
         "segment_progress_path",
+        "preparation_changes",
+        "prepared_settings",
     ):
         setattr(fake, name, getattr(_pw, name))
     fake.build_fn = lambda cfg, **kw: fn
@@ -2784,3 +2825,47 @@ def test_a_full_disk_drops_the_old_bundle_first(tmp_path, monkeypatch, capsys):
     assert "removing it first" in printed and "interrupted run" in printed
     assert zipfile.ZipFile(out).namelist() == ["image.zarr/zarr.json"]
     assert not partial.exists()
+
+
+def test_segment_job_refuses_tiles_prepared_for_other_settings(
+    tmp_path, monkeypatch
+):
+    """The backstop: a batch whose tiles were prepared for 2-D, under a
+    config now 3-D, stops at once saying what changed -- not after hours
+    of Cellpose on a plane of a quarter of the slide taken for a volume."""
+    import runpy
+    import types
+
+    import _pw
+
+    cfg = {
+        "work_dir": str(tmp_path),
+        "label_name": "membrane_labels",
+        "method": "cellpose",
+        "cellpose": {"do_3D": False},
+    }
+    manifest = {
+        "batches": [[0]],
+        "target_path": str(tmp_path / "stage.zarr"),
+        "tile_shape": [1, 64, 64],
+        "settings": _pw.prepared_settings(cfg),  # prepared for 2-D
+    }
+    fake = types.ModuleType("_pw")
+    for name in dir(_pw):
+        if not name.startswith("__"):
+            setattr(fake, name, getattr(_pw, name))
+    fake.load_tiles_json = lambda path: manifest
+    fake.start_log = lambda path: None
+    fake.pin_slurm_gpus = lambda: None
+    fake.open_image = lambda *a: pytest.fail("read the image")
+    monkeypatch.setitem(sys.modules, "_pw", fake)
+    snake = types.SimpleNamespace(
+        log=[str(tmp_path / "log")],
+        config={**cfg, "cellpose": {"do_3D": True}},  # now 3-D
+        wildcards=types.SimpleNamespace(batch="0"),
+        input=types.SimpleNamespace(tiles="tiles.json"),
+        output=[str(tmp_path / "0.done")],
+    )
+    script = _workflow_dir() / "scripts" / "segment_tile.py"
+    with pytest.raises(SystemExit, match="prepared with other settings"):
+        runpy.run_path(str(script), init_globals={"snakemake": snake})

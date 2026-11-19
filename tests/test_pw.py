@@ -760,3 +760,78 @@ def test_build_fn_applies_the_image_wide_kwargs(monkeypatch):
     _pw.build_fn(cfg, kwargs_overrides={"foreground": 812.5})
     assert seen == {"foreground": 812.5, "a": 1}
     assert cfg["custom"]["kwargs"]["foreground"] == "otsu"  # not mutated
+
+
+def _prepared_run(tmp_path, cfg, tile_shape, finished=False):
+    """A run directory as prepare leaves it: tiles.json, the stage marker,
+    two segmented batches, and with *finished* its merge marker."""
+    import json
+
+    from _pw import prepared_settings
+
+    run = tmp_path / cfg["label_name"]
+    (run / "seg").mkdir(parents=True)
+    for i in (0, 1):
+        (run / "seg" / f"{i}.done").touch()
+    (run / "stage.zarr.done").touch()
+    (run / "tiles.json").write_text(
+        json.dumps(
+            {"tile_shape": tile_shape, "settings": prepared_settings(cfg)}
+        )
+    )
+    if finished:
+        (run / "labels.done").touch()
+    return run
+
+
+def test_a_run_prepared_for_other_settings_is_prepared_again(tmp_path):
+    """Snakemake does not prepare again when the config changes: a run
+    prepared with `do_3D: false` kept its 2-D tiles (one plane of a quarter
+    of the slide) under a now-3-D config, and Cellpose spent hours on one
+    plane taken for a volume, then ran out of memory. The change is seen,
+    and the run's tiles and segmented batches go, so prepare runs again."""
+    from _pw import clear_preparation, stale_preparation
+
+    cfg = {
+        "work_dir": str(tmp_path),
+        "label_name": "membrane_labels",
+        "method": "cellpose",
+        "cellpose": {"do_3D": False, "diameter": 60},
+    }
+    run = _prepared_run(tmp_path, cfg, [1, 24202, 17672])
+    assert stale_preparation(cfg) == []  # the same config: nothing to redo
+    now = {**cfg, "cellpose": {"do_3D": True, "diameter": 60}}
+    (changed,) = stale_preparation(now)
+    assert changed.startswith("cellpose:") and "'do_3D': True" in changed
+    clear_preparation(now)
+    assert not (run / "tiles.json").exists()
+    assert not (run / "seg").exists() and not (run / "stage.zarr.done").exists()
+    # Settings that only the merge or the mail read change nothing.
+    run = _prepared_run(tmp_path, {**cfg, "label_name": "b"}, [1, 9, 9])
+    later = {**cfg, "label_name": "b", "min_volume": 5, "notify_email": "x"}
+    assert stale_preparation(later) == []
+
+
+def test_a_finished_run_is_left_alone(tmp_path):
+    """Finished labels are not made again because the config changed:
+    deleting them is how a segmentation is redone."""
+    from _pw import stale_preparation
+
+    cfg = {"work_dir": str(tmp_path), "label_name": "cells", "overlap": 8}
+    _prepared_run(tmp_path, cfg, [16, 256, 256], finished=True)
+    assert stale_preparation({**cfg, "overlap": 32}) == []
+
+
+def test_tiles_from_before_the_settings_were_recorded(tmp_path):
+    """A tiles.json without its settings (every run so far): one-plane
+    tiles under 3-D Cellpose, or an explicit tile_shape other than its
+    own, still tell."""
+    from _pw import preparation_changes
+
+    old = {"tile_shape": [1, 24202, 17672]}
+    cfg3d = {"method": "cellpose", "cellpose": {"do_3D": True}}
+    assert preparation_changes(old, cfg3d)
+    assert not preparation_changes(old, {"cellpose": {"do_3D": False}})
+    assert preparation_changes(old, {"tile_shape": [126, 468, 468]})
+    assert not preparation_changes(old, {"tile_shape": "auto"})
+    assert not preparation_changes({"tile_shape": [126, 468, 468]}, cfg3d)
