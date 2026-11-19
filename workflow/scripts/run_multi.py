@@ -586,7 +586,7 @@ def _relate_cmd(
     return cmd
 
 
-def _run(cmd: list[str], workflow_dir: Path) -> int:
+def _run(cmd: list[str], workflow_dir: Path, checked: bool = False) -> int:
     """Run *cmd* in the workflow folder, echoing it first.
 
     Parameters
@@ -595,6 +595,9 @@ def _run(cmd: list[str], workflow_dir: Path) -> int:
         The command.
     workflow_dir : Path
         Where to run it.
+    checked : bool, optional
+        Tell its Snakefile the configs are checked, and their runs' tiles
+        too (`PATCHWORKS_CONFIG_CHECKED`): run_multi did both itself.
 
     Returns
     -------
@@ -602,7 +605,8 @@ def _run(cmd: list[str], workflow_dir: Path) -> int:
         Its exit code.
     """
     print(f"[run_multi] $ {' '.join(cmd)}", flush=True)
-    return subprocess.run(cmd, cwd=workflow_dir).returncode
+    env = {**os.environ, "PATCHWORKS_CONFIG_CHECKED": "1"} if checked else None
+    return subprocess.run(cmd, cwd=workflow_dir, env=env).returncode
 
 
 # The keys convert reads: the image is converted once, so every config must agree.
@@ -2015,6 +2019,7 @@ def main() -> None:
             common=common_path,
         ),
         workflow_dir,
+        checked=True,
     )
     if rc != 0:
         print(
@@ -2126,6 +2131,31 @@ def main() -> None:
                 flush=True,
             )
             shutil.rmtree(run)
+    from _pw import clear_preparation, stale_preparation
+
+    # Prepared with other settings (Snakemake does not prepare again when a
+    # config changes): prepare again, or 2-D tiles get segmented in 3-D.
+    pinned = (
+        yaml.safe_load(Path(tile_override).read_text()) if tile_override else {}
+    )
+    for cfg in seg_cfgs:
+        changed = stale_preparation({**cfg, **(pinned or {})})
+        if not changed:
+            continue
+        what = "; ".join(changed)
+        if args.dry_run:
+            print(
+                f"[run_multi] {cfg['label_name']}: prepared with other "
+                f"settings ({what}); a real run prepares it again",
+                flush=True,
+            )
+        else:
+            print(
+                f"[run_multi] {cfg['label_name']}: prepared with other "
+                f"settings ({what}): preparing it again",
+                flush=True,
+            )
+            clear_preparation(cfg)
     problems = relation_problems(
         multi_cfg.get("relations") or [], seg_cfgs, image_store
     )

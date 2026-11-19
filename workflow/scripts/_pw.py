@@ -68,6 +68,155 @@ DEFAULTS = {
 }
 
 
+#: The settings that decide a run's tiles and what each tile's labels are:
+#: a run prepared with other values of any of them must be prepared again
+#: (its tiles, or tiles already segmented, belong to the old ones).
+PREPARED_KEYS = (
+    "channel",
+    "level",
+    "tile_shape",
+    "gpu_memory_gb",
+    "overlap",
+    "skip_empty",
+    "empty_threshold",
+    "tiles_per_job",
+    "method",
+    "normalize",
+    "nuclei_channel",
+    "seed_labels",
+    "fill_holes",
+    "open_radius",
+    "dilate",
+    "stitch",
+    "connectivity",
+    "cellpose",
+    "custom",
+    "denoise",
+)
+
+
+def prepared_settings(cfg: dict) -> dict:
+    """The settings of *cfg* that decide its tiles (:data:`PREPARED_KEYS`).
+
+    Recorded in `tiles.json` by prepare, to tell later whether the run was
+    prepared with the config it now has.
+
+    Parameters
+    ----------
+    cfg : dict
+        A segmentation config; defaults are applied.
+
+    Returns
+    -------
+    dict
+        JSON-safe: what a `tiles.json` round trip gives back.
+    """
+    full = with_defaults(cfg)
+    picked = {k: full.get(k) for k in PREPARED_KEYS}
+    return json.loads(json.dumps(picked, sort_keys=True, default=str))
+
+
+def preparation_changes(manifest: dict, cfg: dict) -> list[str]:
+    """How *cfg* differs from the settings its run was prepared with.
+
+    Snakemake's `--rerun-triggers mtime` does not prepare a run again when
+    its config changes: a run first prepared with `do_3D: false` kept its
+    2-D tiles (one plane of a quarter of a slide each) once the config said
+    3-D, and Cellpose then took one such plane for a volume -- hours of
+    work, then an out-of-memory error.
+
+    Parameters
+    ----------
+    manifest : dict
+        The run's `tiles.json`.
+    cfg : dict
+        The config it is about to run with.
+
+    Returns
+    -------
+    list of str
+        One line per setting that changed, e.g.
+        `"cellpose.do_3D: False -> True"`; empty when it was prepared with
+        these settings. A `tiles.json` from before the settings were
+        recorded is checked for what can still be told: an explicit
+        `tile_shape` other than its own, and one-plane tiles under 3-D
+        Cellpose.
+
+    Examples
+    --------
+    >>> m = {"tile_shape": [1, 24000, 18000]}
+    >>> preparation_changes(m, {"method": "cellpose", "cellpose": {"do_3D": True}})
+    ['cellpose.do_3D: tiles of one plane (prepared for 2-D), now 3-D']
+    >>> m = {"settings": prepared_settings({"cellpose": {"do_3D": False}})}
+    >>> preparation_changes(m, {"cellpose": {"do_3D": True}})
+    ["cellpose: {'do_3D': False} -> {'do_3D': True}"]
+    """
+    saved = manifest.get("settings")
+    if saved is not None:
+        now = prepared_settings(cfg)
+        return [
+            f"{k}: {saved.get(k)!r} -> {now.get(k)!r}"
+            for k in sorted(set(saved) | set(now))
+            if saved.get(k) != now.get(k)
+        ]
+    changes = []
+    tile = list(manifest.get("tile_shape") or [])
+    wanted = cfg.get("tile_shape", "auto")
+    if wanted not in ("auto", None, "") and list(wanted) != tile:
+        changes.append(f"tile_shape: {tile} -> {list(wanted)}")
+    cellpose_3d = cfg.get("method", "cellpose") == "cellpose" and bool(
+        (cfg.get("cellpose") or {}).get("do_3D")
+    )
+    if cellpose_3d and len(tile) >= 3 and tile[0] == 1:
+        changes.append(
+            "cellpose.do_3D: tiles of one plane (prepared for 2-D), now 3-D"
+        )
+    return changes
+
+
+def stale_preparation(cfg: dict) -> list[str]:
+    """How an unfinished run's tiles differ from what *cfg* asks for.
+
+    Parameters
+    ----------
+    cfg : dict
+        A segmentation config (`work_dir`, `label_name`, ...), as the run
+        will see it.
+
+    Returns
+    -------
+    list of str
+        The changed settings (:func:`preparation_changes`); empty when the
+        run is not prepared yet, is finished (its labels are made: deleting
+        them is how a segmentation is redone), or matches *cfg*.
+    """
+    run = Path(cfg["work_dir"]) / cfg.get("label_name", "labels")
+    if (run / "labels.done").exists():
+        return []
+    try:
+        manifest = json.loads((run / "tiles.json").read_text())
+    except (OSError, ValueError):
+        return []
+    return preparation_changes(manifest, cfg)
+
+
+def clear_preparation(cfg: dict) -> None:
+    """Make a run prepare again: its tiles, and the batches segmented from
+    them, go (prepare recreates the stage store or label group itself).
+
+    Parameters
+    ----------
+    cfg : dict
+        The segmentation config whose run it is.
+    """
+    import shutil
+
+    run = Path(cfg["work_dir"]) / cfg.get("label_name", "labels")
+    (run / "tiles.json").unlink(missing_ok=True)
+    (run / "stage.zarr.done").unlink(missing_ok=True)
+    shutil.rmtree(run / "seg", ignore_errors=True)
+
+
 def with_defaults(cfg: dict) -> dict:
     """*cfg* with every setting it leaves out taken from :data:`DEFAULTS`.
 

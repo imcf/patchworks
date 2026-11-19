@@ -26,6 +26,39 @@ if getattr(workflow, "is_main_process", True) and not os.environ.get(
 ):
     validate_config(config)
 
+    # A run prepared with other settings: Snakemake does not prepare it again
+    # when the config changes (rerun triggers: mtime), and its tiles would be
+    # segmented with these settings -- 2-D tiles in 3-D, say. Prepare again.
+    # (run_multi does this itself, with its shared tile_shape.)
+    from _pw import clear_preparation, stale_preparation
+
+    # Only for a run that segments: one asked for named targets (convert
+    # only, say) leaves the tiles alone.
+    _targets = "--" in sys.argv[1:]
+    _changed = [] if _targets else stale_preparation(config)
+    if _changed:
+        _what = "; ".join(_changed)
+        # A dry run deletes nothing. Snakemake may not know it is one yet
+        # while it reads this file, so its command line says too.
+        _dry = getattr(workflow, "dryrun", False) or any(
+            a in ("--dry-run", "--dryrun", "--just-print")
+            or (a.startswith("-") and not a.startswith("--") and "n" in a)
+            for a in sys.argv[1:]
+        )
+        if _dry:
+            print(
+                f"[patchworks] {config['label_name']}: prepared with other "
+                f"settings ({_what}); a real run prepares it again",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"[patchworks] {config['label_name']}: prepared with other "
+                f"settings ({_what}): preparing it again",
+                file=sys.stderr,
+            )
+            clear_preparation(config)
+
 include: "rules/common.smk"
 include: "rules/convert.smk"
 include: "rules/segment.smk"

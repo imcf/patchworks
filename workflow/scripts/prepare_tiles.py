@@ -25,6 +25,7 @@ from _pw import (
     check_overlap,
     resolve_overlap,
     halo_path,
+    prepared_settings,
     resolve_tile_shape,
     check_seed_labels,
     open_image,
@@ -181,6 +182,9 @@ Path(work_dir, label_name, "tiles.json").write_text(
             "target_path": target_path,
             "target_component": target_component,
             "in_place": in_place,
+            # What these tiles were made for: a later run with other
+            # settings prepares again (preparation_changes).
+            "settings": prepared_settings(cfg),
         },
         indent=2,
     )
