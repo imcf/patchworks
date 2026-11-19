@@ -77,6 +77,13 @@ view_in_napari("scan.zarr", channel=0)   # one channel
 ```
 
 Only what is on screen is read, so it opens at once even for terabytes.
+Each label image's metadata names its image (`source`), and can hold each
+object's values (volume, length, parent, position...), shown when hovering
+over it: the workflow writes them after the merge, `patchworks tables` after
+measuring, and `patchworks fix-metadata scan.zarr --properties` after the
+relations or a review. Only for label images of up to 50,000 objects: the
+values are one list in the metadata, read whenever the label image is
+opened. Neuroglancer shows them for any number (below).
 Each channel is a layer of its own, so several can be shown together; only
 the first is visible at first (`--show 0,2` for others), and a hidden
 channel is not read until you switch it on. `--slider` puts all channels
@@ -106,6 +113,13 @@ first shown) and every label image as a segmentation layer: click an object
 for its id, show only the ones selected. Every URL holds a random token, and
 only the store is served, read-only. Serve the unzipped `image.zarr`, not
 the bundle. No 3-D meshes: objects are shown in cross-section.
+
+A label image with an object table shows each object's values beside its id
+in the layer's *Seg.* tab: volume, length, the object it sits in, its
+position and review status. Sort by a column, filter by a number
+(`area_um3>10`) or a tag (`#apical`) and show only those. They come from
+the tables, with your review's decisions, and are made when first asked
+for (a few seconds); objects the review rejected have none.
 
 Neuroglancer fetches a whole chunk for any part of it, through the tunnel,
 so the server offers it every array in small chunks instead (one plane

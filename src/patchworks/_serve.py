@@ -11,16 +11,20 @@ from __future__ import annotations
 
 import getpass
 import json
+import logging
 import os
 import re
 import secrets
 import socket
+import threading
 import urllib.parse
 from functools import partial
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Union
+
+logger = logging.getLogger(__name__)
 
 NEUROGLANCER = "https://neuroglancer-demo.appspot.com/"
 
@@ -259,6 +263,90 @@ def _real_chunks(doc: dict) -> list[int]:
     return list(doc["chunk_grid"]["configuration"]["chunk_shape"])
 
 
+#: Where `serve` offers the label images' per-object values, inside the
+#: store's URL (a name no zarr node has).
+PROPERTIES_DIR = ".properties"
+
+
+class _Properties:
+    """The label images' per-object values, as Neuroglancer reads them.
+
+    Made from the object tables with the review's decisions, once per
+    label image, on the first request (loading the tables takes seconds).
+
+    Parameters
+    ----------
+    store : str or Path
+        The OME-Zarr image.
+    """
+
+    def __init__(self, store: Union[str, Path]) -> None:
+        self.store = str(store)
+        self._lock = threading.Lock()
+        self._review: Any = None
+        self._info: dict[str, bytes | None] = {}
+
+    def info(self, name: str) -> bytes | None:
+        """The `info` of label image *name*'s `precomputed://` source.
+
+        Parameters
+        ----------
+        name : str
+            The label image.
+
+        Returns
+        -------
+        bytes or None
+            JSON; None without a current table.
+        """
+        with self._lock:
+            if name not in self._info:
+                from ._properties import (
+                    neuroglancer_properties,
+                    object_properties,
+                )
+                from ._review import Review
+
+                try:
+                    if self._review is None:
+                        self._review = Review(self.store)
+                    df = object_properties(self.store, name, self._review)
+                except Exception as exc:  # a broken table: no values
+                    logger.warning("no values for %s: %s", name, exc)
+                    df = None
+                self._info[name] = (
+                    None
+                    if df is None
+                    else json.dumps(
+                        neuroglancer_properties(df), separators=(",", ":")
+                    ).encode()
+                )
+            return self._info[name]
+
+
+def has_properties(store: Union[str, Path], name: str) -> bool:
+    """Whether label image *name* has a current object table to show.
+
+    Parameters
+    ----------
+    store : str or Path
+        The OME-Zarr image.
+    name : str
+        The label image.
+
+    Returns
+    -------
+    bool
+    """
+    from ._tables import has_table, is_stale
+
+    group = f"{str(store).rstrip('/')}/labels/{name}"
+    try:
+        return has_table(group) and not is_stale(group)
+    except Exception:
+        return False
+
+
 class _Handler(SimpleHTTPRequestHandler):
     """Read-only files under *directory*, below a secret path prefix, with
     CORS and single byte ranges."""
@@ -274,6 +362,8 @@ class _Handler(SimpleHTTPRequestHandler):
     upstream = ""
     #: The store's arrays in small chunks; None serves the files as they are.
     rechunked: _Rechunked | None = None
+    #: The label images' per-object values for Neuroglancer; None for none.
+    properties: _Properties | None = None
 
     def end_headers(self) -> None:
         """Add the CORS and range headers to every response."""
@@ -379,9 +469,36 @@ class _Handler(SimpleHTTPRequestHandler):
         answer."""
         if self._to_viewer():
             return self._proxy()
-        if self._rechunked():
+        if self._properties() or self._rechunked():
             return None
         return super().do_GET()
+
+    def _properties(self) -> bool:
+        """Answer a label image's per-object values,
+        `/<token>/<store>/.properties/<name>/info`.
+
+        Returns
+        -------
+        bool
+            Whether the path was one; a label image without values gets
+            404.
+        """
+        if self.properties is None:
+            return False
+        prefix = f"/{self.token}/{self.store_name}/{PROPERTIES_DIR}/"
+        path = urllib.parse.unquote(self.path.split("?", 1)[0])
+        if not (path.startswith(prefix) and path.endswith("/info")):
+            return False
+        body = self.properties.info(path[len(prefix) : -len("/info")])
+        if body is None:
+            self.send_error(HTTPStatus.NOT_FOUND)
+            return True
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+        return True
 
     def _rechunked(self) -> bool:
         """Answer from :attr:`rechunked` when the path is an array's
@@ -592,10 +709,17 @@ def neuroglancer_state(store: Union[str, Path], base_url: str) -> dict:
     else:
         layers.append({"type": "image", "source": source, "name": "image"})
     for name in _inner_label_names(str(store)):
+        labels: Any = f"{source}/labels/{name}"
+        if has_properties(store, name):
+            # The objects' values from the tables, served beside the store
+            labels = [
+                labels,
+                f"precomputed://{base_url}/{PROPERTIES_DIR}/{name}",
+            ]
         layers.append(
             {
                 "type": "segmentation",
-                "source": f"{source}/labels/{name}",
+                "source": labels,
                 "name": name,
                 "visible": False,
             }
@@ -785,6 +909,7 @@ def serve(
                 "token": token,
                 "store_name": store.name,
                 "rechunked": _Rechunked(store),
+                "properties": _Properties(store),
             },
         ),
         directory=str(store.parent),

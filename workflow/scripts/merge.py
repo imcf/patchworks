@@ -154,6 +154,27 @@ def write_object_table(group, objects: dict) -> None:
             f"[patchworks] object table: {len(cols['label']):,} objects in "
             f"{group}/table ({how})"
         )
+        write_object_values()
+
+
+def write_object_values() -> None:
+    """Each object's values (volume, length...) into the labels' metadata.
+
+    For napari's hover; metadata only, and never fatal: the labels and their
+    table are done by now. The relations come later (`relate`), so a
+    parent shows only after `patchworks fix-metadata --properties`.
+    """
+    from patchworks._properties import write_label_properties
+    from patchworks._review import Review
+
+    try:
+        # This label image's table only: other merges may be writing theirs.
+        review = Review(image_store, names=[label_name])
+        print(
+            f"[patchworks] {write_label_properties(image_store, label_name, review=review)}"
+        )
+    except Exception as exc:  # noqa: BLE001 - optional, after the fact
+        print(f"[patchworks] per-object values not written: {exc}")
 
 
 def finish(group, record=None, objects=None) -> None:

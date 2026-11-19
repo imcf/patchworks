@@ -372,6 +372,7 @@ def _cmd_info(args: argparse.Namespace) -> int:
         The exit status.
     """
     from ._io import open_group_any
+    from ._provenance import PROVENANCE_KEY, summarize
     from .plugins.ome_zarr import read_ngff_attr, read_pixel_size
 
     def describe(path: str, indent: str = "") -> None:
@@ -410,13 +411,17 @@ def _cmd_info(args: argparse.Namespace) -> int:
     for name in labels or []:
         path = f"{args.store}/labels/{name}"
         try:
-            n = dict(open_group_any(path).attrs).get("n_objects")
+            attrs = dict(open_group_any(path).attrs)
         except (KeyError, FileNotFoundError, ValueError):
             print(
                 f"labels/{name}  (listed, but missing: patchworks fix-metadata)"
             )
             continue
+        n = attrs.get("n_objects")
         print(f"labels/{name}" + (f"  ({n} objects)" if n is not None else ""))
+        made = summarize(attrs.get(PROVENANCE_KEY))
+        if made:
+            print(f"  {made}")
         describe(path, "  ")
     return 0
 
@@ -427,8 +432,8 @@ def _cmd_fix_metadata(args: argparse.Namespace) -> int:
     Parameters
     ----------
     args : argparse.Namespace
-            The parsed flags: store, channel_names, channels_from,
-        sequence_pattern.
+        The parsed flags: store, properties, channel_names,
+        channels_from, sequence_pattern.
 
     Returns
     -------
@@ -438,6 +443,16 @@ def _cmd_fix_metadata(args: argparse.Namespace) -> int:
     from .plugins.ome_zarr import fix_ngff_metadata
 
     changes = fix_ngff_metadata(args.store)
+    if args.properties:
+        from ._properties import write_label_properties
+        from ._review import Review
+        from .plugins.napari import _inner_label_names
+
+        review = Review(args.store)
+        for name in _inner_label_names(args.store):
+            changes.append(
+                write_label_properties(args.store, name, review=review)
+            )
     names = None
     if args.channel_names:
         names = [n.strip() for n in args.channel_names.split(",")]
@@ -651,6 +666,12 @@ def _cmd_tables(args: argparse.Namespace) -> int:
             n_workers=args.workers,
         )
     print(f"tables written for: {', '.join(names)}")
+    from ._properties import write_label_properties
+    from ._review import Review
+
+    review = Review(args.store)
+    for name in names:
+        print(write_label_properties(args.store, name, review=review))
     return 0
 
 
@@ -770,7 +791,14 @@ def _cmd_denoise_train(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """The `patchworks` argument parser (exposed for tests and docs)."""
+    """The `patchworks` argument parser (exposed for tests and docs).
+
+    Returns
+    -------
+    argparse.ArgumentParser
+    """
+    from ._properties import PROPERTY_LIMIT
+
     parser = argparse.ArgumentParser(
         prog="patchworks",
         description="Tiled processing of arbitrarily large images.",
@@ -948,6 +976,13 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="FILE",
         help="name them as in the original file (CZI, LIF, ND2, IMS, ...), "
         "or a folder of TIFFs: its glob, with --sequence-pattern",
+    )
+    p.add_argument(
+        "--properties",
+        action="store_true",
+        help="put each object's values from the tables (volume, length, "
+        "parent, position...) into its label image's metadata, for napari "
+        f"(label images of up to {PROPERTY_LIMIT:,} objects)",
     )
     p.add_argument(
         "--sequence-pattern",
