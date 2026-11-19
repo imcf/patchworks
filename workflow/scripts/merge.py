@@ -27,9 +27,12 @@ from patchworks._volume_filter import (
     min_voxels_for_volume,
 )
 from patchworks.plugins.ome_zarr import (
+    _default_axes,
+    label_layout,
     read_pixel_size,
     register_labels,
     reshard_level,
+    viewer_layout,
 )
 
 from _pw import (
@@ -300,8 +303,19 @@ objects: dict = {}
 # shard would be lost. A list asks for a shard shape of its own, which
 # takes that second pass too.
 shard_labels = cfg.get("shard_labels", False)
+# The viewer layout (planes of 512 x 512 in shards) for a new store's labels:
+# written after the merge, in one pass, as the merge's workers write tiles.
+# A store whose label images are in the tiles layout keeps it, so relating
+# them walks matching blocks. Decided before this label image is written:
+# label images being merged elsewhere are not registered yet, so not seen.
+layout = cfg.get("chunk_layout", "auto")
+if layout == "auto":
+    layout = label_layout(image_store, exclude=label_name)
+viewer = layout == "viewer" and str(cfg.get("ngff_version", "auto")) != "0.4"
+print(f"[patchworks] {label_name}: {'viewer' if viewer else 'tiles'} layout")
 shard_in_merge = (
-    shard_labels is True
+    not viewer
+    and shard_labels is True
     and not in_place
     and (fused or not (min_voxels or max_voxels))
 )
@@ -370,7 +384,11 @@ print(
     f"[patchworks] sharding: shard={cfg.get('shard', False)!r} "
     f"shard_labels={shard_labels!r}"
 )
-if (not shard_labels or not cfg.get("shard")) and n_chunks > 2000:
+if (
+    not viewer
+    and (not shard_labels or not cfg.get("shard"))
+    and n_chunks > 2000
+):
     missing = " and ".join(
         k
         for k, on in (
@@ -386,7 +404,24 @@ if (not shard_labels or not cfg.get("shard")) and n_chunks > 2000:
         "to pack them into shards: `shard` covers levels 1..N, "
         "`shard_labels` covers level 0, which is the one that counts."
     )
-if shard_labels and not shard_in_merge:
+viewer_chunks = viewer_shards = None
+if viewer:
+    # One pass, one writer: level 0 into planes of 512 x 512 in shards.
+    viewer_chunks, viewer_shards = viewer_layout(
+        level0.shape, _default_axes(level0.ndim)
+    )
+    print(
+        f"[patchworks] {label_name}: rewriting level 0 in chunks "
+        f"{viewer_chunks} in shards {viewer_shards}, for viewers"
+    )
+    reshard_level(
+        label_group,
+        "0",
+        shard=viewer_shards,
+        chunks=viewer_chunks,
+        progress=True,
+    )
+elif shard_labels and not shard_in_merge:
     # A shard shape of its own (a list), or relabeled in place: level 0 is
     # written by many processes, so it is sharded only now, in one pass.
     spec = (cfg.get("shard") or True) if shard_labels is True else shard_labels
@@ -433,7 +468,8 @@ group = register_labels(
     downscale=int(cfg.get("pyramid_downscale", 2)),
     progress=True,
     n_objects=n_objects,
-    shard=cfg.get("shard", False),
+    chunks=viewer_chunks,
+    shard=viewer_shards if viewer else cfg.get("shard", False),
     ngff_version=cfg.get("ngff_version", "auto"),
     level=int(cfg.get("level", 0)),
 )

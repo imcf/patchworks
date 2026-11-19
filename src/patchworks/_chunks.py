@@ -14,6 +14,107 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 
+def io_chunks(arr: Any) -> tuple[int, ...]:
+    """The block a pass over a whole zarr array reads or writes at a time.
+
+    Its shard when it is sharded, else its chunk. A sharded array's chunks
+    are small (one plane of 512 x 512, for viewers): a pass taking one at a
+    time would schedule millions of them, and two threads writing chunks of
+    the same shard would lose each other's.
+
+    Parameters
+    ----------
+    arr : zarr.Array
+        The array.
+
+    Returns
+    -------
+    tuple of int
+
+    Examples
+    --------
+    >>> import zarr
+    >>> a = zarr.create_array({}, shape=(8, 64, 64), chunks=(1, 16, 16),
+    ...                       shards=(4, 32, 32), dtype="u1")
+    >>> io_chunks(a), io_chunks(zarr.create_array({}, shape=(8,), dtype="u1",
+    ...                                           chunks=(4,)))
+    ((4, 32, 32), (4,))
+    """
+    shards = getattr(arr, "shards", None)
+    return tuple(int(c) for c in (shards or arr.chunks))
+
+
+#: Most of a viewer's dask block along y and x, in a sharded array.
+VIEW_BLOCK = 2048
+
+
+def view_chunks(arr: Any) -> tuple[int, ...]:
+    """The dask blocks a viewer (napari) reads a zarr array in.
+
+    The array's chunks, unless it is sharded: its chunks are then small
+    (one plane of 512 x 512), and dask spends more time on a million
+    blocks than reading what is shown takes (half a second for a
+    2000 x 2000 view of a slide). One plane of up to
+    :data:`VIEW_BLOCK` x :data:`VIEW_BLOCK` instead: zarr still reads only
+    the chunks a block covers.
+
+    Parameters
+    ----------
+    arr : zarr.Array
+        The array.
+
+    Returns
+    -------
+    tuple of int
+
+    Examples
+    --------
+    >>> import zarr
+    >>> a = zarr.create_array({}, shape=(126, 45961, 42072), dtype="i4",
+    ...                       chunks=(1, 512, 512), shards=(16, 2048, 2048))
+    >>> view_chunks(a)
+    (1, 2048, 2048)
+    """
+    shards = getattr(arr, "shards", None)
+    if not shards or len(shards) < 2:
+        return tuple(int(c) for c in arr.chunks)
+    lead = tuple(int(c) for c in arr.chunks[:-2])
+    plane = tuple(
+        max(int(c), min(int(s), VIEW_BLOCK))
+        for c, s in zip(arr.chunks[-2:], shards[-2:])
+    )
+    return lead + plane
+
+
+def dask_from_zarr(source: Any, component: str | None = None) -> Any:
+    """A dask array of a zarr array, in blocks of :func:`io_chunks`.
+
+    `dask.array.from_zarr` takes a sharded array's small chunks for its
+    blocks; for a pass over the whole array (measuring, relating,
+    rewriting) that is millions of tasks.
+
+    Parameters
+    ----------
+    source : str, Path or zarr.Array
+        The array, or the store holding it.
+    component : str, optional
+        The array inside *source* (a pyramid level), for a store.
+
+    Returns
+    -------
+    dask.array.Array
+    """
+    import dask.array as da
+    import zarr
+
+    arr = (
+        source
+        if isinstance(source, zarr.Array)
+        else zarr.open_array(str(source), path=component or "", mode="r")
+    )
+    return da.from_zarr(arr, chunks=io_chunks(arr))
+
+
 def chunk_slices(
     shape: Sequence[int], chunks: Sequence[int]
 ) -> list[tuple[slice, ...]]:

@@ -18,7 +18,12 @@ import dask.array as da
 import numpy as np
 import zarr
 
-from ._chunks import auto_tile_shape, cpu_allocation, safe_worker_count
+from ._chunks import (
+    auto_tile_shape,
+    cpu_allocation,
+    dask_from_zarr,
+    safe_worker_count,
+)
 from ._cluster import _client_is_in_process, _distributed_client
 from ._io import _COMPRESSION, auto_empty_threshold, is_remote, load_ome_zarr
 from ._provenance import provenance, write_provenance
@@ -1390,7 +1395,7 @@ def tile_process(
         sequential_labels=sequential_labels,
         compression=_COMPRESSION.get(),
     )
-    merged = da.from_zarr(_merge_out, component=output_component)
+    merged = dask_from_zarr(_merge_out, component=output_component)
     if not _into_input:
         # write_to: the record rides on the labels array itself.
         write_provenance(
@@ -1421,4 +1426,4 @@ def tile_process(
     finally:
         _remove_scratch(_merge_cleanup)
     logger.info("labels stored in input OME-ZARR under %s", label_group)
-    return da.from_zarr(label_group, component="0")
+    return dask_from_zarr(label_group, component="0")

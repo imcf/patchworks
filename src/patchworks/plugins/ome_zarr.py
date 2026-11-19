@@ -67,7 +67,7 @@ import dask.array as da
 import numpy as np
 import zarr
 
-from .._chunks import cpu_allocation, safe_worker_count
+from .._chunks import cpu_allocation, dask_from_zarr, safe_worker_count
 from .._progress import (
     PROGRESS_INTERVAL_S as _PROGRESS_INTERVAL_S,
 )
@@ -909,6 +909,130 @@ def _shard_for(
 # Don't let deep pyramid levels fragment into thousands of tiny chunks.
 _CHUNK_FLOOR = {"y": 128, "x": 128}
 
+#: The viewer layout's chunk per axis: one plane of 512 x 512, so a viewer
+#: reads about what it shows (a label chunk of 14 planes of 839 x 839 cost
+#: 14 planes for every plane shown).
+VIEWER_CHUNK = {"t": 1, "c": 1, "z": 1, "y": 512, "x": 512}
+#: Its shard for labels: 16 planes of 2048 x 2048 (256 MB of int32): files
+#: of a useful size, and a bounded block for every pass over the array.
+VIEWER_SHARD = {"t": 1, "c": 1, "z": 16, "y": 2048, "x": 2048}
+#: Its shard for an image: one plane of 4096 x 4096 (32 MB of uint16).
+#: One plane deep, as conversion writes a slab as deep as a shard: 16
+#: planes of a whole slide would be tens of GB at once.
+VIEWER_IMAGE_SHARD = {"t": 1, "c": 1, "z": 1, "y": 4096, "x": 4096}
+#: How arrays are chunked: `"viewer"` (:func:`viewer_layout`) or `"tiles"`
+#: (chunks following the tiles, unsharded unless asked).
+LAYOUTS = ("viewer", "tiles")
+
+
+def viewer_layout(
+    shape: tuple[int, ...], axes: str, image: bool = False
+) -> tuple[tuple[int, ...], tuple[int, ...]]:
+    """The viewer layout's chunks and shards for an array.
+
+    Parameters
+    ----------
+    shape : tuple of int
+        The array's shape.
+    axes : str
+        One letter per axis.
+    image : bool, optional
+        For an image (:data:`VIEWER_IMAGE_SHARD`) rather than labels
+        (:data:`VIEWER_SHARD`, default).
+
+    Returns
+    -------
+    chunks : tuple of int
+        :data:`VIEWER_CHUNK`, no larger than the array.
+    shards : tuple of int
+        :data:`VIEWER_SHARD` (or :data:`VIEWER_IMAGE_SHARD`), a whole
+        number of chunks.
+
+    Examples
+    --------
+    >>> viewer_layout((126, 45961, 42072), "zyx")
+    ((1, 512, 512), (16, 2048, 2048))
+    >>> viewer_layout((4, 126, 45961, 42072), "czyx", image=True)
+    ((1, 1, 512, 512), (1, 1, 4096, 4096))
+    >>> viewer_layout((8, 300, 300), "zyx")
+    ((1, 300, 300), (8, 300, 300))
+    """
+    chunks = tuple(
+        max(1, min(int(n), VIEWER_CHUNK.get(a, int(n))))
+        for n, a in zip(shape, axes)
+    )
+    table = VIEWER_IMAGE_SHARD if image else VIEWER_SHARD
+    wanted = tuple(table.get(a, int(n)) for n, a in zip(shape, axes))
+    return chunks, _effective_shard(wanted, chunks, tuple(shape))
+
+
+def is_viewer_layout(arr) -> bool:
+    """Whether a zarr array is stored in the viewer layout.
+
+    Sharded, with chunks one plane deep (every axis but the last two of
+    size 1).
+
+    Parameters
+    ----------
+    arr : zarr.Array
+        The array.
+
+    Returns
+    -------
+    bool
+    """
+    if not getattr(arr, "shards", None):
+        return False
+    return all(int(c) == 1 for c in tuple(arr.chunks)[:-2])
+
+
+def label_layout(
+    store: Union[str, Path], exclude: Union[str, None] = None
+) -> str:
+    """The layout a new label image of *store* is written in.
+
+    The store's: label images of one store share a layout, so relating two
+    of them walks them block by block without rechunking either. The
+    viewer layout for a store without label images yet (zarr v3); the
+    tiles layout as soon as one of them is written that way, and for zarr
+    v2 (NGFF 0.4), which has no shards.
+
+    Parameters
+    ----------
+    store : str or Path
+        The OME-Zarr image.
+    exclude : str, optional
+        A label image not to go by (the one being written again).
+
+    Returns
+    -------
+    str
+        `"viewer"` or `"tiles"`.
+    """
+    try:
+        root = zarr.open_group(str(store), mode="r")
+    except Exception:
+        return "viewer" if _zarr_format() == 3 else "tiles"
+    if root.metadata.zarr_format != 3:
+        return "tiles"
+    try:
+        labels = root["labels"]
+    except KeyError:
+        return "viewer"
+    for name, group in labels.groups():
+        if name == exclude:
+            continue
+        ms = read_ngff_attr(group.attrs, "multiscales")
+        if not ms:
+            continue
+        try:
+            level0 = group[ms[0]["datasets"][0]["path"]]
+        except KeyError:
+            continue
+        if not is_viewer_layout(level0):
+            return "tiles"
+    return "viewer"
+
 
 def _level_chunks(
     src_chunks: tuple[int, ...],
@@ -1630,6 +1754,7 @@ def _to_zarr_level(
     shard: ShardSpec,
     progress: bool = True,
     source_nbytes: int = 0,
+    inner_chunks: Union[tuple[int, ...], None] = None,
 ) -> None:
     """Write one array to `group_path/component`, optionally sharded.
 
@@ -1655,17 +1780,27 @@ def _to_zarr_level(
         Bytes of one chunk of the array *arr* was cut from. When large
         (:data:`_SLAB_SOURCE_BYTES`), the write goes slab by slab
         (:func:`_store_in_slabs`) to bound memory.
+    inner_chunks : tuple of int, optional
+        The chunks to store, when not *arr*'s blocks. Sharded, *arr* is
+        then cut straight into shards: blocks as small as a viewer's chunks
+        (one plane of 512 x 512) would make millions of tasks.
 
     Returns
     -------
     None
     """
-    inner = arr.chunksize
+    if inner_chunks is not None:
+        inner_chunks = tuple(
+            max(1, min(int(c), int(n))) for c, n in zip(inner_chunks, arr.shape)
+        )
+    inner = inner_chunks or arr.chunksize
     label = f"{Path(group_path).name}/{component}"
     slabs = source_nbytes >= _SLAB_SOURCE_BYTES and arr.ndim > 2
     fmt = _group_zarr_format(group_path)
     sh = _shard_for(shard, inner, arr.shape, arr.dtype, fmt)
     ctx = _progress_ctx(progress, f"{Path(group_path).name}/{component}")
+    if not sh and inner_chunks is not None:
+        arr = arr.rechunk(inner_chunks)
     if not sh:
         # Created here (dask's array-creation keywords changed between
         # releases); regular chunks need no lock.
@@ -1726,6 +1861,7 @@ def reshard_level(
     component: str = "0",
     shard: ShardSpec = True,
     progress: bool = True,
+    chunks: Union[tuple[int, ...], None] = None,
 ) -> str:
     """Rewrite an existing array in place, sharded, via one dask pass.
 
@@ -1754,6 +1890,9 @@ def reshard_level(
         Sharding request; see :func:`_shard_for`. `False` is a no-op.
     progress : bool, optional
         Show a dask progress bar for the rewrite.
+    chunks : tuple of int, optional
+        New chunks inside the shards (:func:`viewer_layout`'s); default the
+        array's own.
 
     Returns
     -------
@@ -1783,8 +1922,15 @@ def reshard_level(
     # Written beside the original, then swapped: rewriting in place would
     # mean reading an array that is being overwritten underneath.
     tmp = f"{component}__resharding"
-    src = da.from_zarr(str(group_path), component=component)
-    _to_zarr_level(src, str(group_path), tmp, shard, progress)
+    src = dask_from_zarr(str(group_path), component=component)
+    _to_zarr_level(
+        src,
+        str(group_path),
+        tmp,
+        shard,
+        progress,
+        inner_chunks=tuple(chunks or grp[component].chunks),
+    )
 
     # Swap by renames only, deleting the original last: removing it first
     # left a window in which a crash or a scheduler kill lost the level
@@ -2348,14 +2494,27 @@ def _write_pyramid(
         )
         if one_pass is not None:
             return one_pass
-        _to_zarr_level(
-            arr.rechunk(base_chunks),
-            group_path,
-            base_name,
-            shard,
-            progress,
-            source_nbytes=int(np.prod(arr.chunksize)) * arr.dtype.itemsize,
-        )
+        source_nbytes = int(np.prod(arr.chunksize)) * arr.dtype.itemsize
+        if shard and chunks:
+            # Cut straight into shards holding these (small) chunks
+            _to_zarr_level(
+                arr,
+                group_path,
+                base_name,
+                shard,
+                progress,
+                source_nbytes=source_nbytes,
+                inner_chunks=tuple(base_chunks),
+            )
+        else:
+            _to_zarr_level(
+                arr.rechunk(base_chunks),
+                group_path,
+                base_name,
+                shard,
+                progress,
+                source_nbytes=source_nbytes,
+            )
     datasets = [_dataset(base_name, base_scale, base_translation)]
 
     prev_name = base_name
@@ -2406,7 +2565,8 @@ def _write_pyramid(
         elif shard or chunks:
             # An explicit chunking may not line up with the source chunks:
             # the dask path.
-            src = da.from_zarr(group_path, component=prev_name)
+            # A shard at a time: a sharded level's chunks are small.
+            src = dask_from_zarr(group_path, component=prev_name)
             if downsample == "nearest":
                 nxt = src[tuple(slice(None, None, st) for st in strides)]
             # mean and mode are both block reductions
@@ -2429,8 +2589,19 @@ def _write_pyramid(
                     ),
                     dtype=src.dtype,
                 )
-            nxt = nxt.rechunk(chunks or _default_chunks(nxt.shape, axes))
-            _to_zarr_level(nxt, group_path, str(i), shard, progress)
+            if shard and chunks:
+                # Cut straight into shards holding these chunks
+                _to_zarr_level(
+                    nxt,
+                    group_path,
+                    str(i),
+                    shard,
+                    progress,
+                    inner_chunks=chunks,
+                )
+            else:
+                nxt = nxt.rechunk(chunks or _default_chunks(nxt.shape, axes))
+                _to_zarr_level(nxt, group_path, str(i), shard, progress)
             next_shape = nxt.shape
         else:
             # One source chunk per task: decimation needs no halo.
@@ -3220,6 +3391,7 @@ def to_ome_zarr(
     ngff_version: Union[str, None] = "auto",
     compression: Union[str, None] = None,
     downsample: str = "mean",
+    layout: str = "tiles",
 ) -> str:
     """Write *source* as a pyramidal, calibrated OME-ZARR store.
 
@@ -3298,6 +3470,12 @@ def to_ome_zarr(
         `"blosc:lz4"`, `"none"`, ...; see
         :func:`patchworks.compression`). `None` (default) uses the active
         setting, zstd level 1 unless changed.
+    layout : {"tiles", "viewer"}, optional
+        How the arrays are chunked when *chunks* and *shard* are not given:
+        `"tiles"` (default; bounded chunks, unsharded) or `"viewer"`
+        (:func:`viewer_layout`: planes of 512 x 512 in shards of one plane
+        of 4096 x 4096), which viewers read faster. Zarr v3 only.
+
     Returns
     -------
     str
@@ -3352,6 +3530,16 @@ def to_ome_zarr(
 
         ps = _normalize_pixel_size(pixel_size, axes) if pixel_size else detected
         base_scale = _base_scale(axes, ps)
+        if layout not in LAYOUTS:
+            raise ValueError(f"layout must be viewer or tiles, not {layout!r}")
+        if layout == "viewer" and chunks is None and not shard:
+            if _zarr_format() == 3:
+                chunks, shard = viewer_layout(arr.shape, axes, image=True)
+            else:
+                logger.warning(
+                    "the viewer layout needs shards, which zarr v2 (NGFF "
+                    "0.4) has not: written in the tiles layout"
+                )
 
         out = str(out_path)
         _open_group(out, mode="w" if overwrite else "w-")
@@ -3473,7 +3661,7 @@ def add_pyramid(
             if axes is None:
                 axes = "".join(a["name"] for a in multiscales[0]["axes"])
 
-        base_arr = da.from_zarr(gp, component=base)
+        base_arr = dask_from_zarr(gp, component=base)
         if axes is None:
             axes = _default_axes(base_arr.ndim)
         if len(axes) != base_arr.ndim:
@@ -3796,7 +3984,7 @@ def register_labels(
         group = f"{store}/labels/{name}"
         n_levels = _label_level_count(store, name, n_levels)
         if not pixel_size:
-            arr0 = da.from_zarr(group, component="0")
+            arr0 = dask_from_zarr(group, component="0")
             lab_axes = axes or _default_axes(arr0.ndim)
             pixel_size = _read_zarr_calibration(store, lab_axes, level=level)
         add_pyramid(
@@ -3853,6 +4041,7 @@ def write_labels(
     compression: Union[str, None] = None,
     level: int = 0,
     provenance: Union[dict, None] = None,
+    layout: str = "auto",
 ) -> str:
     """Store *labels* inside *image_store* under the NGFF `labels/` group.
 
@@ -3913,6 +4102,12 @@ def write_labels(
     provenance : dict, optional
         How the labels were made (see :func:`patchworks.provenance`),
         stored in the label group's attrs under `"patchworks"`.
+    layout : {"auto", "viewer", "tiles"}, optional
+        How the arrays are chunked when *chunks* and *shard* are not given:
+        `"viewer"` (:func:`viewer_layout`: planes of 512 x 512 in shards),
+        `"tiles"` (bounded chunks, unsharded), or `"auto"` (default): the
+        store's (:func:`label_layout`).
+
     Returns
     -------
     str
@@ -3950,8 +4145,20 @@ def write_labels(
         parent.require_group(name)
 
         label_group = f"{store}/labels/{name}"
-        base = arr.rechunk(chunks or _default_chunks(arr.shape, axes))
-        _to_zarr_level(base, label_group, "0", shard, progress)
+        if layout not in ("auto", *LAYOUTS):
+            raise ValueError(
+                f"layout must be auto, viewer or tiles, not {layout!r}"
+            )
+        if layout == "auto" and chunks is None and not shard:
+            layout = label_layout(store, exclude=name)
+        if layout == "viewer" and chunks is None and not shard:
+            chunks, shard = viewer_layout(arr.shape, axes)
+            _to_zarr_level(
+                arr, label_group, "0", shard, progress, inner_chunks=chunks
+            )
+        else:
+            base = arr.rechunk(chunks or _default_chunks(arr.shape, axes))
+            _to_zarr_level(base, label_group, "0", shard, progress)
         return register_labels(
             store,
             name,

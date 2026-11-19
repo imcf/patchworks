@@ -615,6 +615,7 @@ _CONVERT_KEYS = (
     "sequence_pattern",
     "convert_chunks",
     "shard",
+    "chunk_layout",
     "reuse_pyramid",
     "ngff_version",
 )

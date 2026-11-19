@@ -32,6 +32,8 @@ to_ome_zarr(
     sequence_pattern=cfg.get("sequence_pattern"),
     chunks=tuple(chunks) if chunks else None,
     shard=bool(cfg.get("shard", False)),
+    # "auto" keeps the image as it always was; labels follow on their own
+    layout="viewer" if cfg.get("chunk_layout") == "viewer" else "tiles",
     ngff_version=cfg.get("ngff_version", "auto"),
     reuse_pyramid=bool(cfg.get("reuse_pyramid", False)),
     # Progress goes to the log as periodic lines, not a redrawing bar:

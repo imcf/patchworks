@@ -21,6 +21,15 @@ Usage
     # everything: image pyramid + every label group
     pixi run reshard --store /path/to/image.zarr
 
+    # for viewers: every array in planes of 512 x 512 inside shards (new
+    # chunks too, not only shards), as new runs write their labels
+    pixi run reshard --store /path/to/image.zarr --layout viewer
+
+The object tables stay current: only the arrays are rewritten, not what
+identifies the labels. With `--layout viewer`, rewrite every label image
+of a store (the default): label images of one store are related block by
+block, so they should share a layout.
+
 Run it as a batch job, not on the login node: it reads and writes every
 level, and a whole-store pass on a login node is killed with no traceback,
 the same way the occupancy build is. A `runtime` past your QOS's MaxWall is
@@ -112,6 +121,34 @@ def _levels(group_path):
     )
 
 
+def _axes(group_path, ndim):
+    """The axes of a group's arrays, from its multiscales metadata.
+
+    Parameters
+    ----------
+    group_path : str
+        An image or label group.
+    ndim : int
+        The arrays' number of dimensions, for the default.
+
+    Returns
+    -------
+    str
+        One letter per axis, e.g. `"czyx"`.
+    """
+    import zarr
+
+    from patchworks.plugins.ome_zarr import _default_axes, read_ngff_attr
+
+    ms = read_ngff_attr(
+        zarr.open_group(group_path, mode="r").attrs, "multiscales"
+    )
+    try:
+        return "".join(a["name"] for a in ms[0]["axes"])
+    except (TypeError, IndexError, KeyError):
+        return _default_axes(ndim)
+
+
 def main():
     """Reshard an existing store's levels in place (see `--help`)."""
     ap = argparse.ArgumentParser()
@@ -131,11 +168,22 @@ def main():
         action="store_true",
         help="report what would change, write nothing",
     )
+    ap.add_argument(
+        "--layout",
+        choices=("shards", "viewer"),
+        default="shards",
+        help="shards: the same chunks, packed in shards (default); viewer: "
+        "planes of 512 x 512 in shards, which viewers read faster",
+    )
     args = ap.parse_args()
 
     import zarr
 
-    from patchworks.plugins.ome_zarr import reshard_level
+    from patchworks.plugins.ome_zarr import (
+        is_viewer_layout,
+        reshard_level,
+        viewer_layout,
+    )
 
     store = Path(args.store)
     if not store.exists():
@@ -177,8 +225,17 @@ def main():
         n, size = _files(path), _bytes(path)
         total_before += n
         already = getattr(arr, "shards", None)
-        if already is None:
-            todo.append((group_path, component, label, n))
+        if args.layout == "viewer":
+            spec = viewer_layout(
+                arr.shape,
+                _axes(group_path, arr.ndim),
+                image=not label.startswith("labels/"),
+            )
+            if not is_viewer_layout(arr):
+                todo.append((group_path, component, label, n, spec))
+                biggest = max(biggest, size)
+        elif already is None:
+            todo.append((group_path, component, label, n, (None, True)))
             biggest = max(biggest, size)
         print(
             f"{label:34s} {n:>9,}  {_human(size):>10}  "
@@ -188,8 +245,9 @@ def main():
     print("-" * 78)
     print(f"{'TOTAL':34s} {total_before:>9,} files")
     print(
-        f"\n{len(todo)} array(s) need resharding, "
-        f"{len(targets) - len(todo)} already sharded."
+        f"\n{len(todo)} array(s) need rewriting, "
+        f"{len(targets) - len(todo)} already "
+        + ("in the viewer layout." if args.layout == "viewer" else "sharded.")
     )
     if todo:
         print(
@@ -213,16 +271,19 @@ def main():
 
     print()
     total_after = 0
-    for group_path, component, label, before in todo:
-        print(f"resharding {label} ...", flush=True)
-        reshard_level(group_path, component, shard=True, progress=True)
+    for group_path, component, label, before, (chunks, shards) in todo:
+        print(f"rewriting {label} ...", flush=True)
+        reshard_level(
+            group_path, component, shard=shards, chunks=chunks, progress=True
+        )
         path = Path(group_path) / component
         after = _files(path)
         total_after += after
         arr = zarr.open_array(str(path), mode="r")
         print(
             f"  {label}: {before:,} -> {after:,} files "
-            f"({before / max(1, after):.1f}x fewer), shards={arr.shards}",
+            f"({before / max(1, after):.1f}x fewer), chunks={arr.chunks} "
+            f"shards={arr.shards}",
             flush=True,
         )
         # The merge records how far it got in the array's attrs; losing it

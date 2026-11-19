@@ -1100,7 +1100,11 @@ def image_form() -> dict:
             core.COMPRESSIONS,
             **_init("compression"),
         )
-        v["convert_chunks"] = st.text_input(
+        c1, c2 = st.columns([1, 3])
+        v["chunk_layout"] = c1.selectbox(
+            "chunk_layout", list(core.CHUNK_LAYOUTS), **_init("chunk_layout")
+        )
+        v["convert_chunks"] = c2.text_input(
             "convert_chunks (YAML, e.g. [8, 512, 512]; blank = auto)",
             **_init("convert_chunks", value=""),
         )

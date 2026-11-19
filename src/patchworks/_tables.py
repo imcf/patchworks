@@ -39,7 +39,13 @@ import numpy as np
 import scipy.ndimage as ndi
 import zarr
 
-from ._chunks import chunk_slices, cpu_allocation, safe_worker_count
+from ._chunks import (
+    chunk_slices,
+    cpu_allocation,
+    dask_from_zarr,
+    io_chunks,
+    safe_worker_count,
+)
 from ._progress import PROGRESS_INTERVAL_S as _PROGRESS_INTERVAL_S
 from ._progress import log_progress
 from ._provenance import PROVENANCE_KEY
@@ -553,6 +559,8 @@ def _chunks_of(arr: Any) -> "tuple[int, ...] | None":
         None when it has no regular chunk shape.
     """
     size = getattr(arr, "chunksize", None)  # dask
+    if size is None and getattr(arr, "shards", None):
+        size = io_chunks(arr)  # zarr, sharded: whole shards
     if size is None:
         size = getattr(arr, "chunks", None)
     if size and all(isinstance(c, (int, np.integer)) for c in size):
@@ -1216,7 +1224,6 @@ def relate_tables(
     dict
         The matches used.
     """
-    import dask.array as da
 
     from ._relations import label_relations
 
@@ -1224,8 +1231,8 @@ def relate_tables(
     if not has_table(cpath) or is_stale(cpath):
         compute_table(store, child, n_workers=n_workers)
     if matches is None:
-        a = da.from_zarr(_level0(zarr.open_group(cpath, mode="r")))
-        b = da.from_zarr(_level0(zarr.open_group(ppath, mode="r")))
+        a = dask_from_zarr(_level0(zarr.open_group(cpath, mode="r")))
+        b = dask_from_zarr(_level0(zarr.open_group(ppath, mode="r")))
         a, b = align_chunks(a, b)
         matches = label_relations(a, b, n_workers=n_workers)
     labels = zarr.open_group(f"{cpath}/{TABLE_GROUP}", mode="r")["label"][...]

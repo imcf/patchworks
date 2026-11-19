@@ -253,6 +253,19 @@ at the cost of a second pass over level 0. Choose before
 converting, or repack a finished store with `pixi run reshard --store
 image.zarr`.
 
+**Fast to view** — `chunk_layout: "auto"` (default) writes label images in
+planes of 512 x 512 packed in shards of 16 planes of 2048 x 2048, after the
+merge (one more pass over level 0): a viewer showing a plane reads that
+plane, not the 14 planes of a tile's chunk (several times faster in
+Neuroglancer and napari), in a few thousand files. A store whose label
+images were written before keeps their layout for new ones, so related
+label images walk matching blocks. `chunk_layout: "viewer"` also converts
+the image that way (one plane of 4096 x 4096 per shard); `"tiles"` keeps
+the layout of before. Rewrite a finished store for viewers, image and
+every label image, in one job: `pixi run reshard --store image.zarr
+--layout viewer` (`--dry-run` first: it says what and how much); the object
+tables stay current.
+
 **OME-Zarr version** — `ngff_version: "auto"` writes 0.5 (zarr v3). Set
 `"0.4"` (zarr v2, no sharding) for a reader that cannot read 0.5 yet.
 

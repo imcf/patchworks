@@ -25,7 +25,7 @@ import zarr
 
 from concurrent.futures import ThreadPoolExecutor
 
-from ._chunks import chunk_slices, cpu_allocation
+from ._chunks import chunk_slices, cpu_allocation, io_chunks
 from ._progress import track
 
 logger = logging.getLogger(__name__)
@@ -187,7 +187,8 @@ def filter_labels_by_size(
 
     root = zarr.open_group(store_path, mode="r+")
     z = root[component]
-    slices = chunk_slices(z.shape, z.chunks)
+    # Whole shards: threads writing chunks of one shard lose each other's
+    slices = chunk_slices(z.shape, io_chunks(z))
     n_threads = max(1, int(n_workers or cpu_allocation()))
 
     # Pass 1, one chunk per thread; an all-zero chunk is skipped at once.

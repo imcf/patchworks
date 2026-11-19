@@ -1525,14 +1525,15 @@ class Review:
         str
             The new label image's name.
         """
-        import dask.array as da
 
         from ._provenance import PROVENANCE_KEY
         from ._tables import _level0, write_table
         from .plugins.ome_zarr import write_labels
 
         group = open_group_any(_label_group(self.store, name))
-        level0 = da.from_zarr(_level0(group))
+        from ._chunks import dask_from_zarr
+
+        level0 = dask_from_zarr(_level0(group))
         roots = self.roots(name)
         top = int(max(self.tables[name].index.max(), max(roots, default=0)))
         lut = np.arange(top + 1, dtype=level0.dtype)

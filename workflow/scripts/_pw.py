@@ -27,6 +27,10 @@ DEFAULTS = {
     "reuse_pyramid": False,  # .ims: copy its own pyramid
     "convert_chunks": None,
     "shard": False,  # true: far fewer files
+    # "auto": labels as the store's (viewer for a new one), the image as
+    # tiles; "viewer": both in planes of 512 x 512 in shards; "tiles": as
+    # before 3.6
+    "chunk_layout": "auto",
     "ngff_version": "auto",  # or "0.4" for older readers
     "compression": "zstd",
     # tiling
@@ -1628,6 +1632,17 @@ def validate_config(cfg) -> None:
             'shard: false, or use ngff_version "auto".'
         )
 
+    layout = cfg.get("chunk_layout", "auto")
+    if layout not in ("auto", "viewer", "tiles"):
+        problems.append(
+            f'chunk_layout must be "auto", "viewer" or "tiles"; got {layout!r}'
+        )
+    elif layout == "viewer" and str(ngff) == "0.4":
+        problems.append(
+            'chunk_layout "viewer" needs shards, which ngff_version "0.4" '
+            '(zarr v2) has not: use ngff_version "auto", or chunk_layout '
+            '"tiles"'
+        )
     for key in ("shard", "shard_labels"):
         value = cfg.get(key)
         if value is None or isinstance(value, bool):
