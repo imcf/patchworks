@@ -1091,9 +1091,13 @@ def image_form() -> dict:
         v["reuse_pyramid"] = c1.checkbox(
             "reuse_pyramid", **_init("reuse_pyramid", value=False)
         )
-        v["shard"] = c2.checkbox("shard", **_init("shard", value=False))
         v["ngff_version"] = c3.selectbox(
             "ngff_version", ["auto", "0.4", "0.5"], **_init("ngff_version")
+        )
+        v["shard"] = c2.checkbox(
+            "shard",
+            disabled=v["ngff_version"] == "0.4",  # zarr v2: no shards
+            **_init("shard", value=True),
         )
         v["compression"] = c4.selectbox(
             "compression",
@@ -1327,7 +1331,9 @@ def outputs_form() -> dict:
             **_init("pyramid_downscale", value=2),
         )
         v["shard_labels"] = c3.checkbox(
-            "shard_labels", **_init("shard_labels", value=False)
+            "shard_labels",
+            disabled=st.session_state.get("ngff_version") == "0.4",
+            **_init("shard_labels", value=True),
         )
         v["seam_report"] = c4.checkbox(
             "seam_report", **_init("seam_report", value=True)
@@ -1643,7 +1649,7 @@ def segmentation_form(
             **_init(f"{k}cpd", value=30.0),
         )
         v["cp_do_3d"] = c3.checkbox(
-            "cellpose.do_3D", **_init(f"{k}cp3", value=False)
+            "cellpose.do_3D", **_init(f"{k}cp3", value=True)
         )
         v["cp_gpu"] = c4.checkbox(
             "cellpose.gpu", **_init(f"{k}cpg", value=True)

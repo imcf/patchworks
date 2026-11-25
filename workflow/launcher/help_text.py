@@ -131,7 +131,7 @@ HELP = {
     "Example: 30",
     "cp_do_3d": "Segment in 3-D: objects are followed through z. Off: each "
     "plane alone, then stitched. 3-D is better for round objects in a "
-    "fine z-stack, and needs more GPU memory.",
+    "fine z-stack, and needs more GPU memory. Turn it off for a 2-D image.",
     "cp_gpu": "Run Cellpose on the GPU (the segment jobs have one). Off "
     "only to test on CPU nodes: much slower.",
     "cp_extra_kwargs": "Any other Cellpose setting, as YAML `key: value` "

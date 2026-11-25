@@ -78,6 +78,8 @@ setting does, its usual values and an example (the texts are in
      default, since they need it.
    - A multi run adds a relations table (`a` → `b` → `.xlsx`), plus
      optional SLURM settings for the relate jobs and a bundle format.
+   - Sharding (`shard`, `shard_labels`) and `cellpose.do_3D` are on by
+     default; turn `do_3D` off for a 2-D image.
    - Each config is complete: the workflow fills in its defaults and
      reads nothing from the cluster's `config/config.yaml`. A multi run
      is checked the way `run_multi.py` checks it

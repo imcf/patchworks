@@ -89,6 +89,9 @@ while connected; **Disconnect** closes it.
    tunnel. The single xy panel is the fast view: side views read every
    plane of their strip.
 
+Sharding and `cellpose.do_3D` are on by default: turn `do_3D` off for a
+2-D image.
+
 The configs it writes (`config/launcher_*.yaml`) are ordinary workflow
 configs you can also run from a terminal.
 

@@ -299,6 +299,8 @@ def build_config(v: dict[str, Any]) -> dict[str, Any]:
     -------
     dict
     """
+    # NGFF 0.4 is zarr v2, which has no shards: the workflow refuses them.
+    sharded = str(v.get("ngff_version", "auto")) != "0.4"
     cfg: dict[str, Any] = {
         "input": v["input"],
         "work_dir": v["work_dir"],
@@ -306,7 +308,7 @@ def build_config(v: dict[str, Any]) -> dict[str, Any]:
         # conversion
         "reuse_pyramid": v.get("reuse_pyramid", False),
         "convert_chunks": _yaml_or(v.get("convert_chunks", ""), None),
-        "shard": v.get("shard", False),
+        "shard": sharded and v.get("shard", True),
         "chunk_layout": v.get("chunk_layout", "auto"),
         "ngff_version": v.get("ngff_version", "auto"),
         "sequence_pattern": v.get("sequence_pattern") or None,
@@ -347,7 +349,7 @@ def build_config(v: dict[str, Any]) -> dict[str, Any]:
         # label pyramid
         "pyramid_levels": v.get("pyramid_levels", 5),
         "pyramid_downscale": v.get("pyramid_downscale", 2),
-        "shard_labels": v.get("shard_labels", False),
+        "shard_labels": sharded and v.get("shard_labels", True),
         # notifications
         "notify_email": v.get("notify_email", ""),
         "notify_events": v.get("notify_events", ["finish", "error"]),
@@ -357,7 +359,7 @@ def build_config(v: dict[str, Any]) -> dict[str, Any]:
         cellpose = {
             "model": v.get("cp_model", "cyto3"),
             "diameter": v.get("cp_diameter") or None,
-            "do_3D": v.get("cp_do_3d", False),
+            "do_3D": v.get("cp_do_3d", True),
             "gpu": v.get("cp_gpu", True),
         }
         cellpose.update(_yaml_or(v.get("cp_extra_kwargs", ""), {}) or {})

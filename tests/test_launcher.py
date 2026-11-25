@@ -760,6 +760,35 @@ def _app(ssh, **state):
     return at
 
 
+def _one_cfg(at):
+    """The segmentation config of a one-segmentation run's files."""
+    (cfg,) = (
+        c
+        for p, c in at.session_state["files"].items()
+        if not p.endswith("multi.yaml")
+    )
+    return cfg
+
+
+def test_sharding_and_3d_are_on_by_default():
+    """The boxes start checked; NGFF 0.4 has no shards."""
+    pytest.importorskip("paramiko")
+    at = _app(_FakeSSH(), input="/x.czi", work_dir="/scratch/run")
+    at.run()
+    assert not at.exception
+    for key in ("shard", "shard_labels", "cp3"):
+        assert at.checkbox(key=key).value is True, key
+    cfg = _one_cfg(at)
+    assert cfg["shard"] is cfg["shard_labels"] is True
+    assert cfg["cellpose"]["do_3D"] is True
+    # The workflow would refuse the config.
+    at.selectbox(key="ngff_version").set_value("0.4").run()
+    cfg = _one_cfg(at)
+    assert cfg["shard"] is cfg["shard_labels"] is False
+    assert at.checkbox(key="shard").disabled
+    assert at.checkbox(key="shard_labels").disabled
+
+
 def _report(labels, converted, plans=True):
     plan = {
         "shape": [10, 2048, 2048],
