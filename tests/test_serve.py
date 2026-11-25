@@ -430,3 +430,20 @@ def test_names_needing_quotes_are_served(tmp_path):
     finally:
         httpd.shutdown()
         httpd.server_close()
+
+
+def test_a_head_range_does_not_truncate_the_next_get(server, store):
+    """`_remaining` is set by a range and cleared by `copyfile`, which a
+    HEAD never reaches: the next plain GET on the connection got it."""
+    import http.client
+    from pathlib import Path
+
+    whole = (Path(store) / "zarr.json").read_bytes()
+    conn = http.client.HTTPConnection(server.removeprefix("http://"), timeout=3)
+    conn.request(
+        "HEAD", "/secret/image.zarr/zarr.json", headers={"Range": "bytes=0-3"}
+    )
+    conn.getresponse().read()
+    conn.request("GET", "/secret/image.zarr/zarr.json")
+    assert conn.getresponse().read() == whole
+    conn.close()

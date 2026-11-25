@@ -584,6 +584,7 @@ class _Handler(SimpleHTTPRequestHandler):
             The open file, positioned at the range's start, for
             :meth:`copyfile`; None after an error.
         """
+        self._remaining = None  # a HEAD range never reaches copyfile
         path = self.translate_path(self.path)
         match = re.fullmatch(
             r"bytes=(\d*)-(\d*)", self.headers.get("Range", "").strip()
