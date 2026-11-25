@@ -447,3 +447,19 @@ def test_a_head_range_does_not_truncate_the_next_get(server, store):
     conn.request("GET", "/secret/image.zarr/zarr.json")
     assert conn.getresponse().read() == whole
     conn.close()
+
+
+def test_the_whole_plane_is_in_view(tmp_path):
+    """Neuroglancer opens at a voxel per pixel: the middle of a slide, black
+    where there is no tissue. Its scale counts in the smallest voxel."""
+    out = to_ome_zarr(
+        np.ones((2, 100, 1400), "uint16"),
+        tmp_path / "image.zarr",
+        axes="zyx",
+        n_levels=1,
+        pixel_size={"z": 0.1, "y": 0.2, "x": 0.2},
+        progress=False,
+    )
+    state = neuroglancer_state(out, "http://localhost:1/t/image.zarr")
+    # 1400 voxels of 0.2 um in 700 pixels, in voxels of 0.1 um
+    assert state["crossSectionScale"] == pytest.approx(4.0)

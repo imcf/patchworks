@@ -37,6 +37,9 @@ SERVE_TAG = "PATCHWORKS_SERVE"
 _COLORS = ("#00ff00", "#ff00ff", "#00ffff", "#ffff00", "#ffffff", "#ff0000")
 
 
+#: The pixels the whole image is fitted in when Neuroglancer opens.
+_FIT_PIXELS = 700
+
 #: The chunks Neuroglancer is given, per spatial axis: one plane deep and
 #: this wide in y and x (less where the store's own are smaller).
 VIEW_CHUNK = 256
@@ -687,6 +690,7 @@ def neuroglancer_state(store: Union[str, Path], base_url: str) -> dict:
     -------
     dict
         The state: `dimensions` (x, y, z with the voxel size),
+        `crossSectionScale` (the whole plane in view),
         `displayDimensions`, `layers` and `layout`.
     """
     from .plugins.napari import _inner_label_names, _store_axes
@@ -698,11 +702,13 @@ def neuroglancer_state(store: Union[str, Path], base_url: str) -> dict:
     meta = _multiscale_meta(str(store)) or {}
     axes = _store_axes(str(store), len(meta.get("axes") or []))
     layers: list[dict[str, Any]] = []
+    sizes: dict[str, int] = {}
     if meta.get("datasets"):
         import zarr
 
         group = zarr.open_group(str(store), mode="r")
         level0 = group[meta["datasets"][0]["path"]]
+        sizes = dict(zip(axes, level0.shape))
         if "c" in axes:
             n = level0.shape[axes.index("c")]
             names = channel_names(str(store)) or [
@@ -766,8 +772,21 @@ def neuroglancer_state(store: Union[str, Path], base_url: str) -> dict:
         ]
         for a in shown
     }
+    # The whole plane in view: by default a pixel is a voxel, a thousandth
+    # of a slide, at its middle, which is black where there is no tissue.
+    # The scale counts in the smallest voxel size.
+    extent = max(
+        (sizes.get(a, 0) * dimensions[a][0] for a in shown[:2]), default=0
+    )
+    smallest = min((d[0] for d in dimensions.values()), default=0)
+    fit = (
+        {"crossSectionScale": extent / smallest / _FIT_PIXELS}
+        if extent and smallest
+        else {}
+    )
     return {
         "dimensions": dimensions,
+        **fit,
         "displayDimensions": shown,
         "layers": layers,
         "layout": "xy",
