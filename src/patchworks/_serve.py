@@ -18,6 +18,7 @@ import secrets
 import socket
 import threading
 import urllib.parse
+from concurrent.futures import Future
 from functools import partial
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -70,6 +71,7 @@ class _Rechunked:
         self._open: dict[str, Any] = {}
         self._cache: OrderedDict = OrderedDict()
         self._lock = threading.Lock()
+        self._loading: dict[tuple, Future] = {}
         self._used = 0
         if cache_bytes is None:
             from ._chunks import _get_available_memory
@@ -176,19 +178,33 @@ class _Rechunked:
             if key in self._cache:
                 self._cache.move_to_end(key)
                 return self._cache[key]
-        arr = self._array(rel)
-        real = _real_chunks(self.arrays[rel])
-        sl = tuple(
-            slice(i * c, min((i + 1) * c, n))
-            for i, c, n in zip(index, real, arr.shape)
-        )
-        block = np.asarray(arr[sl])
+            fut = self._loading.get(key)
+            mine = fut is None
+            if mine:
+                fut = self._loading[key] = Future()
+        if not mine:
+            return fut.result()
+        try:
+            arr = self._array(rel)
+            real = _real_chunks(self.arrays[rel])
+            sl = tuple(
+                slice(i * c, min((i + 1) * c, n))
+                for i, c, n in zip(index, real, arr.shape)
+            )
+            block = np.asarray(arr[sl])
+        except BaseException as exc:
+            with self._lock:
+                self._loading.pop(key, None)
+            fut.set_exception(exc)
+            raise
         with self._lock:
             self._cache[key] = block
             self._used += block.nbytes
             while self._used > self.cache_bytes and len(self._cache) > 1:
                 _, old = self._cache.popitem(last=False)
                 self._used -= old.nbytes
+            self._loading.pop(key, None)
+        fut.set_result(block)
         return block
 
     def chunk(self, rel: str, index: tuple[int, ...]) -> bytes:

@@ -318,3 +318,51 @@ def test_the_server_offers_the_small_chunks(store):
     finally:
         httpd.shutdown()
         httpd.server_close()
+
+
+def test_concurrent_misses_decode_a_real_chunk_once(store):
+    """Threads asking for the same real chunk wait for one decode, and the
+    cache's byte count stays the sum of what it holds; a decode that fails
+    leaves nothing behind to hang or poison a retry."""
+    import time
+    from pathlib import Path
+
+    from patchworks._serve import _Rechunked
+
+    re = _Rechunked(Path(store))
+    real = re._array("0")
+    state = {"calls": 0, "fail": False}
+
+    class Slow:
+        shape = real.shape
+
+        def __getitem__(self, sl):
+            state["calls"] += 1
+            time.sleep(0.2)  # long enough for every thread to miss
+            if state["fail"]:
+                raise OSError("disk")
+            return real[sl]
+
+    re._open["0"] = Slow()
+    key = (0, 0, 0, 0)
+    state["fail"] = True
+    errors = []
+
+    def ask():
+        try:
+            re._real_chunk("0", key)
+        except OSError as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=ask) for _ in range(16)]
+    [t.start() for t in threads]
+    [t.join(5) for t in threads]
+    assert not any(t.is_alive() for t in threads)
+    assert len(errors) == 16 and not re._loading and not re._cache
+    state.update(calls=0, fail=False)
+    threads = [threading.Thread(target=ask) for _ in range(16)]
+    [t.start() for t in threads]
+    [t.join(5) for t in threads]
+    assert state["calls"] == 1 and len(errors) == 16
+    assert re._used == sum(b.nbytes for b in re._cache.values())
+    assert not re._loading
