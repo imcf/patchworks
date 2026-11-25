@@ -170,7 +170,8 @@ found from where you run pixi; the paths inside it, next to it.
 
 Relate jobs take `relate: {cpus: 16, mem: "32G", time: 180, qos: "1day"}`
 in the multi config (the work is mostly reading; more CPUs help up to the
-filesystem's speed).
+filesystem's speed). The bundle job uses their `partition` and `qos`, and
+takes up to 12 h, or 6 h with no `qos` (what a default QOS may allow).
 
 ## Outputs
 

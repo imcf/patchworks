@@ -332,7 +332,7 @@ BUNDLE_DEFAULTS = {
     "partition": "scicore",
     "mem": "8G",
     "cpus": 2,
-    "time": 720,
+    "time": 720,  # 360 with no QOS set: a default QOS may allow only 6 h
     "qos": None,
 }
 
@@ -386,6 +386,8 @@ def _bundle_settings(multi_cfg: dict, args) -> dict:
         if key in ("partition", "qos"):
             fallback = relate[key] or fallback
         resolved[key] = flag if flag is not None else block.get(key, fallback)
+    if not resolved["qos"] and "time" not in block:
+        resolved["time"] = 360
     if resolved["format"] in ("none", False):
         resolved["format"] = None
     if resolved["format"] not in (None, "zip", "iso"):

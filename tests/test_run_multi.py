@@ -2256,6 +2256,10 @@ def test_the_bundle_job_runs_where_the_relate_jobs_may(monkeypatch):
     cfg = {"relate": {"qos": "1day", "partition": "gpu"}}
     out = _bundle_settings(cfg, flags)
     assert out["qos"] == "1day" and out["partition"] == "gpu"
+    assert out["time"] == 720
+    # With no QOS at all, what a default one allows.
+    assert _bundle_settings({}, flags)["time"] == 360
+    assert _bundle_settings({"bundle": {"time": 60}}, flags)["time"] == 60
     # Its own block still wins.
     cfg["bundle"] = {"qos": "6hours"}
     assert _bundle_settings(cfg, flags)["qos"] == "6hours"
