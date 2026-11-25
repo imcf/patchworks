@@ -77,7 +77,9 @@ setting does, its usual values and an example (the texts are in
      with `iou` in the same run; PlantSeg and the watershed get `iou` by
      default, since they need it.
    - A multi run adds a relations table (`a` → `b` → `.xlsx`), plus
-     optional SLURM settings for the relate jobs and a bundle format.
+     optional SLURM settings for the relate jobs.
+   - *Zip the results*, on by default, packs the finished store into one
+     file at the end of every run (or an `.iso`).
    - Sharding (`shard`, `shard_labels`) and `cellpose.do_3D` are on by
      default; turn `do_3D` off for a 2-D image.
    - Each config is complete: the workflow fills in its defaults and
@@ -133,9 +135,10 @@ setting does, its usual values and an example (the texts are in
      bundle;
    - the log, with optional auto-refresh.
 
-Generated configs go to `<workflow dir>/config/launcher_<name>.yaml`. A
-multi run goes to `<workflow dir>/config/launcher_multi_<stamp>/`, with one
-`seg_<label>.yaml` per segmentation plus `multi.yaml`.
+Generated configs go to `<workflow dir>/config/launcher_<name>/`
+(`launcher_multi_<stamp>/` for several segmentations), with one
+`seg_<label>.yaml` per segmentation plus `multi.yaml`: every run goes
+through `run_multi.py`, which zips the results.
 
 If the SSH connection drops (an idle tab behind a firewall; the app
 sends a keepalive every 30 s), the sidebar asks to log in again. Runs are

@@ -1005,7 +1005,7 @@ def build_multi(
     bundle: dict[str, Any] | None = None,
     review: dict[str, Any] | None = None,
 ) -> dict[str, dict[str, Any]]:
-    """The files of a multi-segmentation run, keyed by their remote path.
+    """The files of a run, keyed by their remote path.
 
     One complete config per segmentation (shared form values overlaid with
     that segmentation's own), and the `multi.yaml` listing them and the
@@ -3543,13 +3543,20 @@ def form_state(
         `(state, keys the form cannot hold)`.
     """
     state = shared_state(seg_cfgs[0])
-    state["run_kind"] = RUN_KINDS[0 if multi is None else 1]
-    if multi is None:
+    # A run of one segmentation is a multi config of one (it zips the results).
+    single = multi is None or (
+        len(seg_cfgs) == 1
+        and not multi.get("relations")
+        and not multi.get("review")
+    )
+    state["run_kind"] = RUN_KINDS[0 if single else 1]
+    if single:
         state.update(segmentation_state(seg_cfgs[0]))
     else:
         state["n_segs"] = len(seg_cfgs)
         for i, cfg in enumerate(seg_cfgs):
             state.update(segmentation_state(cfg, f"s{i}_"))
+    if multi is not None:
         relate = multi.get("relate") or {}
         state.update(
             {
@@ -3561,11 +3568,14 @@ def form_state(
             }
         )
         bundle = multi.get("bundle")
-        state["bundle_format"] = (
-            "none"
-            if bundle is False
-            else ((bundle or {}).get("format") or "zip")
+        fmt = (
+            # As run_multi reads it: several ways of saying no, else a zip.
+            None
+            if bundle is False or bundle in ("none", "off")
+            else (bundle or {}).get("format", "zip")
         )
+        state["bundle"] = fmt not in (None, False, "none")
+        state["bundle_format"] = "iso" if fmt == "iso" else "zip"
         review = multi.get("review") or {}
         state["min_overlap"] = float(review.get("min_overlap") or 0.5)
         state["loaded_relations"] = [
@@ -3706,7 +3716,8 @@ def template_choices(entries: list[tuple[str, bool]], directory: str) -> dict:
         if is_dir:
             out[name] = f"{directory}/{name}/multi.yaml"
         elif name.endswith((".yaml", ".yml")):
-            out[name.rsplit(".", 1)[0]] = f"{directory}/{name}"
+            # The folder wins over a file saved by an older launcher.
+            out.setdefault(name.rsplit(".", 1)[0], f"{directory}/{name}")
     return out
 
 

@@ -1914,8 +1914,70 @@ def segmentations_form() -> list[dict]:
     return segs
 
 
-def relations_form(labels: list[str]) -> tuple[list[dict], dict, dict]:
-    """Relations between segmentations, their jobs and the review rules.
+def jobs_form(single: bool) -> tuple[dict, dict]:
+    """The zip of the results, and the SLURM settings of the jobs that end
+    a run.
+
+    Parameters
+    ----------
+    single : bool
+        Whether the run is one segmentation: it has no relate jobs.
+
+    Returns
+    -------
+    tuple
+        `(relate job settings, bundle settings)`.
+    """
+    c1, c2 = st.columns(2)
+    zipped = c1.checkbox("zip the results", **_init("bundle", value=True))
+    fmt = c2.selectbox(
+        "as", ["zip", "iso"], disabled=not zipped, **_init("bundle_format")
+    )
+    what = "zip" if single else "relate and zip"
+    with st.expander(
+        f"{what.capitalize()} jobs (SLURM)", icon=":material/dns:"
+    ):
+        info = cluster_info()
+        c1, c2, c3, c4, c5 = st.columns(5)
+        relate = {
+            "partition": slurm_choice(
+                c1,
+                f"{what} partition",
+                "relate_partition",
+                sorted((info or {}).get("partitions", {})),
+            ),
+            "qos": slurm_choice(
+                c2,
+                f"{what} qos",
+                "relate_qos",
+                core.usable_qos(
+                    info or {}, st.session_state.get("relate_partition") or None
+                ),
+            ),
+        }
+        if not single:
+            relate["mem"] = c3.text_input(
+                "relate mem", **_init("relate_mem", value="")
+            )
+            for col, key, label in (
+                (c4, "cpus", "relate cpus (0 = default)"),
+                (c5, "time", "relate minutes (0 = default)"),
+            ):
+                relate[key] = (
+                    int(
+                        col.number_input(
+                            label,
+                            min_value=0,
+                            **_init(f"relate_{key}", value=0),
+                        )
+                    )
+                    or None
+                )
+    return relate, {"format": fmt if zipped else None}
+
+
+def relations_form(labels: list[str]) -> tuple[list[dict], dict]:
+    """Relations between segmentations, and the review rules.
 
     Parameters
     ----------
@@ -1925,7 +1987,7 @@ def relations_form(labels: list[str]) -> tuple[list[dict], dict, dict]:
     Returns
     -------
     tuple
-        `(relations, relate job settings, review rules)`.
+        `(relations, review rules)`.
     """
     st.caption(
         "Each row relates every object of `a` to the `b` object it overlaps "
@@ -1973,48 +2035,6 @@ def relations_form(labels: list[str]) -> tuple[list[dict], dict, dict]:
     relations = [
         r for r in rows if r.get("a") and r.get("b") and r.get("output")
     ]
-    with st.expander("Relate and bundle jobs (SLURM)", icon=":material/dns:"):
-        info = cluster_info()
-        c1, c2, c3, c4, c5 = st.columns(5)
-        relate = {
-            "partition": slurm_choice(
-                c1,
-                "relate partition",
-                "relate_partition",
-                sorted((info or {}).get("partitions", {})),
-            ),
-            "mem": c2.text_input("relate mem", **_init("relate_mem", value="")),
-            "cpus": int(
-                c3.number_input(
-                    "relate cpus (0 = default)",
-                    min_value=0,
-                    **_init("relate_cpus", value=0),
-                )
-            )
-            or None,
-            "time": int(
-                c4.number_input(
-                    "relate minutes (0 = default)",
-                    min_value=0,
-                    **_init("relate_time", value=0),
-                )
-            )
-            or None,
-            "qos": slurm_choice(
-                c5,
-                "relate qos",
-                "relate_qos",
-                core.usable_qos(
-                    info or {}, st.session_state.get("relate_partition") or None
-                ),
-            ),
-        }
-        fmt = st.selectbox(
-            "bundle the finished store",
-            ["zip", "iso", "none"],
-            **_init("bundle_format"),
-        )
-        bundle = {"format": None if fmt == "none" else fmt}
     with st.expander(
         "Review rules (what `patchworks review` flags)",
         icon=":material/rule:",
@@ -2094,7 +2114,7 @@ def relations_form(labels: list[str]) -> tuple[list[dict], dict, dict]:
                 "apical": pos_apical.removeprefix("away from "),
             }
         }
-    return relations, {"relate": relate, "bundle": bundle}, review
+    return relations, review
 
 
 # ---------------------------------------------------------------------------
@@ -4492,6 +4512,7 @@ with tab_config:
         shared |= tiling_form()
 
     if single:
+        relations, review = [], {}
         with section(":material/category: Segmentation"):
             segs = [segmentation_form()]
     else:
@@ -4503,31 +4524,30 @@ with tab_config:
             segs = segmentations_form()
         labels = [s["label_name"] for s in segs]
         with section(":material/hub: Relations and review"):
-            relations, jobs_cfg, review = relations_form(labels)
+            relations, review = relations_form(labels)
 
     with section(":material/output: Outputs"):
+        relate, bundle = jobs_form(single)
         shared |= outputs_form()
 
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     files: dict = {}
     problems: list[str] = []
     try:
+        # One segmentation too: run_multi zips the results at the end.
+        name = f"multi_{stamp}"
         if single:
-            cfg = core.build_config({**shared, **segs[0]})
-            name = f"{core.safe_name(cfg['label_name'])}_{stamp}"
-            files = {f"{wf_dir}/config/launcher_{name}.yaml": cfg}
-        else:
-            name = f"multi_{stamp}"
-            files = core.build_multi(
-                shared,
-                segs,
-                relations,
-                directory=f"{wf_dir}/config/launcher_{name}",
-                relate=jobs_cfg["relate"],
-                bundle=jobs_cfg["bundle"],
-                review=review,
-            )
-            problems = core.multi_problems(files)
+            name = f"{core.safe_name(segs[0]['label_name'])}_{stamp}"
+        files = core.build_multi(
+            shared,
+            segs,
+            relations,
+            directory=f"{wf_dir}/config/launcher_{name}",
+            relate=relate,
+            bundle=bundle,
+            review=review,
+        )
+        problems = core.multi_problems(files)
         seg_cfgs = [c for p, c in files.items() if not p.endswith("multi.yaml")]
         missing = sorted({m for c in seg_cfgs for m in core.missing_fields(c)})
         problems += sorted(

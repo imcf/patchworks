@@ -789,6 +789,28 @@ def test_sharding_and_3d_are_on_by_default():
     assert at.checkbox(key="shard_labels").disabled
 
 
+def test_one_segmentation_zips_by_default():
+    """A run of one segmentation zips too, and so goes through run_multi."""
+    pytest.importorskip("paramiko")
+    at = _app(_FakeSSH(), input="/x.czi", work_dir="/scratch/run")
+    at.run()
+    assert not at.exception
+
+    def multi():
+        files = at.session_state["files"]
+        return next(c for p, c in files.items() if p.endswith("/multi.yaml"))
+
+    assert multi()["bundle"] == {"format": "zip"}
+    assert multi()["relations"] == []
+
+    # Loaded back: one segmentation still, zipped or not as it was.
+    at.checkbox(key="bundle").uncheck().run()
+    assert multi()["bundle"] is False
+    state, ignored = core.form_state([_one_cfg(at)], multi())
+    assert state["run_kind"] == core.RUN_KINDS[0] and not ignored
+    assert state["bundle"] is False and state["cp3"] is True
+
+
 def _report(labels, converted, plans=True):
     plan = {
         "shape": [10, 2048, 2048],
@@ -841,9 +863,8 @@ def test_app_connected_flow_validates_and_checks_on_the_cluster():
     assert any("Not converted yet" in i.value for i in at.info)
     # The configs went up first, then check.py ran on them, there.
     uploaded = [p for p in ssh.files if p.startswith(f"{WF}/config/launcher_")]
-    assert uploaded and any(
-        "scripts/check.py" in c and uploaded[0] in c for c in ssh.commands
-    )
+    (multi,) = [p for p in uploaded if p.endswith("/multi.yaml")]
+    assert any("scripts/check.py" in c and multi in c for c in ssh.commands)
 
 
 def test_app_plans_every_segmentation_of_a_multi_run():
@@ -935,12 +956,15 @@ def test_app_resources_change_for_one_run():
     submitted = next(i for i, c in enumerate(ssh.commands) if "sbatch" in c)
     assert fetched < submitted  # the models first, on the login node
     record = json.loads(ssh.files[f"{WF}/{core.REGISTRY}"].decode())
-    assert record["slurm_job"] == "123" and record["kind"] == "single"
+    assert record["slurm_job"] == "123" and record["kind"] == "multi"
     # Cellpose's "auto" tiles: sized for the segment partition's RTX 4090,
     # not the 8 GB fallback.
     import yaml
 
-    uploaded = yaml.safe_load(ssh.files[record["config"]])
+    multi = yaml.safe_load(ssh.files[record["config"]])
+    assert multi["bundle"] == {"format": "zip"}
+    (path,) = multi["segmentations"]
+    uploaded = yaml.safe_load(ssh.files[path])
     assert uploaded["gpu_memory_gb"] == 24
     assert record["inner"] and record["setup"] is not None
 
@@ -1402,8 +1426,7 @@ def test_a_config_file_loads_into_the_one_segmentation_form():
     at.text_input(key="load_path").set_value(path).run()
     next(b for b in at.button if b.key == "load_file").click().run()
     assert not at.exception
-    (rebuilt,) = at.session_state["files"].values()
-    assert rebuilt == cfg
+    assert _one_cfg(at) == cfg
 
 
 @pytest.mark.parametrize(
@@ -1810,7 +1833,7 @@ def test_cellpose_model_dropdown_lists_the_clusters_models():
     model = at.selectbox(key="cpm")
     # Cellpose 4 only: its model, and the form's default is not offered.
     assert model.options == ["cpsam"] and model.value == "cpsam"
-    (cfg,) = at.session_state["files"].values()
+    cfg = _one_cfg(at)
     assert cfg["cellpose"]["model"] == "cpsam"
     # Asked once, not on every rerun.
     at.run()
@@ -1844,7 +1867,13 @@ def test_template_files():
     )
     assert "input" not in out["/t/lab/seg_cells.yaml"]
     assert core.template_choices(
-        [("lab", True), ("my-run.yaml", False), ("notes.txt", False)], "/t"
+        [
+            ("lab", True),
+            ("lab.yaml", False),  # saved by an older launcher
+            ("my-run.yaml", False),
+            ("notes.txt", False),
+        ],
+        "/t",
     ) == {"lab": "/t/lab/multi.yaml", "my-run": "/t/my-run.yaml"}
 
 
@@ -1859,7 +1888,7 @@ def test_save_a_template_and_start_the_next_run_from_it():
     at.text_input(key="template_name").set_value("nuclei 3D").run()
     next(b for b in at.button if b.label == "Save").click().run()
     assert not at.exception
-    saved = f"{WF}/config/templates/nuclei-3D.yaml"
+    saved = f"{WF}/config/templates/nuclei-3D/seg_labels.yaml"
     import yaml
 
     template = yaml.safe_load(ssh.files[saved])
@@ -1873,7 +1902,7 @@ def test_save_a_template_and_start_the_next_run_from_it():
     ).run()
     at.button(key="load_template").click().run()
     assert not at.exception
-    (cfg,) = at.session_state["files"].values()
+    cfg = _one_cfg(at)
     assert cfg["input"] == "/data/second.czi"
     assert cfg["work_dir"] == "/scratch/second"
     assert cfg["cellpose"]["model"] == "nuclei" and cfg["overlap"] == [

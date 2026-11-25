@@ -272,16 +272,20 @@ HELP = {
     "memory: its retries send no start mail, and only the last attempt's "
     "failure is mailed.",
     # relations and review
-    "relate_partition": "The SLURM partition for the relate jobs, which "
-    "find each object's parent (each nucleus's cell). Blank: the default.",
+    "relate_partition": "The SLURM partition for the jobs that end a run: "
+    "relate, which finds each object's parent (each nucleus's cell), and "
+    "zip. Blank: the default.",
     "relate_mem": "Memory for each relate job.\n\nExample: `64G`",
     "relate_cpus": "CPUs for each relate job. 0: the default.",
     "relate_time": "Time for each relate job, in minutes. 0: the default. "
     "Keep it within the QOS's limit.",
-    "relate_qos": "The QOS for the relate jobs. Blank: the account's default.",
-    "bundle_format": "Pack the finished `image.zarr` into one file to copy "
-    "or archive. **zip**: read directly by zarr, napari and patchworks. "
-    "**iso**: a read-only disk image. **none**: leave the folder.",
+    "relate_qos": "The QOS for the relate and zip jobs. Blank: the "
+    "account's default, and 6 h for the zip (12 h with a QOS).",
+    "bundle": "Pack the finished `image.zarr` into one file to copy or "
+    "archive, in a job at the end of the run. The folder is kept, so this "
+    "takes as much disk space again.",
+    "bundle_format": "**zip**: read directly by zarr, napari and "
+    "patchworks. **iso**: a read-only disk image.",
     "min_overlap": "A child (say a nucleus) less than this share inside its "
     "parent (its cell) is flagged by `patchworks review`.\n\n"
     "Example: 0.5",

@@ -89,11 +89,15 @@ while connected; **Disconnect** closes it.
    tunnel. The single xy panel is the fast view: side views read every
    plane of their strip.
 
+Every run ends by zipping the store into one `image.zarr.zip`, unless
+*zip the results* is off.
+
 Sharding and `cellpose.do_3D` are on by default: turn `do_3D` off for a
 2-D image.
 
-The configs it writes (`config/launcher_*.yaml`) are ordinary workflow
-configs you can also run from a terminal.
+The configs it writes (`config/launcher_*/`) are ordinary workflow
+configs you can also run from a terminal, the `multi.yaml` with
+`run_multi.py`.
 
 ## Troubleshooting
 
