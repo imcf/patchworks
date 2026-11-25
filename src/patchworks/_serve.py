@@ -418,7 +418,11 @@ class _Handler(SimpleHTTPRequestHandler):
         """
         # Only the store, only below the token: not the files beside it.
         prefix = f"/{self.token}/{self.store_name}/"
-        real = super().translate_path("/" + path[len(f"/{self.token}/") :])
+        # The prefix names the store as it is on disk: compare it decoded.
+        path = urllib.parse.unquote(path.split("?", 1)[0])
+        # Already decoded: quote again for the parent, which decodes.
+        stripped = "/" + path[len(f"/{self.token}/") :]
+        real = super().translate_path(urllib.parse.quote(stripped))
         inside = os.path.join(self.directory, self.store_name) + os.sep
         if not path.startswith(prefix) or not real.startswith(inside):
             # Somewhere that is not a file: a 404, whatever it asks for.
@@ -730,12 +734,13 @@ def neuroglancer_state(store: Union[str, Path], base_url: str) -> dict:
     else:
         layers.append({"type": "image", "source": source, "name": "image"})
     for name in _inner_label_names(str(store)):
-        labels: Any = f"{source}/labels/{name}"
+        quoted = urllib.parse.quote(name, safe="")
+        labels: Any = f"{source}/labels/{quoted}"
         if has_properties(store, name):
             # The objects' values from the tables, served beside the store
             labels = [
                 labels,
-                f"precomputed://{base_url}/{PROPERTIES_DIR}/{name}",
+                f"precomputed://{base_url}/{PROPERTIES_DIR}/{quoted}",
             ]
         layers.append(
             {
@@ -940,7 +945,8 @@ def serve(
 
     # The addresses the browser uses: the local end of the tunnel.
     local = link_port or port
-    base = f"http://localhost:{local}/{token}/{store.name}"
+    quoted = urllib.parse.quote(store.name, safe="")
+    base = f"http://localhost:{local}/{token}/{quoted}"
     user = getpass.getuser()
     here = socket.gethostname()
     if in_job:

@@ -384,3 +384,49 @@ def test_a_store_without_channels_is_shown_with_contrast(tmp_path):
     lo, hi = layer["shaderControls"]["normalized"]["range"]
     assert 0 < lo < hi < 65535
     assert "localDimensions" not in layer and "localPosition" not in layer
+
+
+def test_names_needing_quotes_are_served(tmp_path):
+    """A store (or label) named with a space or a literal `%` is reached by
+    the URLs patchworks builds; the walls around the store stay."""
+    from pathlib import Path
+
+    out = Path(
+        to_ome_zarr(
+            np.ones((2, 8, 8), "uint16"),
+            tmp_path / "my image 50%.zarr",
+            axes="zyx",
+            n_levels=1,
+            progress=False,
+        )
+    )
+    write_labels(out, np.ones((2, 8, 8), "int32"), name="a b", progress=False)
+    (tmp_path / "beside.txt").write_text("private")
+    quoted = urllib.parse.quote(out.name, safe="")
+    state = neuroglancer_state(out, f"http://localhost:1/t/{quoted}")
+    seg = [x for x in state["layers"] if x["type"] == "segmentation"][0]
+    assert seg["source"].endswith(f"/{quoted}/labels/a%20b")
+    handler = partial(
+        type("H", (_Handler,), {"token": "secret", "store_name": out.name}),
+        directory=str(tmp_path),
+    )
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{httpd.server_address[1]}/secret"
+    try:
+        whole = (Path(out) / "zarr.json").read_bytes()
+        assert _get(f"{base}/{quoted}/zarr.json").read() == whole
+        assert _get(f"{base}/{quoted}/zarr.json?x=1").read() == whole
+        for path in (
+            f"{quoted}/../beside.txt",
+            f"{quoted}/%2e%2e/beside.txt",
+            f"{quoted}/%2e%2e%2fbeside.txt",
+            f"{quoted}/..%2f..%2fbeside.txt",
+            "../secret/beside.txt",
+        ):
+            with pytest.raises(urllib.error.HTTPError) as err:
+                _get(f"{base}/{path}")
+            assert err.value.code == 404, path
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
