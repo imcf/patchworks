@@ -693,35 +693,40 @@ def neuroglancer_state(store: Union[str, Path], base_url: str) -> dict:
     meta = _multiscale_meta(str(store)) or {}
     axes = _store_axes(str(store), len(meta.get("axes") or []))
     layers: list[dict[str, Any]] = []
-    if "c" in axes:
+    if meta.get("datasets"):
         import zarr
 
         group = zarr.open_group(str(store), mode="r")
         level0 = group[meta["datasets"][0]["path"]]
-        n = level0.shape[axes.index("c")]
-        names = channel_names(str(store)) or [f"channel {i}" for i in range(n)]
+        if "c" in axes:
+            n = level0.shape[axes.index("c")]
+            names = channel_names(str(store)) or [
+                f"channel {i}" for i in range(n)
+            ]
+        else:  # one image, shown white: its dtype's range would be black
+            names = ["image"]
         coarse = group[meta["datasets"][-1]["path"]]
         for i, name in enumerate(names):
-            color = _COLORS[i % len(_COLORS)]
+            color = _COLORS[i % len(_COLORS)] if "c" in axes else "#ffffff"
             lo, hi = _contrast(coarse, axes, i)
-            layers.append(
-                {
-                    "type": "image",
-                    "source": source,
-                    "name": name,
-                    "localDimensions": {"c'": [1, ""]},
-                    "localPosition": [i],
-                    "blend": "additive",
-                    "visible": i == 0,
-                    "shader": (
-                        f'#uicontrol vec3 color color(default="{color}")\n'
-                        "#uicontrol invlerp normalized\n"
-                        "void main() { emitRGB(color * normalized()); }\n"
-                    ),
-                    # The data's own range: the dtype's (0-65535) is black.
-                    "shaderControls": {"normalized": {"range": [lo, hi]}},
-                }
-            )
+            layer: dict[str, Any] = {
+                "type": "image",
+                "source": source,
+                "name": name,
+                "blend": "additive",
+                "visible": i == 0,
+                "shader": (
+                    f'#uicontrol vec3 color color(default="{color}")\n'
+                    "#uicontrol invlerp normalized\n"
+                    "void main() { emitRGB(color * normalized()); }\n"
+                ),
+                # The data's own range: the dtype's (0-65535) is black.
+                "shaderControls": {"normalized": {"range": [lo, hi]}},
+            }
+            if "c" in axes:
+                layer["localDimensions"] = {"c'": [1, ""]}
+                layer["localPosition"] = [i]
+            layers.append(layer)
     else:
         layers.append({"type": "image", "source": source, "name": "image"})
     for name in _inner_label_names(str(store)):

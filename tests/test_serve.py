@@ -366,3 +366,21 @@ def test_concurrent_misses_decode_a_real_chunk_once(store):
     assert state["calls"] == 1 and len(errors) == 16
     assert re._used == sum(b.nbytes for b in re._cache.values())
     assert not re._loading
+
+
+def test_a_store_without_channels_is_shown_with_contrast(tmp_path):
+    out = to_ome_zarr(
+        np.arange(4 * 32 * 32, dtype="uint16").reshape(4, 32, 32) + 1,
+        tmp_path / "zyx.zarr",
+        axes="zyx",
+        n_levels=1,
+        progress=False,
+    )
+    state = neuroglancer_state(out, "http://localhost:1/t/zyx.zarr")
+    (layer,) = state["layers"]
+    assert layer["name"] == "image"
+    assert 'default="#ffffff"' in layer["shader"]
+    assert "invlerp normalized" in layer["shader"]
+    lo, hi = layer["shaderControls"]["normalized"]["range"]
+    assert 0 < lo < hi < 65535
+    assert "localDimensions" not in layer and "localPosition" not in layer
