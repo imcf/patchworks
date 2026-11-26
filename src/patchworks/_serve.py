@@ -378,6 +378,9 @@ class _Handler(SimpleHTTPRequestHandler):
     # channel to the node, and the browser opens only six at a time.
     # HTTP/1.0 closed one after every chunk.
     protocol_version = "HTTP/1.1"
+    # The headers and the body are written apart: Nagle kept the body back
+    # until the headers were acknowledged, for every chunk.
+    disable_nagle_algorithm = True
     #: `host:port` of the Neuroglancer server running beside this one, to
     #: which every path outside `/<token>/` is passed; "" for none.
     upstream = ""
