@@ -3908,6 +3908,8 @@ def _open_tunnel(
                 return
             if chan is None:
                 return
+            # An answer comes in pieces: Nagle kept the last one back.
+            self.request.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
             def browser_to_server() -> None:
                 """Copy the browser's requests up; once it hangs up, close
