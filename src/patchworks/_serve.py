@@ -41,8 +41,10 @@ _COLORS = ("#00ff00", "#ff00ff", "#00ffff", "#ffff00", "#ffffff", "#ff0000")
 _FIT_PIXELS = 700
 
 #: The chunks Neuroglancer is given, per spatial axis: one plane deep and
-#: this wide in y and x (less where the store's own are smaller).
-VIEW_CHUNK = 256
+#: this wide in y and x (less where the store's own are smaller). A browser
+#: asks for six at a time, each a round trip through the tunnel: 256 was
+#: four times the requests for the same view.
+VIEW_CHUNK = 512
 
 
 class _Rechunked:

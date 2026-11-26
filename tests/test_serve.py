@@ -225,16 +225,19 @@ def test_one_connection_serves_many_chunks(server, store):
 
 
 @pytest.mark.parametrize("shard", [False, True])
-def test_small_chunks_read_back_as_the_store(tmp_path, shard):
+def test_small_chunks_read_back_as_the_store(tmp_path, shard, monkeypatch):
     """Neuroglancer is offered every array in chunks one plane deep and at
-    most 256 wide, cut from the real ones: written out as a store of their
+    most `VIEW_CHUNK` wide, cut from the real ones: written out as a store of their
     own, they read back as exactly the original arrays."""
     import itertools
 
     import zarr
 
+    from patchworks import _serve
     from patchworks._serve import _Rechunked
 
+    # Narrower than the store's chunks, for them to be cut
+    monkeypatch.setattr(_serve, "VIEW_CHUNK", 128)
     rng = np.random.default_rng(0)
     img = rng.integers(0, 4000, (2, 5, 300, 520)).astype("uint16")
     store = to_ome_zarr(
@@ -256,7 +259,7 @@ def test_small_chunks_read_back_as_the_store(tmp_path, shard):
     for rel, doc in re.arrays.items():
         meta = json.loads(re.metadata(rel))
         view = meta["chunk_grid"]["configuration"]["chunk_shape"]
-        assert view[:-2] == [1] * (len(view) - 2) and max(view[-2:]) <= 256
+        assert view[:-2] == [1] * (len(view) - 2) and max(view[-2:]) <= 128
         (out / rel).mkdir(parents=True)
         (out / rel / "zarr.json").write_text(json.dumps(meta))
         grid = [range(-(-n // c)) for n, c in zip(doc["shape"], view)]
